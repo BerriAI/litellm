@@ -194,7 +194,7 @@ class SpendLogCleanup:
             prisma_client,
             cutoff_date,
             table_name="LiteLLM_AutoRouterSession",
-            key_columns=("session_id", "model_group"),
+            key_columns=("api_key", "session_id", "model_group"),
             time_column="last_turn_at",
         )
 

@@ -303,7 +303,8 @@ class DBSpendUpdateWriter:
         session_id = payload.get("session_id")
         model_group = payload.get("model_group")
         model = payload.get("model")
-        if prisma_client is None or llm_router is None or not session_id or not model_group or not model:
+        api_key = payload.get("api_key")
+        if prisma_client is None or llm_router is None or not session_id or not model_group or not model or not api_key:
             return
         if not serves_an_auto_router(llm_router, model_group):
             return
@@ -334,7 +335,7 @@ class DBSpendUpdateWriter:
             cost_breakdown=_metadata.get("cost_breakdown"),
         )
         await self.auto_router_session_queue.record_turn(
-            key=(session_id, model_group),
+            key=(api_key, session_id, model_group),
             router_kind=router_kind,
             # The same setting savings.py priced this turn against, stored on the row so
             # the dashboard names the baseline the numbers were actually computed with

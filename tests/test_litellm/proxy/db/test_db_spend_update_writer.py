@@ -2285,6 +2285,7 @@ def _turn_payload(
             "routed_model": "anthropic/claude-haiku-4-5",
         }
     return {
+        "api_key": "key-1",
         "session_id": session_id,
         "model_group": model_group,
         "model": "anthropic/claude-haiku-4-5",
@@ -2316,7 +2317,7 @@ class TestRecordingAnAutoRouterTurn:
 
         queue = await _record(router, _turn_payload("smart-router"))
 
-        assert queue.staged == [(("session-1", "smart-router"), "complexity", "anthropic/claude-haiku-4-5")]
+        assert queue.staged == [(("key-1", "session-1", "smart-router"), "complexity", "anthropic/claude-haiku-4-5")]
 
     @pytest.mark.parametrize("kind", ["complexity", "quality", "adaptive", "semantic"])
     async def test_a_turn_is_folded_under_the_kind_the_router_recorded(self, kind):

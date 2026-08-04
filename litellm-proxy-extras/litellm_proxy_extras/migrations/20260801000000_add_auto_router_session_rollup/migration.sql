@@ -1,5 +1,6 @@
 -- CreateTable
 CREATE TABLE IF NOT EXISTS "LiteLLM_AutoRouterSession" (
+    "api_key" TEXT NOT NULL,
     "session_id" TEXT NOT NULL,
     "model_group" TEXT NOT NULL,
     "router_kind" TEXT NOT NULL,
@@ -27,7 +28,7 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_AutoRouterSession" (
     "model_state" JSONB NOT NULL DEFAULT '{}',
     "updated_at" TIMESTAMP(3) NOT NULL,
 
-    CONSTRAINT "LiteLLM_AutoRouterSession_pkey" PRIMARY KEY ("session_id","model_group")
+    CONSTRAINT "LiteLLM_AutoRouterSession_pkey" PRIMARY KEY ("api_key","session_id","model_group")
 );
 
 -- CreateIndex

@@ -41,7 +41,15 @@ from litellm.repositories.table_repositories import AutoRouterSessionRepository
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
-SessionKey = tuple[str, str]
+SessionKey = tuple[str, str, str]
+"""``(api_key, session_id, model_group)``.
+
+``session_id`` is caller-controlled, so on its own it lets one caller write into
+another's rollup by reusing their id. The row sums spend, baseline spend and the
+savings between them, which puts it in the same family as the daily spend tables,
+and every one of those carries ``api_key`` in its key for exactly this reason. A
+key rotated mid-conversation splits that session's rollup in two, which
+undercounts one row rather than merging two tenants into one wrong number."""
 
 DEFAULT_MAX_STAGED_TURNS = 50_000
 MAX_CACHED_SESSIONS = 10_000
@@ -94,14 +102,18 @@ def _chunked(batch: _Chunk, size: int) -> tuple[_Chunk, ...]:
 
 
 def _key_fields(key: SessionKey) -> Mapping[str, str]:
-    """One composite primary key as the two columns that make it up."""
-    session_id, model_group = key
-    return {"session_id": session_id, "model_group": model_group}  # mutable-ok: prisma's query API takes dict payloads
+    """One composite primary key as the three columns that make it up."""
+    api_key, session_id, model_group = key
+    return {  # mutable-ok: prisma's query API takes dict payloads
+        "api_key": api_key,
+        "session_id": session_id,
+        "model_group": model_group,
+    }
 
 
 def _unique_where(key: SessionKey) -> Mapping[str, Mapping[str, str]]:
     """The composite primary key, under the name prisma gives the ``@@id`` selector."""
-    return {"session_id_model_group": _key_fields(key)}  # mutable-ok: prisma's query API takes dict payloads
+    return {"api_key_session_id_model_group": _key_fields(key)}  # mutable-ok: prisma's query API takes dict payloads
 
 
 def _increment(value: float) -> Mapping[str, float]:
@@ -279,7 +291,9 @@ class AutoRouterSessionQueue:
             verbose_proxy_logger.warning("auto_router_sessions: could not load %d session states (%s)", len(missing), e)
             return StateUnavailable()
         stored = {  # mutable-ok: built once from the rows this read returned
-            (row.session_id, row.model_group): state_from_row(row.last_model, row.last_turn_at, row.model_state)
+            (row.api_key, row.session_id, row.model_group): state_from_row(
+                row.last_model, row.last_turn_at, row.model_state
+            )
             for row in rows
         }
         return MappingProxyType(

@@ -370,7 +370,16 @@ def test_state_from_row_without_a_timestamp_starts_at_the_epoch():
 class _StoredRow:
     """A session rollup as prisma hands it back."""
 
-    def __init__(self, session_id: str, model_group: str, last_model: str, last_turn_at: float, model_state: dict):
+    def __init__(
+        self,
+        session_id: str,
+        model_group: str,
+        last_model: str,
+        last_turn_at: float,
+        model_state: dict,
+        api_key: str = "k1",
+    ):
+        self.api_key = api_key
         self.session_id = session_id
         self.model_group = model_group
         self.last_model = last_model
@@ -397,8 +406,8 @@ class _RecordingTable:
         self.reads += 1
         if self.fail_read:
             raise RuntimeError("transient database fault")
-        wanted = {(pair["session_id"], pair["model_group"]) for pair in where["OR"]}
-        return [row for row in self.rows if (row.session_id, row.model_group) in wanted]
+        wanted = {(pair["api_key"], pair["session_id"], pair["model_group"]) for pair in where["OR"]}
+        return [row for row in self.rows if (row.api_key, row.session_id, row.model_group) in wanted]
 
     def commit(self, statements):
         self.transactions += 1
@@ -474,9 +483,10 @@ def _turn_at(at: float, model: str = MODEL_A) -> TurnFacts:
     return turn(model, at=at, created=5000)
 
 
-def _stored_session(session_id: str = "s1", model_group: str = "g") -> _StoredRow:
+def _stored_session(session_id: str = "s1", model_group: str = "g", api_key: str = "k1") -> _StoredRow:
     """A session last served on MODEL_B that has already used MODEL_A."""
     return _StoredRow(
+        api_key=api_key,
         session_id=session_id,
         model_group=model_group,
         last_model=MODEL_B,
@@ -497,7 +507,7 @@ class TestTheLoggingPathNeverTouchesTheDatabase:
 
         queue = AutoRouterSessionQueue()
         for at in (0, 60, 120):
-            await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(at))
+            await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(at))
 
         table = _RecordingTable()
         assert await queue.flush(_RecordingPrisma(table)) == 1
@@ -510,12 +520,12 @@ class TestTheLoggingPathNeverTouchesTheDatabase:
         prisma = _RecordingPrisma(table)
         queue = AutoRouterSessionQueue()
         for at in (0, 60, 120):
-            await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(at))
+            await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(at))
         await queue.flush(prisma)
 
         assert table.reads == 1
 
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(180))
+        await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(180))
         await queue.flush(prisma)
         assert table.reads == 1
 
@@ -530,7 +540,7 @@ class TestFlushDurability:
         table = _RecordingTable(fail_write=True)
         prisma = _RecordingPrisma(table)
         queue = AutoRouterSessionQueue()
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(0))
+        await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(0))
 
         assert await queue.flush(prisma) == 0
 
@@ -544,11 +554,11 @@ class TestFlushDurability:
         table = _RecordingTable(fail_write=True)
         prisma = _RecordingPrisma(table)
         queue = AutoRouterSessionQueue()
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(0))
+        await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(0))
         await queue.flush(prisma)
 
         table.fail_write = False
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(60))
+        await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(60))
         assert await queue.flush(prisma) == 1
         assert table.upserts[0][1]["create"]["turns"] == 2
 
@@ -559,7 +569,7 @@ class TestFlushDurability:
         table = _RecordingTable(fail_read=True, rows=(_stored_session(),))
         prisma = _RecordingPrisma(table)
         queue = AutoRouterSessionQueue()
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(120))
+        await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(120))
 
         assert await queue.flush(prisma) == 0
         assert table.upserts == []
@@ -571,7 +581,7 @@ class TestFlushDurability:
         table = _RecordingTable(fail_read=True, rows=(_stored_session(),))
         prisma = _RecordingPrisma(table)
         queue = AutoRouterSessionQueue()
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(120))
+        await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(120))
         await queue.flush(prisma)
 
         table.fail_read = False
@@ -586,9 +596,45 @@ class TestFlushDurability:
 
         prisma = _RecordingPrisma(_RecordingTable())
         queue = AutoRouterSessionQueue()
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(0))
+        await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(0))
         assert await queue.flush(prisma) == 1
         assert await queue.flush(prisma) == 0
+
+
+@pytest.mark.asyncio
+class TestOneCallerCannotWriteIntoAnothersRollup:
+    """`session_id` is caller-controlled, and the row sums spend and savings.
+
+    Keyed on the session alone, a caller reusing someone else's id would fold
+    their turns into that tenant's dollars. The key carries the trusted
+    credential for the same reason every daily spend table does.
+    """
+
+    async def test_the_same_session_id_under_two_keys_is_two_rollups(self):
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        table = _RecordingTable()
+        queue = AutoRouterSessionQueue()
+        await queue.record_turn(("victim-key", "shared-id", "g"), "complexity", None, _turn_at(0))
+        await queue.record_turn(("attacker-key", "shared-id", "g"), "complexity", None, _turn_at(60))
+
+        assert await queue.flush(_RecordingPrisma(table)) == 2
+        keys = {where["api_key_session_id_model_group"]["api_key"] for where, _ in table.upserts}
+        assert keys == {"victim-key", "attacker-key"}
+        assert all(data["create"]["turns"] == 1 for _, data in table.upserts)
+
+    async def test_history_is_looked_up_under_the_callers_own_key(self):
+        """Reusing the id must not even read the other tenant's state, let alone fold onto it."""
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        victim = _stored_session(api_key="victim-key", session_id="shared-id")
+        table = _RecordingTable(rows=(victim,))
+        queue = AutoRouterSessionQueue()
+        await queue.record_turn(("attacker-key", "shared-id", "g"), "complexity", None, _turn_at(300))
+
+        assert await queue.flush(_RecordingPrisma(table)) == 1
+        assert table.upserts[0][1]["create"]["first_visit_turns"] == 1
+        assert table.upserts[0][1]["create"]["return_turns"] == 0
 
 
 @pytest.mark.asyncio
@@ -604,7 +650,7 @@ class TestTheRowRecordsTheFoldsAnswer:
 
         table = _RecordingTable(rows=(_stored_session(),))
         queue = AutoRouterSessionQueue()
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(30))
+        await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(30))
 
         assert await queue.flush(_RecordingPrisma(table)) == 1
         update = table.upserts[0][1]["update"]
@@ -616,7 +662,7 @@ class TestTheRowRecordsTheFoldsAnswer:
 
         table = _RecordingTable(rows=(_stored_session(),))
         queue = AutoRouterSessionQueue()
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(300))
+        await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(300))
 
         assert await queue.flush(_RecordingPrisma(table)) == 1
         update = table.upserts[0][1]["update"]
@@ -636,7 +682,7 @@ class TestStagingCostsTheSamePerTurn:
         from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
 
         queue = AutoRouterSessionQueue()
-        key = ("s1", "g")
+        key = ("k1", "s1", "g")
         await queue.record_turn(key, "complexity", None, _turn_at(0))
         buffer = queue._pending[key].turns
 
@@ -652,7 +698,7 @@ class TestStagingCostsTheSamePerTurn:
         table = _RecordingTable()
         queue = AutoRouterSessionQueue()
         for at in range(500):
-            await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(at * 60))
+            await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(at * 60))
 
         assert await queue.flush(_RecordingPrisma(table)) == 1
         assert table.upserts[0][1]["create"]["turns"] == 500
@@ -668,7 +714,7 @@ class TestStagingIsBounded:
         table = _RecordingTable()
         queue = AutoRouterSessionQueue(max_staged_turns=2)
         for i in range(5):
-            await queue.record_turn((f"s{i}", "g"), "complexity", None, _turn_at(0))
+            await queue.record_turn(("k1", f"s{i}", "g"), "complexity", None, _turn_at(0))
 
         assert await queue.flush(_RecordingPrisma(table)) == 2
 
@@ -679,7 +725,7 @@ class TestStagingIsBounded:
         table = _RecordingTable()
         queue = AutoRouterSessionQueue(max_staged_turns=2)
         for at in (0, 60, 120, 180):
-            await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(at))
+            await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(at))
 
         await queue.flush(_RecordingPrisma(table))
         assert table.upserts[0][1]["create"]["turns"] == 2
@@ -690,10 +736,10 @@ class TestStagingIsBounded:
         table = _RecordingTable()
         prisma = _RecordingPrisma(table)
         queue = AutoRouterSessionQueue(max_staged_turns=1)
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(0))
+        await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(0))
         await queue.flush(prisma)
 
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(60))
+        await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(60))
         assert await queue.flush(prisma) == 1
         assert table.upserts[1][1]["update"]["turns"] == {"increment": 1}
 
@@ -711,11 +757,11 @@ class TestStagingIsBounded:
 
         async def arrive_mid_flush():
             for at in (200, 260):
-                await queue.record_turn(("s2", "g"), "complexity", None, _turn_at(at))
+                await queue.record_turn(("k1", "s2", "g"), "complexity", None, _turn_at(at))
 
         table = _RefillingTable(arrive_mid_flush, fail_write=True)
         for at in (0, 60):
-            await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(at))
+            await queue.record_turn(("k1", "s1", "g"), "complexity", None, _turn_at(at))
 
         await queue.flush(_RecordingPrisma(table))
 
@@ -744,7 +790,7 @@ class TestFlushCostDoesNotGrowWithSessionCount:
         table = _RecordingTable()
         queue = AutoRouterSessionQueue()
         for i in range(250):
-            await queue.record_turn((f"s{i}", "g"), "complexity", None, _turn_at(0))
+            await queue.record_turn(("k1", f"s{i}", "g"), "complexity", None, _turn_at(0))
 
         assert await queue.flush(_RecordingPrisma(table)) == 250
         assert (table.reads, table.transactions) == (1, 1)
@@ -757,11 +803,11 @@ class TestFlushCostDoesNotGrowWithSessionCount:
         prisma = _RecordingPrisma(table)
         queue = AutoRouterSessionQueue()
         for i in range(50):
-            await queue.record_turn((f"s{i}", "g"), "complexity", None, _turn_at(0))
+            await queue.record_turn(("k1", f"s{i}", "g"), "complexity", None, _turn_at(0))
         await queue.flush(prisma)
 
         for i in range(50):
-            await queue.record_turn((f"s{i}", "g"), "complexity", None, _turn_at(60))
+            await queue.record_turn(("k1", f"s{i}", "g"), "complexity", None, _turn_at(60))
         assert await queue.flush(prisma) == 50
         assert (table.reads, table.transactions) == (1, 2)
 
@@ -773,14 +819,14 @@ class TestFlushCostDoesNotGrowWithSessionCount:
         prisma = _RecordingPrisma(table)
         queue = AutoRouterSessionQueue()
         for i in range(5):
-            await queue.record_turn((f"s{i}", "g"), "complexity", None, _turn_at(0))
+            await queue.record_turn(("k1", f"s{i}", "g"), "complexity", None, _turn_at(0))
 
         assert await queue.flush(prisma) == 0
         assert table.upserts == []
 
         table.fail_write = False
         assert await queue.flush(prisma) == 5
-        written = {where["session_id_model_group"]["session_id"] for where, _ in table.upserts}
+        written = {where["api_key_session_id_model_group"]["session_id"] for where, _ in table.upserts}
         assert written == {f"s{i}" for i in range(5)}
 
     async def test_one_read_serves_a_chunk_of_sessions_that_all_have_history(self):
@@ -790,7 +836,7 @@ class TestFlushCostDoesNotGrowWithSessionCount:
         table = _RecordingTable(rows=tuple(_stored_session(session_id=f"s{i}") for i in range(5)))
         queue = AutoRouterSessionQueue()
         for i in range(5):
-            await queue.record_turn((f"s{i}", "g"), "complexity", None, _turn_at(120))
+            await queue.record_turn(("k1", f"s{i}", "g"), "complexity", None, _turn_at(120))
 
         assert await queue.flush(_RecordingPrisma(table)) == 5
         assert table.reads == 1

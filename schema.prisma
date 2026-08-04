@@ -1393,6 +1393,7 @@ model LiteLLM_AdaptiveRouterSession {
 
 // Per-(session, auto-router) rollup behind the auto-router benchmarks dashboard.
 model LiteLLM_AutoRouterSession {
+  api_key               String
   session_id            String
   model_group           String
   router_kind           String
@@ -1426,7 +1427,7 @@ model LiteLLM_AutoRouterSession {
   model_state           Json     @default("{}")
   updated_at            DateTime @default(now()) @updatedAt
 
-  @@id([session_id, model_group])
+  @@id([api_key, session_id, model_group])
   @@index([model_group, last_turn_at], map: "idx_auto_router_session_group_activity")
   @@index([last_turn_at], map: "idx_auto_router_session_last_turn")
 }
