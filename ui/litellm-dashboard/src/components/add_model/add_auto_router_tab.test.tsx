@@ -435,5 +435,35 @@ describe("AddAutoRouterTab", () => {
         },
       });
     });
+
+    // Bugbot-found bug: submitBlockedReason disables the button for this, but Form's onFinish
+    // (wired to the same handler as the button) fires whenever the form itself is submitted,
+    // independent of the button's own disabled state. Without submitRecommendedRouter re-checking
+    // it, a real form submission (e.g. Enter, in browsers where that's implicit for this form)
+    // could still create a router referencing a model no longer in availableModelSet.
+    it("blocks a form submit when a referenced model disappears after the tiers are filled in", async () => {
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+      const { container } = renderWithProviders(<Harness />);
+      await waitForPresetEnabled("Anthropic Family");
+      fireEvent.click(optionByLabel("Anthropic Family")!);
+      fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "stale-model-router" } });
+      expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled();
+
+      // The model list changed after the tiers were filled in (e.g. a deployment removed
+      // elsewhere) - update the query cache directly rather than a real refetch, since that's the
+      // one thing under test, not how the data arrived. Waiting for the button to actually reflect
+      // the disabled state confirms the re-render (and availableModelSet) has settled before the
+      // form submits, the same way a real user's next interaction would only happen after that.
+      testQueryClient.setQueryData(["availableModels", "autoRouter", "token"], []);
+      await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled());
+
+      fireEvent.submit(container.querySelector("form")!);
+
+      await waitFor(() =>
+        expect(NotificationManager.fromBackend).toHaveBeenCalledWith(expect.stringContaining("no longer available")),
+      );
+      expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
+    });
   });
 });

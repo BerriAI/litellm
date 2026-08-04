@@ -267,6 +267,17 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
+    // submitBlockedReason already disables the button for this, but Form's onFinish (wired to this
+    // same handler) fires on Enter regardless of the button's disabled state - without this check,
+    // Enter in the name field could still create a router referencing a model that disappeared from
+    // availableModelSet after the tiers were filled in.
+    const referencedModelsError = getReferencedModelsError(referencedModelsParams, availableModelSet);
+    if (referencedModelsError) {
+      setShowValidationErrors(true);
+      NotificationManager.fromBackend(referencedModelsError);
+      return;
+    }
+
     const defaultModel = tiers.MEDIUM[0] || tiers.SIMPLE[0] || tiers.COMPLEX[0] || tiers.REASONING[0];
 
     form.setFieldsValue({
