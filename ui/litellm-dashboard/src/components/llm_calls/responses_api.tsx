@@ -11,6 +11,7 @@ import {
   handleCodeInterpreterCall,
   handleCodeInterpreterOutput,
 } from "./code_interpreter_handler";
+import { flushThinkTags, initialThinkTagState, splitThinkTags, ThinkTagState } from "./thinkTags";
 
 export type { CodeInterpreterResult } from "./code_interpreter_handler";
 
@@ -28,6 +29,12 @@ interface ResponseOutputItem {
 interface NonStreamedResponse {
   output?: ResponseOutputItem[];
 }
+
+const REASONING_DELTA_EVENT_TYPES = new Set([
+  "response.reasoning.delta",
+  "response.reasoning_text.delta",
+  "response.reasoning_summary_text.delta",
+]);
 
 type SynthesizedResponseEvent =
   | { type: "response.output_item.done"; item: ResponseOutputItem }
@@ -206,6 +213,7 @@ export async function makeOpenAIResponsesRequest(
 
     let mcpToolUsed = "";
     let codeInterpreterState: CodeInterpreterState = { code: "", containerId: "" };
+    let thinkTagState: ThinkTagState = initialThinkTagState;
 
     for await (const event of events) {
       // Use a type-safe approach to handle events
@@ -250,24 +258,30 @@ export async function makeOpenAIResponsesRequest(
 
         // 2) only handle actual text deltas
         if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
-          const delta = event.delta;
-          if (delta.length > 0) {
-            updateTextUI("assistant", delta, selectedModel);
+          const split = splitThinkTags(thinkTagState, event.delta);
+          thinkTagState = split.state;
 
-            // Calculate time to first token
-            if (!firstTokenReceived) {
-              firstTokenReceived = true;
-              const timeToFirstToken = Date.now() - startTime;
+          if (split.reasoning.length > 0 && onReasoningContent) {
+            onReasoningContent(split.reasoning);
+          }
 
-              if (onTimingData && streamingEnabled) {
-                onTimingData(timeToFirstToken);
-              }
+          if (split.text.length > 0) {
+            updateTextUI("assistant", split.text, selectedModel);
+          }
+
+          // Calculate time to first token
+          if ((split.text.length > 0 || split.reasoning.length > 0) && !firstTokenReceived) {
+            firstTokenReceived = true;
+            const timeToFirstToken = Date.now() - startTime;
+
+            if (onTimingData && streamingEnabled) {
+              onTimingData(timeToFirstToken);
             }
           }
         }
 
         // Handle reasoning content
-        if (event.type === "response.reasoning.delta" && "delta" in event) {
+        if (REASONING_DELTA_EVENT_TYPES.has(event.type) && "delta" in event) {
           const delta = event.delta;
           if (typeof delta === "string" && onReasoningContent) {
             onReasoningContent(delta);
@@ -301,6 +315,14 @@ export async function makeOpenAIResponsesRequest(
           }
         }
       }
+    }
+
+    const trailing = flushThinkTags(thinkTagState);
+    if (trailing.reasoning.length > 0 && onReasoningContent) {
+      onReasoningContent(trailing.reasoning);
+    }
+    if (trailing.text.length > 0) {
+      updateTextUI("assistant", trailing.text, selectedModel);
     }
 
     if (onTotalLatency) {
