@@ -302,7 +302,7 @@ class Metric:
 
 
 # litellm ``custom_llm_provider`` -> ``gen_ai.provider.name`` value.
-_PROVIDER_BY_LITELLM: dict[str, GenAIProvider] = {
+_PROVIDER_BY_LITELLM: Final[dict[str, GenAIProvider]] = {
     "openai": GenAIProvider.OPENAI,
     "text-completion-openai": GenAIProvider.OPENAI,
     "azure": GenAIProvider.AZURE_AI_OPENAI,
@@ -324,7 +324,7 @@ _PROVIDER_BY_LITELLM: dict[str, GenAIProvider] = {
 }
 
 # litellm ``call_type`` -> ``gen_ai.operation.name``.
-_OPERATION_BY_CALL_TYPE: dict[str, GenAIOperation] = {
+_OPERATION_BY_CALL_TYPE: Final[dict[str, GenAIOperation]] = {
     "completion": GenAIOperation.CHAT,
     "acompletion": GenAIOperation.CHAT,
     "completion_with_retries": GenAIOperation.CHAT,
@@ -375,7 +375,7 @@ def resolve_provider(custom_llm_provider: str | None) -> str:
     """
     if not custom_llm_provider:
         return ""
-    mapped = _PROVIDER_BY_LITELLM.get(custom_llm_provider.lower())
+    mapped: Final = _PROVIDER_BY_LITELLM.get(custom_llm_provider.lower())
     return mapped.value if mapped is not None else custom_llm_provider
 
 
@@ -389,7 +389,7 @@ def resolve_operation(call_type: str | None) -> GenAIOperation:
     """
     if not call_type:
         return GenAIOperation.CHAT
-    mapped = _OPERATION_BY_CALL_TYPE.get(call_type.lower())
+    mapped: Final = _OPERATION_BY_CALL_TYPE.get(call_type.lower())
     if mapped is not None:
         return mapped
     verbose_logger.debug(

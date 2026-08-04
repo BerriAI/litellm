@@ -1,4 +1,5 @@
 import types
+from typing import Final
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
@@ -45,7 +46,7 @@ class AmazonAI21Config(AmazonInvokeConfig, BaseConfig):
         presencePenalty: dict | None = None,
         countPenalty: dict | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

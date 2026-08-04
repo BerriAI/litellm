@@ -6,7 +6,7 @@ This allows the same policy to be attached to multiple scopes.
 """
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.repositories.table_repositories import PolicyAttachmentRepository
@@ -107,8 +107,8 @@ class AttachmentRegistry:
         """
         from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
-        results: list[dict[str, Any]] = []
-        seen_policies: set = set()
+        results: Final[list[dict[str, Any]]] = []
+        seen_policies: Final[set] = set()
 
         for attachment in self._attachments:
             scope = attachment.to_policy_scope()
@@ -141,9 +141,9 @@ class AttachmentRegistry:
         if attachment.is_global():
             return "scope:*"
 
-        reasons = []
+        reasons: Final = []
         if attachment.tags and context.tags:
-            matching_tags = [t for t in context.tags if PolicyMatcher.matches_pattern(t, attachment.tags)]
+            matching_tags: Final = [t for t in context.tags if PolicyMatcher.matches_pattern(t, attachment.tags)]
             if matching_tags:
                 reasons.append(f"tag:{matching_tags[0]}")
         if attachment.teams and context.team_alias:
@@ -166,7 +166,7 @@ class AttachmentRegistry:
         Returns:
             True if the policy is attached to a matching scope
         """
-        attached = self.get_attached_policies(context)
+        attached: Final = self.get_attached_policies(context)
         return policy_name in attached
 
     def get_all_attachments(self) -> list[PolicyAttachment]:
@@ -237,9 +237,9 @@ class AttachmentRegistry:
         Returns:
             Number of attachments removed
         """
-        original_count = len(self._attachments)
+        original_count: Final = len(self._attachments)
         self._attachments = [a for a in self._attachments if a.policy != policy_name]
-        removed_count = original_count - len(self._attachments)
+        removed_count: Final = original_count - len(self._attachments)
         if removed_count > 0:
             verbose_proxy_logger.debug("Removed %s attachment(s) for policy: %s", removed_count, policy_name)
         return removed_count
@@ -280,7 +280,7 @@ class AttachmentRegistry:
             PolicyAttachmentDBResponse with the created attachment
         """
         try:
-            created_attachment = await PolicyAttachmentRepository(prisma_client).table.create(
+            created_attachment: Final = await PolicyAttachmentRepository(prisma_client).table.create(
                 data={
                     "policy_name": attachment_request.policy_name,
                     "scope": attachment_request.scope,
@@ -296,7 +296,7 @@ class AttachmentRegistry:
             )
 
             # Also add to in-memory registry
-            attachment = PolicyAttachment(
+            attachment: Final = PolicyAttachment(
                 policy=attachment_request.policy_name,
                 scope=attachment_request.scope,
                 teams=attachment_request.teams,
@@ -340,7 +340,7 @@ class AttachmentRegistry:
         """
         try:
             # Get attachment before deleting
-            attachment = await PolicyAttachmentRepository(prisma_client).table.find_unique(
+            attachment: Final = await PolicyAttachmentRepository(prisma_client).table.find_unique(
                 where={"attachment_id": attachment_id}
             )
 
@@ -375,7 +375,7 @@ class AttachmentRegistry:
             PolicyAttachmentDBResponse if found, None otherwise
         """
         try:
-            attachment = await PolicyAttachmentRepository(prisma_client).table.find_unique(
+            attachment: Final = await PolicyAttachmentRepository(prisma_client).table.find_unique(
                 where={"attachment_id": attachment_id}
             )
 
@@ -413,7 +413,7 @@ class AttachmentRegistry:
             List of PolicyAttachmentDBResponse objects
         """
         try:
-            attachments = await PolicyAttachmentRepository(prisma_client).table.find_many(
+            attachments: Final = await PolicyAttachmentRepository(prisma_client).table.find_many(
                 order={"created_at": "desc"},
             )
 
@@ -449,9 +449,9 @@ class AttachmentRegistry:
             prisma_client: The Prisma client instance
         """
         try:
-            attachments = await self.get_all_attachments_from_db(prisma_client)
+            attachments: Final = await self.get_all_attachments_from_db(prisma_client)
 
-            db_attachments = [
+            db_attachments: Final = [
                 PolicyAttachment(
                     policy=attachment_response.policy_name,
                     scope=attachment_response.scope,

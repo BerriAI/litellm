@@ -7,7 +7,7 @@ so this implementation skips the embedding step and directly uploads files.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -83,11 +83,11 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         """
         vector_store_id = self.vector_store_config.get("vector_store_id")
 
-        vector_store_config = cast(dict[str, Any], self.vector_store_config)
+        vector_store_config: Final = cast(dict[str, Any], self.vector_store_config)
 
         # Get API credentials
-        api_key = cast(str | None, vector_store_config.get("api_key")) or GeminiModelInfo.get_api_key()
-        api_base = cast(str | None, vector_store_config.get("api_base")) or GeminiModelInfo.get_api_base()
+        api_key: Final = cast(str | None, vector_store_config.get("api_key")) or GeminiModelInfo.get_api_key()
+        api_base: Final = cast(str | None, vector_store_config.get("api_base")) or GeminiModelInfo.get_api_base()
 
         if not api_key:
             raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini File Search")
@@ -95,8 +95,8 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         if not api_base:
             raise ValueError("GEMINI_API_BASE is required")
 
-        api_version = "v1beta"
-        base_url = f"{api_base}/{api_version}"
+        api_version: Final = "v1beta"
+        base_url: Final = f"{api_base}/{api_version}"
 
         # Create File Search store if not provided
         if not vector_store_id:
@@ -137,15 +137,15 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         Returns:
             Store name (format: fileSearchStores/xxxxxxx)
         """
-        url = f"{base_url}/fileSearchStores"
+        url: Final = f"{base_url}/fileSearchStores"
 
-        request_body = {"displayName": display_name}
+        request_body: Final = {"displayName": display_name}
 
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
             params={"timeout": 60.0},
         )
-        response = await client.post(
+        response: Final = await client.post(
             url,
             json=request_body,
             headers={
@@ -155,12 +155,12 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         )
 
         if response.status_code != 200:
-            error_msg = f"Failed to create File Search store: {response.text}"
+            error_msg: Final = f"Failed to create File Search store: {response.text}"
             verbose_logger.error(error_msg)
             raise Exception(error_msg)
 
-        response_data = response.json()
-        store_name = response_data.get("name", "")
+        response_data: Final = response.json()
+        store_name: Final = response_data.get("name", "")
 
         verbose_logger.debug("Created File Search store: %s", store_name)
         return store_name
@@ -189,7 +189,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             File ID or document name
         """
         # Step 1: Initiate resumable upload
-        upload_url = await self._initiate_resumable_upload(
+        upload_url: Final = await self._initiate_resumable_upload(
             api_key=api_key,
             base_url=base_url,
             vector_store_id=vector_store_id,
@@ -199,7 +199,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         )
 
         # Step 2: Upload the file content
-        file_id = await self._upload_file_content(
+        file_id: Final = await self._upload_file_content(
             upload_url=upload_url,
             file_content=file_content,
         )
@@ -224,16 +224,16 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         # Construct the upload URL - need to use the full upload endpoint
         # base_url is like: https://generativelanguage.googleapis.com/v1beta
         # We need: https://generativelanguage.googleapis.com/upload/v1beta/{store_id}:uploadToFileSearchStore
-        api_base = base_url.replace("/v1beta", "")  # Get base without version
-        url = f"{api_base}/upload/v1beta/{vector_store_id}:uploadToFileSearchStore"
+        api_base: Final = base_url.replace("/v1beta", "")  # Get base without version
+        url: Final = f"{api_base}/upload/v1beta/{vector_store_id}:uploadToFileSearchStore"
 
         # Build request body with chunking config and metadata if provided
-        request_body: dict[str, Any] = {"displayName": filename}
+        request_body: Final[dict[str, Any]] = {"displayName": filename}
 
         # Add chunking configuration if provided
-        chunking_strategy = self.chunking_strategy
+        chunking_strategy: Final = self.chunking_strategy
         if chunking_strategy and isinstance(chunking_strategy, dict):
-            white_space_config = chunking_strategy.get("white_space_config")
+            white_space_config: Final = chunking_strategy.get("white_space_config")
             if white_space_config:
                 request_body["chunkingConfig"] = {
                     "whiteSpaceConfig": {
@@ -243,14 +243,14 @@ class GeminiRAGIngestion(BaseRAGIngestion):
                 }
 
         # Add custom metadata if provided in vector_store_config
-        custom_metadata = cast(
+        custom_metadata: Final = cast(
             list[dict[str, Any]] | None,
             self.vector_store_config.get("custom_metadata"),
         )
         if custom_metadata:
             request_body["customMetadata"] = custom_metadata
 
-        headers = {
+        headers: Final = {
             "X-Goog-Upload-Protocol": "resumable",
             "X-Goog-Upload-Command": "start",
             "X-Goog-Upload-Header-Content-Length": str(file_size),
@@ -261,23 +261,23 @@ class GeminiRAGIngestion(BaseRAGIngestion):
 
         verbose_logger.debug("Initiating resumable upload: %s", url)
 
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
             params={"timeout": 60.0},
         )
-        response = await client.post(
+        response: Final = await client.post(
             url,
             json=request_body,
             headers=headers,
         )
 
         if response.status_code not in [200, 201]:
-            error_msg = f"Failed to initiate upload: {response.text}"
+            error_msg: Final = f"Failed to initiate upload: {response.text}"
             verbose_logger.error(error_msg)
             raise Exception(error_msg)
         verbose_logger.debug("Initiate resumable upload response: %s", response.headers)
         # Extract upload URL from response headers
-        upload_url = response.headers.get("x-goog-upload-url")
+        upload_url: Final = response.headers.get("x-goog-upload-url")
         if not upload_url:
             raise Exception("No upload URL returned in response headers")
 
@@ -295,7 +295,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         Returns:
             File ID or document name from the response
         """
-        headers = {
+        headers: Final = {
             "Content-Length": str(len(file_content)),
             "X-Goog-Upload-Offset": "0",
             "X-Goog-Upload-Command": "upload, finalize",
@@ -303,26 +303,26 @@ class GeminiRAGIngestion(BaseRAGIngestion):
 
         verbose_logger.debug("Uploading file content (%s bytes)", len(file_content))
 
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
             params={"timeout": 300.0},  # Longer timeout for large files
         )
-        response = await client.put(
+        response: Final = await client.put(
             upload_url,
             content=file_content,
             headers=headers,
         )
 
         if response.status_code not in [200, 201]:
-            error_msg = f"Failed to upload file: {response.text}"
+            error_msg: Final = f"Failed to upload file: {response.text}"
             verbose_logger.error(error_msg)
             raise Exception(error_msg)
 
         # Parse response to get file/document ID
         try:
-            response_data = response.json()
+            response_data: Final = response.json()
             # The response should contain the document name or file reference
-            file_id = response_data.get("name", "") or response_data.get("file", {}).get("name", "")
+            file_id: Final = response_data.get("name", "") or response_data.get("file", {}).get("name", "")
             verbose_logger.debug("Upload complete. File ID: %s", file_id)
             return file_id
         except Exception as e:

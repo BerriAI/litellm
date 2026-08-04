@@ -2,7 +2,7 @@
 Cisco AI Defense Guardrail Config Model
 """
 
-from typing import List, Literal, Optional
+from typing import Final, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
