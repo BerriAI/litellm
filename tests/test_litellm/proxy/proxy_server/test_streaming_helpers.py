@@ -196,9 +196,7 @@ async def test_async_assistants_data_generator_hook_failure_yields_error_chunk(
     async def _noop_failure(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(
-        ps.proxy_logging_obj, "async_post_call_streaming_hook", _boom_hook
-    )
+    monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_hook", _boom_hook)
     monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _noop_failure)
 
     stream = _FakeAssistantsStream([_simple_chunk()])
@@ -385,9 +383,7 @@ def test_get_streaming_fallback_metadata_no_additional_headers():
 def test_get_streaming_fallback_metadata_zero_fallback_count():
     stream = _FakeStream(
         [],
-        hidden_params={
-            "additional_headers": {"x-litellm-attempted-fallbacks": 0}
-        },
+        hidden_params={"additional_headers": {"x-litellm-attempted-fallbacks": 0}},
     )
     assert _get_streaming_fallback_metadata(stream) == (False, None, [])
 
@@ -558,9 +554,7 @@ async def test_apply_streaming_chunk_hooks_appends_to_str_so_far(monkeypatch):
     async def _passthrough(*, user_api_key_dict, response, data, str_so_far=None):
         return response
 
-    monkeypatch.setattr(
-        ps.proxy_logging_obj, "async_post_call_streaming_hook", _passthrough
-    )
+    monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_hook", _passthrough)
 
     new_chunk, new_str = await _apply_streaming_chunk_hooks(
         chunk=chunk,
@@ -870,9 +864,7 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
         out.append(line)
 
     # First entry is the successful "partial" chunk (bytes), last is the error.
-    assert any(
-        isinstance(item, str) and item.startswith('data: {"error":') for item in out
-    )
+    assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
 
 
 # ---------------------------------------------------------------------------
@@ -1268,6 +1260,68 @@ def test_keepalive_from_deployment_config_no_router_returns_none(monkeypatch):
     monkeypatch.setattr(ps, "llm_router", None)
     result = _keepalive_from_deployment_config({"model": "gpt-4"}, None)
     assert result is None
+
+
+def test_keepalive_from_deployment_config_uses_metadata_model_info_after_fallback(monkeypatch):
+    """A router-level fallback rewrites kwargs["model"] on the fallback handler's
+    own local **kwargs copy, not on this request_data dict, so request_data["model"]
+    still names the pre-fallback model group even after a successful fallback.
+    metadata.model_info.id is mutated on this same dict by every deployment attempt
+    (including fallbacks), so it must be preferred over guessing from the stale
+    model group name."""
+    from unittest.mock import MagicMock
+
+    fallback_deployment = MagicMock()
+    fallback_deployment.litellm_params.keepalive_seconds = 30.0
+    fallback_deployment.litellm_params.allow_client_keepalive_override = False
+
+    router = MagicMock()
+    router.get_deployment.return_value = fallback_deployment
+    router.get_model_list.side_effect = AssertionError(
+        "must not guess by the stale model group name when metadata.model_info.id is available"
+    )
+
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    response = MagicMock()
+    response._hidden_params = {}
+
+    request_data = {
+        "model": "model-group-a",
+        "metadata": {"model_info": {"id": "deploy-in-group-b"}},
+    }
+    result = _keepalive_from_deployment_config(request_data, response)
+    assert result == ps._DeploymentKeepaliveConfig(keepalive_seconds=30.0, allow_client_override=False)
+    router.get_deployment.assert_called_once_with(model_id="deploy-in-group-b")
+
+
+def test_keepalive_from_deployment_config_uses_litellm_metadata_model_info_after_fallback(monkeypatch):
+    """Same as the metadata case, but for the litellm_metadata variable name used
+    by the Responses API call path."""
+    from unittest.mock import MagicMock
+
+    fallback_deployment = MagicMock()
+    fallback_deployment.litellm_params.keepalive_seconds = 15.0
+    fallback_deployment.litellm_params.allow_client_keepalive_override = True
+
+    router = MagicMock()
+    router.get_deployment.return_value = fallback_deployment
+    router.get_model_list.side_effect = AssertionError(
+        "must not guess by the stale model group name when litellm_metadata.model_info.id is available"
+    )
+
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    response = MagicMock()
+    response._hidden_params = {}
+
+    request_data = {
+        "model": "model-group-a",
+        "litellm_metadata": {"model_info": {"id": "deploy-in-group-b"}},
+    }
+    result = _keepalive_from_deployment_config(request_data, response)
+    assert result == ps._DeploymentKeepaliveConfig(keepalive_seconds=15.0, allow_client_override=True)
+    router.get_deployment.assert_called_once_with(model_id="deploy-in-group-b")
 
 
 def test_keepalive_seconds_in_all_litellm_params():
