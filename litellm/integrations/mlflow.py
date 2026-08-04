@@ -228,7 +228,9 @@ class MlflowLogger(CustomLogger):
             )
         return attributes
 
-    def _extract_cache_token_usage(self, standard_obj) -> dict:
+    def _extract_cache_token_usage(
+        self, standard_obj: StandardLoggingPayload
+    ) -> dict[str, int]:
         """
         Extract cache token counts from the raw response usage.
 
