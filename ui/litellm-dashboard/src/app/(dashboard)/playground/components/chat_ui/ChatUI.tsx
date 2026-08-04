@@ -589,8 +589,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
         NotificationsManager.fromBackend("Please select an MCP server to test");
         return;
       }
-      // Resolve the real server ID (toolsets use toolset: prefix)
-      rawSelected.startsWith("toolset:") ? rawSelected : rawSelected;
       if (!selectedMCPDirectTool) {
         NotificationsManager.fromBackend("Please select an MCP tool to call");
         return;
