@@ -17,12 +17,14 @@ if TYPE_CHECKING:
     from aiohttp import ClientSession
 
 import litellm
+from litellm.exceptions import BadRequestError
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
     get_ssl_configuration,
 )
+from litellm.types.utils import LlmProviders
 
 
 def _get_client_init_params(cls: type) -> tuple[str, ...]:
@@ -262,8 +264,24 @@ def get_openai_credentials(
     api_base: str | None = None,
     api_key: str | None = None,
     organization: str | None = None,
+    custom_llm_provider: str | None = None,
 ) -> OpenAICredentials:
-    """Resolve OpenAI credentials from params, litellm globals, and env vars."""
+    """Resolve OpenAI credentials from params, litellm globals, and env vars.
+
+    `custom_llm_provider` names the OpenAI-compatible provider the caller is
+    resolving for (see OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS). Anything other
+    than openai resolves through that provider's own config, so a self-hosted
+    deployment reads its own api_base/api_key env vars (e.g. HOSTED_VLLM_API_BASE)
+    and never silently falls back to api.openai.com with OPENAI_API_KEY, which
+    would send the caller's payload and spend to OpenAI instead of failing.
+    """
+    if custom_llm_provider is not None and custom_llm_provider != LlmProviders.OPENAI.value:
+        return _get_openai_compatible_provider_credentials(
+            api_base=api_base,
+            api_key=api_key,
+            organization=organization,
+            custom_llm_provider=custom_llm_provider,
+        )
     resolved_api_base: Final = (
         api_base
         or litellm.api_base
@@ -277,4 +295,43 @@ def get_openai_credentials(
         api_base=resolved_api_base,
         api_key=resolved_api_key,
         organization=resolved_organization,
+    )
+
+
+def _get_openai_compatible_provider_credentials(
+    api_base: str | None,
+    api_key: str | None,
+    organization: str | None,
+    custom_llm_provider: str,
+) -> OpenAICredentials:
+    """Resolve api_base/api_key for a non-openai OpenAI-compatible provider.
+
+    Delegates to the same `get_llm_provider` path the chat/embedding routes use, so
+    provider env vars stay defined in one place. A provider whose api_base cannot be
+    resolved raises rather than defaulting to OpenAI's base URL.
+    """
+    # Imported lazily: get_llm_provider_logic pulls in the provider configs, which
+    # import this module, so a module-level import would be circular.
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    _, _, resolved_api_key, resolved_api_base = get_llm_provider(
+        model="",
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        api_key=api_key,
+    )
+    if not resolved_api_base:
+        raise BadRequestError(
+            message=(
+                f"api_base is required for custom_llm_provider={custom_llm_provider}. "
+                f"Set it on the call, on the deployment, or via that provider's api_base env var "
+                f"(e.g. HOSTED_VLLM_API_BASE for hosted_vllm)."
+            ),
+            model="",
+            llm_provider=custom_llm_provider,
+        )
+    return OpenAICredentials(
+        api_base=resolved_api_base,
+        api_key=resolved_api_key,
+        organization=organization or litellm.organization or os.getenv("OPENAI_ORGANIZATION", None) or None,
     )

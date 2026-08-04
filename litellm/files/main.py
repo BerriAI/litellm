@@ -218,6 +218,7 @@ def create_file(
                 api_base=optional_params.api_base,
                 api_key=optional_params.api_key,
                 organization=optional_params.organization,
+                custom_llm_provider=custom_llm_provider,
             )
             response = openai_files_instance.create_file(
                 _is_async=_is_async,
@@ -339,6 +340,7 @@ def file_retrieve(
                 api_base=optional_params.api_base,
                 api_key=optional_params.api_key,
                 organization=optional_params.organization,
+                custom_llm_provider=custom_llm_provider,
             )
             response = openai_files_instance.retrieve_file(
                 file_id=file_id,
@@ -520,6 +522,7 @@ def file_delete(
                 api_base=optional_params.api_base,
                 api_key=optional_params.api_key,
                 organization=optional_params.organization,
+                custom_llm_provider=custom_llm_provider,
             )
             response = openai_files_instance.delete_file(
                 file_id=file_id,
@@ -722,6 +725,7 @@ def file_list(
                 api_base=optional_params.api_base,
                 api_key=optional_params.api_key,
                 organization=optional_params.organization,
+                custom_llm_provider=custom_llm_provider,
             )
             response = openai_files_instance.list_files(
                 purpose=purpose,
@@ -922,6 +926,7 @@ def file_content(
                 api_base=optional_params.api_base,
                 api_key=optional_params.api_key,
                 organization=optional_params.organization,
+                custom_llm_provider=custom_llm_provider,
             )
             response = openai_files_instance.file_content(
                 _is_async=_is_async,
@@ -1041,6 +1046,7 @@ def file_content_streaming(
             api_base=optional_params.api_base,
             api_key=optional_params.api_key,
             organization=optional_params.organization,
+            custom_llm_provider=custom_llm_provider,
         )
         response = openai_files_instance.file_content_streaming(
             _is_async=_is_async,

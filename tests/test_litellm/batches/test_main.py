@@ -19,8 +19,11 @@ to exactly one provider handler. These tests lock that dispatch:
 
 Only the provider handler instances are mocked (true network boundaries). The
 real public functions run (including the @client decorator) so dispatch reflects
-production. Provider env vars are not required: missing creds resolve to None and
-flow through harmlessly because the handler is mocked.
+production. Provider env vars are mostly not required: missing creds resolve to None
+and flow through harmlessly because the handler is mocked. The exception is a
+non-openai OpenAI-compatible provider (hosted_vllm), which must resolve its own
+api_base rather than defaulting to api.openai.com, so those cases pass one
+explicitly.
 """
 
 import os
@@ -139,8 +142,13 @@ def test_create__openai_dispatch_and_payload(seams):
 
 def test_create__hosted_vllm_routes_to_openai_instance(seams):
     """hosted_vllm is in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, so it shares
-    the openai handler. Locks that set membership."""
-    result = bm.create_batch(**CREATE_KW, custom_llm_provider="hosted_vllm")
+    the openai handler. Locks that set membership.
+
+    api_base is explicit because a non-openai OpenAI-compatible provider must resolve
+    its own base and refuses to fall back to api.openai.com."""
+    result = bm.create_batch(
+        **CREATE_KW, custom_llm_provider="hosted_vllm", api_base="http://vllm:8000"
+    )
 
     assert result is seams.openai.create_batch.return_value
     _assert_only(seams.openai.create_batch, seams, "create_batch")
@@ -215,7 +223,9 @@ def test_retrieve__openai_dispatch_and_payload(seams):
 
 
 def test_retrieve__hosted_vllm_routes_to_openai_instance(seams):
-    result = bm.retrieve_batch(batch_id="batch-1", custom_llm_provider="hosted_vllm")
+    result = bm.retrieve_batch(
+        batch_id="batch-1", custom_llm_provider="hosted_vllm", api_base="http://vllm:8000"
+    )
 
     assert result is seams.openai.retrieve_batch.return_value
     _assert_only(seams.openai.retrieve_batch, seams, "retrieve_batch")
@@ -307,7 +317,9 @@ def test_list__openai_dispatch_and_payload(seams):
 
 
 def test_list__hosted_vllm_routes_to_openai_instance(seams):
-    result = bm.list_batches(custom_llm_provider="hosted_vllm")
+    result = bm.list_batches(
+        custom_llm_provider="hosted_vllm", api_base="http://vllm:8000"
+    )
 
     assert result is seams.openai.list_batches.return_value
     _assert_only(seams.openai.list_batches, seams, "list_batches")
