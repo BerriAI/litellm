@@ -5559,6 +5559,153 @@ def test_warn_stale_team_alias_once_evicts_oldest_key_beyond_cap(monkeypatch):
     assert list(pre_call_utils._STALE_TEAM_ALIAS_WARNING_KEYS) == ["key-2", "key-3"]
 
 
+_OAUTH_TOKEN = "Bearer sk-ant-oat01-regression-token-lit5108"
+
+
+def _all_header_dicts(data: dict, metadata_variable_name: str) -> list[dict]:
+    metadata = data.get(metadata_variable_name) or {}
+    proxy_server_request = data["proxy_server_request"]
+    body = proxy_server_request["body"]
+    return [
+        metadata.get("headers") or {},
+        (metadata.get("requester_metadata") or {}).get("headers") or {},
+        proxy_server_request["headers"],
+        (body.get(metadata_variable_name) or {}).get("headers") or {},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path, metadata_variable_name",
+    [
+        ("/v1/messages", "litellm_metadata"),
+        ("/v1/chat/completions", "metadata"),
+    ],
+)
+async def test_add_litellm_data_to_request_redacts_oauth_header_from_logging_copies(path, metadata_variable_name):
+    """The Anthropic subscription token is forwarded upstream but never handed to logging."""
+    request_mock = _make_request_mock(
+        path,
+        {
+            "Content-Type": "application/json",
+            "anthropic-version": "2023-06-01",
+            "Authorization": _OAUTH_TOKEN,
+            "x-litellm-api-key": "Bearer sk-virtual-key",
+        },
+    )
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "anthropic-claude", "messages": [{"role": "user", "content": "hello"}]},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"forward_client_headers_to_llm_api": True},
+        version="test-version",
+    )
+
+    for header_dict in _all_header_dicts(updated, metadata_variable_name):
+        assert header_dict.get("Authorization") != _OAUTH_TOKEN
+        assert "sk-ant-oat01" not in json.dumps(header_dict)
+
+    assert "sk-ant-oat01" not in json.dumps(updated["proxy_server_request"], default=repr)
+
+    assert updated["proxy_server_request"]["headers"] is updated[metadata_variable_name]["headers"]
+
+    assert updated["provider_specific_header"]["extra_headers"]["Authorization"] == _OAUTH_TOKEN
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_keeps_every_forwarded_credential_out_of_logging_copies():
+    """Credentials kept for transport must not survive anywhere under proxy_server_request."""
+    secrets = {
+        "x-api-key": "sk-byok-provider-key-lit5108",
+        "cookie": "litellm_jwt=session-token-lit5108",
+        "proxy-authorization": "Bearer proxy-token-lit5108",
+    }
+    request_mock = _make_request_mock(
+        "/v1/chat/completions",
+        {
+            "Content-Type": "application/json",
+            "x-litellm-api-key": "Bearer sk-virtual-key",
+            **secrets,
+        },
+    )
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={
+            "forward_llm_provider_auth_headers": True,
+            "forward_client_headers_to_llm_api": True,
+        },
+        version="test-version",
+    )
+
+    assert updated["api_key"] == secrets["x-api-key"]
+    assert updated["headers"]["x-api-key"] == secrets["x-api-key"]
+
+    logged = json.dumps(updated["proxy_server_request"], default=repr)
+    for value in secrets.values():
+        assert value not in logged
+
+
+
+@pytest.mark.parametrize(
+    "header, expected_redacted",
+    [
+        ("Authorization", True),
+        ("X-Api-Key", True),
+        ("x-goog-api-key", True),
+        ("Ocp-Apim-Subscription-Key", True),
+        ("API-Key", True),
+        ("Cookie", True),
+        ("Proxy-Authorization", True),
+        ("anthropic-version", False),
+        ("user-agent", False),
+    ],
+)
+def test_redact_credential_headers_classifies_each_header(header, expected_redacted):
+    from litellm.proxy.litellm_pre_call_utils import redact_credential_headers
+
+    headers = {header: "secret-value"}
+
+    redacted = redact_credential_headers(headers)
+
+    assert redacted[header] == ("***REDACTED***" if expected_redacted else "secret-value")
+    assert headers[header] == "secret-value"
+
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_debug_log_does_not_print_credentials():
+    """The request-header debug line carries values the stdout secret filter does not match."""
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+
+    request_mock = _make_request_mock(
+        "/v1/chat/completions",
+        {
+            "Content-Type": "application/json",
+            "Ocp-Apim-Subscription-Key": "apim-plaintext-token-lit5108",
+            "x-litellm-api-key": "Bearer sk-virtual-key",
+        },
+    )
+
+    with patch.object(pre_call_utils.verbose_proxy_logger, "debug") as mock_debug:
+        await add_litellm_data_to_request(
+            data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]},
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={"forward_llm_provider_auth_headers": True},
+            version="test-version",
+        )
+
+    logged = " ".join(str(call) for call in mock_debug.call_args_list)
+    assert "apim-plaintext-token-lit5108" not in logged
+
+
 def _callback_credential_request_mock() -> MagicMock:
     request_mock = MagicMock(spec=Request)
     request_mock.url = MagicMock()
