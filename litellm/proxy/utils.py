@@ -2212,7 +2212,9 @@ class ProxyLogging:
         #########################################################
         if route is None:
             return False
-        if not RouteChecks.should_log_proxy_failure_for_route(route=route, team_id=team_id):
+        if not RouteChecks.should_log_proxy_failure_for_route(
+            route=route, team_id=team_id, original_exception=original_exception
+        ):
             return False
 
         return isinstance(original_exception, (HTTPException, ProxyException)) or (

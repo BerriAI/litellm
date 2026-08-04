@@ -72,7 +72,9 @@ class _ProxyDBLogger(CustomLogger):
             _ProxyDBLogger._should_track_errors_in_db() is False
             or request_route is not None
             and not RouteChecks.should_log_proxy_failure_for_route(
-                route=request_route, team_id=user_api_key_dict.team_id
+                route=request_route,
+                team_id=user_api_key_dict.team_id,
+                original_exception=original_exception,
             )
         ):
             return

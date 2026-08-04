@@ -129,11 +129,25 @@ async def test_async_post_call_failure_hook_non_llm_route():
         mock_update_database.assert_not_called()
 
 
+def _expired_key_exception():
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    return ProxyException(
+        message="Authentication Error - Expired Key.",
+        type=ProxyErrorTypes.expired_key,
+        param="sk-...abcd",
+        code=401,
+    )
+
+
+@pytest.mark.parametrize("route", ["/key/list", "/models", "/v1/models"])
 @pytest.mark.asyncio
-async def test_async_post_call_failure_hook_ui_session_token_info_route():
+async def test_async_post_call_failure_hook_ui_session_token_info_route(route):
     """An expired UI session token replayed by a stale dashboard tab against
     an info route must NOT produce a SpendLogs failure row — it used to be
-    written as an LLM request carrying a session id."""
+    written as an LLM request carrying a session id. ``/models`` and
+    ``/v1/models`` are covered because they are in both info_routes and the
+    LLM API route set."""
     from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 
     logger = _ProxyDBLogger()
@@ -142,7 +156,7 @@ async def test_async_post_call_failure_hook_ui_session_token_info_route():
         api_key="test_api_key",
         user_id="test_user_id",
         team_id=UI_SESSION_TOKEN_TEAM_ID,
-        request_route="/key/list",  # dashboard polling an info route
+        request_route=route,  # dashboard polling an info route
     )
 
     with patch(
@@ -151,11 +165,42 @@ async def test_async_post_call_failure_hook_ui_session_token_info_route():
     ) as mock_update_database:
         await logger.async_post_call_failure_hook(
             request_data={},
-            original_exception=Exception("Authentication Error - Expired Key"),
+            original_exception=_expired_key_exception(),
             user_api_key_dict=user_api_key_dict,
         )
 
         mock_update_database.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_ui_session_non_expiry_still_logged():
+    """A live UI session denied on an info route (authorization denial, rate
+    limit, guardrail block) must still produce a SpendLogs row — only the
+    expired-key replay is suppressed."""
+    from fastapi import HTTPException
+
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    logger = _ProxyDBLogger()
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        request_route="/key/list",
+    )
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data={"metadata": {}},
+            original_exception=HTTPException(status_code=401, detail="denied"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        mock_update_database.assert_called_once()
 
 
 @pytest.mark.asyncio
