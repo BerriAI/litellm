@@ -5,7 +5,8 @@ use crate::messages::types::{
 };
 use crate::providers::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
 use crate::providers::bedrock::constants::{
-    AWS_REGION, AWS_REGION_NAME, BEDROCK_ANTHROPIC_VERSION, DEFAULT_BEDROCK_REGION,
+    AWS_REGION, AWS_REGION_NAME, BEDROCK_ANTHROPIC_VERSION, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE,
+    DEFAULT_BEDROCK_REGION,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -98,8 +99,40 @@ pub fn complete_bedrock_url(
     stream: bool,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> CoreResult<String> {
-    let _ = (api_base, model, stream, env_lookup);
-    todo!("implement Bedrock InvokeModel URL construction and model path encoding")
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(CoreError::InvalidRequest(
+            "Bedrock model must not be empty".to_string(),
+        ));
+    }
+
+    let region = env_lookup(AWS_REGION_NAME)
+        .or_else(|| env_lookup(AWS_REGION))
+        .unwrap_or_else(|| DEFAULT_BEDROCK_REGION.to_string());
+    let endpoint = api_base
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| BEDROCK_RUNTIME_ENDPOINT_TEMPLATE.replace("{region}", &region));
+    let model = model
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect::<String>();
+    let operation = if stream {
+        "invoke-with-response-stream"
+    } else {
+        "invoke"
+    };
+
+    Ok(format!(
+        "{}/model/{model}/{operation}",
+        endpoint.trim_end_matches('/')
+    ))
 }
 
 impl AnthropicMessagesProviderConfig for BedrockMessagesConfig {
@@ -109,8 +142,7 @@ impl AnthropicMessagesProviderConfig for BedrockMessagesConfig {
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> CoreResult<String> {
-        let _ = (api_base, model, env_lookup);
-        todo!("Bedrock InvokeModel URLs carry the model id and the streaming mode in the path")
+        complete_bedrock_url(api_base, model, false, env_lookup)
     }
 
     fn signing_region(
