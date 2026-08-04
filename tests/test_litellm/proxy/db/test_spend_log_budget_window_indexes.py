@@ -3,6 +3,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 EXTRAS_ROOT = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
+SCHEMAS = (
+    REPO_ROOT / "schema.prisma",
+    REPO_ROOT / "litellm" / "proxy" / "schema.prisma",
+    EXTRAS_ROOT / "schema.prisma",
+)
 
 INDEXES = {
     "api_key": (
@@ -14,14 +19,13 @@ INDEXES = {
 }
 
 
-def test_spend_log_budget_window_indexes_are_declared_in_both_schemas():
-    root_schema = (REPO_ROOT / "schema.prisma").read_text(encoding="utf-8")
-    packaged_schema = (EXTRAS_ROOT / "schema.prisma").read_text(encoding="utf-8")
+def test_spend_log_budget_window_indexes_are_declared_in_all_schemas():
+    schemas = [schema.read_text(encoding="utf-8") for schema in SCHEMAS]
 
-    for field in INDEXES:
-        declaration = f"@@index([{field}, startTime])"
-        assert declaration in root_schema
-        assert declaration in packaged_schema
+    assert all(schema == schemas[0] for schema in schemas[1:])
+    for schema in schemas:
+        for field in INDEXES:
+            assert f"@@index([{field}, startTime])" in schema
 
 
 def test_spend_log_budget_window_migrations_create_covering_indexes_concurrently():
