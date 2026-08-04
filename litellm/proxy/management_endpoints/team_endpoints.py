@@ -113,6 +113,10 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
+from litellm.proxy.management_helpers.team_metadata_validation import (
+    TEAM_METADATA_SCHEMA_REGISTRY,
+    validate_team_metadata_if_configured,
+)
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
@@ -147,6 +151,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamListResponse,
     TeamMemberAddResult,
     TeamMemberInfoResponse,
+    TeamMetadataSchemaResponse,
     UpdateTeamMemberPermissionsRequest,
 )
 
@@ -1287,6 +1292,18 @@ async def new_team(
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
 
+        if isinstance(data.metadata, dict):
+            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
+
+        await validate_team_metadata_if_configured(
+            operation="create",
+            metadata=data.metadata,
+            existing_metadata=None,
+            team_id=data.team_id,
+            team_alias=data.team_alias,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         ## ADD TO MODEL TABLE
         _model_id = None
         if data.model_aliases is not None and isinstance(data.model_aliases, dict):
@@ -1301,9 +1318,6 @@ async def new_team(
 
             _model_id = model_dict.id
 
-        ## Create Team Member Budget Table
-        if isinstance(data.metadata, dict):
-            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
         data_json = data.json()
 
         ## Handle Object Permission - MCP, Vector Stores etc.
@@ -1964,6 +1978,25 @@ async def update_team(
         # be written by the same code path that creates the underlying rows.
         if isinstance(updated_kv.get("metadata"), dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(updated_kv["metadata"])
+
+        if "metadata" in updated_kv:
+            stored_metadata = (
+                {  # mutable-ok: the validator payload's isinstance guard requires a plain dict
+                    key: value
+                    for key, value in existing_team_row.metadata.items()
+                    if key not in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS
+                }
+                if isinstance(existing_team_row.metadata, dict)
+                else None
+            )
+            await validate_team_metadata_if_configured(
+                operation="update",
+                metadata=updated_kv.get("metadata"),
+                existing_metadata=stored_metadata,
+                team_id=data.team_id,
+                team_alias=data.team_alias if data.team_alias is not None else existing_team_row.team_alias,
+                user_api_key_dict=user_api_key_dict,
+            )
 
         # Check budget_duration and budget_reset_at
         _set_budget_reset_at(data, updated_kv)
@@ -4177,6 +4210,24 @@ async def unblock_team(
     )
 
     return record
+
+
+@router.get(
+    "/team/metadata_schema",
+    tags=["team management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=TeamMetadataSchemaResponse,
+)
+async def get_team_metadata_schema():
+    """
+    Get the team metadata fields declared in ``general_settings.team_metadata_schema``.
+
+    The UI uses this to prepopulate the team metadata form with the declared
+    keys. Returns an empty ``fields`` list when no schema is configured. This
+    schema is advisory; server-side enforcement stays with
+    ``custom_team_metadata_validate``.
+    """
+    return TeamMetadataSchemaResponse(fields=TEAM_METADATA_SCHEMA_REGISTRY.get())
 
 
 @router.get("/team/available")

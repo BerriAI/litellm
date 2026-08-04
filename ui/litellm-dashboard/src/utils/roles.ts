@@ -48,8 +48,6 @@ export const formatUserRole = (userRole: string): string => {
       return "App Owner";
     case "demo_app_owner":
       return "App Owner";
-    case "app_admin":
-      return "Admin";
     case "proxy_admin":
       return "Admin";
     case "proxy_admin_viewer":

@@ -2862,6 +2862,16 @@
       "count": 2
     }
   },
+  "src/components/common_components/MetadataKeyValueFields.test.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/components/common_components/MetadataKeyValueFields.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
   "src/components/common_components/ModelAliasManager.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -4139,11 +4149,6 @@
   },
   "src/components/view_logs/LogDetailsDrawer/TruncatedValue.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/prettyMessagesUtils.ts": {
-    "no-nested-ternary": {
       "count": 1
     }
   },

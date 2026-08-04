@@ -20,6 +20,7 @@ import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
   buildComplexityRouterConfig,
+  getKeywordTierRulesError,
   getMissingTiersError,
   getSemanticConfigError,
 } from "./build_complexity_router_config";
@@ -214,6 +215,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     return getMissingModelsInPreset(preset, freshSet).length === 0;
   };
 
+  // Why the submit is unavailable, or null when it is available. The button reads this to disable
+  // itself and to say what is missing, so the two can never give different answers.
+  const submitBlockedReason =
+    getMissingTiersError(complexityRouterConfig.tiers) ?? getKeywordTierRulesError(keywordTierRules);
+
   const submitRecommendedRouter = async (name: string) => {
     if (!selectedPreset) {
       setShowValidationErrors(true);
@@ -254,6 +260,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     if (classifierType === "llm" && !classifierLlmConfig?.model) {
       setShowValidationErrors(true);
       NotificationManager.fromBackend("Please select a classifier model, or switch back to Heuristic");
+      return;
+    }
+
+    const keywordRulesError = getKeywordTierRulesError(keywordTierRules);
+    if (keywordRulesError) {
+      setShowValidationErrors(true);
+      NotificationManager.fromBackend(keywordRulesError);
       return;
     }
 
@@ -502,15 +515,18 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   Test Connection
                 </Button>
               }
-              <Button
-                type="primary"
-                onClick={() => {
-                  void handleAutoRouterSubmit();
-                }}
-                loading={isSubmittingRouter}
-              >
-                Add Auto Router
-              </Button>
+              <Tooltip title={submitBlockedReason}>
+                <Button
+                  type="primary"
+                  disabled={submitBlockedReason !== null}
+                  onClick={() => {
+                    void handleAutoRouterSubmit();
+                  }}
+                  loading={isSubmittingRouter}
+                >
+                  Add Auto Router
+                </Button>
+              </Tooltip>
             </div>
           </div>
         </Form>
