@@ -17,6 +17,7 @@ from litellm.integrations.rubrik import (
     RubrikLogger,
     _MalformedToolBlockingResponseError,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 
 from tests.test_litellm.integrations.rubrik_test_helpers import (
     make_inputs_with_tools,
@@ -42,6 +43,18 @@ def handler(mock_env):
     """Create a RubrikLogger instance for testing."""
     with patch("asyncio.create_task", Mock()):
         return RubrikLogger()
+
+
+@pytest.fixture
+def user_api_key_dict():
+    """The authenticated caller the proxy hands to async_post_call_failure_hook."""
+    return UserAPIKeyAuth(
+        api_key="sk-block-attribution-test",
+        key_alias="rubrik-probe-key",
+        user_id="probe-user-1",
+        team_id="probe-team-1",
+        org_id="probe-org-1",
+    )
 
 
 # -- Initialization -----------------------------------------------------------
@@ -1544,17 +1557,17 @@ class TestSuccessEventBlockedSkip:
 
 @pytest.mark.asyncio
 class TestPostCallFailureHook:
-    async def test_non_modify_exception_returns_immediately(self, handler):
+    async def test_non_modify_exception_returns_immediately(self, handler, user_api_key_dict):
         """Non-ModifyResponseException causes a no-op."""
         await handler.async_post_call_failure_hook(
             request_data={"litellm_call_id": "test"},
             original_exception=ValueError("unrelated error"),
-            user_api_key_dict=None,
+            user_api_key_dict=user_api_key_dict,
         )
         assert len(handler.log_queue) == 0
 
     async def test_modify_exception_without_stashed_logging_obj_emits_warning(
-        self, handler
+        self, handler, user_api_key_dict
     ):
         """ModifyResponseException with no _rubrik_logging_obj → warning, no enqueue."""
         request_data = {"litellm_call_id": "test-123", "model": "gpt-4"}
@@ -1568,12 +1581,12 @@ class TestPostCallFailureHook:
         await handler.async_post_call_failure_hook(
             request_data=request_data,
             original_exception=exc,
-            user_api_key_dict=None,
+            user_api_key_dict=user_api_key_dict,
         )
         assert len(handler.log_queue) == 0
 
     async def test_modify_exception_with_valid_logging_obj_enqueues_payload(
-        self, handler
+        self, handler, user_api_key_dict
     ):
         """ModifyResponseException + stashed logging_obj → builds and enqueues."""
         logging_obj = Mock()
@@ -1602,12 +1615,12 @@ class TestPostCallFailureHook:
         await handler.async_post_call_failure_hook(
             request_data=request_data,
             original_exception=exc,
-            user_api_key_dict=None,
+            user_api_key_dict=user_api_key_dict,
         )
         assert len(handler.log_queue) == 1
         assert "ModifyResponseException" in handler.log_queue[0]["response"]
 
-    async def test_logging_obj_popped_from_request_data(self, handler):
+    async def test_logging_obj_popped_from_request_data(self, handler, user_api_key_dict):
         """_rubrik_logging_obj must be popped from request_data so it is not
         forwarded downstream."""
         logging_obj = Mock()
@@ -1636,12 +1649,12 @@ class TestPostCallFailureHook:
         await handler.async_post_call_failure_hook(
             request_data=request_data,
             original_exception=exc,
-            user_api_key_dict=None,
+            user_api_key_dict=user_api_key_dict,
         )
         assert "_rubrik_logging_obj" not in request_data
 
     async def test_build_and_enqueue_swallows_attribute_error_from_prepare_payload(
-        self, handler
+        self, handler, user_api_key_dict
     ):
         """When _prepare_block_failure_payload raises AttributeError/KeyError/TypeError,
         the error is logged and the event is silently dropped (lines 806-812)."""
@@ -1657,10 +1670,10 @@ class TestPostCallFailureHook:
         )
 
         # Must not raise
-        await handler._build_and_enqueue_block_event(logging_obj, exc, None)
+        await handler._build_and_enqueue_block_event(logging_obj, exc, None, user_api_key_dict)
         assert len(handler.log_queue) == 0
 
-    async def test_build_and_enqueue_swallows_flush_exception(self, handler):
+    async def test_build_and_enqueue_swallows_flush_exception(self, handler, user_api_key_dict):
         """When _append_and_maybe_flush raises, the error is logged (lines 816-817)."""
         logging_obj = Mock()
         logging_obj.model_call_details = {
@@ -1688,14 +1701,14 @@ class TestPostCallFailureHook:
         )
 
         # Must not raise
-        await handler._build_and_enqueue_block_event(logging_obj, exc, None)
+        await handler._build_and_enqueue_block_event(logging_obj, exc, None, user_api_key_dict)
 
 
 # -- _prepare_block_failure_payload and _build_fallback_payload ---------------
 
 
 class TestPrepareBlockFailurePayload:
-    def test_uses_standard_logging_object_when_present(self, handler):
+    def test_uses_standard_logging_object_when_present(self, handler, user_api_key_dict):
         """When standard_logging_object is on model_call_details, it is used as base."""
         logging_obj = Mock()
         logging_obj.model_call_details = {
@@ -1716,12 +1729,37 @@ class TestPrepareBlockFailurePayload:
             guardrail_name="rubrik",
         )
 
-        payload = handler._prepare_block_failure_payload(logging_obj, exc)
+        payload = handler._prepare_block_failure_payload(logging_obj, exc, user_api_key_dict)
 
         assert "ModifyResponseException: blocked" in payload["response"]
         assert payload["id"] == "call-slo"
 
-    def test_uses_fallback_when_standard_logging_object_absent(self, handler):
+    def test_standard_logging_object_identity_is_not_overwritten(self, handler, user_api_key_dict):
+        """A streamed block can arrive with the object populated; it keeps its own identity."""
+        logging_obj = Mock()
+        logging_obj.model_call_details = {
+            "litellm_call_id": "call-slo-identity",
+            "model": "gpt-4",
+            "standard_logging_object": {
+                "id": "chatcmpl-original",
+                "model": "gpt-4",
+                "response": "original response",
+                "messages": [],
+                "metadata": {"user_api_key_hash": "hash-from-standard-logging-object"},
+            },
+        }
+        exc = ModifyResponseException(
+            message="blocked",
+            model="gpt-4",
+            request_data={},
+            guardrail_name="rubrik",
+        )
+
+        payload = handler._prepare_block_failure_payload(logging_obj, exc, user_api_key_dict)
+
+        assert payload["metadata"]["user_api_key_hash"] == "hash-from-standard-logging-object"
+
+    def test_uses_fallback_when_standard_logging_object_absent(self, handler, user_api_key_dict):
         """When standard_logging_object is absent, _build_fallback_payload is used."""
         from datetime import datetime
 
@@ -1731,7 +1769,7 @@ class TestPrepareBlockFailurePayload:
             "model": "claude-3",
             "messages": [{"role": "user", "content": "question"}],
             "optional_params": {"temperature": 0.5},
-            "metadata": {"user_api_key_hash": "hash-abc"},
+            "metadata": {"headers": {"host": "127.0.0.1:4000", "user-agent": "curl/8.7.1"}},
             "start_time": datetime(2024, 6, 1),
         }
         exc = ModifyResponseException(
@@ -1741,16 +1779,15 @@ class TestPrepareBlockFailurePayload:
             guardrail_name="rubrik",
         )
 
-        payload = handler._prepare_block_failure_payload(logging_obj, exc)
+        payload = handler._prepare_block_failure_payload(logging_obj, exc, user_api_key_dict)
 
         assert payload["id"] == "call-fallback"
         assert payload["model"] == "claude-3"
         assert payload["model_group"] == "claude-3"
         assert "ModifyResponseException: prompt blocked" in payload["response"]
-        assert payload["metadata"]["user_api_key_hash"] == "hash-abc"
         assert payload["status"] == "failure"
 
-    def test_fallback_payload_without_start_time(self, handler):
+    def test_fallback_payload_without_start_time(self, handler, user_api_key_dict):
         """_build_fallback_payload handles missing start_time gracefully."""
         logging_obj = Mock()
         logging_obj.model_call_details = {
@@ -1767,8 +1804,88 @@ class TestPrepareBlockFailurePayload:
             guardrail_name="rubrik",
         )
 
-        payload = handler._prepare_block_failure_payload(logging_obj, exc)
+        payload = handler._prepare_block_failure_payload(logging_obj, exc, user_api_key_dict)
         assert payload["startTime"] is None
+
+
+class TestBlockPayloadCallerAttribution:
+    """A block log must identify the caller that triggered it.
+
+    The enriched litellm metadata lives under
+    ``model_call_details["litellm_params"]["metadata"]``, never at the top
+    level, so sourcing identity from ``call_details["metadata"]`` yielded an
+    empty string for every block. Identity comes from the authenticated
+    ``user_api_key_dict`` the failure hook is handed.
+    """
+
+    def _blocked_call_details(self):
+        return {
+            "litellm_call_id": "call-attr",
+            "model": "claude-3",
+            "messages": [{"role": "user", "content": "question"}],
+            "optional_params": {},
+            "metadata": {"headers": {"host": "127.0.0.1:4000", "user-agent": "curl/8.7.1"}},
+        }
+
+    def test_fallback_payload_identifies_the_caller(self, handler, user_api_key_dict):
+        payload = handler._build_fallback_payload(self._blocked_call_details(), user_api_key_dict)
+
+        metadata = payload["metadata"]
+        assert metadata["user_api_key_hash"] == user_api_key_dict.api_key
+        assert metadata["user_api_key_alias"] == "rubrik-probe-key"
+        assert metadata["user_api_key_user_id"] == "probe-user-1"
+        assert metadata["user_api_key_team_id"] == "probe-team-1"
+        assert metadata["user_api_key_org_id"] == "probe-org-1"
+
+    def test_metadata_covers_the_full_caller_key_set(self, handler, user_api_key_dict):
+        """A block log and a success log agree on the caller key set."""
+        from litellm.types.utils import StandardLoggingUserAPIKeyMetadata
+
+        payload = handler._build_fallback_payload(self._blocked_call_details(), user_api_key_dict)
+
+        expected = StandardLoggingUserAPIKeyMetadata.__required_keys__ | StandardLoggingUserAPIKeyMetadata.__optional_keys__
+        assert set(payload["metadata"]) == set(expected)
+
+    def test_virtual_key_is_logged_hashed(self, handler):
+        """A virtual key reaches the webhook as its hash, never as the raw token."""
+        raw = "sk-block-attribution-test"
+        payload = handler._build_fallback_payload(
+            self._blocked_call_details(), UserAPIKeyAuth(api_key=raw)
+        )
+
+        assert payload["metadata"]["user_api_key_hash"] not in (raw, "")
+
+    def test_request_header_metadata_is_not_used_as_identity(self, handler, user_api_key_dict):
+        """The pre-fix source is present and misleading; it must not win."""
+        call_details = self._blocked_call_details()
+        call_details["metadata"]["user_api_key_hash"] = "stale-hash-from-request-metadata"
+
+        payload = handler._build_fallback_payload(call_details, user_api_key_dict)
+
+        assert payload["metadata"]["user_api_key_hash"] == user_api_key_dict.api_key
+
+    async def test_enqueued_block_event_carries_attribution(self, handler, user_api_key_dict):
+        """End of the real hook chain: what actually lands on the Rubrik queue."""
+        logging_obj = Mock()
+        logging_obj.model_call_details = self._blocked_call_details()
+        request_data = {"litellm_call_id": "call-attr", "_rubrik_logging_obj": logging_obj}
+        exc = ModifyResponseException(
+            message="prompt blocked",
+            model="claude-3",
+            request_data=request_data,
+            guardrail_name="rubrik",
+        )
+
+        await handler.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=exc,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert len(handler.log_queue) == 1
+        metadata = handler.log_queue[0]["metadata"]
+        assert metadata["user_api_key_hash"] == user_api_key_dict.api_key
+        assert metadata["user_api_key_user_id"] == "probe-user-1"
 
 
 # -- async_send_batch empty queue and flush_queue edge cases ------------------
