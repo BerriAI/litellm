@@ -875,6 +875,11 @@ class TestVertexBase:
                 "streamGenerateContent",
                 "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent",
             ),
+            (
+                "models/gemini-1.5-flash",
+                "generateContent",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+            ),
         ]
 
         for model, endpoint, expected_url in test_cases:

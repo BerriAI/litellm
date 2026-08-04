@@ -309,6 +309,46 @@ def test_function_calling_with_gemini():
         ]
 
 
+def test_qualified_gemini_model_uses_single_models_path():
+    from unittest.mock import patch
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": "Hello from Gemini."}],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 1,
+            "candidatesTokenCount": 1,
+            "totalTokenCount": 2,
+        },
+    }
+
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        response = litellm.completion(
+            model="gemini/models/gemini-1.5-flash",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-api-key",
+            client=client,
+        )
+
+    assert response.choices[0].message.content == "Hello from Gemini."
+    assert mock_post.call_args.kwargs["url"] == (
+        "https://generativelanguage.googleapis.com/v1beta/"
+        "models/gemini-1.5-flash:generateContent"
+    )
+    assert "/models/models/" not in mock_post.call_args.kwargs["url"]
+
+
 def test_multiple_function_call():
     litellm.set_verbose = True
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
