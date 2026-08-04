@@ -9,6 +9,8 @@ Notes:
 
 import asyncio
 import time
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -25,6 +27,8 @@ if TYPE_CHECKING:
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 else:
     SlackAlerting = Any
+
+_NO_METADATA: Mapping[str, Any] = MappingProxyType({})
 
 
 class AlertingHangingRequestCheck:
@@ -58,9 +62,7 @@ class AlertingHangingRequestCheck:
             return
 
         request_metadata: Final = (
-            get_litellm_metadata_from_kwargs(kwargs=request_data)
-            or request_data.get("metadata", {})
-            or {}
+            get_litellm_metadata_from_kwargs(kwargs=request_data) or request_data.get("metadata") or _NO_METADATA
         )
         model: Final = request_data.get("model", "")
         api_base: str | None = None
