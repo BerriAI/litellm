@@ -4631,6 +4631,28 @@ async def test_get_tools_from_mcp_servers_prefers_explicit_request_tags_over_the
     assert function_setup_kwargs["metadata"]["tags"] == ["explicit"]
 
 
+@pytest.mark.parametrize(
+    "raw_headers, expected",
+    [
+        (None, None),
+        ({"mcp-session-id": "abc"}, None),
+        ({"x-litellm-tags": ""}, None),
+        ({"X-LiteLLM-Tags": "application:orders, service:checkout"}, ["application:orders", "service:checkout"]),
+    ],
+)
+def test_request_tags_from_raw_headers_only_reads_the_tag_header(raw_headers, expected):
+    """Only `x-litellm-tags` carries tags, whatever its casing, and an empty value is not a tag.
+    A request whose headers are unrelated must attribute nothing rather than the first value seen."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _request_tags_from_raw_headers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    assert _request_tags_from_raw_headers(raw_headers) == expected
+
+
 @pytest.mark.asyncio
 async def test_get_tools_from_mcp_servers_returns_tools_when_success_logging_fails():
     """
