@@ -3,6 +3,7 @@ import re
 from fastapi import HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import (
     CommonProxyErrors,
     KeyManagementRoutes,
@@ -437,6 +438,29 @@ class RouteChecks:
         Check if route is an info route
         """
         return route in LiteLLMRoutes.info_routes.value
+
+    @staticmethod
+    def should_log_proxy_failure_for_route(route: str, team_id: str | None = None) -> bool:
+        """
+        Whether a proxy-gate failure (auth error, rate limit, guardrail block)
+        on this route should reach the failure-logging paths — the SpendLogs
+        DB row and the failure callbacks.
+
+        - LLM API routes: always log.
+        - Info routes: log, EXCEPT for UI session tokens
+          (``team_id == UI_SESSION_TOKEN_TEAM_ID``). The dashboard polls info
+          routes (``/key/list``, ``/user/info``, ``/models``, ...) with its
+          session token; once that token expires, every open browser tab keeps
+          replaying it, and each 401 used to be written to SpendLogs as an LLM
+          request carrying a session id — noise that reads as key abuse.
+        - Anything else (management endpoints): never log, so temporary
+          keys/auth info can't leak into logs.
+        """
+        if RouteChecks.is_llm_api_route(route=route):
+            return True
+        if RouteChecks.is_info_route(route=route):
+            return team_id != UI_SESSION_TOKEN_TEAM_ID
+        return False
 
     @staticmethod
     def _is_azure_openai_route(route: str) -> bool:

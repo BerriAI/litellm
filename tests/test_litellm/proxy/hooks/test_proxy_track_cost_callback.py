@@ -130,6 +130,67 @@ async def test_async_post_call_failure_hook_non_llm_route():
 
 
 @pytest.mark.asyncio
+async def test_async_post_call_failure_hook_ui_session_token_info_route():
+    """An expired UI session token replayed by a stale dashboard tab against
+    an info route must NOT produce a SpendLogs failure row — it used to be
+    written as an LLM request carrying a session id."""
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    logger = _ProxyDBLogger()
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        request_route="/key/list",  # dashboard polling an info route
+    )
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data={},
+            original_exception=Exception("Authentication Error - Expired Key"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        mock_update_database.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_info_route_regular_key_still_logged():
+    """Info-route failures from regular (non UI session) keys must keep
+    producing SpendLogs failure rows — only the dashboard's own session
+    token is excluded."""
+    logger = _ProxyDBLogger()
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        team_id="test_team_id",
+        request_route="/key/list",
+    )
+
+    request_data = {
+        "metadata": {},
+        "proxy_server_request": {"request_id": "test_request_id"},
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Authentication Error - Expired Key"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        mock_update_database.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_releases_budget_reservation_before_route_skip():
     logger = _ProxyDBLogger()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}

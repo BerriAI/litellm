@@ -3192,3 +3192,46 @@ def test_internal_user_blocked_from_search_tool_writes(route):
     assert "Only proxy admin" in str(exc_info.value)
     assert f"Route={route}" in str(exc_info.value)
     assert "Your role=internal_user" in str(exc_info.value)
+
+
+def test_should_log_proxy_failure_for_route_ui_session_token():
+    """Info-route failures from UI session tokens are the dashboard polling
+    itself with an expired session token — they must not reach the
+    failure-logging paths. The same routes stay logged for regular keys, and
+    LLM API routes stay logged for everyone, including the UI session token
+    (playground test calls)."""
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    # info route + UI session token -> suppressed
+    assert (
+        RouteChecks.should_log_proxy_failure_for_route(
+            route="/key/list", team_id=UI_SESSION_TOKEN_TEAM_ID
+        )
+        is False
+    )
+    # info route + regular team -> logged
+    assert (
+        RouteChecks.should_log_proxy_failure_for_route(
+            route="/key/list", team_id="my-team"
+        )
+        is True
+    )
+    # info route + unresolved team (e.g. garbage key) -> logged
+    assert (
+        RouteChecks.should_log_proxy_failure_for_route(route="/key/list", team_id=None)
+        is True
+    )
+    # LLM API route + UI session token (playground) -> logged
+    assert (
+        RouteChecks.should_log_proxy_failure_for_route(
+            route="/chat/completions", team_id=UI_SESSION_TOKEN_TEAM_ID
+        )
+        is True
+    )
+    # management route -> never logged, regardless of team
+    assert (
+        RouteChecks.should_log_proxy_failure_for_route(
+            route="/key/generate", team_id="my-team"
+        )
+        is False
+    )

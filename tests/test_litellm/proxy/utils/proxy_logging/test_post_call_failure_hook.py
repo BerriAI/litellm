@@ -64,6 +64,41 @@ def test_is_proxy_only_llm_api_missing_exception_raises(proxy_logging):
         proxy_logging._is_proxy_only_llm_api_error()  # type: ignore[call-arg]
 
 
+def test_is_proxy_only_llm_api_ui_session_token(proxy_logging):
+    """Info-route auth failures from UI session tokens are the dashboard
+    polling itself with an expired session token — they must not be handed
+    to the failure-logging paths (they used to land in SpendLogs typed as
+    LLM requests). Regular keys on info routes and the UI session token on
+    LLM routes (playground) both keep logging."""
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    snapshot = {
+        "ui_session_info_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=Exception("expired"),
+            error_type=ProxyErrorTypes.auth_error,
+            route="/key/list",
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+        ),
+        "regular_key_info_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=Exception("expired"),
+            error_type=ProxyErrorTypes.auth_error,
+            route="/key/list",
+            team_id="my-team",
+        ),
+        "ui_session_llm_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=Exception("expired"),
+            error_type=ProxyErrorTypes.auth_error,
+            route="/chat/completions",
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+        ),
+    }
+    assert snapshot == {
+        "ui_session_info_route": False,
+        "regular_key_info_route": True,
+        "ui_session_llm_route": True,
+    }
+
+
 # ---------------------------------------------------------------------------
 # post_call_failure_hook
 # ---------------------------------------------------------------------------
