@@ -5,6 +5,7 @@ import re
 import time
 from collections import OrderedDict
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException, Request
@@ -1118,7 +1119,7 @@ class LiteLLMProxyRequestSetup:
         # anything - but lets a caller's existing traceparent/baggage headers
         # (from real OTel instrumentation) correlate with litellm's own logs
         # instead of generating an unrelated trace_id.
-        normalized_headers = {k.lower(): v for k, v in dict(headers).items() if isinstance(k, str)}
+        normalized_headers = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
         if "litellm_trace_id" not in data:
             traceparent = normalized_headers.get("traceparent")
             if isinstance(traceparent, str):

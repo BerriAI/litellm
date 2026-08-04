@@ -354,7 +354,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # a Token can only be reset in the exact Context where it was created.
         self._pre_call_trace_id: str = trace_id_var.get()
         self._pre_call_session_id: str = session_id_var.get()
-        _sid = (kwargs or {}).get("litellm_session_id")
+        _sid = kwargs.get("litellm_session_id") if kwargs else None
         self.litellm_session_id: str = str(_sid) if _sid else ""
         # supports_correlation_logging is False for calls originating from the
         # sync client entry point (wrapper() in utils.py): a plain OS thread

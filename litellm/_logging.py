@@ -267,8 +267,12 @@ class CorrelationPlainFormatter(logging.Formatter):
         session_id = getattr(record, "session_id", None)
         if not trace_id and not session_id:
             return formatted
-        parts = [f"trace_id={trace_id}" if trace_id else None, f"session_id={session_id}" if session_id else None]
-        return f"{formatted} [{' '.join(p for p in parts if p)}]"
+        parts = tuple(
+            p
+            for p in (f"trace_id={trace_id}" if trace_id else None, f"session_id={session_id}" if session_id else None)
+            if p
+        )
+        return f"{formatted} [{' '.join(parts)}]"
 
 
 # Function to set up exception handlers for JSON logging
