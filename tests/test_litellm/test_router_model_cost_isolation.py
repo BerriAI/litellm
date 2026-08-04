@@ -944,3 +944,60 @@ def test_wildcard_zero_cost_request_does_not_poison_named_deployment_pricing():
         assert named_cost == pytest.approx(10 * builtin_input_cost)
     finally:
         _restore_model_cost_entries(model_keys)
+
+
+def test_shared_backend_registration_does_not_warn_about_stripped_cache_pricing():
+    """The shared backend key strips cache pricing on purpose, so it must not warn.
+
+    register_model warns when an unknown backend model carries neither cache cost
+    field, telling the operator to add them to model_info. The router registers
+    every deployment a second time under the shared backend key, filtered through
+    shared_backend_model_info(), which removes exactly those two fields. The
+    warning therefore fired on a path where the operator had already supplied
+    them, asking for something no config change could satisfy.
+    """
+    with patch("litellm.utils.verbose_logger.warning") as mock_warning:
+        Router(
+            model_list=[
+                {
+                    "model_name": "local-chat",
+                    "litellm_params": {
+                        "model": "openai/my-local-model-x9y8z7",
+                        "api_base": "http://localhost:9999/v1",
+                        "api_key": "x",
+                    },
+                    "model_info": {
+                        "cache_creation_input_token_cost": 0.000001,
+                        "cache_read_input_token_cost": 0.0000001,
+                    },
+                }
+            ]
+        )
+
+    cache_warnings = [
+        call for call in mock_warning.call_args_list if "cache cost fields will default to 0" in str(call)
+    ]
+    assert cache_warnings == []
+
+
+def test_register_model_still_warns_when_cache_pricing_is_genuinely_absent():
+    """The warning is only suppressed for the stripped shared-backend path.
+
+    A direct register_model call for an unknown backend model with no cache
+    pricing is actionable, so it must keep warning.
+    """
+    with patch("litellm.utils.verbose_logger.warning") as mock_warning:
+        litellm.register_model(
+            model_cost={
+                "openai/another-unknown-model-x9y8z7": {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.000003,
+                }
+            }
+        )
+
+    cache_warnings = [
+        call for call in mock_warning.call_args_list if "cache cost fields will default to 0" in str(call)
+    ]
+    assert len(cache_warnings) == 1
