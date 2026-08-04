@@ -53,15 +53,15 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
-        request_data: dict,
+        headers: dict,  # mutable-ok: matches parent class signature
+        optional_params: dict,  # mutable-ok: matches parent class signature
+        request_data: dict,  # mutable-ok: matches parent class signature
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
         stream: bool | None = None,
         fake_stream: bool | None = None,
-    ) -> tuple[dict, bytes | None]:
+    ) -> tuple[dict, bytes | None]:  # mutable-ok: matches parent class signature
         """Sign request with bedrock-mantle service name instead of bedrock."""
         return self._sign_request(
             service_name="bedrock-mantle",
