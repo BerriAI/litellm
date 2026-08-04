@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 from litellm.proxy.proxy_server import app
@@ -81,11 +82,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
                 ResponseOutputMessage(
                     type="message",
                     role="assistant",
-                    content=[
-                        ResponseOutputText(
-                            type="output_text", text="Hello from Cursor!"
-                        )
-                    ],
+                    content=[ResponseOutputText(type="output_text", text="Hello from Cursor!")],
                 )
             ],
         )
@@ -118,11 +115,98 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
             assert "output" not in response_data or "status" not in response_data
 
     @pytest.mark.asyncio
+    async def test_cursor_data_generator_accepts_request_kwarg(self):
+        """
+        Regression for #35632: base_process_llm_request always passes request=
+        into select_data_generator. cursor_data_generator must accept it (and
+        forward it) so streaming /cursor/chat/completions does not 500 with
+        TypeError: unexpected keyword argument 'request'.
+        """
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _cursor_data_generator,
+            cursor_chat_completions,
+        )
+
+        # Direct coverage of the production helper (Codecov patch attribution).
+        mock_req = MagicMock(spec=Request)
+        with patch(
+            "litellm.proxy.proxy_server.async_data_generator",
+            return_value=MagicMock(name="async_gen"),
+        ) as mock_adg:
+            result = _cursor_data_generator(
+                response=MagicMock(),
+                user_api_key_dict=MagicMock(),
+                request_data={"model": "gpt-4o"},
+                request=mock_req,
+            )
+        assert result is mock_adg.return_value
+        mock_adg.assert_called_once()
+        assert mock_adg.call_args.kwargs["request"] is mock_req
+
+        captured: dict = {}
+
+        async def _capture_and_invoke_generator(self, **kwargs):
+            select_data_generator = kwargs["select_data_generator"]
+            assert select_data_generator is _cursor_data_generator
+            mock_fastapi_request = MagicMock(spec=Request)
+            # Mirror the call shape in common_request_processing (streaming path).
+            # Before the fix this raised TypeError for unexpected kwarg 'request'.
+            result = select_data_generator(
+                response=MagicMock(),
+                user_api_key_dict=kwargs["user_api_key_dict"],
+                request_data=self.data,
+                request=mock_fastapi_request,
+            )
+            captured["accepted_request"] = True
+            captured["result"] = result
+            return {"id": "cursor_stream_ok"}
+
+        mock_http_request = MagicMock(spec=Request)
+        mock_http_request.headers = {}
+        mock_fastapi_response = MagicMock()
+        mock_user_api_key = MagicMock()
+        mock_user_api_key.token = "test_token"
+        mock_user_api_key.user_id = "test_user"
+        mock_user_api_key.team_id = None
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server._read_request_body",
+                new=AsyncMock(
+                    return_value={
+                        "model": "gpt-4o",
+                        "input": [{"role": "user", "content": "Hello"}],
+                        "stream": True,
+                    }
+                ),
+            ),
+            patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=_capture_and_invoke_generator,
+            ),
+            patch("litellm.proxy.proxy_server.async_data_generator") as mock_adg_endpoint,
+        ):
+            mock_adg_endpoint.return_value = MagicMock(name="async_gen")
+            response = await cursor_chat_completions(
+                request=mock_http_request,
+                fastapi_response=mock_fastapi_response,
+                user_api_key_dict=mock_user_api_key,
+            )
+
+        assert response == {"id": "cursor_stream_ok"}
+        assert captured.get("accepted_request") is True
+        mock_adg_endpoint.assert_called_once()
+        assert "request" in mock_adg_endpoint.call_args.kwargs
+        assert mock_adg_endpoint.call_args.kwargs["request"] is not None
+
+    @pytest.mark.asyncio
     @patch("litellm.proxy.proxy_server.llm_router")
     @patch("litellm.proxy.proxy_server.user_api_key_auth")
-    async def test_responses_api_key_spend_header_includes_response_cost(
-        self, mock_auth, mock_router
-    ):
+    async def test_responses_api_key_spend_header_includes_response_cost(self, mock_auth, mock_router):
         """
         Test that x-litellm-key-spend header includes the current request's response_cost
         for /v1/responses endpoint.
@@ -158,9 +242,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
                 ResponseOutputMessage(
                     type="message",
                     role="assistant",
-                    content=[
-                        ResponseOutputText(type="output_text", text="Test response")
-                    ],
+                    content=[ResponseOutputText(type="output_text", text="Test response")],
                 )
             ],
         )
@@ -355,6 +437,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {"type": "response.create", "model": "gpt-4o", "input": "hello"}
         assert _extract_model_from_first_ws_event(event) == "gpt-4o"
 
@@ -362,6 +445,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {"type": "response.create", "response": {"model": "gpt-4o", "input": "hello"}}
         assert _extract_model_from_first_ws_event(event) == "gpt-4o"
 
@@ -369,6 +453,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {
             "type": "response.create",
             "model": "flat-model",
@@ -380,6 +465,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {"type": "response.create", "input": "hello"}
         assert _extract_model_from_first_ws_event(event) is None
 
@@ -399,9 +485,7 @@ class TestResponsesWSFirstFrameValidation:
         )
 
         ws = MagicMock()
-        ws.receive_text = AsyncMock(
-            return_value=json.dumps({"type": "session.update", "model": "gpt-4o"})
-        )
+        ws.receive_text = AsyncMock(return_value=json.dumps({"type": "session.update", "model": "gpt-4o"}))
         ws.send_text = AsyncMock()
         ws.close = AsyncMock()
 
@@ -411,10 +495,7 @@ class TestResponsesWSFirstFrameValidation:
         ws.send_text.assert_awaited_once()
         ws.close.assert_awaited_once_with(code=1008, reason="Invalid first message")
         error_payload = json.loads(ws.send_text.await_args.args[0])
-        assert (
-            error_payload["error"]["message"]
-            == "First message must be a response.create JSON object."
-        )
+        assert error_payload["error"]["message"] == "First message must be a response.create JSON object."
 
     @pytest.mark.asyncio
     async def test_rejects_non_object_json_first_frame(self):
@@ -483,16 +564,12 @@ class TestResponsesWSFirstFrameModelAuth:
         ws.url = "ws://testserver/v1/responses"
         ws.accept = AsyncMock()
         ws.receive_text = AsyncMock(
-            return_value=json.dumps(
-                {"type": "response.create", "model": "gpt-4o-mini", "input": []}
-            )
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
         )
         ws.close = AsyncMock()
 
         processor = MagicMock()
-        processor.common_processing_pre_call_logic = AsyncMock(
-            return_value=({"model": "gpt-4o-mini"}, MagicMock())
-        )
+        processor.common_processing_pre_call_logic = AsyncMock(return_value=({"model": "gpt-4o-mini"}, MagicMock()))
 
         async def fake_llm_call():
             return None
@@ -528,9 +605,7 @@ class TestResponsesWSFirstFrameModelAuth:
             _enforce_responses_ws_first_frame_model_auth,
         )
 
-        request = Request(
-            {"type": "http", "method": "POST", "path": "/v1/responses", "headers": []}
-        )
+        request = Request({"type": "http", "method": "POST", "path": "/v1/responses", "headers": []})
         user_api_key_dict = MagicMock()
         llm_router = MagicMock()
 
@@ -592,9 +667,7 @@ class TestReadWSModelFromFirstFrameErrors:
 
         assert result is None
         ws.send_text.assert_not_awaited()
-        ws.close.assert_awaited_once_with(
-            code=1008, reason="Timed out waiting for first message"
-        )
+        ws.close.assert_awaited_once_with(code=1008, reason="Timed out waiting for first message")
 
     @pytest.mark.asyncio
     async def test_invalid_json_sends_error_and_closes(self):
@@ -612,9 +685,7 @@ class TestReadWSModelFromFirstFrameErrors:
         assert result is None
         payload = json.loads(ws.send_text.await_args.args[0])
         assert payload["error"]["message"] == "First message is not valid JSON."
-        ws.close.assert_awaited_once_with(
-            code=1008, reason="Invalid JSON in first message"
-        )
+        ws.close.assert_awaited_once_with(code=1008, reason="Invalid JSON in first message")
 
     @pytest.mark.asyncio
     async def test_missing_model_sends_error_and_closes(self):
@@ -623,9 +694,7 @@ class TestReadWSModelFromFirstFrameErrors:
         )
 
         ws = MagicMock()
-        ws.receive_text = AsyncMock(
-            return_value=json.dumps({"type": "response.create", "input": []})
-        )
+        ws.receive_text = AsyncMock(return_value=json.dumps({"type": "response.create", "input": []}))
         ws.send_text = AsyncMock()
         ws.close = AsyncMock()
 
@@ -678,10 +747,7 @@ class TestManagedResponsesSameProvider:
         assert self._handler("gpt-4o")._same_provider("gpt-4o-mini") is True
 
     def test_different_provider_is_not_same(self):
-        assert (
-            self._handler("gpt-4o")._same_provider("vertex_ai/gemini-2.0-flash")
-            is False
-        )
+        assert self._handler("gpt-4o")._same_provider("vertex_ai/gemini-2.0-flash") is False
 
     def test_inject_credentials_keeps_provider_for_same_provider_model(self):
         handler = self._handler("gpt-4o", custom_llm_provider="openai")
@@ -696,18 +762,14 @@ class TestManagedResponsesSameProvider:
         assert "custom_llm_provider" not in call_kwargs
 
     def test_unresolvable_connection_model_falls_back_to_custom_provider(self):
-        handler = self._handler(
-            "my-custom-deployment", custom_llm_provider="openai"
-        )
+        handler = self._handler("my-custom-deployment", custom_llm_provider="openai")
         assert handler._same_provider("gpt-4o-mini") is True
         call_kwargs: dict = {}
         handler._inject_credentials(call_kwargs, model="gpt-4o-mini")
         assert call_kwargs["custom_llm_provider"] == "openai"
 
     def test_unresolvable_connection_model_still_drops_cross_provider(self):
-        handler = self._handler(
-            "my-custom-deployment", custom_llm_provider="openai"
-        )
+        handler = self._handler("my-custom-deployment", custom_llm_provider="openai")
         call_kwargs: dict = {}
         handler._inject_credentials(call_kwargs, model="vertex_ai/gemini-2.0-flash")
         assert "custom_llm_provider" not in call_kwargs
