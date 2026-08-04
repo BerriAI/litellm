@@ -231,6 +231,18 @@ class JsonFormatter(Formatter):
             if key not in _STANDARD_RECORD_ATTRS and key not in json_record:
                 json_record[key] = value
 
+        # trace_id/session_id are reserved: CorrelationContextFilter is the only
+        # legitimate source for these two fields. Without this, a message string
+        # that happens to parse as JSON/dict (e.g. a proxy log line dumping raw
+        # request headers) with a "trace_id"/"session_id" key would have already
+        # claimed the key at the parsed-message step above, and the extra-attributes
+        # loop's "key not in json_record" guard would then skip the real value -
+        # letting a caller-supplied header spoof another request's correlation ids.
+        for reserved_key in ("trace_id", "session_id"):
+            value = getattr(record, reserved_key, None)
+            if value:
+                json_record[reserved_key] = value
+
         # Set component/logger only if not already supplied via extra={...}
         if "component" not in json_record:
             json_record["component"] = record.name

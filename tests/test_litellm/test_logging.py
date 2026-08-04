@@ -445,6 +445,23 @@ def test_session_id_injected_when_set(monkeypatch):
         session_id_var.set("")
 
 
+def test_trace_id_and_session_id_cannot_be_spoofed_by_message_content(monkeypatch):
+    """A log message that happens to parse as JSON/dict with "trace_id"/"session_id"
+    keys (e.g. the proxy logging a raw request-header dict) must not override the
+    real correlation ids set via set_trace_id()/set_session_id()."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_capture_logger("test.spoof_attempt")
+    set_trace_id("real-trace-id")
+    set_session_id("real-session-id")
+    try:
+        lg.info('{"trace_id": "attacker-supplied-trace", "session_id": "attacker-supplied-session"}')
+        assert cap.records[0]["trace_id"] == "real-trace-id"
+        assert cap.records[0]["session_id"] == "real-session-id"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
 def test_session_id_absent_when_not_set():
     """session_id must NOT appear in JSON record when not set for this context."""
     lg, cap = _make_capture_logger("test.no_session")
