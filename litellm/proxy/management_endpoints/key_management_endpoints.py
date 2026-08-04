@@ -5703,20 +5703,10 @@ def _build_key_filter_conditions(
             }
         else:
             user_condition["user_id"] = user_id
-    if key_alias and isinstance(key_alias, str):
-        if use_substring_matching:
-            user_condition["key_alias"] = {
-                "contains": key_alias,
-                "mode": "insensitive",
-            }
-        else:
-            user_condition["key_alias"] = key_alias
     if exclude_team_id and isinstance(exclude_team_id, str):
         user_condition["team_id"] = {"not": exclude_team_id}
     if organization_id and isinstance(organization_id, str):
         user_condition["organization_id"] = organization_id
-    if key_hash and isinstance(key_hash, str):
-        user_condition["token"] = key_hash
 
     if user_condition:
         or_conditions.append(user_condition)
@@ -5774,19 +5764,30 @@ def _build_key_filter_conditions(
 
     # Apply team_id, project_id and access_group_id as global AND filters so they
     # narrow results across all visibility conditions (own keys, team keys, etc.)
-    if team_id and isinstance(team_id, str):
-        where = {"AND": [where, {"team_id": team_id}]}
-    if project_id:
-        where = {"AND": [where, {"project_id": project_id}]}
-    if access_group_id:
-        where = {"AND": [where, {"access_group_ids": {"hasSome": [access_group_id]}}]}
-    if agent_id and isinstance(agent_id, str):
-        where = {"AND": [where, {"agent_id": agent_id}]}
-    if expires_filter is not None and expires_filter in VALID_EXPIRES_FILTER_VALUES:
-        where = {"AND": [where, _build_expires_where_clause(expires_filter, datetime.now(timezone.utc))]}
-
-    verbose_proxy_logger.debug("Filter conditions: %s", where)
-    return where
+    global_filters: tuple[dict[str, Any], ...] = (
+        *(
+            (
+                {"key_alias": {"contains": key_alias, "mode": "insensitive"}}
+                if use_substring_matching
+                else {"key_alias": key_alias},
+            )
+            if key_alias and isinstance(key_alias, str)
+            else ()
+        ),
+        *(({"token": key_hash},) if key_hash and isinstance(key_hash, str) else ()),
+        *(({"team_id": team_id},) if team_id and isinstance(team_id, str) else ()),
+        *(({"project_id": project_id},) if project_id else ()),
+        *(({"access_group_ids": {"hasSome": [access_group_id]}},) if access_group_id else ()),
+        *(({"agent_id": agent_id},) if agent_id and isinstance(agent_id, str) else ()),
+        *(
+            (_build_expires_where_clause(expires_filter, datetime.now(timezone.utc)),)
+            if expires_filter is not None and expires_filter in VALID_EXPIRES_FILTER_VALUES
+            else ()
+        ),
+    )
+    combined_where = {"AND": [where, *global_filters]} if global_filters else where
+    verbose_proxy_logger.debug("Filter conditions: %s", combined_where)
+    return combined_where
 
 
 async def _list_key_helper(
