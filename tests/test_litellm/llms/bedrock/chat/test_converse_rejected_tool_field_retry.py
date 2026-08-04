@@ -12,6 +12,7 @@ import pytest
 from litellm.llms.base_llm.base_utils import parse_rejected_tool_fields
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.bedrock.common_utils import BedrockError, drop_bedrock_rejected_tool_fields
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 _STRICT_REJECTION = (
     '{"message":"The model returned the following errors: '
@@ -253,7 +254,7 @@ _DESCRIPTION_REJECTION = (
 )
 
 
-class _RejectThenAcceptClient:
+class _RejectThenAcceptTransport:
     """Fake transport: rejects the first body the way Bedrock does, accepts the second.
 
     Drives the real ``_send``/``_send_stream`` closures inside the handler rather than
@@ -277,9 +278,29 @@ class _RejectThenAcceptClient:
             raise httpx.HTTPStatusError(
                 "400", request=request, response=httpx.Response(400, text=_DESCRIPTION_REJECTION, request=request)
             )
-        return httpx.Response(200, json=_CONVERSE_OK)
+        return httpx.Response(200, json=_CONVERSE_OK, request=httpx.Request("POST", "https://x/y"))
+
+
+class _RejectThenAcceptClient(HTTPHandler, _RejectThenAcceptTransport):
+    """Injectable sync client. The handler discards anything that is not an HTTPHandler,
+    so the fake has to be one or the call silently goes to real AWS."""
+
+    def __init__(self) -> None:
+        HTTPHandler.__init__(self)
+        self.posts = []
 
     def post(self, *args, **kwargs) -> httpx.Response:
+        return self._respond(kwargs.get("data") or "")
+
+
+class _AsyncRejectThenAcceptClient(AsyncHTTPHandler, _RejectThenAcceptTransport):
+    """Injectable async twin of ``_RejectThenAcceptClient``."""
+
+    def __init__(self) -> None:
+        AsyncHTTPHandler.__init__(self)
+        self.posts = []
+
+    async def post(self, *args, **kwargs) -> httpx.Response:
         return self._respond(kwargs.get("data") or "")
 
 
@@ -321,6 +342,39 @@ def _raw_credentials():
     return Credentials(access_key="AKIAEXAMPLE", secret_key="secret", token=None)
 
 
+def _assert_retried_without_description(client: _RejectThenAcceptTransport) -> None:
+    assert len(client.posts) == 2, f"expected exactly one retry, saw {len(client.posts)} request(s)"
+    assert '"description"' in client.posts[0]
+    assert '"description"' not in client.posts[1]
+    assert '"get_weather"' in client.posts[1]
+
+
+def _completion_kwargs(client, stream: bool):
+    import litellm
+
+    return {
+        "model": "us.anthropic.claude-sonnet-5",
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_base": None,
+        "custom_prompt_dict": {},
+        "model_response": litellm.ModelResponse(),
+        "encoding": None,
+        "logging_obj": _logging_obj(),
+        "optional_params": {
+            **_converse_kwargs(client)["optional_params"],
+            "stream": stream,
+            "fake_stream": True,
+            "aws_access_key_id": "AKIAEXAMPLE",
+            "aws_secret_access_key": "secret",
+        },
+        "acompletion": False,
+        "timeout": None,
+        "litellm_params": {"aws_region_name": "us-east-1"},
+        "client": client,
+        "api_key": None,
+    }
+
+
 def _logging_obj():
     from unittest.mock import MagicMock
 
@@ -332,14 +386,26 @@ def _logging_obj():
 @pytest.mark.asyncio
 async def test_async_streaming_closure_retries_and_resends_without_the_field() -> None:
     """Covers the `_send` closure inside async_streaming, not just the wrapper."""
-    class _AsyncClient(_RejectThenAcceptClient):
-        async def post(self, *args, **kwargs):
-            return self._respond(kwargs.get("data") or "")
+    client = _AsyncRejectThenAcceptClient()
+    await BedrockConverseLLM().async_streaming(**_converse_kwargs(client))
+    _assert_retried_without_description(client)
 
-    async_client = _AsyncClient()
-    await BedrockConverseLLM().async_streaming(**_converse_kwargs(async_client))
 
-    assert len(async_client.posts) == 2
-    assert '"description"' in async_client.posts[0]
-    assert '"description"' not in async_client.posts[1]
-    assert '"get_weather"' in async_client.posts[1]
+@pytest.mark.asyncio
+async def test_async_completion_closure_retries_and_resends_without_the_field() -> None:
+    """Covers the `_send` closure inside async_completion."""
+    client = _AsyncRejectThenAcceptClient()
+    kwargs = _converse_kwargs(client)
+    kwargs.pop("fake_stream", None)
+    kwargs.pop("stream_chunk_size", None)
+    kwargs["stream"] = False
+    await BedrockConverseLLM().async_completion(**kwargs)
+    _assert_retried_without_description(client)
+
+
+@pytest.mark.parametrize("stream", [True, False], ids=["sync streaming", "sync completion"])
+def test_sync_closures_retry_and_resend_without_the_field(stream: bool) -> None:
+    """Covers the `_send_stream` and `_send` closures inside the sync completion path."""
+    client = _RejectThenAcceptClient()
+    BedrockConverseLLM().completion(**_completion_kwargs(client, stream=stream))
+    _assert_retried_without_description(client)

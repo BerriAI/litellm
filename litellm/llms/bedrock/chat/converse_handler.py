@@ -5,6 +5,7 @@ from typing import Any, TypeVar
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
 )
@@ -27,6 +28,29 @@ from ..common_utils import (
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
 _SendResultT = TypeVar("_SendResultT")
+
+
+def _retry_body_without_rejected_tool_fields(
+    request_data: Mapping[str, Any], err: BedrockError | httpx.HTTPStatusError
+) -> str | None:
+    """
+    Serialised retry body with the rejected ``toolSpec`` members gone, or ``None``.
+
+    Warns when it fires: the retry costs a round trip on every request until the model's
+    ``bedrock_converse_supports_strict_tools`` entry is set, and the pre-call log for
+    this request records the payload that was refused rather than the one that worked,
+    so an operator reading logs needs the retry itself to be visible.
+    """
+    retried = drop_bedrock_rejected_tool_fields(request_data, _provider_error_text(err))
+    if retried is None:
+        return None
+    verbose_logger.warning(
+        "Bedrock Converse rejected tool fields; retrying once without them. "
+        "Set bedrock_converse_supports_strict_tools for this model to avoid the extra round trip. "
+        "Provider error: %s",
+        _provider_error_text(err),
+    )
+    return json.dumps(retried)
 
 
 def _provider_error_text(err: BedrockError | httpx.HTTPStatusError) -> str:
@@ -152,10 +176,9 @@ class BedrockConverseLLM(BaseAWSLLM):
         try:
             return await send(data, headers), data
         except (BedrockError, httpx.HTTPStatusError) as err:
-            retried = drop_bedrock_rejected_tool_fields(request_data, _provider_error_text(err))
-            if retried is None:
+            body = _retry_body_without_rejected_tool_fields(request_data, err)
+            if body is None:
                 raise
-            body = json.dumps(retried)
             return await send(body, sign(body)), body
 
     def _send_with_tool_field_retry(
@@ -171,10 +194,9 @@ class BedrockConverseLLM(BaseAWSLLM):
         try:
             return send(data, headers), data
         except (BedrockError, httpx.HTTPStatusError) as err:
-            retried = drop_bedrock_rejected_tool_fields(request_data, _provider_error_text(err))
-            if retried is None:
+            body = _retry_body_without_rejected_tool_fields(request_data, err)
+            if body is None:
                 raise
-            body = json.dumps(retried)
             return send(body, sign(body)), body
 
     async def async_streaming(
