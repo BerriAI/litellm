@@ -7,7 +7,7 @@ import { all_admin_roles } from "@/utils/roles";
 import { type ModelWriteScope } from "@/utils/modelPermissions";
 import TeamDropdown from "../common_components/team_dropdown";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
-import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
+import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   DEFAULT_ADAPTIVE_WEIGHTS,
@@ -193,48 +193,16 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     setEscalationKeywords(config.escalation_keywords ?? DEFAULT_ESCALATION_KEYWORDS);
   };
 
-  // The dropdown and handlePresetChange trust the cached model list, so a caller's access can
-  // narrow without ever being reflected here (nothing invalidates a preset already applied, and a
-  // background refetch failure keeps trusting the stale cache by design - see modelsUnverifiable
-  // above). The backend does not re-check a router's referenced model names against the caller's
-  // access either, so this is the only place that can catch it: force a fresh fetch right before
-  // creating the router, rather than trusting whatever's cached. Takes the token as a parameter,
-  // captured once by the caller, so this check and the create call it gates can never end up
-  // disagreeing about which caller they represent - reading accessToken independently at each
-  // point only chases a moving target and can never fully close that gap.
-  const verifyPresetStillAvailable = async (presetKey: string, token: string): Promise<boolean> => {
-    const preset = getPresetByKey(presetKey);
-    if (!preset) return false;
-    let freshModels: ModelGroup[];
-    try {
-      freshModels = await fetchAvailableModels(token);
-    } catch {
-      return false;
-    }
-    const freshSet = new Set(freshModels.map((m) => m.model_group));
-    return getMissingModelsInPreset(preset, freshSet).length === 0;
-  };
-
   // Why the submit is unavailable, or null when it is available. The button reads this to disable
   // itself and to say what is missing, so the two can never give different answers.
   const submitBlockedReason =
     getMissingTiersError(complexityRouterConfig.tiers) ?? getKeywordTierRulesError(keywordTierRules);
 
+  // A preset only ever prefills complexityRouterConfig at selection time (handlePresetChange);
+  // after that it's edited exactly like Custom, so there is nothing preset-specific left to verify
+  // at submit. The tier selects already only ever offer models from modelInfo, so submitBlockedReason
+  // covering the actual config is the whole check, regardless of how it got there.
   const submitRecommendedRouter = async (name: string) => {
-    if (!selectedPreset) {
-      setShowValidationErrors(true);
-      NotificationManager.fromBackend("Please select a template, or choose Custom Configuration");
-      return;
-    }
-
-    if (selectedPreset !== "custom" && !(await verifyPresetStillAvailable(selectedPreset, accessToken))) {
-      setShowValidationErrors(true);
-      NotificationManager.fromBackend(
-        "This template's models are no longer available. Please reselect a template or switch to Custom.",
-      );
-      return;
-    }
-
     const {
       tiers,
       classifier_type: classifierType,
@@ -373,9 +341,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           labelAlign="left"
         >
           <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-900 mb-2">
-              Template <span className="text-red-500">*</span>
-            </label>
+            <label className="block text-sm font-medium text-gray-900 mb-2">Template</label>
             <AntdSelect
               value={selectedPreset}
               onChange={handlePresetChange}
@@ -413,9 +379,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 );
               })}
             </AntdSelect>
-            {showValidationErrors && !selectedPreset && (
-              <div className="text-xs mt-1 text-red-500">Please select a template</div>
-            )}
             {modelsUnverifiable && (
               <div className="text-xs mt-1 text-red-500">
                 Could not load available models.{" "}

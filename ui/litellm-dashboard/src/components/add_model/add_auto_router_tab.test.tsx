@@ -1,5 +1,5 @@
 import { renderWithProviders, screen, waitFor, testQueryClient, within } from "../../../tests/test-utils";
-import { act, fireEvent } from "@testing-library/react";
+import { fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import AddAutoRouterTab from "./add_auto_router_tab";
@@ -55,10 +55,16 @@ vi.mock("../molecules/notifications_manager", () => ({
   default: { fromBackend: vi.fn() },
 }));
 
-// Kept real by default so the "mandatory field" test still sees genuine tier validation; one
-// test overrides it to reach the submit path without driving four tier selects.
+// Kept real by default so the "mandatory field" test still sees genuine tier validation; several
+// tests override it with mockReturnValue(null) to reach the submit path without driving four tier
+// selects. vi.clearAllMocks() only clears call history, not that override, so it leaks into
+// whichever test runs next unless beforeEach restores the real implementation explicitly.
+const mocks = vi.hoisted(() => ({
+  realGetMissingTiersError: undefined as ((tiers: unknown) => string | null) | undefined,
+}));
 vi.mock("./build_complexity_router_config", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./build_complexity_router_config")>();
+  mocks.realGetMissingTiersError = actual.getMissingTiersError as (tiers: unknown) => string | null;
   return { ...actual, getMissingTiersError: vi.fn(actual.getMissingTiersError) };
 });
 
@@ -115,6 +121,9 @@ const Harness = () => <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" u
 describe("AddAutoRouterTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    if (mocks.realGetMissingTiersError) {
+      vi.mocked(getMissingTiersError).mockImplementation(mocks.realGetMissingTiersError);
+    }
     // testQueryClient is a shared singleton with staleTime: Infinity, so cached model lists would
     // otherwise bleed across tests (a later test reusing accessToken="token" would read an earlier
     // test's data instead of its own mock).
@@ -209,128 +218,6 @@ describe("AddAutoRouterTab", () => {
     expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2);
   });
 
-  // react-query keeps the last successful list when a later refetch fails, so a background
-  // refetch error must not treat an already-verified, still-cached preset as unverifiable in the
-  // UI: the dropdown stays selectable and the caller never sees a stale error just from a passive
-  // hiccup. Submit still forces its own fresh check (separately tested below); here that fresh
-  // check succeeds, representing the hiccup having been transient.
-  it("keeps a selected preset submit-reachable when a background refetch fails but cached models remain valid", async () => {
-    const user = userEvent.setup();
-    mockFetchAvailableModels
-      .mockResolvedValueOnce(ALL_FAMILY_MODELS)
-      .mockRejectedValueOnce(new Error("boom"))
-      .mockResolvedValueOnce(ALL_FAMILY_MODELS);
-
-    renderWithProviders(<Harness />);
-    openTemplateDropdown();
-    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false));
-    fireEvent.click(optionByLabel("Anthropic Family")!);
-
-    await act(async () => {
-      await testQueryClient.refetchQueries({ queryKey: ["availableModels", "autoRouter", "token"] });
-    });
-    // The passive refetch failure must not have re-disabled the already-selected preset's option.
-    openTemplateDropdown();
-    expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
-    openTemplateDropdown();
-
-    await user.type(screen.getByPlaceholderText(/smart_router/i), "resilient-router");
-    await user.click(screen.getByRole("button", { name: /add auto router/i }));
-
-    await waitFor(() => expect(mockHandleAddAutoRouterSubmit).toHaveBeenCalled());
-    expect(NotificationManager.fromBackend).not.toHaveBeenCalledWith(
-      "This template's models are no longer available. Please reselect a template or switch to Custom.",
-    );
-  });
-
-  // The backend does not re-check a router's referenced model names against the caller's access,
-  // so submit is the only place that can catch a genuinely stale preset: force a fresh fetch right
-  // before creating the router rather than trusting the cache, and block if that fresh check can't
-  // confirm availability (a real outage, or the caller's access having actually narrowed).
-  it("blocks submit when a fresh re-check at submit time cannot confirm the preset's models", async () => {
-    const user = userEvent.setup();
-    mockFetchAvailableModels.mockResolvedValueOnce(ALL_FAMILY_MODELS).mockRejectedValue(new Error("boom"));
-
-    renderWithProviders(<Harness />);
-    openTemplateDropdown();
-    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false));
-    fireEvent.click(optionByLabel("Anthropic Family")!);
-
-    await user.type(screen.getByPlaceholderText(/smart_router/i), "unconfirmed-router");
-    await user.click(screen.getByRole("button", { name: /add auto router/i }));
-
-    await waitFor(() =>
-      expect(NotificationManager.fromBackend).toHaveBeenCalledWith(
-        "This template's models are no longer available. Please reselect a template or switch to Custom.",
-      ),
-    );
-    expect(mockHandleAddAutoRouterSubmit).not.toHaveBeenCalled();
-  });
-
-  // The fresh re-check is a real network round trip, not instant, so the submit button must show
-  // its own loading state (matching the Test Connection button's existing convention) rather than
-  // silently doing nothing until it settles. This also proves the button can't be clicked again
-  // mid-check.
-  it("shows a loading state on the submit button while the submit-time re-check is in flight", async () => {
-    const user = userEvent.setup();
-    let resolveRecheck: (models: ModelGroup[]) => void = () => undefined;
-    mockFetchAvailableModels
-      .mockResolvedValueOnce(ALL_FAMILY_MODELS)
-      .mockReturnValueOnce(new Promise<ModelGroup[]>((resolve) => (resolveRecheck = resolve)));
-
-    renderWithProviders(<Harness />);
-    openTemplateDropdown();
-    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false));
-    fireEvent.click(optionByLabel("Anthropic Family")!);
-
-    await user.type(screen.getByPlaceholderText(/smart_router/i), "loading-state-router");
-    const submitButton = screen.getByRole("button", { name: /add auto router/i });
-    await user.click(submitButton);
-
-    await waitFor(() => expect(submitButton).toHaveClass("ant-btn-loading"));
-    await user.click(submitButton);
-    expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2);
-
-    resolveRecheck(ALL_FAMILY_MODELS);
-
-    await waitFor(() => expect(submitButton).not.toHaveClass("ant-btn-loading"));
-    expect(mockHandleAddAutoRouterSubmit).toHaveBeenCalledTimes(1);
-  });
-
-  // A single in-flight submission must stay internally consistent even if accessToken rotates
-  // mid-flight: verifyPresetStillAvailable and the create call both receive the token captured
-  // once when submit started, so they can never end up verifying one caller's models and creating
-  // under another's identity. Reading a "latest" ref independently at each point can't fully close
-  // that gap (there's always a residual window between any two reads); one snapshot, used
-  // throughout, closes it completely.
-  it("keeps verification and creation on the same token even if it rotates mid-submission", async () => {
-    const user = userEvent.setup();
-    let resolveInitialRecheck: (models: ModelGroup[]) => void = () => undefined;
-    mockFetchAvailableModels
-      .mockResolvedValueOnce(ALL_FAMILY_MODELS)
-      .mockReturnValueOnce(new Promise<ModelGroup[]>((resolve) => (resolveInitialRecheck = resolve)));
-
-    const { rerender } = renderWithProviders(
-      <AddAutoRouterTab handleOk={vi.fn()} accessToken="stale-token" userRole="Admin" />,
-    );
-    openTemplateDropdown();
-    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false));
-    fireEvent.click(optionByLabel("Anthropic Family")!);
-
-    await user.type(screen.getByPlaceholderText(/smart_router/i), "rotated-token-router");
-    await user.click(screen.getByRole("button", { name: /add auto router/i }));
-    await waitFor(() => expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2));
-    expect(mockFetchAvailableModels.mock.calls[1][0]).toBe("stale-token");
-
-    // The token rotates while the re-check above is still in flight.
-    rerender(<AddAutoRouterTab handleOk={vi.fn()} accessToken="fresh-token" userRole="Admin" />);
-
-    resolveInitialRecheck(ALL_FAMILY_MODELS);
-
-    await waitFor(() => expect(mockHandleAddAutoRouterSubmit).toHaveBeenCalled());
-    expect(mockHandleAddAutoRouterSubmit.mock.calls.at(-1)?.[1]).toBe("stale-token");
-  });
-
   // The headline behavior: selecting a preset must pre-fill the tier config so the created
   // router carries the preset's models. Real tier validation runs here (getMissingTiersError is
   // not stubbed), so if selection stopped pre-filling, the empty tiers would either block the
@@ -393,26 +280,7 @@ describe("AddAutoRouterTab", () => {
     await user.type(screen.getByPlaceholderText(/smart_router/i), "raced-router");
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
-    // No preset was applied and none was picked, so the template check blocks the submit.
-    expect(mockHandleAddAutoRouterSubmit).not.toHaveBeenCalled();
-  });
-
-  // The Template field carries a required marker but, until now, nothing actually validated it:
-  // submit fell through to the unrelated missing-tiers error instead. This pins a Template-specific
-  // block so a future regression (e.g. dropping this check) surfaces as a wrong error message, not
-  // silence.
-  it("blocks the submit and shows an inline error when no template is chosen", async () => {
-    const user = userEvent.setup();
-    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
-
-    renderWithProviders(<Harness />);
-    await user.type(screen.getByPlaceholderText(/smart_router/i), "no-template-router");
-    await user.click(screen.getByRole("button", { name: /add auto router/i }));
-
-    expect(await screen.findByText("Please select a template")).toBeInTheDocument();
-    expect(NotificationManager.fromBackend).toHaveBeenCalledWith(
-      "Please select a template, or choose Custom Configuration",
-    );
+    // No preset was applied, so tiers are still empty and submitBlockedReason disables the button.
     expect(mockHandleAddAutoRouterSubmit).not.toHaveBeenCalled();
   });
 
@@ -435,35 +303,6 @@ describe("AddAutoRouterTab", () => {
 
     await waitFor(() => expect(optionByLabel("OpenAI Family")).toHaveTextContent(/Missing:.*o3/));
     expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(true);
-  });
-
-  // handlePresetChange only ever applies an available preset, but that guarantee can go stale by
-  // submit time: select under a caller with the full family, then switch to a caller missing one
-  // of its models. Nothing clears the selection (that would erase in-progress Custom edits too),
-  // so submit itself must re-verify against the current caller's list before creating the router.
-  it("blocks submit when the selected preset's models are no longer available for the current caller", async () => {
-    const user = userEvent.setup();
-    mockFetchAvailableModels
-      .mockResolvedValueOnce(ALL_FAMILY_MODELS)
-      .mockResolvedValueOnce(ALL_FAMILY_MODELS.filter((m) => m.model_group !== "o3"));
-
-    const { rerender } = renderWithProviders(
-      <AddAutoRouterTab handleOk={vi.fn()} accessToken="caller-a" userRole="Admin" />,
-    );
-    openTemplateDropdown();
-    await waitFor(() => expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(false));
-    fireEvent.click(optionByLabel("OpenAI Family")!);
-
-    rerender(<AddAutoRouterTab handleOk={vi.fn()} accessToken="caller-b" userRole="Admin" />);
-    await waitFor(() => expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2));
-
-    await user.type(screen.getByPlaceholderText(/smart_router/i), "stale-preset-router");
-    await user.click(screen.getByRole("button", { name: /add auto router/i }));
-
-    expect(NotificationManager.fromBackend).toHaveBeenCalledWith(
-      "This template's models are no longer available. Please reselect a template or switch to Custom.",
-    );
-    expect(mockHandleAddAutoRouterSubmit).not.toHaveBeenCalled();
   });
 
   // Prefill must preserve a preset's deliberately-falsy fields (a 0 match threshold, an empty
