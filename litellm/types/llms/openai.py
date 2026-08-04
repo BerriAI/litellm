@@ -759,6 +759,7 @@ class ChatCompletionToolMessage(TypedDict):
     role: Literal["tool"]
     content: Union[str, Iterable[ChatCompletionTextObject]]
     tool_call_id: str
+    cache_control: NotRequired[ChatCompletionCachedContent]
 
 
 class ChatCompletionFunctionMessage(TypedDict):
@@ -791,6 +792,7 @@ class ChatCompletionDeveloperMessage(OpenAIChatCompletionDeveloperMessage, total
 class GenericChatCompletionMessage(TypedDict, total=False):
     role: Required[str]
     content: Required[Union[str, List]]
+    cache_control: ChatCompletionCachedContent
 
 
 ValidUserMessageContentTypes = [
@@ -977,6 +979,7 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     provider_specific_fields: Optional[dict]
     reasoning_content: Optional[str]
     thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]]
+    cache_control: ChatCompletionCachedContent
 
 
 class ChatCompletionUsageBlock(TypedDict, total=False):
