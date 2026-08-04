@@ -45,10 +45,28 @@ export const getRequiredModels = (
   return new Set(models.filter((model): model is string => Boolean(model)));
 };
 
+// Admins spell version numbers inconsistently ("claude-sonnet-4-5" vs "claude-sonnet-4.5"), so a
+// preset's hardcoded name and a caller's registered one can refer to the same model while
+// differing only in that separator. Canonicalizing on "-" (the presets' own convention) lets both
+// spellings match without doing anything looser - two DIFFERENT model names never collide here,
+// only the punctuation within one version number does.
+const normalizeModelName = (model: string): string => model.replace(/(\d)\.(\d)/g, "$1-$2");
+
+// The caller's actual registered spelling for a required model, under either separator
+// convention, or undefined if truly absent. Preset prefill must write THIS spelling, not the
+// preset's literal string - otherwise a caller whose proxy only has the dotted form ends up with
+// a tier pointing at a model name that was never registered.
+const resolveAvailableModel = (requiredModel: string, availableModels: Set<string>): string | undefined => {
+  if (availableModels.has(requiredModel)) return requiredModel;
+  const normalized = normalizeModelName(requiredModel);
+  return Array.from(availableModels).find((available) => normalizeModelName(available) === normalized);
+};
+
 export const getMissingModels = (
   config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model">,
   availableModels: Set<string>,
-): string[] => [...getRequiredModels(config)].filter((model) => !availableModels.has(model)).sort();
+): string[] =>
+  [...getRequiredModels(config)].filter((model) => resolveAvailableModel(model, availableModels) === undefined).sort();
 
 export const getRequiredModelsInPreset = (preset: AutoRouterPreset): Set<string> =>
   getRequiredModels(preset.complexity_router_config);
@@ -111,25 +129,47 @@ export const buildEmptyPrefill = (): PresetPrefill => ({
 
 // `??`, never `||`: a preset's match_threshold: 0 or escalation_keywords: [] is a deliberate,
 // falsy value that must survive the prefill, not get silently replaced by the default.
-export const buildPresetPrefill = (config: ComplexityRouterConfigPayload): PresetPrefill => ({
-  complexityRouterConfig: {
-    tiers: config.tiers,
-    classifier_type: config.classifier_type,
-    classifier_llm_config: config.classifier_llm_config,
-    classifier_context_window_size: config.classifier_context_window_size,
-    classifier_context_per_turn_chars: config.classifier_context_per_turn_chars,
-    classifier_context_include_assistant_turns: config.classifier_context_include_assistant_turns,
-    session_affinity: config.session_affinity ?? DEFAULT_SESSION_AFFINITY,
-    adaptive: config.adaptive,
-    adaptive_weights: config.adaptive_weights,
-    tier_distance_penalty: config.tier_distance_penalty,
-    adaptive_eligible: config.adaptive_eligible,
-    return_raw_model_name: config.return_raw_model_name,
-  },
-  customTechnicalKeywords: config.custom_technical_keywords ?? [],
-  keywordTierRules: hydrateKeywordTierRules(config.keyword_tier_rules ?? []),
-  semanticMatchingEnabled: config.semantic_keyword_matching ?? false,
-  embeddingModel: config.embedding_model,
-  matchThreshold: config.match_threshold ?? DEFAULT_MATCH_THRESHOLD,
-  escalationKeywords: config.escalation_keywords ?? DEFAULT_ESCALATION_KEYWORDS,
-});
+//
+// `availableModels` is required, not optional: every model reference gets rewritten to the
+// caller's actual registered spelling (resolveAvailableModel), which may differ from the preset's
+// literal string by version-separator punctuation alone. Called only after presetAvailability has
+// already confirmed every required model resolves, so falling back to the preset's own string
+// when a model somehow doesn't resolve is unreachable in practice, not a silent-failure path.
+export const buildPresetPrefill = (
+  config: ComplexityRouterConfigPayload,
+  availableModels: Set<string>,
+): PresetPrefill => {
+  const resolve = (model: string): string => resolveAvailableModel(model, availableModels) ?? model;
+  const resolveTier = (models: string[]): string[] => models.map(resolve);
+
+  return {
+    complexityRouterConfig: {
+      tiers: {
+        SIMPLE: resolveTier(config.tiers.SIMPLE),
+        MEDIUM: resolveTier(config.tiers.MEDIUM),
+        COMPLEX: resolveTier(config.tiers.COMPLEX),
+        REASONING: resolveTier(config.tiers.REASONING),
+      },
+      classifier_type: config.classifier_type,
+      classifier_llm_config: config.classifier_llm_config && {
+        ...config.classifier_llm_config,
+        model: resolve(config.classifier_llm_config.model),
+      },
+      classifier_context_window_size: config.classifier_context_window_size,
+      classifier_context_per_turn_chars: config.classifier_context_per_turn_chars,
+      classifier_context_include_assistant_turns: config.classifier_context_include_assistant_turns,
+      session_affinity: config.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+      adaptive: config.adaptive,
+      adaptive_weights: config.adaptive_weights,
+      tier_distance_penalty: config.tier_distance_penalty,
+      adaptive_eligible: config.adaptive_eligible,
+      return_raw_model_name: config.return_raw_model_name,
+    },
+    customTechnicalKeywords: config.custom_technical_keywords ?? [],
+    keywordTierRules: hydrateKeywordTierRules(config.keyword_tier_rules ?? []),
+    semanticMatchingEnabled: config.semantic_keyword_matching ?? false,
+    embeddingModel: config.embedding_model && resolve(config.embedding_model),
+    matchThreshold: config.match_threshold ?? DEFAULT_MATCH_THRESHOLD,
+    escalationKeywords: config.escalation_keywords ?? DEFAULT_ESCALATION_KEYWORDS,
+  };
+};

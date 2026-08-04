@@ -203,7 +203,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     if (!preset || presetAvailability(preset).kind !== "available") return;
 
     setSelectedPreset(presetKey);
-    applyPrefill(buildPresetPrefill(preset.complexity_router_config));
+    applyPrefill(buildPresetPrefill(preset.complexity_router_config, availableModelSet));
     setDetailsExpanded(false);
   };
 

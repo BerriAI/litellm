@@ -5,6 +5,7 @@ import {
   getRequiredModelsInPreset,
   getMissingModelsInPreset,
   getRequiredModels,
+  getMissingModels,
   getReferencedModelsError,
   buildEmptyPrefill,
   buildPresetPrefill,
@@ -54,6 +55,24 @@ describe("autorouter_presets", () => {
       required.filter((m) => m !== "gpt-5-nano").sort(),
     );
     expect(getMissingModelsInPreset(preset, new Set(required))).toEqual([]);
+  });
+
+  // Admins spell version numbers with either "-" or "." (claude-sonnet-4-5 vs claude-sonnet-4.5);
+  // a caller who only registered one form still satisfies a preset that names the other.
+  it("treats a preset's model as available under either version-separator spelling", () => {
+    const preset = getPresetByKey("anthropic_family")!;
+    expect(
+      getMissingModelsInPreset(preset, new Set(["claude-haiku-4.5", "claude-sonnet-4.5", "claude-opus-5"])),
+    ).toEqual([]);
+  });
+
+  // The two-arm mirror: a differently-punctuated preset model must not be reported missing.
+  it("does not flag a differently-punctuated model as missing via getMissingModels directly", () => {
+    const missing = getMissingModels(
+      { tiers: { SIMPLE: ["claude-sonnet-4-5"], MEDIUM: [], COMPLEX: [], REASONING: [] } },
+      new Set(["claude-sonnet-4.5"]),
+    );
+    expect(missing).toEqual([]);
   });
 
   // A classifier_llm_config placeholder is seeded with model: "" before a caller picks one; an
@@ -114,7 +133,7 @@ describe("autorouter_presets", () => {
   describe("buildPresetPrefill", () => {
     it("prefills a real bundled preset's tiers into the config", () => {
       const preset = getPresetByKey("anthropic_family")!;
-      const prefill = buildPresetPrefill(preset.complexity_router_config);
+      const prefill = buildPresetPrefill(preset.complexity_router_config, getRequiredModelsInPreset(preset));
       expect(prefill.complexityRouterConfig.tiers).toEqual(preset.complexity_router_config.tiers);
     });
 
@@ -130,19 +149,35 @@ describe("autorouter_presets", () => {
         match_threshold: 0,
         escalation_keywords: [],
       };
-      const prefill = buildPresetPrefill(config);
+      const prefill = buildPresetPrefill(config, new Set(["gpt-5-nano"]));
       expect(prefill.matchThreshold).toBe(0);
       expect(prefill.escalationKeywords).toEqual([]);
     });
 
     it("falls back to the defaults when a preset omits match_threshold and escalation_keywords", () => {
-      const prefill = buildPresetPrefill({
-        tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
-        classifier_type: "heuristic",
-        session_affinity: false,
-      });
+      const prefill = buildPresetPrefill(
+        {
+          tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+          classifier_type: "heuristic",
+          session_affinity: false,
+        },
+        new Set(["gpt-5-nano"]),
+      );
       expect(prefill.matchThreshold).toBe(DEFAULT_MATCH_THRESHOLD);
       expect(prefill.escalationKeywords).toEqual(DEFAULT_ESCALATION_KEYWORDS);
+    });
+
+    // The whole point of the separator normalization: a caller whose proxy only registered the
+    // dotted form of a version number still gets that model written into the tier, not the
+    // preset's own hyphenated spelling (which the caller never actually registered).
+    it("rewrites a preset's model name to the caller's differently-punctuated registered spelling", () => {
+      const config = {
+        tiers: { SIMPLE: ["claude-sonnet-4-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+        classifier_type: "heuristic" as const,
+        session_affinity: false,
+      };
+      const prefill = buildPresetPrefill(config, new Set(["claude-sonnet-4.5"]));
+      expect(prefill.complexityRouterConfig.tiers.SIMPLE).toEqual(["claude-sonnet-4.5"]);
     });
   });
 });
