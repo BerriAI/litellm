@@ -48,6 +48,19 @@ function callbackModeTone(mode: string): StatusTone {
 function ScopeCell({ callback }: { callback: AlertingObject }) {
   const scope = callback.resolvedScope;
   const hasResolvedScope = scope?.global === true || [...(scope?.teams ?? []), ...(scope?.orgs ?? [])].length > 0;
+  // A grant only routes traces if the credential also builds an exporter. Showing the
+  // grant alone advertised destinations the resolver excludes, so a misconfigured one
+  // read as live.
+  if (callback.resolvesToDestination === false) {
+    return (
+      <Badge
+        variant="outline"
+        title="This destination cannot be built from its stored values, so it receives no traces"
+      >
+        Not active
+      </Badge>
+    );
+  }
   if (!scope || !hasResolvedScope) {
     return <span className="text-muted-foreground">—</span>;
   }
@@ -85,6 +98,11 @@ interface CallbackRowActionsProps {
 
 function CallbackRowActions({ callback, onTest, onEdit, onDelete, onEditAccess, readOnly }: CallbackRowActionsProps) {
   const destination = isDestination(callback);
+  // Destinations get no Test, so a read-only admin has no action left on one. Rendering
+  // the trigger anyway opened an empty menu that looked broken rather than restricted.
+  if (destination && readOnly) {
+    return null;
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -159,7 +177,10 @@ export const getLoggingCallbacksTableColumns = ({
     enableSorting: false,
     cell: ({ row }) => {
       const id = row.original.name;
-      const displayName = availableCallbacks[id]?.ui_callback_name || id;
+      // A destination keeps the name the admin gave it. Looking it up in the callback
+      // registry renamed a destination called "datadog" to "Datadog", making it
+      // indistinguishable in this column from the real Datadog callback row.
+      const displayName = isDestination(row.original) ? id : availableCallbacks[id]?.ui_callback_name || id;
       return (
         <div>
           <span className="block max-w-72 truncate text-sm font-medium" title={displayName}>

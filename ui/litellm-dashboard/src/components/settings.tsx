@@ -307,6 +307,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       access: c.credential_info?.access,
       credentialInfo: c.credential_info as Record<string, unknown> | undefined,
       resolvedScope: resolveScope(c.credential_info?.access),
+      resolvesToDestination: (c as { resolves_to_destination?: boolean }).resolves_to_destination,
     }));
 
   useEffect(() => {
@@ -978,13 +979,26 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
 
       <DeleteResourceModal
         isOpen={showDeleteConfirmModal}
-        title="Delete Callback"
-        message="Are you sure you want to delete this callback? This action cannot be undone."
-        resourceInformationTitle="Callback Information"
-        resourceInformation={[
-          { label: "Callback Name", value: callbackToDelete?.name },
-          { label: "Mode", value: callbackToDelete?.mode || "success" },
-        ]}
+        title={callbackToDelete?.credentialName ? "Delete Destination" : "Delete Callback"}
+        message={
+          callbackToDelete?.credentialName
+            ? "Are you sure you want to delete this trace destination? Its stored collector credentials are deleted with it and traces stop reaching it. This action cannot be undone."
+            : "Are you sure you want to delete this callback? This action cannot be undone."
+        }
+        resourceInformationTitle={callbackToDelete?.credentialName ? "Destination Information" : "Callback Information"}
+        resourceInformation={
+          // A destination has no mode. Defaulting the shared field to "success" stated a
+          // value the row itself renders as "—", so the dialog disagreed with the table.
+          callbackToDelete?.credentialName
+            ? [
+                { label: "Destination Name", value: callbackToDelete?.name },
+                { label: "Backend", value: callbackToDelete?.destinationLabel },
+              ]
+            : [
+                { label: "Callback Name", value: callbackToDelete?.name },
+                { label: "Mode", value: callbackToDelete?.mode || "success" },
+              ]
+        }
         onCancel={() => {
           setShowDeleteConfirmModal(false);
           setCallbackToDelete(null);

@@ -21,6 +21,11 @@ export interface AlertingObject {
   // time from credential_info.access. Display labels only -- ids are not
   // surfaced here. global=true bypasses the lists.
   resolvedScope?: ResolvedScope;
+  // Whether the backend can actually build an exporter from this credential, decided
+  // there by the same function the request-time resolver and the team/org disclosure
+  // use. Read rather than recomputed: a second implementation of the adapter rules
+  // here would drift, and the drift is what let a dead destination look active.
+  resolvesToDestination?: boolean;
 }
 
 export interface CredentialAccess {

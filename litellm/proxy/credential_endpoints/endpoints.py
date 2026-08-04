@@ -11,7 +11,10 @@ from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
-from litellm.proxy.management_endpoints.logging_exporter_access import is_logging_credential
+from litellm.proxy.management_endpoints.logging_exporter_access import (
+    destination_for_credential,
+    is_logging_credential,
+)
 from litellm.proxy.management_endpoints.logging_exporter_validation import (
     validate_credential_access,
 )
@@ -130,6 +133,11 @@ async def get_credentials(
                 "credential_name": credential.credential_name,
                 "credential_values": _get_masked_values(credential.credential_values),
                 "credential_info": credential.credential_info,
+                **(
+                    {"resolves_to_destination": destination_for_credential(credential) is not None}
+                    if is_logging_credential(credential.credential_info)
+                    else {}
+                ),
             }
             for credential in litellm.credential_list
         ]

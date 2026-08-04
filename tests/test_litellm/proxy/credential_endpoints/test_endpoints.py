@@ -248,3 +248,57 @@ async def test_get_credentials_masks_secret_values(monkeypatch):
     assert generic["credential_values"]["otel_headers"] != raw_headers
     assert "collector-secret" not in str(response)
     assert "sk-secret" not in str(response)
+
+
+@pytest.mark.asyncio
+async def test_get_credentials_reports_whether_each_destination_actually_builds(monkeypatch):
+    """The dashboard needs the resolver's own verdict, not a second implementation of it.
+
+    Its Scope column read ``credential_info.access`` alone, so a destination the resolver
+    excludes (no backend name, or values its adapter rejects) still rendered a scope badge
+    and read as live. Reproducing the adapter rules in the frontend would drift from them;
+    this field is computed by ``destination_for_credential``, the same function the
+    request-time resolver and the team/org disclosure use.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="builds",
+                credential_values={"otel_endpoint": "http://collector.internal:4318/v1/traces"},
+                credential_info={"credential_type": "logging", "description": "generic", "access": {"global": True}},
+            ),
+            CredentialItem(
+                credential_name="no-backend",
+                credential_values={"otel_endpoint": "http://collector.internal:4318/v1/traces"},
+                credential_info={"credential_type": "logging", "access": {"global": True}},
+            ),
+            CredentialItem(
+                credential_name="adapter-rejects",
+                credential_values={"langfuse_public_key": "pk-only"},
+                credential_info={
+                    "credential_type": "logging",
+                    "description": "langfuse_otel",
+                    "access": {"global": True},
+                },
+            ),
+            CredentialItem(
+                credential_name="openai",
+                credential_values={"api_key": "sk-secret"},
+                credential_info={"custom_llm_provider": "openai"},
+            ),
+        ],
+    )
+    response = await endpoints.get_credentials(
+        request=MagicMock(),
+        fastapi_response=MagicMock(),
+        user_api_key_dict=_admin(),
+    )
+    verdicts = {c["credential_name"]: c.get("resolves_to_destination") for c in response["credentials"]}
+    assert verdicts["builds"] is True
+    assert verdicts["no-backend"] is False
+    assert verdicts["adapter-rejects"] is False
+    # A provider credential is not a destination and gets no verdict at all, rather than a
+    # False that would render it as a broken destination.
+    assert verdicts["openai"] is None

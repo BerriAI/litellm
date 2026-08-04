@@ -258,3 +258,75 @@ describe("read-only admin actions", () => {
     expect(screen.getByTestId("callback-action-delete")).toBeInTheDocument();
   });
 });
+
+describe("destination rows must not overstate what a destination does", () => {
+  const destination = (over: Record<string, unknown> = {}) => ({
+    name: "d1",
+    variables: baseVars,
+    credentialName: "d1",
+    destinationLabel: "Generic OTLP Collector",
+    resolvedScope: { global: true, teams: [], orgs: [] },
+    ...over,
+  });
+
+  it("shows Not active, never a scope badge, when the backend cannot build the destination", () => {
+    // Regression: the cell read credential_info.access alone, so a destination the
+    // resolver excludes (no backend name, or values its adapter rejects) still rendered
+    // "Global access" and read as live.
+    render(
+      <LoggingCallbacksTable
+        callbacks={[destination({ resolvesToDestination: false }) as never]}
+        availableCallbacks={{}}
+      />,
+    );
+    expect(screen.getByText("Not active")).toBeInTheDocument();
+    expect(screen.queryByText("Global access")).not.toBeInTheDocument();
+  });
+
+  it("still shows the scope badge when the destination does build", () => {
+    render(
+      <LoggingCallbacksTable
+        callbacks={[destination({ resolvesToDestination: true }) as never]}
+        availableCallbacks={{}}
+      />,
+    );
+    expect(screen.getByText("Global access")).toBeInTheDocument();
+    expect(screen.queryByText("Not active")).not.toBeInTheDocument();
+  });
+
+  it("keeps the admin's own name for a destination named after a config callback", () => {
+    // Regression: the name column applied the callback registry's display label, so a
+    // destination the admin called "datadog" rendered as "Datadog", indistinguishable
+    // from the real Datadog callback row.
+    render(
+      <LoggingCallbacksTable
+        callbacks={[destination({ name: "datadog", credentialName: "datadog" }) as never]}
+        availableCallbacks={{
+          datadog: { litellm_callback_name: "datadog", litellm_callback_params: [], ui_callback_name: "Datadog" },
+        }}
+      />,
+    );
+    expect(screen.getByText("datadog")).toBeInTheDocument();
+    expect(screen.queryByText("Datadog")).not.toBeInTheDocument();
+  });
+
+  it("renders no actions trigger for a read-only admin, rather than one that opens empty", () => {
+    // Regression: readOnly suppressed both Edit scope and Delete, and destinations never
+    // get Test, so the trigger opened a menu with zero items and looked broken.
+    render(<LoggingCallbacksTable callbacks={[destination() as never]} availableCallbacks={{}} readOnly />);
+    expect(screen.queryByTestId("callback-actions-d1-success")).not.toBeInTheDocument();
+  });
+
+  it("still renders the actions trigger for a config callback a read-only admin can Test", async () => {
+    render(
+      <LoggingCallbacksTable
+        callbacks={[{ name: "datadog", type: "success_and_failure", variables: baseVars }]}
+        availableCallbacks={{}}
+        readOnly
+      />,
+    );
+    const trigger = screen.getByTestId("callback-actions-datadog-success_and_failure");
+    await userEvent.click(trigger);
+    expect(await screen.findByTestId("callback-action-test")).toBeInTheDocument();
+  });
+});
