@@ -726,3 +726,103 @@ class TestFlushCostDoesNotGrowWithSessionCount:
         assert await queue.flush(_RecordingPrisma(table)) == 5
         assert table.reads == 1
         assert all(data["update"]["return_turns"] == {"increment": 1} for _, data in table.upserts)
+
+
+def _router_with_auto_routers():
+    """A real router carrying one auto-router of each kind that builds without extra packages.
+
+    A semantic auto-router needs the ``semantic_router`` package to initialize, so
+    it is exercised against the registries directly in
+    ``TestResolvingOneGroupsKind`` rather than here.
+    """
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "adaptive-complexity-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {"SIMPLE": ["cheap"], "MEDIUM": ["cheap"], "COMPLEX": ["pricey"]},
+                        "adaptive": True,
+                    },
+                    "complexity_router_default_model": "cheap",
+                },
+            },
+            {
+                "model_name": "quality-router",
+                "litellm_params": {
+                    "model": "auto_router/quality_router",
+                    "quality_router_config": {"complexity_to_quality": {"SIMPLE": 1, "MEDIUM": 2, "COMPLEX": 3}},
+                    "quality_router_default_model": "cheap",
+                },
+            },
+            {"model_name": "cheap", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"}},
+            {"model_name": "pricey", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"}},
+        ]
+    )
+
+
+class _RegistriesOnly:
+    """Just the four registries a router keys its pre-routing strategies by."""
+
+    def __init__(self, complexity=(), quality=(), adaptive=(), semantic=()):
+        self.complexity_routers = dict.fromkeys(complexity, ())
+        self.quality_routers = dict.fromkeys(quality, ())
+        self.adaptive_routers = dict.fromkeys(adaptive, ())
+        self.auto_routers = dict.fromkeys(semantic, ())
+
+
+class TestResolvingOneGroupsKind:
+    @pytest.mark.parametrize(
+        "registry, kind",
+        [
+            ("complexity", "complexity"),
+            ("quality", "quality"),
+            ("adaptive", "adaptive"),
+            ("semantic", "semantic"),
+        ],
+    )
+    def test_every_kind_of_auto_router_is_resolved_from_its_own_registry(self, registry, kind):
+        from litellm.proxy.spend_tracking.auto_router_sessions import auto_router_kind
+
+        router = _RegistriesOnly(**{registry: ("a-router",)})
+        assert auto_router_kind(router, "a-router") == kind
+
+    def test_a_plain_model_group_resolves_to_nothing(self):
+        from litellm.proxy.spend_tracking.auto_router_sessions import auto_router_kind
+
+        assert auto_router_kind(_RegistriesOnly(complexity=("a-router",)), "gpt-4o") is None
+
+
+class TestTheWriteAndReadPathsAgreeOnWhatAnAutoRouterIs:
+    """The rollup is written per request and read per group, off two different
+    derivations of the same fact. A group the writer files under one kind and the
+    dashboard labels another, or filters out entirely, is a benchmark that reads
+    empty for traffic that really happened."""
+
+    def test_every_group_the_dashboard_asks_about_resolves_to_the_kind_it_labels(self):
+        from litellm.proxy.spend_tracking.auto_router_sessions import auto_router_group_kinds, auto_router_kind
+
+        router = _router_with_auto_routers()
+        group_kinds = auto_router_group_kinds(router)
+
+        assert dict(group_kinds) == {"adaptive-complexity-router": "complexity", "quality-router": "quality"}
+        assert {group: auto_router_kind(router, group) for group in group_kinds} == dict(group_kinds)
+
+    def test_a_complexity_router_running_the_bandit_is_still_a_complexity_router(self):
+        """It owns an entry in both registries, so the lookup order decides, and only
+        one of the two orders agrees with what the dashboard labels the group."""
+        router = _router_with_auto_routers()
+
+        assert "adaptive-complexity-router" in router.complexity_routers
+        assert "adaptive-complexity-router" in router.adaptive_routers
+
+    def test_a_group_no_auto_router_serves_is_left_out_of_both(self):
+        from litellm.proxy.spend_tracking.auto_router_sessions import auto_router_group_kinds, auto_router_kind
+
+        router = _router_with_auto_routers()
+
+        assert "cheap" not in auto_router_group_kinds(router)
+        assert auto_router_kind(router, "cheap") is None

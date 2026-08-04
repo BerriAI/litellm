@@ -28,7 +28,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model
+from litellm.router_utils.auto_router_model_naming import StrategyRouterKind, classify_strategy_router_model
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -289,15 +289,44 @@ def _unclassified(turn: TurnFacts, baseline_spend: float, state: SessionState) -
     )
 
 
+def auto_router_kind(router: "Router", model_group: str) -> StrategyRouterKind | None:
+    """Which kind of auto-router serves ``model_group``, or None when none does.
+
+    Answered from the registries the router already keys by public alias, so the
+    lookup costs the same on a proxy with a thousand models as on one with ten.
+    It runs on every request that carries a session, most of which never touched
+    an auto-router, so it must decide that before paying for anything else; a
+    scan of ``model_list`` charged the whole proxy for a feature few requests use.
+
+    The alias is load-bearing rather than incidental: the auto-router's own
+    classifier sub-calls share the session but carry the judge model's group, so
+    keying on it folds one turn per routed request and no classifier noise.
+
+    A complexity router with ``adaptive`` enabled owns an entry in both
+    registries, so complexity is answered first; that is the kind
+    ``auto_router_group_kinds`` reports for the same deployment, and the two have
+    to agree or the dashboard would label the group one way and the rows another.
+    """
+    if model_group in router.complexity_routers:
+        return "complexity"
+    if model_group in router.quality_routers:
+        return "quality"
+    if model_group in router.adaptive_routers:
+        return "adaptive"
+    if model_group in router.auto_routers:
+        return "semantic"
+    return None
+
+
 def auto_router_group_kinds(router: "Router") -> Mapping[str, str]:
     """Public alias to router kind, for every auto-router on the proxy.
 
     ``model_name`` is what a caller sends and what spend rows record, while the
     ``litellm_params.model`` string carries the ``auto_router/...`` discriminator
-    that says it is one. Filtering turns by this mapping is the same filter the
-    dashboard has always used, and it is load-bearing: the auto-router's own
-    classifier sub-calls share the session but carry the judge model's group, so
-    keying on the alias yields one entry per routed turn with no classifier noise.
+    that says it is one. This is the read side's enumeration: which groups the
+    benchmarks dashboard asks the rollup about. The write path answers the same
+    question for one group at a time through ``auto_router_kind``, because a scan
+    of every deployment is fine once per dashboard load and not fine per request.
 
     Derived per call rather than cached because the router gains and loses
     deployments while it runs.

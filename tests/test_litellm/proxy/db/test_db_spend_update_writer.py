@@ -2236,3 +2236,129 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
     assert transaction["compression_saved_tokens"] == 0
     assert transaction["compression_savings_spend"] == 0
     assert transaction["prompt_caching_savings_spend"] == 0
+
+
+class _RecordingSessionQueue:
+    """Stands in for the session queue so a test sees exactly what one request staged."""
+
+    def __init__(self):
+        self.staged = []
+
+    async def record_turn(self, key, router_kind, baseline_model, turn) -> None:
+        self.staged.append((key, router_kind, turn.model))
+
+
+class _RegistryOnlyRouter:
+    """A router that can answer which of its groups an auto-router serves, and nothing else.
+
+    ``model_list`` raises rather than returning: deciding that from an enumeration
+    of every deployment charged all traffic on the proxy, auto-routed or not, for a
+    fact the router already has keyed by group, and the cost grew with the number of
+    models configured. Reading it here fails the test instead of quietly costing
+    that again.
+    """
+
+    def __init__(self, complexity=(), quality=(), adaptive=(), semantic=()):
+        self.complexity_routers = dict.fromkeys(complexity, ())
+        self.quality_routers = dict.fromkeys(quality, ())
+        self.adaptive_routers = dict.fromkeys(adaptive, ())
+        self.auto_routers = dict.fromkeys(semantic, ())
+
+    @property
+    def model_list(self):
+        raise AssertionError("recording a turn must not enumerate model_list")
+
+
+def _turn_payload(model_group: str, metadata: str | None = None, session_id: str = "session-1") -> dict:
+    return {
+        "session_id": session_id,
+        "model_group": model_group,
+        "model": "anthropic/claude-haiku-4-5",
+        "model_id": "deployment-1",
+        "startTime": datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
+        "custom_llm_provider": "anthropic",
+        "spend": 0.01,
+        "prompt_tokens": 8000,
+        "completion_tokens": 200,
+        "total_tokens": 8200,
+        "metadata": json.dumps({"usage_object": {"cache_read_input_tokens": 6000}})
+        if metadata is None
+        else metadata,
+    }
+
+
+async def _record(router, payload: dict) -> _RecordingSessionQueue:
+    writer = DBSpendUpdateWriter()
+    queue = _RecordingSessionQueue()
+    writer.auto_router_session_queue = queue
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        await writer._record_auto_router_turn_unsafe(payload=payload, prisma_client=MagicMock())
+    return queue
+
+
+@pytest.mark.asyncio
+class TestRecordingAnAutoRouterTurn:
+    async def test_a_turn_is_staged_without_ever_enumerating_the_model_list(self):
+        """What one turn costs must not grow with how many models the proxy serves."""
+        router = _RegistryOnlyRouter(complexity=("smart-router",))
+
+        queue = await _record(router, _turn_payload("smart-router"))
+
+        assert queue.staged == [(("session-1", "smart-router"), "complexity", "anthropic/claude-haiku-4-5")]
+
+    @pytest.mark.parametrize(
+        "registry, kind",
+        [
+            ("complexity", "complexity"),
+            ("quality", "quality"),
+            ("adaptive", "adaptive"),
+            ("semantic", "semantic"),
+        ],
+    )
+    async def test_every_kind_of_auto_router_is_folded_under_its_own_kind(self, registry, kind):
+        """All four are auto-routers the benchmarks tab reports on, and only the three
+        strategy routers record a routing decision on the request; a semantic one
+        records none, so its traffic is recognised by the group it served."""
+        router = _RegistryOnlyRouter(**{registry: ("a-router",)})
+
+        queue = await _record(router, _turn_payload("a-router"))
+
+        assert [staged[1] for staged in queue.staged] == [kind]
+
+    async def test_a_group_no_auto_router_serves_stages_nothing(self):
+        router = _RegistryOnlyRouter(complexity=("smart-router",))
+
+        queue = await _record(router, _turn_payload("gpt-4o"))
+
+        assert queue.staged == []
+
+    async def test_the_routers_own_classifier_sub_call_is_not_a_turn(self):
+        """The classifier call shares the session with the request it classifies but
+        is billed to the judge model's group, so folding it would double every
+        auto-routed turn and price the session against a model nobody asked for."""
+        router = _RegistryOnlyRouter(complexity=("smart-router",))
+        classifier_call = _turn_payload(
+            "judge",
+            metadata=json.dumps({"usage_object": {}, "internal_call_origin": "autorouter_classifier"}),
+        )
+
+        queue = await _record(router, classifier_call)
+
+        assert queue.staged == []
+
+    async def test_a_request_that_touched_no_auto_router_never_parses_its_metadata(self):
+        """Every spend write reaches here and almost none of them are auto-routed, so
+        the group is checked before anything is deserialized. Unparseable metadata
+        stands in for that parse: if it happens at all, this raises."""
+        router = _RegistryOnlyRouter(complexity=("smart-router",))
+
+        queue = await _record(router, _turn_payload("gpt-4o", metadata="{not json"))
+
+        assert queue.staged == []
+
+    async def test_a_request_without_a_session_is_not_a_turn(self):
+        router = _RegistryOnlyRouter(complexity=("smart-router",))
+
+        queue = await _record(router, _turn_payload("smart-router", metadata="{not json", session_id=""))
+
+        assert queue.staged == []

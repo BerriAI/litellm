@@ -59,7 +59,7 @@ from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
 from litellm.proxy.spend_tracking.auto_router_sessions import (
-    auto_router_group_kinds,
+    auto_router_kind,
     turn_from_spend_payload,
 )
 from litellm.proxy.spend_tracking.compression_savings import (
@@ -303,12 +303,12 @@ class DBSpendUpdateWriter:
         session_id = payload.get("session_id")
         model_group = payload.get("model_group")
         model = payload.get("model")
-        start_time = payload.get("startTime")
         if prisma_client is None or llm_router is None or not session_id or not model_group or not model:
             return
-        router_kind = auto_router_group_kinds(llm_router).get(model_group)
+        router_kind = auto_router_kind(llm_router, model_group)
         if router_kind is None:
             return
+        start_time = payload.get("startTime")
         started_at = start_time if isinstance(start_time, datetime) else _parse_start_time(start_time)
         if started_at is None:
             return
