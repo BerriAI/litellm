@@ -8,6 +8,10 @@ path used for OpenAI and Azure models.
 import json
 from typing import Any, cast
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    TOOL_RESULT_IMAGE_BOUNDARY,
+    TOOL_RESULT_IMAGE_PLACEHOLDER,
+)
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
@@ -43,8 +47,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _translate_anthropic_image_source_to_url(source: dict) -> str | None:
+    def _translate_anthropic_image_source_to_url(source: object) -> str | None:
         """Convert Anthropic image source to a URL string."""
+        if not isinstance(source, dict):
+            return None
         source_type = source.get("type")
         if source_type == "base64":
             media_type = source.get("media_type", "image/jpeg")
@@ -85,6 +91,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     )
                 elif isinstance(content, list):
                     user_parts: list[dict[str, Any]] = []
+                    tool_image_parts: list[dict[str, Any]] = []  # mutable-ok: json content parts
                     for block in content:
                         if not isinstance(block, dict):
                             continue
@@ -107,6 +114,22 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
                                 ]
                                 output_text = "\n".join(parts)
+                                image_candidates = tuple(
+                                    self._translate_anthropic_image_source_to_url(c.get("source"))
+                                    for c in inner
+                                    if isinstance(c, dict) and c.get("type") == "image"
+                                )
+                                image_urls = tuple(url for url in image_candidates if url)
+                                if image_urls:
+                                    output_text = (
+                                        f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
+                                        if output_text
+                                        else TOOL_RESULT_IMAGE_PLACEHOLDER
+                                    )
+                                    tool_image_parts.extend(
+                                        {"type": "input_image", "image_url": url}  # mutable-ok: json content part
+                                        for url in image_urls
+                                    )
                             else:
                                 output_text = str(inner)
                             # tool_result is a top-level item, not inside the message
@@ -117,6 +140,18 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     "output": output_text,
                                 }
                             )
+                    if tool_image_parts:
+                        boundary_part = {  # mutable-ok: json content part
+                            "type": "input_text",
+                            "text": TOOL_RESULT_IMAGE_BOUNDARY,
+                        }
+                        input_items.append(
+                            {  # mutable-ok: json input item
+                                "type": "message",
+                                "role": "user",
+                                "content": [boundary_part, *tool_image_parts],  # mutable-ok: json content list
+                            }
+                        )
                     if user_parts:
                         input_items.append(
                             {
