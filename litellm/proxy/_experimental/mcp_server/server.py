@@ -184,6 +184,17 @@ def _mcp_session_id_from_headers(
     return None
 
 
+def _request_tags_from_raw_headers(
+    raw_headers: dict[str, str] | None,
+) -> list[str] | None:
+    """The caller's ``x-litellm-tags``, parsed by the same helper the LLM routes use so an
+    MCP operation and a chat completion attribute an identical header identically."""
+    if not raw_headers:
+        return None
+    headers = {key.lower(): value for key, value in raw_headers.items() if isinstance(key, str)}
+    return LiteLLMProxyRequestSetup.add_request_tag_to_metadata(llm_router=None, headers=headers, data={})
+
+
 def _jsonrpc_text_has_top_level_method(text: str) -> bool:
     """Whether a (possibly truncated) JSON-RPC envelope has a ``method`` key at
     the root object's top level.
@@ -1034,7 +1045,12 @@ if MCP_AVAILABLE:
 
                 host_progress_callback: Final = _capture_host_progress_callback(server)
                 # Create a body date for logging
-                body_data: Final = {"name": name, "arguments": arguments}
+                request_tags: Final = _request_tags_from_raw_headers(raw_headers)
+                body_data: Final = {
+                    "name": name,
+                    "arguments": arguments,
+                    **({"tags": request_tags} if request_tags else {}),
+                }
                 # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
                 chain_id: Final = get_chain_id_from_headers(raw_headers)
                 if chain_id:
@@ -1890,6 +1906,7 @@ if MCP_AVAILABLE:
             list_tools_call_id: Final = str(uuid.uuid4())
             # Derive trace_id from raw_headers when not explicitly passed (same as A2A / MCP call_tool)
             effective_litellm_trace_id: Final = litellm_trace_id or get_chain_id_from_headers(raw_headers)
+            effective_request_tags: Final = request_tags or _request_tags_from_raw_headers(raw_headers)
             spend_logs_metadata: Final[dict[str, object]] = {
                 "mcp_operation": "list_tools",
             }
@@ -1905,7 +1922,7 @@ if MCP_AVAILABLE:
                 "litellm_trace_id": effective_litellm_trace_id,
                 "metadata": {
                     "spend_logs_metadata": spend_logs_metadata,
-                    **({"tags": request_tags} if request_tags else {}),
+                    **({"tags": effective_request_tags} if effective_request_tags else {}),
                 },
                 # Provide a small input payload for standard logging
                 "input": [
