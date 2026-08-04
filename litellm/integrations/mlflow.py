@@ -194,7 +194,11 @@ class MlflowLogger(CustomLogger):
                 "output_tokens": standard_obj.get("completion_tokens"),
                 "total_tokens": standard_obj.get("total_tokens"),
             }
-            token_usage.update(self._extract_cache_token_usage(standard_obj))
+            cache_read, cache_creation = self._extract_cache_token_usage(standard_obj)
+            if cache_read is not None:
+                token_usage["cache_read_input_tokens"] = cache_read
+            if cache_creation is not None:
+                token_usage["cache_creation_input_tokens"] = cache_creation
             attributes.update(
                 {
                     "api_base": standard_obj.get("api_base"),
@@ -219,9 +223,9 @@ class MlflowLogger(CustomLogger):
             )
         return attributes
 
-    def _extract_cache_token_usage(self, standard_obj: StandardLoggingPayload) -> dict[str, int]:
+    def _extract_cache_token_usage(self, standard_obj: StandardLoggingPayload) -> "tuple[int | None, int | None]":
         """
-        Extract cache token counts from the raw response usage.
+        Extract cache read and cache creation token counts from the raw response usage.
 
         The flattened logging payload does not carry cache token fields, but MLflow
         needs them to price cached tokens at their discounted rates. Anthropic-style
@@ -231,27 +235,23 @@ class MlflowLogger(CustomLogger):
         response = standard_obj.get("response")
         usage = response.get("usage") if isinstance(response, dict) else None
         if not isinstance(usage, dict):
-            return {}
+            return None, None
 
         details = usage.get("prompt_tokens_details")
-        details = details if isinstance(details, dict) else {}
+        if not isinstance(details, dict):
+            details = None
 
         cache_read = usage.get("cache_read_input_tokens")
-        if cache_read is None:
+        if cache_read is None and details is not None:
             cache_read = details.get("cached_tokens")
 
         cache_creation = usage.get("cache_creation_input_tokens")
-        if cache_creation is None:
+        if cache_creation is None and details is not None:
             cache_creation = details.get("cache_creation_tokens")
-        if cache_creation is None:
+        if cache_creation is None and details is not None:
             cache_creation = details.get("cache_write_tokens")
 
-        cache_token_usage = {}
-        if cache_read is not None:
-            cache_token_usage["cache_read_input_tokens"] = cache_read
-        if cache_creation is not None:
-            cache_token_usage["cache_creation_input_tokens"] = cache_creation
-        return cache_token_usage
+        return cache_read, cache_creation
 
     def _get_span_type(self, call_type: str | None) -> str:
         from mlflow.entities import SpanType
