@@ -2459,13 +2459,11 @@ async def test_delete_deployment_type_mismatch():
         patch("litellm.proxy.proxy_server.user_config_file_path", "test_config.yaml"),
     ):
         # Call the function under test
-        deleted_count = await pc._delete_deployment(db_models=[])
+        still_desired = await pc._delete_deployment(db_models=[])
 
     # The two SHA-hash models have no corresponding entry in combined_id_list
     # and must be evicted.
-    assert (
-        deleted_count == 2
-    ), f"Expected 2 deletions (SHA-hash models), got {deleted_count}"
+    assert len(deleted_ids) == 2, f"Expected 2 deletions (SHA-hash models), got {deleted_ids}"
     assert (
         "a96e12e76b36a57cfae57a41288eb41567629cac89b4828c6f7074afc3534695"
         in deleted_ids
@@ -2484,6 +2482,12 @@ async def test_delete_deployment_type_mismatch():
     assert (
         "12345679" not in deleted_ids
     ), f"Model 12345679 should NOT be deleted. Deleted IDs: {deleted_ids}"
+
+    assert still_desired is not None
+    assert {"12345678", "12345679"} <= still_desired, (
+        "the int-keyed config models must come back as strings in the desired set, so a "
+        f"caller judging its own reload reads them as wanted rather than evicted; got {still_desired}"
+    )
 
 
 @pytest.mark.asyncio
@@ -3618,14 +3622,18 @@ class TestPriceDataReloadAPI:
         # Save the original model_cost so the endpoint's direct assignment
         # (litellm.model_cost = new_model_cost_map) does not contaminate
         # subsequent tests running in the same worker process.
+        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+
         original_model_cost = litellm.model_cost.copy()
         try:
             with patch(
-                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-            ) as mock_get_map:
-                mock_get_map.return_value = {
-                    "gpt-3.5-turbo": {"input_cost_per_token": 0.001}
-                }
+                "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+                new=AsyncMock(
+                    return_value=ModelCostMapReloaded(
+                        model_cost_map={"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}
+                    )
+                ),
+            ):
                 # Mock the database connection
                 with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
                     mock_prisma.db.litellm_config.find_unique = AsyncMock(
@@ -3680,10 +3688,9 @@ class TestPriceDataReloadAPI:
     def test_reload_model_cost_map_error_handling(self, client_with_auth):
         """Test error handling in the reload endpoint"""
         with patch(
-            "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-        ) as mock_get_map:
-            mock_get_map.side_effect = Exception("Network error")
-
+            "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+            new=AsyncMock(side_effect=Exception("Network error")),
+        ):
             # Mock the database connection
             with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
                 mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
@@ -3693,7 +3700,7 @@ class TestPriceDataReloadAPI:
 
                 assert (
                     response.status_code == 500
-                )  # The new implementation immediately reloads and fails on error
+                )  # An unexpected exception still maps to 500
                 data = response.json()
                 assert "Failed to reload model cost map" in data["detail"]
 
@@ -3881,13 +3888,16 @@ class TestPriceDataReloadIntegration:
             "gpt-4": {"input_cost_per_token": 0.03, "output_cost_per_token": 0.06},
         }
 
+        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+
         original_model_cost = litellm.model_cost.copy()
         try:
             with patch(
-                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-            ) as mock_get_map:
-                mock_get_map.return_value = mock_cost_map
-
+                "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+                new=AsyncMock(
+                    return_value=ModelCostMapReloaded(model_cost_map=mock_cost_map)
+                ),
+            ):
                 # Mock the database connection
                 with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
                     mock_prisma.db.litellm_config.find_unique = AsyncMock(
@@ -3952,15 +3962,18 @@ class TestPriceDataReloadIntegration:
         mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
         mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
+        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+
         original_model_cost = litellm.model_cost.copy()
         try:
             with patch(
-                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-            ) as mock_get_map:
-                mock_get_map.return_value = {
-                    "gpt-3.5-turbo": {"input_cost_per_token": 0.001}
-                }
-
+                "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+                new=AsyncMock(
+                    return_value=ModelCostMapReloaded(
+                        model_cost_map={"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}
+                    )
+                ),
+            ):
                 # Should reload due to force flag
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
@@ -3995,13 +4008,18 @@ class TestPriceDataReloadIntegration:
         mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
         mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
+        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+
         original_model_cost = litellm.model_cost.copy()
         try:
             with patch(
-                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-            ) as mock_get_map:
-                mock_get_map.return_value = {"gpt-4": {"input_cost_per_token": 0.001}}
-
+                "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+                new=AsyncMock(
+                    return_value=ModelCostMapReloaded(
+                        model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}}
+                    )
+                ),
+            ):
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
                 # Verify the upsert update branch preserves interval_hours
@@ -4017,6 +4035,47 @@ class TestPriceDataReloadIntegration:
         finally:
             litellm.model_cost = original_model_cost
             _invalidate_model_cost_lowercase_map()
+
+    def test_distributed_reload_keeps_current_map_when_fetch_fails(self):
+        """Fetch failure during a periodic/forced reload must not downgrade the pod.
+
+        Regression: a 429/network failure used to silently replace litellm.model_cost
+        with the stale packaged backup, stamp last_run, and clear force_reload.
+        """
+        from litellm.litellm_core_utils.get_model_cost_map import (
+            ModelCostMapReloadUnavailable,
+        )
+        from litellm.proxy import proxy_server as ps
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        mock_prisma = MagicMock()
+
+        mock_config = MagicMock()
+        mock_config.param_value = {"interval_hours": 6, "force_reload": True}
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+        mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
+        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+        original_model_cost = litellm.model_cost
+        with patch(
+            "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+            new=AsyncMock(
+                return_value=ModelCostMapReloadUnavailable(reason="HTTP 429 from upstream")
+            ),
+        ):
+            with patch("litellm.proxy.proxy_server.last_model_cost_map_reload", None):
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+                assert ps.last_model_cost_map_reload is None, (
+                    "a failed reload must not stamp the pod's last reload time, "
+                    "otherwise the retry waits a full interval"
+                )
+
+        assert litellm.model_cost is original_model_cost, (
+            "a failed reload must keep the currently loaded cost map, "
+            "not swap in the packaged backup"
+        )
+        mock_prisma.db.litellm_config.upsert.assert_not_called()
 
     def test_manual_reload_preserves_interval_hours(self):
         """Test that manual reload via /reload/model_cost_map preserves existing interval_hours.
@@ -4037,13 +4096,18 @@ class TestPriceDataReloadIntegration:
         app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
         client = TestClient(app)
 
+        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+
         original_model_cost = litellm.model_cost.copy()
         try:
             with patch(
-                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-            ) as mock_get_map:
-                mock_get_map.return_value = {"gpt-4": {"input_cost_per_token": 0.001}}
-
+                "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+                new=AsyncMock(
+                    return_value=ModelCostMapReloaded(
+                        model_cost_map={"gpt-4": {"input_cost_per_token": 0.001}}
+                    )
+                ),
+            ):
                 with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
                     # Simulate existing config with a schedule
                     mock_existing = MagicMock()
@@ -9119,10 +9183,13 @@ class TestDeleteDeploymentSync:
             with patch.object(
                 proxy_config, "get_config", AsyncMock(return_value={"model_list": []})
             ):
-                count = await proxy_config._delete_deployment(db_models=[])
+                still_desired = await proxy_config._delete_deployment(db_models=[])
 
         mock_router.delete_deployment.assert_called_once_with(id="model-id-to-evict")
-        assert count == 1
+        assert still_desired == frozenset(), (
+            "an empty db and an empty config want nothing, which must stay distinct from "
+            f"the None returned when no reconcile ran at all; got {still_desired}"
+        )
 
     @pytest.mark.asyncio
     async def test_update_llm_router_skips_update_on_db_fetch_failure(self):
@@ -10678,3 +10745,83 @@ async def test_async_data_generator_forwards_usage_chunk_without_strip_marker():
     assert len(data_frames) == 4
     assert any('"usage"' in frame and '"completion_tokens":188' in frame.replace(" ", "") for frame in data_frames)
     assert frames[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_config_field_update_rejects_mock_testing_flag():
+    """The mock-testing opt-in is deliberately absent from
+    ``ConfigGeneralSettings`` so that ``/config/field/update`` refuses it. If
+    someone later adds the field for tidiness, this test fails and tells them
+    they have just opened an API write path into a config-file-only setting."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+    from litellm.proxy.route_llm_request import MOCK_TESTING_CONFIG_KEY
+
+    admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-test",
+    )
+
+    with patch.object(proxy_server_module, "prisma_client", MagicMock()):
+        with pytest.raises(HTTPException) as exc_info:
+            await update_config_general_settings(
+                data=ConfigFieldUpdate(
+                    field_name=MOCK_TESTING_CONFIG_KEY,
+                    field_value=True,
+                    config_type="general_settings",
+                ),
+                user_api_key_dict=admin,
+            )
+
+    assert exc_info.value.status_code == 400
+
+
+def test_config_update_body_drops_mock_testing_flag():
+    """``/config/update`` parses its body as ``ConfigYAML``, whose
+    ``general_settings`` is a ``ConfigGeneralSettings``. Undeclared keys are
+    dropped on parse, so the flag never reaches the DB by that route either."""
+    from litellm.proxy._types import ConfigYAML
+    from litellm.proxy.route_llm_request import MOCK_TESTING_CONFIG_KEY
+
+    parsed = ConfigYAML.model_validate({"general_settings": {MOCK_TESTING_CONFIG_KEY: True}})
+
+    assert parsed.general_settings is not None
+    assert MOCK_TESTING_CONFIG_KEY not in parsed.general_settings.model_dump(exclude_none=True)
+
+
+def test_startup_warns_when_mock_testing_params_enabled(caplog):
+    """Enabling the opt-in must announce itself, naming every param it
+    unlocks — the config key says ``mock_testing`` but the gate also covers
+    ``mock_timeout`` and ``mock_delay``, so coverage cannot be inferred from
+    the name alone."""
+    import logging
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.route_llm_request import (
+        GATED_MOCK_PARAM_NAMES,
+        MOCK_TESTING_CONFIG_KEY,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_if_mock_testing_params_enabled(
+            general_settings={MOCK_TESTING_CONFIG_KEY: True}
+        )
+
+    assert MOCK_TESTING_CONFIG_KEY in caplog.text
+    for param_name in GATED_MOCK_PARAM_NAMES:
+        assert param_name in caplog.text
+
+
+def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
+    """A proxy that never set the opt-in must not emit the warning."""
+    import logging
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.route_llm_request import MOCK_TESTING_CONFIG_KEY
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_if_mock_testing_params_enabled(general_settings={})
+
+    assert MOCK_TESTING_CONFIG_KEY not in caplog.text

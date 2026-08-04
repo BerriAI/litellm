@@ -10,6 +10,7 @@ import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_m
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   DEFAULT_ADAPTIVE_WEIGHTS,
+  DEFAULT_SESSION_AFFINITY,
   DEFAULT_TIER_DISTANCE_PENALTY,
 } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
@@ -17,6 +18,7 @@ import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
   buildComplexityRouterConfig,
+  getKeywordTierRulesError,
   getMissingTiersError,
   getSemanticConfigError,
 } from "./build_complexity_router_config";
@@ -94,6 +96,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     label: model_group,
   }));
 
+  // Why the submit is unavailable, or null when it is available. The button reads this to disable
+  // itself and to say what is missing, so the two can never give different answers.
+  const submitBlockedReason =
+    getMissingTiersError(complexityRouterConfig.tiers) ?? getKeywordTierRulesError(keywordTierRules);
+
   const submitRecommendedRouter = (name: string) => {
     const {
       tiers,
@@ -101,6 +108,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       classifier_llm_config: classifierLlmConfig,
       classifier_context_window_size: classifierContextWindowSize,
       classifier_context_per_turn_chars: classifierContextPerTurnChars,
+      classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
+      session_affinity: sessionAffinity = DEFAULT_SESSION_AFFINITY,
       adaptive = false,
       adaptive_weights: adaptiveWeights = DEFAULT_ADAPTIVE_WEIGHTS,
       tier_distance_penalty: tierDistancePenalty = DEFAULT_TIER_DISTANCE_PENALTY,
@@ -118,6 +127,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     if (classifierType === "llm" && !classifierLlmConfig?.model) {
       setShowValidationErrors(true);
       NotificationManager.fromBackend("Please select a classifier model, or switch back to Heuristic");
+      return;
+    }
+
+    const keywordRulesError = getKeywordTierRulesError(keywordTierRules);
+    if (keywordRulesError) {
+      setShowValidationErrors(true);
+      NotificationManager.fromBackend(keywordRulesError);
       return;
     }
 
@@ -146,6 +162,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           classifierLlmConfig,
           classifierContextWindowSize,
           classifierContextPerTurnChars,
+          classifierContextIncludeAssistantTurns,
+          sessionAffinity,
           customTechnicalKeywords,
           keywordTierRules,
           semanticMatchingEnabled,
@@ -305,14 +323,17 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   Test Connection
                 </Button>
               }
-              <Button
-                type="primary"
-                onClick={() => {
-                  handleAutoRouterSubmit();
-                }}
-              >
-                Add Auto Router
-              </Button>
+              <Tooltip title={submitBlockedReason}>
+                <Button
+                  type="primary"
+                  disabled={submitBlockedReason !== null}
+                  onClick={() => {
+                    handleAutoRouterSubmit();
+                  }}
+                >
+                  Add Auto Router
+                </Button>
+              </Tooltip>
             </div>
           </div>
         </Form>

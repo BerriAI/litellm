@@ -264,6 +264,7 @@ databricks_key: Optional[str] = None
 openai_like_key: Optional[str] = None
 azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
+autorouter_savings_baseline_model: Optional[str] = None
 replicate_key: Optional[str] = None
 bytez_key: Optional[str] = None
 gdc_key: Optional[str] = None
@@ -449,6 +450,8 @@ enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
+prometheus_exclude_metrics: Optional[List[str]] = None
+prometheus_exclude_labels: Optional[List[str]] = None
 prometheus_emit_stream_label: bool = False
 # Opt-in: emit `rate_limit_category` and `rate_limit_type` labels on
 # `litellm_proxy_failed_requests_metric`. Off by default to preserve the

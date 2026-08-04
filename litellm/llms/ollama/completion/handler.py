@@ -4,16 +4,16 @@ Ollama /chat/completion calls handled in llm_http_handler.py
 [TODO]: migrate embeddings to a base handler as well.
 """
 
-from typing import Any, Dict, List
+from typing import Any
 
 import litellm
 from litellm.types.utils import EmbeddingResponse
 
 
 def _prepare_ollama_embedding_payload(
-    model: str, prompts: List[str], optional_params: Dict[str, Any]
-) -> Dict[str, Any]:
-    data: Dict[str, Any] = {"model": model, "input": prompts}
+    model: str, prompts: list[str], optional_params: dict[str, Any]
+) -> dict[str, Any]:
+    data: dict[str, Any] = {"model": model, "input": prompts}
     special_optional_params = ["truncate", "options", "keep_alive", "dimensions"]
 
     for k, v in optional_params.items():
@@ -28,14 +28,14 @@ def _prepare_ollama_embedding_payload(
 
 def _process_ollama_embedding_response(
     response_json: dict,
-    prompts: List[str],
+    prompts: list[str],
     model: str,
     model_response: EmbeddingResponse,
     logging_obj: Any,
     encoding: Any,
 ) -> EmbeddingResponse:
     output_data = []
-    embeddings: List[List[float]] = response_json["embeddings"]
+    embeddings: list[list[float]] = response_json["embeddings"]
 
     for idx, emb in enumerate(embeddings):
         output_data.append({"object": "embedding", "index": idx, "embedding": emb})
@@ -68,7 +68,7 @@ def _process_ollama_embedding_response(
 async def ollama_aembeddings(
     api_base: str,
     model: str,
-    prompts: List[str],
+    prompts: list[str],
     model_response: EmbeddingResponse,
     optional_params: dict,
     logging_obj: Any,
@@ -95,7 +95,7 @@ async def ollama_aembeddings(
 def ollama_embeddings(
     api_base: str,
     model: str,
-    prompts: List[str],
+    prompts: list[str],
     optional_params: dict,
     model_response: EmbeddingResponse,
     logging_obj: Any,

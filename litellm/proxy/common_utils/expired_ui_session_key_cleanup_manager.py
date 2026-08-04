@@ -5,7 +5,7 @@ Deletes expired virtual keys created for LiteLLM dashboard sessions.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -101,7 +101,7 @@ class ExpiredUISessionKeyCleanupManager:
                     e,
                 )
                 return 0
-            verbose_proxy_logger.error(f"Expired UI session key cleanup failed: {e}")
+            verbose_proxy_logger.error("Expired UI session key cleanup failed: %s", e)
             return 0
         finally:
             if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
@@ -111,8 +111,8 @@ class ExpiredUISessionKeyCleanupManager:
 
     @staticmethod
     def _get_deleted_token_count(
-        tokens: List[str],
-        response: Optional[Dict[str, Any]],
+        tokens: list[str],
+        response: dict[str, Any] | None,
     ) -> int:
         """
         Return the number of tokens actually deleted from the delete helper response.
@@ -138,7 +138,7 @@ class ExpiredUISessionKeyCleanupManager:
 
         return len(tokens)
 
-    async def _find_expired_ui_session_keys(self) -> List[LiteLLM_VerificationToken]:
+    async def _find_expired_ui_session_keys(self) -> list[LiteLLM_VerificationToken]:
         """
         Find expired LiteLLM dashboard session keys.
         """

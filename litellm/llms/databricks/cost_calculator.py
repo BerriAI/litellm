@@ -3,13 +3,11 @@ Helper util for handling databricks-specific cost calculation
 - e.g.: handling 'dbrx-instruct-*'
 """
 
-from typing import Tuple
-
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
 
-def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
+def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -29,9 +27,12 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         "meta-llama-3.1-405b-instruct"
     ):
         base_model = "databricks-meta-llama-3-1-405b-instruct"
-    elif model.startswith("databricks/mixtral-8x7b-instruct-v0.1") or model.startswith("mixtral-8x7b-instruct-v0.1"):
-        base_model = "databricks-mixtral-8x7b-instruct"
-    elif model.startswith("databricks/mixtral-8x7b-instruct-v0.1") or model.startswith("mixtral-8x7b-instruct-v0.1"):
+    elif (
+        model.startswith("databricks/mixtral-8x7b-instruct-v0.1")
+        or model.startswith("mixtral-8x7b-instruct-v0.1")
+        or model.startswith("databricks/mixtral-8x7b-instruct-v0.1")
+        or model.startswith("mixtral-8x7b-instruct-v0.1")
+    ):
         base_model = "databricks-mixtral-8x7b-instruct"
     elif model.startswith("databricks/bge-large-en") or model.startswith("bge-large-en"):
         base_model = "databricks-bge-large-en"

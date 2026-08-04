@@ -8,7 +8,7 @@ Router cooldown handlers
 
 import asyncio
 import math
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Union
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -61,8 +61,8 @@ def is_advisor_orchestration_failure(exception: BaseException | None) -> bool:
 def _is_cooldown_required(
     litellm_router_instance: LitellmRouter,
     model_id: str,
-    exception_status: Union[str, int],
-    exception_str: Optional[str] = None,
+    exception_status: str | int,
+    exception_str: str | None = None,
 ) -> bool:
     """
     A function to determine if a cooldown is required based on the exception status.
@@ -95,10 +95,7 @@ def _is_cooldown_required(
                 # Cool down 401 Auth Errors
                 return True
 
-            elif exception_status == 408:
-                return True
-
-            elif exception_status == 404:
+            elif exception_status == 408 or exception_status == 404:
                 return True
 
             else:
@@ -116,10 +113,10 @@ def _is_cooldown_required(
 
 def _should_run_cooldown_logic(
     litellm_router_instance: LitellmRouter,
-    deployment: Optional[str],
-    exception_status: Union[str, int],
+    deployment: str | None,
+    exception_status: str | int,
     original_exception: Any,
-    time_to_cooldown: Optional[float] = None,
+    time_to_cooldown: float | None = None,
 ) -> bool:
     """
     Helper that decides if cooldown logic should be run
@@ -172,7 +169,7 @@ def _should_run_cooldown_logic(
 def _should_cooldown_deployment(
     litellm_router_instance: LitellmRouter,
     deployment: str,
-    exception_status: Union[str, int],
+    exception_status: str | int,
     original_exception: Any,
 ) -> bool:
     """
@@ -252,9 +249,9 @@ def _should_cooldown_deployment(
 def _set_cooldown_deployments(
     litellm_router_instance: LitellmRouter,
     original_exception: Any,
-    exception_status: Union[str, int],
-    deployment: Optional[str] = None,
-    time_to_cooldown: Optional[float] = None,
+    exception_status: str | int,
+    deployment: str | None = None,
+    time_to_cooldown: float | None = None,
 ) -> bool:
     """
     Add a model to the list of models being cooled down for that minute, if it exceeds the allowed fails / minute
@@ -284,7 +281,7 @@ def _set_cooldown_deployments(
         return False
 
     exception_status_int = cast_exception_status_to_int(exception_status)
-    verbose_router_logger.debug(f"Attempting to add {deployment} to cooldown list")
+    verbose_router_logger.debug("Attempting to add %s to cooldown list", deployment)
 
     if _should_cooldown_deployment(
         litellm_router_instance=litellm_router_instance,
@@ -314,8 +311,8 @@ def _set_cooldown_deployments(
 
 async def _async_get_cooldown_deployments(
     litellm_router_instance: LitellmRouter,
-    parent_otel_span: Optional[Span],
-) -> List[str]:
+    parent_otel_span: Span | None,
+) -> list[str]:
     """
     Async implementation of '_get_cooldown_deployments'
     """
@@ -334,14 +331,14 @@ async def _async_get_cooldown_deployments(
     ):
         cached_value_deployment_ids = [cv[0] for cv in cooldown_models]
 
-    verbose_router_logger.debug(f"retrieve cooldown models: {cooldown_models}")
+    verbose_router_logger.debug("retrieve cooldown models: %s", cooldown_models)
     return cached_value_deployment_ids
 
 
 async def _async_get_cooldown_deployments_with_debug_info(
     litellm_router_instance: LitellmRouter,
-    parent_otel_span: Optional[Span],
-) -> List[tuple]:
+    parent_otel_span: Span | None,
+) -> list[tuple]:
     """
     Async implementation of '_get_cooldown_deployments'
     """
@@ -350,11 +347,11 @@ async def _async_get_cooldown_deployments_with_debug_info(
         model_ids=model_ids, parent_otel_span=parent_otel_span
     )
 
-    verbose_router_logger.debug(f"retrieve cooldown models: {cooldown_models}")
+    verbose_router_logger.debug("retrieve cooldown models: %s", cooldown_models)
     return cooldown_models
 
 
-def _get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_otel_span: Optional[Span]) -> List[str]:
+def _get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_otel_span: Span | None) -> list[str]:
     """
     Get the list of models being cooled down for this minute
     """
@@ -429,13 +426,13 @@ def _is_allowed_fails_set_on_router(
     return False
 
 
-def cast_exception_status_to_int(exception_status: Union[str, int]) -> int:
+def cast_exception_status_to_int(exception_status: str | int) -> int:
     if isinstance(exception_status, str):
         try:
             exception_status = int(exception_status)
         except Exception:
             verbose_router_logger.debug(
-                f"Unable to cast exception status to int {exception_status}. Defaulting to status=500."
+                "Unable to cast exception status to int %s. Defaulting to status=500.", exception_status
             )
             exception_status = 500
     return exception_status

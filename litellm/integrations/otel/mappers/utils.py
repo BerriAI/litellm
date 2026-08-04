@@ -6,7 +6,8 @@ they live in one place.
 """
 
 import json
-from typing import Callable, Final, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue
 from litellm.integrations.otel.model.payloads import LLMCallSpanData, ToolDefinition

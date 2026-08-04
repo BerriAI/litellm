@@ -15,7 +15,6 @@ keeps the batched-DELETE path, so existing deployments are untouched.
 
 import re
 from datetime import date, datetime, timedelta, timezone
-from typing import List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -59,12 +58,12 @@ def partition_name(start: date) -> str:
     return f"{SPEND_LOGS_TABLE}_p{start.strftime('%Y%m%d')}"
 
 
-def upcoming_partitions(today: date, interval: PartitionInterval, ahead: int) -> List[Tuple[str, date, date]]:
+def upcoming_partitions(today: date, interval: PartitionInterval, ahead: int) -> list[tuple[str, date, date]]:
     """
     Specs (name, lower_inclusive, upper_exclusive) for the current period plus
     the next `ahead` periods, so writes always have a partition to land in.
     """
-    specs: List[Tuple[str, date, date]] = []
+    specs: list[tuple[str, date, date]] = []
     start = period_start(today, interval)
     for _ in range(ahead + 1):
         upper = next_period_start(start, interval)
@@ -73,7 +72,7 @@ def upcoming_partitions(today: date, interval: PartitionInterval, ahead: int) ->
     return specs
 
 
-def parse_partition_upper_bound(bound_expr: str) -> Optional[datetime]:
+def parse_partition_upper_bound(bound_expr: str) -> datetime | None:
     """
     Upper bound of a Postgres partition from its `pg_get_expr(relpartbound)`
     string, e.g. "FOR VALUES FROM ('2026-06-01 00:00:00') TO ('2026-06-02 00:00:00')".
@@ -91,7 +90,7 @@ def parse_partition_upper_bound(bound_expr: str) -> Optional[datetime]:
         return None
 
 
-def select_partitions_to_drop(partitions: List[Tuple[str, Optional[datetime]]], cutoff: datetime) -> List[str]:
+def select_partitions_to_drop(partitions: list[tuple[str, datetime | None]], cutoff: datetime) -> list[str]:
     """
     Names of partitions whose entire range is older than `cutoff` (upper bound
     <= cutoff). `cutoff` and the bounds are UTC-naive. Partitions without a
@@ -140,13 +139,13 @@ class SpendLogsPartitionManager:
             return False
         return bool(rows and rows[0].get("partitioned"))
 
-    async def ensure_partitions(self, prisma_client) -> List[str]:
+    async def ensure_partitions(self, prisma_client) -> list[str]:
         """
         Ensure the current and upcoming partitions exist, returning the names
         now present. CREATE TABLE IF NOT EXISTS is a no-op for partitions that
         already exist, so this list is "ensured present", not "newly created".
         """
-        ensured: List[str] = []
+        ensured: list[str] = []
         for name, lower, upper in upcoming_partitions(
             datetime.now(timezone.utc).date(), self.interval, self.precreate_ahead
         ):
@@ -161,7 +160,7 @@ class SpendLogsPartitionManager:
                 verbose_proxy_logger.warning("Failed to ensure spend-log partition %s: %s", name, e)
         return ensured
 
-    async def _list_partitions(self, prisma_client) -> List[Tuple[str, Optional[datetime]]]:
+    async def _list_partitions(self, prisma_client) -> list[tuple[str, datetime | None]]:
         rows = await prisma_client.db.query_raw(
             """
             SELECT c.relname AS name,
@@ -177,12 +176,12 @@ class SpendLogsPartitionManager:
         )
         return [(row["name"], parse_partition_upper_bound(row.get("bound") or "")) for row in rows]
 
-    async def drop_partitions_older_than(self, prisma_client, cutoff: datetime) -> List[str]:
+    async def drop_partitions_older_than(self, prisma_client, cutoff: datetime) -> list[str]:
         """DROP every partition whose whole range is older than `cutoff`."""
         cutoff_naive = cutoff.astimezone(timezone.utc).replace(tzinfo=None)
         partitions = await self._list_partitions(prisma_client)
         to_drop = select_partitions_to_drop(partitions, cutoff_naive)
-        dropped: List[str] = []
+        dropped: list[str] = []
         for name in to_drop:
             try:
                 await prisma_client.db.execute_raw(f'DROP TABLE IF EXISTS "{name}"')

@@ -14,7 +14,6 @@ If these are not set, the default Microsoft endpoints are used.
 """
 
 import os
-from typing import List, Optional, Union
 
 import pydantic
 from fastapi_sso.sso.base import DiscoveryDocument
@@ -37,10 +36,10 @@ class CustomMicrosoftSSO(MicrosoftSSO):
         self,
         client_id: str,
         client_secret: str,
-        redirect_uri: Optional[Union[pydantic.AnyHttpUrl, str]] = None,
+        redirect_uri: pydantic.AnyHttpUrl | str | None = None,
         allow_insecure_http: bool = False,
-        scope: Optional[List[str]] = None,
-        tenant: Optional[str] = None,
+        scope: list[str] | None = None,
+        tenant: str | None = None,
     ):
         super().__init__(
             client_id=client_id,
@@ -69,10 +68,10 @@ class CustomMicrosoftSSO(MicrosoftSSO):
 
         if custom_authorization_endpoint or custom_token_endpoint or custom_userinfo_endpoint:
             verbose_proxy_logger.debug(
-                f"Using custom Microsoft SSO endpoints - "
-                f"authorization: {authorization_endpoint}, "
-                f"token: {token_endpoint}, "
-                f"userinfo: {userinfo_endpoint}"
+                "Using custom Microsoft SSO endpoints - authorization: %s, token: %s, userinfo: %s",
+                authorization_endpoint,
+                token_endpoint,
+                userinfo_endpoint,
             )
 
         return DiscoveryDocument(

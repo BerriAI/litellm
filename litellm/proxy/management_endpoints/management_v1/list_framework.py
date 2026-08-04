@@ -359,10 +359,7 @@ def _parse_sort(spec: ListSpec[TRow, TOut], params: Mapping[str, str]) -> tuple[
     if raw is None:
         return spec.default_sort
     segments = tuple(segment.strip() for segment in raw.split(","))
-    keys = tuple(
-        SortKey(field=segment[1:] if segment.startswith("-") else segment, descending=segment.startswith("-"))
-        for segment in segments
-    )
+    keys = tuple(SortKey(field=segment.removeprefix("-"), descending=segment.startswith("-")) for segment in segments)
     rejected = tuple(sorted(frozenset(key.field for key in keys) - spec.sortable))
     if rejected:
         return _problem(

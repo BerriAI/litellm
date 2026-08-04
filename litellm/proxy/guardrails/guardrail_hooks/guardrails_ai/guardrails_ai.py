@@ -10,13 +10,8 @@ import os
 from typing import (
     TYPE_CHECKING,
     Any,
-    List,
     Literal,
-    Optional,
-    Tuple,
-    Type,
     TypedDict,
-    Union,
 )
 
 from fastapi import HTTPException
@@ -46,22 +41,22 @@ class GuardrailsAIResponse(TypedDict):
 
 class InferenceData(TypedDict):
     name: str
-    shape: List[int]
-    data: List
+    shape: list[int]
+    data: list
     datatype: str
 
 
 class GuardrailsAIResponsePreCall(TypedDict):
     modelname: str
     modelversion: str
-    outputs: List[InferenceData]
+    outputs: list[InferenceData]
 
 
 class GuardrailsAI(CustomGuardrail):
     def __init__(
         self,
         guard_name: str,
-        api_base: Optional[str] = None,
+        api_base: str | None = None,
         guardrails_ai_api_input_format: Literal["inputs", "llmOutput"] = "llmOutput",
         **kwargs,
     ):
@@ -186,12 +181,12 @@ class GuardrailsAI(CustomGuardrail):
             "rerank",
             "mcp_call",
         ],
-    ) -> Optional[
-        Union[Exception, str, dict]
-    ]:  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
+    ) -> (
+        Exception | str | dict | None
+    ):  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
         return await self.process_input(data=data, call_type=call_type)
 
-    async def async_logging_hook(self, kwargs: dict, result: Any, call_type: str) -> Tuple[dict, Any]:
+    async def async_logging_hook(self, kwargs: dict, result: Any, call_type: str) -> tuple[dict, Any]:
         if call_type == "acompletion" or call_type == "completion":
             kwargs = await self.process_input(data=kwargs, call_type=call_type)
 
@@ -229,7 +224,7 @@ class GuardrailsAI(CustomGuardrail):
         return
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.guardrails_ai import (
             GuardrailsAIGuardrailConfigModel,
         )
@@ -237,7 +232,7 @@ class GuardrailsAI(CustomGuardrail):
         return GuardrailsAIGuardrailConfigModel
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.pre_call,

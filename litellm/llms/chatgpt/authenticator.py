@@ -2,7 +2,7 @@ import base64
 import json
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 
@@ -63,7 +63,7 @@ class Authenticator:
         tokens = self._login_device_code()
         return tokens["access_token"]
 
-    def get_account_id(self) -> Optional[str]:
+    def get_account_id(self) -> str | None:
         auth_data = self._read_auth_file()
         if not auth_data:
             return None
@@ -82,24 +82,24 @@ class Authenticator:
         if not os.path.exists(self.token_dir):
             os.makedirs(self.token_dir, exist_ok=True)
 
-    def _read_auth_file(self) -> Optional[Dict[str, Any]]:
+    def _read_auth_file(self) -> dict[str, Any] | None:
         try:
             with open(self.auth_file, "r") as f:
                 return json.load(f)
-        except IOError:
+        except OSError:
             return None
         except json.JSONDecodeError as exc:
             verbose_logger.warning("Invalid ChatGPT auth file: %s", exc)
             return None
 
-    def _write_auth_file(self, data: Dict[str, Any]) -> None:
+    def _write_auth_file(self, data: dict[str, Any]) -> None:
         try:
             with open(self.auth_file, "w") as f:
                 json.dump(data, f)
-        except IOError as exc:
+        except OSError as exc:
             verbose_logger.error("Failed to write ChatGPT auth file: %s", exc)
 
-    def _is_token_expired(self, auth_data: Dict[str, Any], access_token: str) -> bool:
+    def _is_token_expired(self, auth_data: dict[str, Any], access_token: str) -> bool:
         expires_at = auth_data.get("expires_at")
         if expires_at is None:
             expires_at = self._get_expires_at(access_token)
@@ -110,14 +110,14 @@ class Authenticator:
             return True
         return time.time() >= float(expires_at) - TOKEN_EXPIRY_SKEW_SECONDS
 
-    def _get_expires_at(self, token: str) -> Optional[int]:
+    def _get_expires_at(self, token: str) -> int | None:
         claims = self._decode_jwt_claims(token)
         exp = claims.get("exp")
         if isinstance(exp, (int, float)):
             return int(exp)
         return None
 
-    def _decode_jwt_claims(self, token: str) -> Dict[str, Any]:
+    def _decode_jwt_claims(self, token: str) -> dict[str, Any]:
         try:
             parts = token.split(".")
             if len(parts) < 2:
@@ -129,7 +129,7 @@ class Authenticator:
         except Exception:
             return {}
 
-    def _extract_account_id(self, token: Optional[str]) -> Optional[str]:
+    def _extract_account_id(self, token: str | None) -> str | None:
         if not token:
             return None
         claims = self._decode_jwt_claims(token)
@@ -140,7 +140,7 @@ class Authenticator:
                 return account_id
         return None
 
-    def _login_device_code(self) -> Dict[str, str]:
+    def _login_device_code(self) -> dict[str, str]:
         cooldown_remaining = self._get_device_code_cooldown_remaining(self._read_auth_file())
         if cooldown_remaining > 0:
             token = self._wait_for_access_token(cooldown_remaining)
@@ -162,7 +162,7 @@ class Authenticator:
         self._write_auth_file(auth_data)
         return tokens
 
-    def _request_device_code(self) -> Dict[str, str]:
+    def _request_device_code(self) -> dict[str, str]:
         try:
             client = _get_httpx_client()
             resp = client.post(
@@ -196,7 +196,7 @@ class Authenticator:
             "interval": str(interval or "5"),
         }
 
-    def _poll_for_authorization_code(self, device_code: Dict[str, str]) -> Dict[str, str]:
+    def _poll_for_authorization_code(self, device_code: dict[str, str]) -> dict[str, str]:
         client = _get_httpx_client()
         interval = int(device_code.get("interval", "5"))
         start_time = time.time()
@@ -245,7 +245,7 @@ class Authenticator:
             status_code=408,
         )
 
-    def _exchange_code_for_tokens(self, code_data: Dict[str, str]) -> Dict[str, str]:
+    def _exchange_code_for_tokens(self, code_data: dict[str, str]) -> dict[str, str]:
         try:
             client = _get_httpx_client()
             redirect_uri = f"{CHATGPT_AUTH_BASE}/deviceauth/callback"
@@ -285,7 +285,7 @@ class Authenticator:
             "id_token": data["id_token"],
         }
 
-    def _refresh_tokens(self, refresh_token: str) -> Dict[str, str]:
+    def _refresh_tokens(self, refresh_token: str) -> dict[str, str]:
         try:
             client = _get_httpx_client()
             resp = client.post(
@@ -327,7 +327,7 @@ class Authenticator:
         self._write_auth_file(auth_data)
         return refreshed
 
-    def _build_auth_record(self, tokens: Dict[str, str]) -> Dict[str, Any]:
+    def _build_auth_record(self, tokens: dict[str, str]) -> dict[str, Any]:
         access_token = tokens.get("access_token")
         id_token = tokens.get("id_token")
         expires_at = self._get_expires_at(access_token) if access_token else None
@@ -340,7 +340,7 @@ class Authenticator:
             "account_id": account_id,
         }
 
-    def _get_device_code_cooldown_remaining(self, auth_data: Optional[Dict[str, Any]]) -> float:
+    def _get_device_code_cooldown_remaining(self, auth_data: dict[str, Any] | None) -> float:
         if not auth_data:
             return 0.0
         requested_at = auth_data.get("device_code_requested_at")
@@ -359,7 +359,7 @@ class Authenticator:
         auth_data["device_code_requested_at"] = time.time()
         self._write_auth_file(auth_data)
 
-    def _wait_for_access_token(self, timeout_seconds: float) -> Optional[str]:
+    def _wait_for_access_token(self, timeout_seconds: float) -> str | None:
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
             auth_data = self._read_auth_file()

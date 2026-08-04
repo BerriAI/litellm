@@ -3,7 +3,8 @@ Anthropic Batches API Handler
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Coroutine, Optional, Union
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -36,11 +37,11 @@ class AnthropicBatchesHandler:
     async def aretrieve_batch(
         self,
         batch_id: str,
-        api_base: Optional[str],
-        api_key: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        logging_obj: Optional[LiteLLMLoggingObj] = None,
+        api_base: str | None,
+        api_key: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> LiteLLMBatch:
         """
         Async: Retrieve a batch from Anthropic.
@@ -124,12 +125,12 @@ class AnthropicBatchesHandler:
         self,
         _is_async: bool,
         batch_id: str,
-        api_base: Optional[str],
-        api_key: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        logging_obj: Optional[LiteLLMLoggingObj] = None,
-    ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
+        api_base: str | None,
+        api_key: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
         """
         Retrieve a batch from Anthropic.
 

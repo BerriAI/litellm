@@ -449,7 +449,9 @@ class SAMLAuthHandler:
 
         display_name = " ".join(part for part in (first_name, last_name) if part) or email
 
-        verbose_proxy_logger.info(f"SAML login: subject={user_id}, email={email}, attributes={list(attributes.keys())}")
+        verbose_proxy_logger.info(
+            "SAML login: subject=%s, email=%s, attributes=%s", user_id, email, list(attributes.keys())
+        )
 
         try:
             return CustomOpenID(

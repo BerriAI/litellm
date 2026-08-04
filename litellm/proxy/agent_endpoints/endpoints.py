@@ -148,9 +148,7 @@ def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> Non
         raise HTTPException(
             status_code=403,
             detail={
-                "error": "Only proxy admins can create, update, or delete agents. Your role={}".format(
-                    user_api_key_dict.user_role
-                )
+                "error": f"Only proxy admins can create, update, or delete agents. Your role={user_api_key_dict.user_role}"
             },
         )
 
@@ -318,10 +316,8 @@ async def get_agents(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.agent_endpoints.get_agents(): Exception occurred - {}".format(str(e))
-        )
-        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {str(e)}"})
+        verbose_proxy_logger.exception("litellm.proxy.agent_endpoints.get_agents(): Exception occurred - %s", e)
+        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {e}"})
 
 
 #### CRUD ENDPOINTS FOR AGENTS ####
@@ -438,10 +434,10 @@ async def create_agent(
         # Also register in memory
         try:
             AGENT_REGISTRY.register_agent(agent_config=result)
-            verbose_proxy_logger.info(f"Successfully registered agent '{agent_name}' (ID: {agent_id}) in memory")
+            verbose_proxy_logger.info("Successfully registered agent '%s' (ID: %s) in memory", agent_name, agent_id)
         except Exception as reg_error:
             verbose_proxy_logger.warning(
-                f"Failed to register agent '{agent_name}' (ID: {agent_id}) in memory: {reg_error}"
+                "Failed to register agent '%s' (ID: %s) in memory: %s", agent_name, agent_id, reg_error
             )
 
         return result
@@ -449,7 +445,7 @@ async def create_agent(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error adding agent to db: {e}")
+        verbose_proxy_logger.exception("Error adding agent to db: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -533,7 +529,7 @@ async def get_agent_by_id(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting agent from db: {e}")
+        verbose_proxy_logger.exception("Error getting agent from db: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -628,14 +624,14 @@ async def update_agent(
         AGENT_REGISTRY.register_agent(agent_config=result)
 
         verbose_proxy_logger.info(
-            f"Successfully updated agent '{existing_agent.get('agent_name')}' (ID: {agent_id}) in memory"
+            "Successfully updated agent '%s' (ID: %s) in memory", existing_agent.get("agent_name"), agent_id
         )
 
         return result
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating agent: {e}")
+        verbose_proxy_logger.exception("Error updating agent: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -731,14 +727,14 @@ async def patch_agent(
         AGENT_REGISTRY.register_agent(agent_config=result)
 
         verbose_proxy_logger.info(
-            f"Successfully updated agent '{existing_agent.get('agent_name')}' (ID: {agent_id}) in memory"
+            "Successfully updated agent '%s' (ID: %s) in memory", existing_agent.get("agent_name"), agent_id
         )
 
         return result
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating agent: {e}")
+        verbose_proxy_logger.exception("Error updating agent: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -793,7 +789,7 @@ async def delete_agent(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error deleting agent: {e}")
+        verbose_proxy_logger.exception("Error deleting agent: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -851,9 +847,7 @@ async def make_agent_public(
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "error": "Only proxy admins can update public model groups. Your role={}".format(
-                        user_api_key_dict.user_role
-                    )
+                    "error": f"Only proxy admins can update public model groups. Your role={user_api_key_dict.user_role}"
                 },
             )
 
@@ -890,7 +884,7 @@ async def make_agent_public(
         await proxy_config.save_config(new_config=config)
 
         verbose_proxy_logger.debug(
-            f"Updated public agent groups to: {litellm.public_agent_groups} by user: {user_api_key_dict.user_id}"
+            "Updated public agent groups to: %s by user: %s", litellm.public_agent_groups, user_api_key_dict.user_id
         )
 
         return {
@@ -901,7 +895,7 @@ async def make_agent_public(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error making agent public: {e}")
+        verbose_proxy_logger.exception("Error making agent public: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -964,9 +958,7 @@ async def make_agents_public(
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "error": "Only proxy admins can update public model groups. Your role={}".format(
-                        user_api_key_dict.user_role
-                    )
+                    "error": f"Only proxy admins can update public model groups. Your role={user_api_key_dict.user_role}"
                 },
             )
 
@@ -996,7 +988,7 @@ async def make_agents_public(
         await proxy_config.save_config(new_config=config)
 
         verbose_proxy_logger.debug(
-            f"Updated public agent groups to: {litellm.public_agent_groups} by user: {user_api_key_dict.user_id}"
+            "Updated public agent groups to: %s by user: %s", litellm.public_agent_groups, user_api_key_dict.user_id
         )
 
         return {
@@ -1007,7 +999,7 @@ async def make_agents_public(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error making agent public: {e}")
+        verbose_proxy_logger.exception("Error making agent public: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

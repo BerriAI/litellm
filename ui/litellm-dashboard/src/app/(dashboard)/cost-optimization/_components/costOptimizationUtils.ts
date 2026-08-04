@@ -3,8 +3,11 @@ import { ToolSpendDailyEntry, ToolSpendEntry } from "@/components/networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 export const usd = (value: number): string => {
-  const decimals = value > 0 && value < 1 ? 4 : 2;
-  return `$${formatNumberWithCommas(value, decimals)}`;
+  // Sized and signed off the magnitude: a driver can come out negative, and a small
+  // loss rendered at two decimals would read as "$-0.00"
+  const magnitude = Math.abs(value);
+  const decimals = magnitude > 0 && magnitude < 1 ? 4 : 2;
+  return `${value < 0 ? "-" : ""}$${formatNumberWithCommas(magnitude, decimals)}`;
 };
 
 export const pct = (ratio: number): string => `${formatNumberWithCommas(ratio * 100, 1)}%`;
@@ -161,9 +164,27 @@ export type SavingsPoint = {
   date: string;
   Compression: number;
   "Prompt caching": number;
+  "Auto-router": number;
 };
 
-export const SAVINGS_SERIES = ["Compression", "Prompt caching"] as const;
+/**
+ * The savings drivers, each owning its own colour.
+ *
+ * One list rather than a names list beside a colours list, because the donut is
+ * given only the drivers that saved anything and charts assign colours by position
+ * in the data they receive. Two lists that line up by index therefore stop lining
+ * up the moment a driver is filtered out: the survivors slide down and inherit the
+ * colours of the drivers above them, while the legend still reports the original
+ * mapping. Colour travels with the driver so filtering cannot separate them.
+ */
+export const SAVINGS_DRIVERS = [
+  { name: "Compression", color: "emerald" },
+  { name: "Prompt caching", color: "blue" },
+  { name: "Auto-router", color: "amber" },
+] as const;
+
+export const SAVINGS_SERIES = SAVINGS_DRIVERS.map((d) => d.name);
+export const SAVINGS_COLORS = SAVINGS_DRIVERS.map((d) => d.color);
 
 /**
  * Running total of each series across the selected window. The total restarts
@@ -179,6 +200,7 @@ export const toCumulative = (points: readonly SavingsPoint[]): SavingsPoint[] =>
         date: point.date,
         Compression: (previous?.Compression ?? 0) + point.Compression,
         "Prompt caching": (previous?.["Prompt caching"] ?? 0) + point["Prompt caching"],
+        "Auto-router": (previous?.["Auto-router"] ?? 0) + point["Auto-router"],
       },
     ];
   }, []);
@@ -193,7 +215,7 @@ export const toCumulative = (points: readonly SavingsPoint[]): SavingsPoint[] =>
 export const withStartAnchor = (cumulative: readonly SavingsPoint[], startLabel: string): SavingsPoint[] =>
   cumulative.length === 0
     ? [...cumulative]
-    : [{ date: startLabel, Compression: 0, "Prompt caching": 0 }, ...cumulative];
+    : [{ date: startLabel, Compression: 0, "Prompt caching": 0, "Auto-router": 0 }, ...cumulative];
 
 /** "Jul 16 – Jul 23", collapsing to a single date when the range is one day. */
 export const formatRangeLabel = (from: Date | undefined, to: Date | undefined): string => {

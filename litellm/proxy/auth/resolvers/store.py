@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
@@ -12,14 +13,14 @@ from litellm.proxy.auth.auth_checks import (
     _fetch_key_object_from_db_with_reconnect,
     get_object_permission,
 )
+from litellm.proxy.auth.auth_method import AuthMethod
+from litellm.proxy.auth.network import NetworkContext
 from litellm.proxy.auth.resolvers.exceptions import (
     KeyNotFoundError,
     KeyNotInCacheError,
     NoDatabaseConnectionError,
     PrincipalMissingSourceKeyError,
 )
-from litellm.proxy.auth.auth_method import AuthMethod
-from litellm.proxy.auth.network import NetworkContext
 from litellm.proxy.auth.resolvers.models import (
     CredentialRef,
     EndUserIdentity,
@@ -131,7 +132,9 @@ class IdentityStore:
                 )
             except Exception as e:
                 verbose_proxy_logger.debug(
-                    f"Failed to load object_permission for key with object_permission_id={key.object_permission_id}: {e}"
+                    "Failed to load object_permission for key with object_permission_id=%s: %s",
+                    key.object_permission_id,
+                    e,
                 )
 
         await _cache_key_object(

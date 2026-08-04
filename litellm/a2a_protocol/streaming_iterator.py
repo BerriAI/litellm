@@ -3,8 +3,9 @@ A2A Streaming Iterator with token tracking and logging support.
 """
 
 import asyncio
+from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import litellm
 from litellm._logging import verbose_logger
@@ -37,9 +38,9 @@ class A2AStreamingIterator:
         self.start_time = datetime.now()
 
         # Collect chunks for token counting
-        self.chunks: List[Any] = []
-        self.collected_text_parts: List[str] = []
-        self.final_chunk: Optional[Any] = None
+        self.chunks: list[Any] = []
+        self.collected_text_parts: list[str] = []
+        self.final_chunk: Any | None = None
 
     def __aiter__(self):
         return self
@@ -137,17 +138,19 @@ class A2AStreamingIterator:
             )
 
             verbose_logger.info(
-                f"A2A streaming completed: prompt_tokens={prompt_tokens}, "
-                f"completion_tokens={completion_tokens}, total_tokens={total_tokens}, "
-                f"response_cost={response_cost}"
+                "A2A streaming completed: prompt_tokens=%s, completion_tokens=%s, total_tokens=%s, response_cost=%s",
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                response_cost,
             )
 
         except Exception as e:
-            verbose_logger.debug(f"Error in A2A streaming completion handler: {e}")
+            verbose_logger.debug("Error in A2A streaming completion handler: %s", e)
 
-    def _build_logging_result(self, usage: litellm.Usage) -> Dict[str, Any]:
+    def _build_logging_result(self, usage: litellm.Usage) -> dict[str, Any]:
         """Build a result dict for logging."""
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "id": getattr(self.request, "id", "unknown"),
             "jsonrpc": "2.0",
             "usage": (usage.model_dump() if hasattr(usage, "model_dump") else dict(usage)),

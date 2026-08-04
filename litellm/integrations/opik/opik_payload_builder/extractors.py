@@ -1,12 +1,12 @@
 """Data extraction functions for Opik payload building."""
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from litellm import _logging
 
 
-def normalize_provider_name(provider: Optional[str]) -> Optional[str]:
+def normalize_provider_name(provider: str | None) -> str | None:
     """
     Normalize LiteLLM provider names to standardized string names.
 
@@ -35,9 +35,9 @@ def normalize_provider_name(provider: Optional[str]) -> Optional[str]:
 
 
 def extract_opik_metadata(
-    litellm_metadata: Dict[str, Any],
-    standard_logging_metadata: Dict[str, Any],
-) -> Dict[str, Any]:
+    litellm_metadata: dict[str, Any],
+    standard_logging_metadata: dict[str, Any],
+) -> dict[str, Any]:
     """
     Merge Opik metadata from three sources in increasing priority order:
 
@@ -66,14 +66,14 @@ def extract_opik_metadata(
     if requester_opik:
         opik_meta.update(requester_opik)
 
-    _logging.verbose_logger.debug(f"litellm_opik_metadata - {json.dumps(opik_meta, default=str)}")
+    _logging.verbose_logger.debug("litellm_opik_metadata - %s", json.dumps(opik_meta, default=str))
 
     return opik_meta
 
 
 def extract_span_identifiers(
     current_span_data: Any,
-) -> Tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     """
     Extract trace_id and parent_span_id from current_span_data.
 
@@ -92,14 +92,14 @@ def extract_span_identifiers(
     try:
         return current_span_data.trace_id, current_span_data.id
     except AttributeError:
-        _logging.verbose_logger.warning(f"Unexpected current_span_data format: {type(current_span_data)}")
+        _logging.verbose_logger.warning("Unexpected current_span_data format: %s", type(current_span_data))
         return None, None
 
 
 def extract_tags(
-    opik_metadata: Dict[str, Any],
-    custom_llm_provider: Optional[str],
-) -> List[str]:
+    opik_metadata: dict[str, Any],
+    custom_llm_provider: str | None,
+) -> list[str]:
     """
     Extract and build list of tags.
 
@@ -120,10 +120,10 @@ def extract_tags(
 
 def apply_proxy_header_overrides(
     project_name: str,
-    tags: List[str],
-    thread_id: Optional[str],
-    proxy_headers: Dict[str, Any],
-) -> Tuple[str, List[str], Optional[str]]:
+    tags: list[str],
+    thread_id: str | None,
+    proxy_headers: dict[str, Any],
+) -> tuple[str, list[str], str | None]:
     """
     Apply overrides from proxy request headers (opik_* prefix).
 
@@ -152,17 +152,17 @@ def apply_proxy_header_overrides(
                 if isinstance(parsed_tags, list):
                     tags.extend(parsed_tags)
             except (json.JSONDecodeError, TypeError):
-                _logging.verbose_logger.warning(f"Failed to parse tags from header: {value}")
+                _logging.verbose_logger.warning("Failed to parse tags from header: %s", value)
 
     return project_name, tags, thread_id
 
 
 def extract_and_build_metadata(
-    opik_metadata: Dict[str, Any],
-    standard_logging_metadata: Dict[str, Any],
-    standard_logging_object: Dict[str, Any],
-    litellm_kwargs: Dict[str, Any],
-) -> Dict[str, Any]:
+    opik_metadata: dict[str, Any],
+    standard_logging_metadata: dict[str, Any],
+    standard_logging_object: dict[str, Any],
+    litellm_kwargs: dict[str, Any],
+) -> dict[str, Any]:
     """
     Build the complete metadata dictionary from all available sources.
 

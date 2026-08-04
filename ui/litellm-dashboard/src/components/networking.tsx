@@ -38,7 +38,7 @@ import type {
   CoordinationRedisTestResponse,
 } from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
-import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
+import { createApiClient, deriveErrorMessage, unwrapProxyErrorMessage } from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
 import {
   registerAuthHeaderNameGetter,
@@ -2643,7 +2643,7 @@ export const teamUpdateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      NotificationsManager.fromBackend("Failed to update team settings: " + errorData);
+      NotificationsManager.fromBackend("Failed to update team settings: " + unwrapProxyErrorMessage(errorData));
       throw new Error(errorData);
     }
     const data = (await response.json()) as { data: Team; team_id: string };
@@ -7107,6 +7107,29 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   }
   const data = await response.json();
   return data;
+};
+
+export type UserBannerSeverity = "info" | "warning" | "error";
+
+export interface UserBanner {
+  enabled: boolean;
+  message: string;
+  severity: UserBannerSeverity;
+  revision: string;
+}
+
+export type UserBannerUpdate = Omit<UserBanner, "revision">;
+
+export const getUserBanner = async (accessToken: string): Promise<UserBanner> => {
+  return await apiClient.get<UserBanner>("/get/user_banner", { accessToken });
+};
+
+export const updateUserBanner = async (accessToken: string, banner: UserBannerUpdate): Promise<UserBanner> => {
+  const data = await apiClient.patch<{ message: string; banner: UserBanner }>("/update/user_banner", {
+    accessToken,
+    body: banner,
+  });
+  return data.banner;
 };
 
 // Claude Code Marketplace Networking Functions

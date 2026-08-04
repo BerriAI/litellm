@@ -5,7 +5,7 @@ Maps OpenAI-compatible audio transcription calls to Azure Speech REST
 recognition for short audio.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -16,11 +16,11 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
 )
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import FileTypes, TranscriptionResponse
 
 
@@ -41,7 +41,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     STT_ENDPOINT_PATH = "/speech/recognition/conversation/cognitiveservices/v1"
     DEFAULT_LANGUAGE = "en-US"
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         return ["language", "response_format"]
 
     def map_openai_params(
@@ -61,11 +61,11 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         api_key = api_key or get_secret_str("AZURE_SPEECH_API_KEY")
         if not api_key:
@@ -82,12 +82,12 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         api_base = api_base or get_secret_str("AZURE_SPEECH_API_BASE")
         if api_base is None:
@@ -140,9 +140,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         response._hidden_params = response_json
         return response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return AzureSpeechAudioTranscriptionException(
             message=error_message,
             status_code=status_code,
@@ -191,12 +189,12 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return f"https://{region}.{self.STT_SPEECH_DOMAIN}"
         return f"https://{self.STT_SPEECH_DOMAIN}"
 
-    def _get_azure_response_format(self, response_format: Optional[str]) -> str:
+    def _get_azure_response_format(self, response_format: str | None) -> str:
         if response_format == "verbose_json":
             return "detailed"
         return "simple"
 
-    def _extract_text(self, response_json: Dict[str, Any]) -> str:
+    def _extract_text(self, response_json: dict[str, Any]) -> str:
         if isinstance(response_json.get("DisplayText"), str):
             return response_json["DisplayText"]
 

@@ -10,7 +10,7 @@ LAR-1 metadata passed via request_kwargs["metadata"]["lar1"]
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
@@ -31,7 +31,7 @@ def _coerce_threshold(value: object, default: float) -> float:
 
 
 def lar1_thresholds_from_args(
-    routing_strategy_args: Optional[Mapping[str, object]] = None,
+    routing_strategy_args: Mapping[str, object] | None = None,
 ) -> dict[str, float]:
     args = routing_strategy_args or {}
     return {
@@ -43,7 +43,7 @@ def lar1_thresholds_from_args(
 
 def apply_lar1_routing_strategy(
     router: Router,
-    routing_strategy_args: Optional[Mapping[str, object]] = None,
+    routing_strategy_args: Mapping[str, object] | None = None,
 ) -> None:
     strategy = LAR1RoutingStrategy(
         router_instance=router,
@@ -53,7 +53,7 @@ def apply_lar1_routing_strategy(
     router.set_custom_routing_strategy(strategy)
 
 
-def _normalize_thresholds(thresholds: Optional[dict[str, float]]) -> dict[str, float]:
+def _normalize_thresholds(thresholds: dict[str, float] | None) -> dict[str, float]:
     merged = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
     low = merged["low"]
     medium = merged["medium"]
@@ -68,20 +68,20 @@ def _normalize_thresholds(thresholds: Optional[dict[str, float]]) -> dict[str, f
 def _parse_lar1_metadata(request_kwargs: dict) -> LAR1Metadata:
     lar1_raw = request_kwargs.get("metadata", {}).get("lar1", {})
     if not isinstance(lar1_raw, dict):
-        verbose_router_logger.warning(f"[LAR-1] Invalid lar1 metadata type: {type(lar1_raw).__name__}. Using defaults")
+        verbose_router_logger.warning("[LAR-1] Invalid lar1 metadata type: %s. Using defaults", type(lar1_raw).__name__)
         return LAR1Metadata()
     try:
         return LAR1Metadata.model_validate(lar1_raw)
     except ValidationError as exc:
-        verbose_router_logger.warning(f"[LAR-1] Invalid lar1 metadata: {exc}. Using defaults")
+        verbose_router_logger.warning("[LAR-1] Invalid lar1 metadata: %s. Using defaults", exc)
         return LAR1Metadata()
 
 
 class LAR1RoutingStrategy(CustomRoutingStrategyBase):
     def __init__(
         self,
-        router_instance: Optional[Router] = None,
-        thresholds: Optional[dict[str, float]] = None,
+        router_instance: Router | None = None,
+        thresholds: dict[str, float] | None = None,
     ):
         self._router = router_instance
         self.thresholds = _normalize_thresholds(thresholds)
@@ -89,10 +89,10 @@ class LAR1RoutingStrategy(CustomRoutingStrategyBase):
     async def async_get_available_deployment(
         self,
         model: str,
-        messages: Optional[list[dict[str, str]]] = None,
-        input: Optional[Union[str, list]] = None,
-        specific_deployment: Optional[bool] = False,
-        request_kwargs: Optional[dict] = None,
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
+        specific_deployment: bool | None = False,
+        request_kwargs: dict | None = None,
     ):
         if request_kwargs is None:
             request_kwargs = {}
@@ -123,11 +123,11 @@ class LAR1RoutingStrategy(CustomRoutingStrategyBase):
         if selected is None:
             return None
         if exact_match:
-            verbose_router_logger.info(f"[LAR-1] confidence={confidence} -> {target}")
+            verbose_router_logger.info("[LAR-1] confidence=%s -> %s", confidence, target)
         else:
             actual_type = selected.get("model_info", {}).get("type", "unknown")
             verbose_router_logger.warning(
-                f"[LAR-1] No deployment for type '{target}', fallback to deployment type '{actual_type}'"
+                "[LAR-1] No deployment for type '%s', fallback to deployment type '%s'", target, actual_type
             )
         return selected
 
@@ -156,7 +156,7 @@ class LAR1RoutingStrategy(CustomRoutingStrategyBase):
         self,
         target_type: str,
         deployments: list[dict],
-    ) -> tuple[Optional[dict], bool]:
+    ) -> tuple[dict | None, bool]:
         if not deployments:
             return None, False
 

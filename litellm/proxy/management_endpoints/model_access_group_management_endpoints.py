@@ -7,7 +7,7 @@ Endpoints here:
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -17,10 +17,10 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 # Clear cache and reload models to pick up the access group changes
 from litellm.proxy.management_endpoints.model_management_endpoints import (
+    clear_cache,
     live_model_ids_snapshot,
     model_info_as_mapping,
     reload_serving_verdict,
-    clear_cache,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.model_repository import ModelRepository
@@ -36,7 +36,7 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
 router = APIRouter()
 
 
-def validate_models_exist(model_names: List[str], llm_router) -> Tuple[bool, List[str]]:
+def validate_models_exist(model_names: list[str], llm_router) -> tuple[bool, list[str]]:
     """
     Validate that all requested model names exist in the router.
     Checks only exact model name matches.
@@ -52,7 +52,7 @@ def validate_models_exist(model_names: List[str], llm_router) -> Tuple[bool, Lis
     return (len(missing) == 0, missing)
 
 
-def add_access_group_to_deployment(model_info: Dict[str, Any], access_group: str) -> Tuple[Dict[str, Any], bool]:
+def add_access_group_to_deployment(model_info: dict[str, Any], access_group: str) -> tuple[dict[str, Any], bool]:
     """
     Add an access group to a deployment's model_info.
 
@@ -121,7 +121,7 @@ async def _tag_deployment_with_access_group(
         where={"model_id": model_id},
         data={"model_info": json.dumps(updated_model_info)},
     )
-    verbose_proxy_logger.debug(f"Updated deployment {model_id} with access group: {access_group}")
+    verbose_proxy_logger.debug("Updated deployment %s with access group: %s", model_id, access_group)
     return (model_id, updated_model_info)
 
 
@@ -158,7 +158,7 @@ async def _strip_access_group_from_deployment(
 
 
 async def update_deployments_with_access_group(
-    model_names: List[str],
+    model_names: list[str],
     access_group: str,
     prisma_client: PrismaClient,
 ) -> tuple[tuple[str, Mapping[str, object]], ...]:
@@ -175,7 +175,7 @@ async def update_deployments_with_access_group(
         so callers can verify each one survived the post-write reload
     """
     deployments = await ModelRepository(prisma_client).table.find_many(where={"model_name": {"in": model_names}})
-    verbose_proxy_logger.debug(f"Found {len(deployments)} deployments for model_names: {model_names}")
+    verbose_proxy_logger.debug("Found %s deployments for model_names: %s", len(deployments), model_names)
 
     found_names = {deployment.model_name for deployment in deployments}
     for model_name in model_names:
@@ -200,7 +200,7 @@ async def update_deployments_with_access_group(
 
 
 async def update_specific_deployments_with_access_group(
-    model_ids: List[str],
+    model_ids: list[str],
     access_group: str,
     prisma_client: PrismaClient,
 ) -> tuple[tuple[str, Mapping[str, object]], ...]:
@@ -212,7 +212,7 @@ async def update_specific_deployments_with_access_group(
     their unique model_id. Returns the (model_id, updated model_info) pair of every
     deployment actually written.
     """
-    verbose_proxy_logger.debug(f"Updating specific deployment model_ids: {model_ids}")
+    verbose_proxy_logger.debug("Updating specific deployment model_ids: %s", model_ids)
     tagged = [
         await _tag_deployment_with_access_group(
             model_id=model_id,
@@ -235,7 +235,7 @@ async def _find_deployment_or_400(model_id: str, prisma_client: PrismaClient) ->
     return deployment.model_info
 
 
-def remove_access_group_from_deployment(model_info: Dict[str, Any], access_group: str) -> Tuple[Dict[str, Any], bool]:
+def remove_access_group_from_deployment(model_info: dict[str, Any], access_group: str) -> tuple[dict[str, Any], bool]:
     """
     Remove an access group from a deployment's model_info.
 
@@ -261,7 +261,7 @@ def remove_access_group_from_deployment(model_info: Dict[str, Any], access_group
 
 async def get_all_access_groups_from_db(
     prisma_client: PrismaClient,
-) -> Dict[str, AccessGroupInfo]:
+) -> dict[str, AccessGroupInfo]:
     """
     Get all access groups from the database.
 
@@ -272,7 +272,7 @@ async def get_all_access_groups_from_db(
     deployments = await ModelRepository(prisma_client).table.find_many()
 
     # Build access group map
-    access_group_map: Dict[str, Dict[str, Any]] = {}
+    access_group_map: dict[str, dict[str, Any]] = {}
 
     for deployment in deployments:
         model_info = deployment.model_info or {}
@@ -344,7 +344,7 @@ async def create_model_group(
         prisma_client,
     )
 
-    verbose_proxy_logger.debug(f"Creating access group: {data.access_group} with models: {data.model_names}")
+    verbose_proxy_logger.debug("Creating access group: %s with models: %s", data.access_group, data.model_names)
 
     # Validation: Check if access_group is provided
     if not data.access_group or not data.access_group.strip():
@@ -426,7 +426,7 @@ async def create_model_group(
         )
 
         verbose_proxy_logger.info(
-            f"Successfully created access group '{data.access_group}' with {models_updated} models updated"
+            "Successfully created access group '%s' with %s models updated", data.access_group, models_updated
         )
 
         return NewModelGroupResponse(
@@ -439,10 +439,10 @@ async def create_model_group(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error creating access group '{data.access_group}': {str(e)}")
+        verbose_proxy_logger.exception("Error creating access group '%s': %s", data.access_group, e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to create access group: {str(e)}"},
+            detail={"error": f"Failed to create access group: {e}"},
         )
 
 
@@ -489,10 +489,10 @@ async def list_access_groups(
         return ListAccessGroupsResponse(access_groups=access_groups_list)
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error listing access groups: {str(e)}")
+        verbose_proxy_logger.exception("Error listing access groups: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to list access groups: {str(e)}"},
+            detail={"error": f"Failed to list access groups: {e}"},
         )
 
 
@@ -546,10 +546,10 @@ async def get_access_group_info(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting access group info for '{access_group}': {str(e)}")
+        verbose_proxy_logger.exception("Error getting access group info for '%s': %s", access_group, e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to get access group info: {str(e)}"},
+            detail={"error": f"Failed to get access group info: {e}"},
         )
 
 
@@ -600,7 +600,7 @@ async def update_access_group(
             detail={"error": "Database not connected."},
         )
 
-    verbose_proxy_logger.debug(f"Updating access group: {access_group} with models: {data.model_names}")
+    verbose_proxy_logger.debug("Updating access group: %s with models: %s", access_group, data.model_names)
 
     # Validation: Check that at least one of model_names or model_ids is provided
     has_model_names = data.model_names and len(data.model_names) > 0
@@ -627,7 +627,7 @@ async def update_access_group(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to check access group existence: {str(e)}"},
+            detail={"error": f"Failed to check access group existence: {e}"},
         )
 
     # Validation: Check if all new models exist (only if using model_names path)
@@ -686,7 +686,7 @@ async def update_access_group(
         )
 
         verbose_proxy_logger.info(
-            f"Successfully updated access group '{access_group}' with {models_updated} models updated"
+            "Successfully updated access group '%s' with %s models updated", access_group, models_updated
         )
 
         return NewModelGroupResponse(
@@ -699,10 +699,10 @@ async def update_access_group(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating access group '{access_group}': {str(e)}")
+        verbose_proxy_logger.exception("Error updating access group '%s': %s", access_group, e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to update access group: {str(e)}"},
+            detail={"error": f"Failed to update access group: {e}"},
         )
 
 
@@ -744,7 +744,7 @@ async def delete_access_group(
             detail={"error": "Database not connected."},
         )
 
-    verbose_proxy_logger.debug(f"Deleting access group: {access_group}")
+    verbose_proxy_logger.debug("Deleting access group: %s", access_group)
 
     # Validation: Check if access group exists
     try:
@@ -759,7 +759,7 @@ async def delete_access_group(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to check access group existence: {str(e)}"},
+            detail={"error": f"Failed to check access group existence: {e}"},
         )
 
     try:
@@ -788,7 +788,7 @@ async def delete_access_group(
         )
 
         verbose_proxy_logger.info(
-            f"Successfully deleted access group '{access_group}' from {models_updated} deployments"
+            "Successfully deleted access group '%s' from %s deployments", access_group, models_updated
         )
 
         return DeleteModelGroupResponse(
@@ -800,8 +800,8 @@ async def delete_access_group(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error deleting access group '{access_group}': {str(e)}")
+        verbose_proxy_logger.exception("Error deleting access group '%s': %s", access_group, e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to delete access group: {str(e)}"},
+            detail={"error": f"Failed to delete access group: {e}"},
         )

@@ -1,7 +1,7 @@
 import os
 import shutil
 import sys
-from typing import Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
+from collections.abc import Callable, Mapping, Sequence
 
 import click
 import requests
@@ -17,13 +17,13 @@ OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
 PROFILE_ANTHROPIC = "anthropic"
 PROFILE_OPENAI = "openai"
 
-_KNOWN_AGENTS: Dict[str, Tuple[str, FrozenSet[str]]] = {
+_KNOWN_AGENTS: dict[str, tuple[str, frozenset[str]]] = {
     "claude": ("Claude Code", frozenset({PROFILE_ANTHROPIC})),
     "codex": ("Codex", frozenset({PROFILE_OPENAI})),
     "opencode": ("OpenCode", frozenset({PROFILE_OPENAI})),
 }
 
-_INSTALL_DOCS: Dict[str, str] = {
+_INSTALL_DOCS: dict[str, str] = {
     "claude": "https://docs.claude.com/en/docs/claude-code/setup",
     "codex": "https://developers.openai.com/codex/cli",
     "opencode": "https://opencode.ai/docs",
@@ -36,7 +36,7 @@ class AgentRunError(Exception):
     """Raised for any user-actionable failure while preparing to run an agent."""
 
 
-def agent_profile(command: str) -> Tuple[str, FrozenSet[str]]:
+def agent_profile(command: str) -> tuple[str, frozenset[str]]:
     """Return the (display name, env profiles) for a wrapped command.
 
     Known agents map to the API family they speak. Anything else gets both
@@ -52,8 +52,8 @@ def build_agent_env(
     base_env: Mapping[str, str],
     base_url: str,
     api_key: str,
-    profiles: FrozenSet[str],
-) -> Dict[str, str]:
+    profiles: frozenset[str],
+) -> dict[str, str]:
     """Return a copy of base_env wired to route the agent through the proxy.
 
     Anthropic clients (Claude Code) append /v1/messages to ANTHROPIC_BASE_URL,
@@ -73,7 +73,7 @@ def build_agent_env(
     return env
 
 
-def _codex_proxy_args(base_url: str) -> List[str]:
+def _codex_proxy_args(base_url: str) -> list[str]:
     """Codex `-c` overrides that point it at the proxy.
 
     Codex ignores OPENAI_BASE_URL (it always dials api.openai.com), so the env
@@ -100,12 +100,12 @@ def _codex_proxy_args(base_url: str) -> List[str]:
     ]
 
 
-_PROXY_ARGS: Dict[str, Callable[[str], List[str]]] = {
+_PROXY_ARGS: dict[str, Callable[[str], list[str]]] = {
     "codex": _codex_proxy_args,
 }
 
 
-def agent_launch_args(command: str, base_url: str) -> List[str]:
+def agent_launch_args(command: str, base_url: str) -> list[str]:
     """Extra CLI args an agent needs to actually honor the proxy.
 
     Claude Code and OpenCode respect the exported env vars, so they get nothing
@@ -171,11 +171,11 @@ def run_agent(
     command: Sequence[str],
     *,
     skip_verify: bool = False,
-    base_env: Optional[Mapping[str, str]] = None,
-    which: Callable[[str], Optional[str]] = shutil.which,
+    base_env: Mapping[str, str] | None = None,
+    which: Callable[[str], str | None] = shutil.which,
     verify: Callable[[str, str], None] = verify_proxy_key,
     launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _exec,
-    reattach_terminal: Optional[Callable[[], None]] = None,
+    reattach_terminal: Callable[[], None] | None = None,
 ) -> None:
     """Validate, wire the environment, and hand off to the agent.
 
@@ -276,18 +276,18 @@ def _make_agent_command(binary: str, display_name: str) -> click.Command:
     return _command
 
 
-def agent_commands() -> List[click.Command]:
+def agent_commands() -> list[click.Command]:
     """Build one top-level command per known agent, e.g. `lite claude`."""
     return [_make_agent_command(binary, name) for binary, (name, _profiles) in _KNOWN_AGENTS.items()]
 
 
 __all__ = [
-    "agent_commands",
-    "run_agent",
-    "build_agent_env",
-    "agent_launch_args",
-    "verify_proxy_key",
-    "agent_profile",
-    "resolve_api_key",
     "AgentRunError",
+    "agent_commands",
+    "agent_launch_args",
+    "agent_profile",
+    "build_agent_env",
+    "resolve_api_key",
+    "run_agent",
+    "verify_proxy_key",
 ]

@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from fastapi import HTTPException
 
@@ -39,7 +39,7 @@ _CONTAINER_STORED_ID_CACHE = InMemoryCache(max_size_in_memory=10000, default_ttl
 _ALLOWED_CONTAINER_IDS_CACHE = InMemoryCache(max_size_in_memory=2048, default_ttl=60)
 
 
-def _allowed_container_ids_cache_key(owner_scopes: List[str]) -> str:
+def _allowed_container_ids_cache_key(owner_scopes: list[str]) -> str:
     """JSON-encode the sorted scope list — using a separator like ``|``
     would collide for any tenant whose user_id / team_id / org_id /
     api_key happens to contain the separator. JSON quoting escapes
@@ -51,7 +51,7 @@ def _container_model_object_id(original_container_id: str, custom_llm_provider: 
     return f"{CONTAINER_OBJECT_PURPOSE}:{custom_llm_provider}:{original_container_id}"
 
 
-def decode_container_id_for_ownership(container_id: str, custom_llm_provider: str) -> Tuple[str, str]:
+def decode_container_id_for_ownership(container_id: str, custom_llm_provider: str) -> tuple[str, str]:
     decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
     original_container_id = decoded.get("response_id", container_id)
     decoded_provider = decoded.get("custom_llm_provider")
@@ -62,7 +62,7 @@ def decode_container_id_for_ownership(container_id: str, custom_llm_provider: st
 
 async def get_container_forwarding_params(
     container_id: str, original_container_id: str, custom_llm_provider: str
-) -> Dict[str, str]:
+) -> dict[str, str]:
     params = {
         "container_id": original_container_id,
         "custom_llm_provider": custom_llm_provider,
@@ -86,7 +86,7 @@ async def get_container_forwarding_params(
     return params
 
 
-def _get_response_id(response: Any) -> Optional[str]:
+def _get_response_id(response: Any) -> str | None:
     if response is None:
         return None
     if isinstance(response, dict):
@@ -96,7 +96,7 @@ def _get_response_id(response: Any) -> Optional[str]:
     return value if isinstance(value, str) else None
 
 
-def _dump_response(response: Any) -> Dict[str, Any]:
+def _dump_response(response: Any) -> dict[str, Any]:
     if isinstance(response, dict):
         return dict(response)
     if hasattr(response, "model_dump"):
@@ -116,7 +116,7 @@ def _custom_llm_provider_from_responses_response(
     response: Any,
     default: str = "openai",
 ) -> str:
-    hidden_params: Dict[str, Any] = {}
+    hidden_params: dict[str, Any] = {}
     if isinstance(response, dict):
         hidden_params = response.get("_hidden_params") or {}
     else:
@@ -131,7 +131,7 @@ def _custom_llm_provider_from_responses_response(
 async def record_container_owners_from_responses_response(
     response: Any,
     user_api_key_dict: UserAPIKeyAuth,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
 ) -> None:
     """Track containers created implicitly by code interpreter in /v1/responses."""
     container_ids = ResponsesAPIRequestUtils.collect_container_ids_from_responses_response(response)
@@ -234,7 +234,7 @@ async def record_container_owner(
     return response
 
 
-async def _get_container_owner(original_container_id: str, custom_llm_provider: str) -> Optional[str]:
+async def _get_container_owner(original_container_id: str, custom_llm_provider: str) -> str | None:
     model_object_id = _container_model_object_id(original_container_id, custom_llm_provider)
 
     cached = _CONTAINER_OWNER_CACHE.get_cache(model_object_id)
@@ -263,7 +263,7 @@ async def _get_container_owner(original_container_id: str, custom_llm_provider: 
     return owner
 
 
-async def _get_stored_container_id(original_container_id: str, custom_llm_provider: str) -> Optional[str]:
+async def _get_stored_container_id(original_container_id: str, custom_llm_provider: str) -> str | None:
     """Return the ``unified_object_id`` stored at create time, if any.
 
     Used by :func:`get_container_forwarding_params` to recover the
@@ -301,7 +301,7 @@ async def assert_user_can_access_container(
     container_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     custom_llm_provider: str,
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     original_container_id, resolved_provider = decode_container_id_for_ownership(container_id, custom_llm_provider)
 
     if is_proxy_admin(user_api_key_dict):
@@ -317,7 +317,7 @@ async def assert_user_can_access_container(
     return original_container_id, resolved_provider
 
 
-def _get_container_list_data(response: Any) -> Optional[List[Any]]:
+def _get_container_list_data(response: Any) -> list[Any] | None:
     if response is None:
         return None
     if isinstance(response, dict):
@@ -327,7 +327,7 @@ def _get_container_list_data(response: Any) -> Optional[List[Any]]:
     return data if isinstance(data, list) else None
 
 
-def _set_container_list_data(response: Any, data: List[Any], removed_filtered_items: bool = False) -> Any:
+def _set_container_list_data(response: Any, data: list[Any], removed_filtered_items: bool = False) -> Any:
     if isinstance(response, dict):
         response["data"] = data
         if data:
@@ -353,7 +353,7 @@ def _set_container_list_data(response: Any, data: List[Any], removed_filtered_it
 
 async def _get_allowed_container_ids(
     user_api_key_dict: UserAPIKeyAuth,
-) -> Set[str]:
+) -> set[str]:
     owner_scopes = get_resource_owner_scopes(user_api_key_dict)
     if not owner_scopes:
         return set()
@@ -394,7 +394,7 @@ async def filter_container_list_response(
         return response
 
     allowed_container_ids = await _get_allowed_container_ids(user_api_key_dict)
-    filtered: List[Any] = []
+    filtered: list[Any] = []
     for item in data:
         container_id = _get_response_id(item)
         if container_id is None:

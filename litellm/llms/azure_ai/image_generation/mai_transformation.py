@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -22,8 +22,8 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
     @staticmethod
     def get_mai_image_generation_url(
-        api_base: Optional[str],
-        api_version: Optional[str],
+        api_base: str | None,
+        api_version: str | None,
     ) -> str:
         if api_base is None:
             raise ValueError("api_base is required for Azure AI MAI image generation")
@@ -44,8 +44,8 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
     @staticmethod
     def get_mai_image_edit_url(
-        api_base: Optional[str],
-        api_version: Optional[str],
+        api_base: str | None,
+        api_version: str | None,
     ) -> str:
         if api_base is None:
             raise ValueError("api_base is required for Azure AI MAI image editing")
@@ -70,7 +70,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         return "maiimage" in model_normalized
 
     @staticmethod
-    def normalize_mai_image_usage(usage: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def normalize_mai_image_usage(usage: dict[str, Any] | None) -> dict[str, Any]:
         """Map Azure MAI usage fields to OpenAI ImageUsage schema."""
         if usage is None:
             return {
@@ -126,7 +126,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         )
         return normalized_usage
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         return ["n", "size"]
 
     def map_openai_params(
@@ -200,8 +200,8 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         try:
             response = raw_response.json()

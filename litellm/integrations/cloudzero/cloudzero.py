@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Optional, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -25,9 +25,9 @@ class CloudZeroLogger(CustomLogger):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        connection_id: Optional[str] = None,
-        timezone: Optional[str] = None,
+        api_key: str | None = None,
+        connection_id: str | None = None,
+        timezone: str | None = None,
         **kwargs,
     ):
         """Initialize CloudZero logger with configuration from parameters or environment variables."""
@@ -38,7 +38,7 @@ class CloudZeroLogger(CustomLogger):
         self.connection_id = connection_id or os.getenv("CLOUDZERO_CONNECTION_ID")
         self.timezone = timezone or os.getenv("CLOUDZERO_TIMEZONE", "UTC")
         verbose_logger.debug(
-            f"CloudZero Logger initialized with connection ID: {self.connection_id}, timezone: {self.timezone}"
+            "CloudZero Logger initialized with connection ID: %s, timezone: %s", self.connection_id, self.timezone
         )
 
     async def initialize_cloudzero_export_job(self):
@@ -92,10 +92,10 @@ class CloudZeroLogger(CustomLogger):
 
     async def export_usage_data(
         self,
-        limit: Optional[int] = None,
+        limit: int | None = None,
         operation: str = "replace_hourly",
-        start_time_utc: Optional[datetime] = None,
-        end_time_utc: Optional[datetime] = None,
+        start_time_utc: datetime | None = None,
+        end_time_utc: datetime | None = None,
     ):
         """
         Exports the usage data to CloudZero.
@@ -130,7 +130,7 @@ class CloudZeroLogger(CustomLogger):
                 verbose_logger.debug("CloudZero Logger: No usage data found to export")
                 return
 
-            verbose_logger.debug(f"CloudZero Logger: Processing {len(data)} records")
+            verbose_logger.debug("CloudZero Logger: Processing %s records", len(data))
 
             # Transform data to CloudZero CBF format
             transformer = CBFTransformer()
@@ -147,16 +147,16 @@ class CloudZeroLogger(CustomLogger):
                 user_timezone=self.timezone,
             )
 
-            verbose_logger.debug(f"CloudZero Logger: Transmitting {len(cbf_data)} records to CloudZero")
+            verbose_logger.debug("CloudZero Logger: Transmitting %s records to CloudZero", len(cbf_data))
             streamer.send_batched(cbf_data, operation=operation)
 
-            verbose_logger.debug(f"CloudZero Logger: Successfully exported {len(cbf_data)} records to CloudZero")
+            verbose_logger.debug("CloudZero Logger: Successfully exported %s records to CloudZero", len(cbf_data))
 
         except Exception as e:
-            verbose_logger.error(f"CloudZero Logger: Error exporting usage data: {str(e)}")
+            verbose_logger.error("CloudZero Logger: Error exporting usage data: %s", e)
             raise
 
-    async def dry_run_export_usage_data(self, limit: Optional[int] = 10000):
+    async def dry_run_export_usage_data(self, limit: int | None = 10000):
         """
         Returns the data that would be exported to CloudZero without actually sending it.
 
@@ -191,7 +191,7 @@ class CloudZeroLogger(CustomLogger):
                     },
                 }
 
-            verbose_logger.debug(f"CloudZero Dry Run: Processing {len(data)} records...")
+            verbose_logger.debug("CloudZero Dry Run: Processing %s records...", len(data))
 
             # Convert usage data to dict format for response
             usage_data_sample = data.head(50).to_dicts()  # Return first 50 rows
@@ -229,7 +229,7 @@ class CloudZeroLogger(CustomLogger):
             )
             total_tokens = sum(record.get("usage/amount", 0) for record in cbf_data_dict)
 
-            verbose_logger.debug(f"CloudZero Logger: Dry run completed for {len(cbf_data)} records")
+            verbose_logger.debug("CloudZero Logger: Dry run completed for %s records", len(cbf_data))
 
             return {
                 "usage_data": usage_data_sample,
@@ -244,8 +244,8 @@ class CloudZeroLogger(CustomLogger):
             }
 
         except Exception as e:
-            verbose_logger.error(f"CloudZero Logger: Error in dry run export: {str(e)}")
-            verbose_logger.error(f"CloudZero Dry Run Error: {str(e)}")
+            verbose_logger.error("CloudZero Logger: Error in dry run export: %s", e)
+            verbose_logger.error("CloudZero Dry Run Error: %s", e)
             raise
 
     def _display_cbf_data_on_screen(self, cbf_data):
@@ -346,7 +346,7 @@ class CloudZeroLogger(CustomLogger):
         from litellm.constants import CLOUDZERO_EXPORT_INTERVAL_MINUTES
         from litellm.integrations.custom_logger import CustomLogger
 
-        prometheus_loggers: List[CustomLogger] = litellm.logging_callback_manager.get_custom_loggers_for_type(
+        prometheus_loggers: list[CustomLogger] = litellm.logging_callback_manager.get_custom_loggers_for_type(
             callback_type=CloudZeroLogger
         )
         # we need to get the initialized prometheus logger instance(s) and call logger.initialize_remaining_budget_metrics() on them

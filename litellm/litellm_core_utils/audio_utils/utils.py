@@ -5,7 +5,6 @@ Utils used for litellm.transcription() and litellm.atranscription()
 import hashlib
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 from litellm.types.files import get_file_mime_type_from_extension
 from litellm.types.utils import FileTypes
@@ -174,8 +173,8 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
     Compute SHA-256 hash of audio file content for cache keys.
     Falls back to filename hash if content extraction fails.
     """
-    file_content: Optional[bytes] = None
-    fallback_filename: Optional[str] = None
+    file_content: bytes | None = None
+    fallback_filename: str | None = None
 
     if isinstance(file_obj, tuple):
         if len(file_obj) < 2:
@@ -203,7 +202,7 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
                     file_content = f.read()
                 if fallback_filename is None:
                     fallback_filename = str(file_content_obj)
-            except (OSError, IOError):
+            except OSError:
                 fallback_filename = str(file_content_obj)
                 file_content = None
         elif hasattr(file_content_obj, "read"):
@@ -214,7 +213,7 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
                 file_content = file_content_obj.read()  # type: ignore
                 if current_position is not None and hasattr(file_content_obj, "seek"):
                     file_content_obj.seek(current_position)  # type: ignore
-            except (OSError, IOError, AttributeError):
+            except (OSError, AttributeError):
                 file_content = None
         else:
             file_content = None
@@ -248,7 +247,7 @@ def get_audio_file_for_health_check() -> FileTypes:
     return open(file_path, "rb")
 
 
-def calculate_request_duration(file: FileTypes) -> Optional[float]:
+def calculate_request_duration(file: FileTypes) -> float | None:
     """
     Calculate audio duration from file content.
 
@@ -268,7 +267,7 @@ def calculate_request_duration(file: FileTypes) -> Optional[float]:
         import io
 
         # Handle different file input types
-        file_content: Optional[bytes] = None
+        file_content: bytes | None = None
 
         if isinstance(file, (bytes, bytearray)):
             # Raw bytes

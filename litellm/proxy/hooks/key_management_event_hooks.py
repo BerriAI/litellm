@@ -1,7 +1,7 @@
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -30,7 +30,7 @@ class KeyManagementEventHooks:
         data: GenerateKeyRequest,
         response: GenerateKeyResponse,
         user_api_key_dict: UserAPIKeyAuth,
-        litellm_changed_by: Optional[str] = None,
+        litellm_changed_by: str | None = None,
     ):
         """
         Hook that runs after a successful /key/generate request
@@ -51,7 +51,7 @@ class KeyManagementEventHooks:
             try:
                 await KeyManagementEventHooks._send_key_created_email(response.model_dump(exclude_none=True))
             except Exception as e:
-                verbose_proxy_logger.warning(f"Failed to send key created email: {e}")
+                verbose_proxy_logger.warning("Failed to send key created email: %s", e)
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
@@ -84,7 +84,7 @@ class KeyManagementEventHooks:
                 team_id=data.team_id,
             )
         except Exception as e:
-            verbose_proxy_logger.warning(f"Failed to store virtual key in secret manager: {e}")
+            verbose_proxy_logger.warning("Failed to store virtual key in secret manager: %s", e)
 
     @staticmethod
     async def async_key_updated_hook(
@@ -92,7 +92,7 @@ class KeyManagementEventHooks:
         existing_key_row: Any,
         response: Any,
         user_api_key_dict: UserAPIKeyAuth,
-        litellm_changed_by: Optional[str] = None,
+        litellm_changed_by: str | None = None,
     ):
         """
         Post /key/update processing hook
@@ -135,11 +135,11 @@ class KeyManagementEventHooks:
 
     @staticmethod
     async def async_key_rotated_hook(
-        data: Optional[RegenerateKeyRequest],
+        data: RegenerateKeyRequest | None,
         existing_key_row: LiteLLM_VerificationToken,
         response: GenerateKeyResponse,
         user_api_key_dict: UserAPIKeyAuth,
-        litellm_changed_by: Optional[str] = None,
+        litellm_changed_by: str | None = None,
     ):
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
@@ -168,7 +168,7 @@ class KeyManagementEventHooks:
                     new_secret_name,
                 )
             except Exception as e:
-                verbose_proxy_logger.warning(f"Failed to rotate virtual key in secret manager: {e}")
+                verbose_proxy_logger.warning("Failed to rotate virtual key in secret manager: %s", e)
 
         # Send key rotated email if configured - non-blocking, independent operation
         try:
@@ -177,7 +177,7 @@ class KeyManagementEventHooks:
                 existing_key_alias=existing_key_row.key_alias,
             )
         except Exception as e:
-            verbose_proxy_logger.warning(f"Failed to send key rotated email: {e}")
+            verbose_proxy_logger.warning("Failed to send key rotated email: %s", e)
 
         # store the audit log
         if litellm.store_audit_logs is True and existing_key_row.token is not None:
@@ -204,10 +204,10 @@ class KeyManagementEventHooks:
     @staticmethod
     async def async_key_deleted_hook(
         data: KeyRequest,
-        keys_being_deleted: List[LiteLLM_VerificationToken],
+        keys_being_deleted: list[LiteLLM_VerificationToken],
         response: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        litellm_changed_by: Optional[str] = None,
+        litellm_changed_by: str | None = None,
     ):
         """
         Post /key/delete processing hook
@@ -251,10 +251,9 @@ class KeyManagementEventHooks:
                 )
         # delete the keys from the secret manager
         await KeyManagementEventHooks._delete_virtual_keys_from_secret_manager(keys_being_deleted=keys_being_deleted)
-        pass
 
     @staticmethod
-    async def _store_virtual_key_in_secret_manager(secret_name: str, secret_token: str, team_id: Optional[str] = None):
+    async def _store_virtual_key_in_secret_manager(secret_name: str, secret_token: str, team_id: str | None = None):
         """
         Store a virtual key in the secret manager
 
@@ -274,7 +273,7 @@ class KeyManagementEventHooks:
                     description = getattr(litellm._key_management_settings, "description", None)
                     optional_params = await KeyManagementEventHooks._get_secret_manager_optional_params(team_id)
                     verbose_proxy_logger.debug(
-                        f"Creating secret with {secret_name} and tags={tags} and description={description}"
+                        "Creating secret with %s and tags=%s and description=%s", secret_name, tags, description
                     )
 
                     await litellm.secret_manager_client.async_write_secret(
@@ -290,7 +289,7 @@ class KeyManagementEventHooks:
         current_secret_name: str,
         new_secret_name: str,
         new_secret_value: str,
-        team_id: Optional[str] = None,
+        team_id: str | None = None,
     ):
         """
         Update a virtual key in the secret manager
@@ -326,7 +325,7 @@ class KeyManagementEventHooks:
 
     @staticmethod
     async def _delete_virtual_keys_from_secret_manager(
-        keys_being_deleted: List[LiteLLM_VerificationToken],
+        keys_being_deleted: list[LiteLLM_VerificationToken],
     ):
         """
         Deletes virtual keys from the secret manager
@@ -341,7 +340,7 @@ class KeyManagementEventHooks:
                 )
 
                 if isinstance(litellm.secret_manager_client, BaseSecretManager):
-                    team_settings_cache: Dict[Optional[str], Optional[dict]] = {}
+                    team_settings_cache: dict[str | None, dict | None] = {}
                     for key in keys_being_deleted:
                         if key.key_alias is not None:
                             team_id = getattr(key, "team_id", None)
@@ -356,13 +355,14 @@ class KeyManagementEventHooks:
                             )
                         else:
                             verbose_proxy_logger.warning(
-                                f"KeyManagementEventHooks._delete_virtual_key_from_secret_manager: Key alias not found for key {key.token}. Skipping deletion from secret manager."
+                                "KeyManagementEventHooks._delete_virtual_key_from_secret_manager: Key alias not found for key %s. Skipping deletion from secret manager.",
+                                key.token,
                             )
 
     @staticmethod
     async def _get_secret_manager_optional_params(
-        team_id: Optional[str],
-    ) -> Optional[dict]:
+        team_id: str | None,
+    ) -> dict | None:
         if team_id is None:
             return None
 
@@ -386,7 +386,7 @@ class KeyManagementEventHooks:
                 user_api_key_cache=user_api_key_cache,
             )
         except Exception as exc:  # pragma: no cover - defensive logging
-            verbose_proxy_logger.debug(f"Unable to load team metadata for team_id={team_id}: {exc}")
+            verbose_proxy_logger.debug("Unable to load team metadata for team_id=%s: %s", team_id, exc)
             return None
 
         metadata = getattr(team_obj, "metadata", None)
@@ -511,7 +511,7 @@ class KeyManagementEventHooks:
             )
 
     @staticmethod
-    async def _send_key_rotated_email(response: dict, existing_key_alias: Optional[str]):
+    async def _send_key_rotated_email(response: dict, existing_key_alias: str | None):
         """
         Send key rotated email if email sending is enabled.
 

@@ -27,6 +27,7 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     KeywordOverride,
 )
 from litellm.router_strategy.complexity_router.config import (
+    DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     DEFAULT_COMPLEXITY_CONFIG,
     DEFAULT_TECHNICAL_KEYWORDS,
     ComplexityRouterConfig,
@@ -745,6 +746,7 @@ class TestSingletonMutation:
     def test_default_config_not_mutated(self, mock_router_instance):
         """Test that creating routers without config doesn't mutate defaults."""
         from litellm.router_strategy.complexity_router.config import (
+    DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
             ComplexityRouterConfig,
         )
 
@@ -2901,7 +2903,7 @@ class TestRoutingDecisionCauseLogging:
 
 
 class TestSessionAffinity:
-    """Test the session_affinity sticky-routing behavior (on by default)."""
+    """Test the session_affinity sticky-routing behavior (off by default)."""
 
     REASONING_MESSAGE = [
         {
@@ -2915,18 +2917,14 @@ class TestSessionAffinity:
     def session_affinity_config(self, basic_config) -> Dict:
         return {**basic_config, "session_affinity": True}
 
-    @pytest.fixture
-    def session_affinity_disabled_config(self, basic_config) -> Dict:
-        return {**basic_config, "session_affinity": False}
-
     @staticmethod
     def _request_kwargs(session_id: str) -> Dict:
         return {"metadata": {"session_id": session_id}}
 
     @pytest.mark.asyncio
-    async def test_enabled_by_default_pins_model(self, mock_router_instance, basic_config):
-        """Regression: session_affinity defaults to True, so a shared session_id pins the
-        first turn's model and later turns reuse it instead of reclassifying."""
+    async def test_disabled_by_default_reclassifies_every_turn(self, mock_router_instance, basic_config):
+        """Regression: session_affinity defaults to False, so a shared session_id must NOT
+        pin the first turn's model; every turn is classified on its own merits."""
         assert "session_affinity" not in basic_config
         mock_router_instance.cache = DualCache()
         router = ComplexityRouter(
@@ -2942,19 +2940,17 @@ class TestSessionAffinity:
             model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
         )
         assert first.model == "o1-preview"
-        assert second.model == "o1-preview"
+        assert second.model == "gpt-4o-mini"
 
     @pytest.mark.asyncio
-    async def test_can_be_disabled_reclassifies_every_turn(
-        self, mock_router_instance, session_affinity_disabled_config
-    ):
-        """Regression: session_affinity=False must still reclassify every turn even when a
-        shared session_id is present, so the opt-out keeps working."""
+    async def test_can_be_enabled_to_pin_every_later_turn(self, mock_router_instance, session_affinity_config):
+        """Regression: session_affinity=True is the opt-in, so a shared session_id reuses the
+        first turn's model instead of reclassifying."""
         mock_router_instance.cache = DualCache()
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
-            complexity_router_config=session_affinity_disabled_config,
+            complexity_router_config=session_affinity_config,
         )
         request_kwargs = self._request_kwargs("session-1")
         first = await router.async_pre_routing_hook(
@@ -2964,7 +2960,7 @@ class TestSessionAffinity:
             model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
         )
         assert first.model == "o1-preview"
-        assert second.model == "gpt-4o-mini"
+        assert second.model == "o1-preview"
 
     @pytest.mark.asyncio
     async def test_pins_model_after_first_turn(self, mock_router_instance, session_affinity_config):
@@ -4098,6 +4094,23 @@ class TestRecordRoutingDecision:
         assert request_kwargs == {}
 
 
+    def test_clearing_the_decision_takes_the_savings_facts_with_it(self):
+        """A fallback to a plain model group re-enters the hook with the same
+        `request_kwargs`. The baseline and the conversation shape ride inside the
+        decision rather than beside it, so one clear cannot leave either behind and
+        attribute an auto-router saving to a deployment that never routed."""
+        decision = {
+            "router_model_name": "smart-router",
+            "router_type": "complexity",
+            "routed_model": "gpt-4o-mini",
+            "savings_baseline_model": "anthropic/claude-opus-5",
+            "conversation_continuing": False,
+        }
+        request_kwargs: Dict = {"litellm_metadata": {"routing_decision": decision}}
+        Router._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
+        assert request_kwargs["litellm_metadata"] == {}
+
+
 class TestEscalationIsRecordedConsistently:
     """An escalation keyword records two separate facts on every path: that the caller
     asked, and whether the tier actually moved. Dropping the ask when there is nowhere
@@ -4395,7 +4408,7 @@ class TestContextAwareClassifier:
         assert _extract_current_ask_and_system_prompt(messages)[0] == expected_ask
 
     @pytest.mark.parametrize(
-        "messages,current_ask,window,per_turn_chars,expected",
+        "messages,current_ask,window,per_turn_chars,include_assistant,expected",
         [
             pytest.param(
                 [
@@ -4407,7 +4420,8 @@ class TestContextAwareClassifier:
                 "Third request is the current ask",
                 2,
                 30,
-                ("First request", "Second request with more detai..."),
+                False,
+                (("user", "First request"), ("user", "Second request with more detai...")),
                 id="current-ask-excluded-and-long-turn-marked-as-clipped",
             ),
             pytest.param(
@@ -4418,7 +4432,8 @@ class TestContextAwareClassifier:
                 "something the caller supplied",
                 3,
                 100,
-                ("turn one", "turn two"),
+                False,
+                (("user", "turn one"), ("user", "turn two")),
                 id="caller-classifying-other-than-newest-keeps-every-turn",
             ),
             pytest.param(
@@ -4430,6 +4445,7 @@ class TestContextAwareClassifier:
                 "continue",
                 3,
                 100,
+                False,
                 (),
                 id="earlier-turn-repeating-the-ask-is-not-quoted-back",
             ),
@@ -4442,21 +4458,112 @@ class TestContextAwareClassifier:
                 "Real question 2",
                 3,
                 100,
-                ("Real question 1",),
+                False,
+                (("user", "Real question 1"),),
                 id="tool-result-turn-does-not-consume-a-slot",
+            ),
+            pytest.param(
+                [
+                    {"role": "user", "content": "Find events at this location with these properties"},
+                    {"role": "assistant", "content": "Here is the plan, it is complex, should I execute?"},
+                    {"role": "user", "content": "yes."},
+                ],
+                "yes.",
+                3,
+                200,
+                True,
+                (
+                    ("user", "Find events at this location with these properties"),
+                    ("assistant", "Here is the plan, it is complex, should I execute?"),
+                ),
+                id="assistant-turn-stating-the-difficulty-is-included-when-enabled",
+            ),
+            pytest.param(
+                [
+                    {"role": "user", "content": "Find events at this location with these properties"},
+                    {"role": "assistant", "content": "Here is the plan, it is complex, should I execute?"},
+                    {"role": "user", "content": "yes."},
+                ],
+                "yes.",
+                3,
+                200,
+                False,
+                (("user", "Find events at this location with these properties"),),
+                id="same-conversation-drops-the-assistant-turn-by-default",
+            ),
+            pytest.param(
+                [
+                    {"role": "user", "content": "ask one"},
+                    {"role": "assistant", "content": "reply one"},
+                    {"role": "user", "content": "ask two"},
+                    {"role": "assistant", "content": "reply two"},
+                    {"role": "user", "content": "ask three"},
+                ],
+                "ask three",
+                3,
+                100,
+                True,
+                (("assistant", "reply one"), ("user", "ask two"), ("assistant", "reply two")),
+                id="window-counts-the-last-n-turns-across-both-roles",
+            ),
+            pytest.param(
+                [
+                    {"role": "user", "content": "ask one"},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": "x", "name": "f", "input": {}}]},
+                    {"role": "assistant", "content": [{"type": "thinking", "thinking": "hmm"}]},
+                    {"role": "user", "content": "ask two"},
+                ],
+                "ask two",
+                2,
+                100,
+                True,
+                (("user", "ask one"),),
+                id="assistant-turn-with-no-text-does-not-consume-a-slot",
+            ),
+            pytest.param(
+                [
+                    {"role": "user", "content": "go"},
+                    {"role": "assistant", "content": "a very long plan that keeps going well past the cap"},
+                    {"role": "user", "content": "yes"},
+                ],
+                "yes",
+                1,
+                20,
+                True,
+                (("assistant", "a very long plan tha..."),),
+                id="assistant-reply-is-clipped-at-per-turn-chars",
+            ),
+            pytest.param(
+                [
+                    {"role": "user", "content": "ask one"},
+                    {"role": "assistant", "content": "reply one"},
+                    {"role": "user", "content": "ask two"},
+                ],
+                "ask two",
+                0,
+                100,
+                True,
+                (),
+                id="window-of-zero-sends-nothing-even-with-assistant-turns-enabled",
             ),
         ],
     )
-    def test_prior_turn_window(self, messages, current_ask, window, per_turn_chars, expected):
-        """The window holds the human turns before the current ask, oldest first.
+    def test_prior_turn_window(self, messages, current_ask, window, per_turn_chars, include_assistant, expected):
+        """The window holds the turns before the current ask, oldest first, tagged with their role.
 
         The current ask is excluded by matching it rather than by position, since `aclassify` takes
         `prompt` and `messages` separately and a caller may classify other than the newest turn. A turn
         cut at per_turn_chars is marked so a clip does not read as an abandoned thought.
-        """
-        from litellm.router_strategy.complexity_router.complexity_router import _extract_prior_user_turns
 
-        assert _extract_prior_user_turns(messages, current_ask, window, per_turn_chars) == expected
+        With assistant turns enabled the window is the last N turns of the conversation rather than the
+        last N asks, which is what makes a plan the assistant called complex visible under a bare "yes".
+        The two rows over the same conversation are the discriminating pair: enabling the flag is the
+        only difference between them. A turn holding only tool calls or thinking blocks has no text, so
+        it is skipped rather than quoted as an empty slot.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _extract_prior_turns
+
+        assert _extract_prior_turns(messages, current_ask, window, per_turn_chars, include_assistant) == expected
 
     def test_reminder_scan_is_linear_on_adversarial_input(self):
         """Unclosed reminder tags must not make stripping superlinear.
@@ -4700,6 +4807,130 @@ class TestContextAwareClassifier:
         assert user_payload.strip() == "Classify this message:\nwhat is 2+2"
 
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("include_assistant,plan_is_quoted", [(True, True), (False, False)])
+    async def test_assistant_turn_carrying_the_difficulty_reaches_the_classifier(
+        self, mock_router_instance, llm_classifier_config, include_assistant, plan_is_quoted
+    ):
+        """The reported case: the work is described by the assistant and approved with a bare "yes".
+
+        Only the assistant turn says the task is hard, so with assistant turns excluded the classifier
+        is asked to rate the word "yes" against a prior ask that no longer describes the work being
+        approved. The two rows run the same conversation and differ only by the flag, so a payload
+        change can only be the flag.
+        """
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_context_include_assistant_turns": include_assistant,
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+        plan = "Here is the plan to figure that out, it is complex, should I execute?"
+
+        await router.aclassify(
+            "yes.",
+            messages=[
+                {"role": "user", "content": "Find events at this location with these properties"},
+                {"role": "assistant", "content": plan},
+                {"role": "user", "content": "yes."},
+            ],
+        )
+
+        ask = "Find events at this location with these properties"
+        user_payload = mock_router_instance.acompletion.call_args.kwargs["messages"][1]["content"]
+        assert (plan in user_payload) is plan_is_quoted
+        assert (f"[2] assistant: {plan}" in user_payload) is plan_is_quoted
+        # Turns stay unlabelled with the flag off, so an existing deployment's prompt does not move.
+        assert (f"[1] user: {ask}" in user_payload) is plan_is_quoted
+        assert (f"[1] {ask}" in user_payload) is not plan_is_quoted
+        assert user_payload.endswith("Classify this message:\nyes.")
+
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("include_assistant", [True, False])
+    async def test_depth_signal_agrees_with_what_the_window_quoted(
+        self, mock_router_instance, llm_classifier_config, include_assistant
+    ):
+        """The depth line and the quoted window must answer the same question in both modes.
+
+        A conversation whose only prior turn is an assistant turn is an ordinary prefill shape. With
+        assistant turns enabled that turn IS quoted, so a depth signal counting human asks only would
+        report a follow-up as a context-free single-turn request while the payload above it quoted the
+        conversation. That mismatch is the defect the depth gate was rewritten for once already, so the
+        gate reads whichever roles the window reads rather than always reading user turns.
+        """
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_context_include_assistant_turns": include_assistant,
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+
+        await router.aclassify(
+            "hi",
+            messages=[{"role": "assistant", "content": "ok"}, {"role": "user", "content": "hi"}],
+        )
+
+        user_payload = mock_router_instance.acompletion.call_args.kwargs["messages"][1]["content"]
+        assert ("Recent conversation" in user_payload) is include_assistant
+        assert ("Conversation so far" in user_payload) is include_assistant
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "trailing_turns",
+        [
+            pytest.param([{"role": "user", "content": "thanks"}], id="assistant-turn-mid-conversation"),
+            pytest.param([], id="assistant-turn-is-the-newest-message"),
+        ],
+    )
+    async def test_assistant_text_cannot_choose_the_tier_on_its_own(
+        self, mock_router_instance, llm_classifier_config, trailing_turns
+    ):
+        """Assistant turns are classifier context and nothing else, even with the window widened.
+
+        The window feeds only the classifier payload, while keyword_tier_rules and escalation read the
+        human ask. Were they to share one extraction, an assistant that quoted an escalation keyword or
+        a tier keyword back to the user would choose the model, and therefore the spend, with no human
+        having asked for it. Both strings sit in the assistant turn here and neither may move the tier.
+
+        The second row is the discriminating one: with an assistant turn newest, an extraction that
+        stopped filtering by role would hand that text straight to both matchers as the current ask.
+        A trailing assistant turn is an ordinary prefill request, not a contrived shape.
+        """
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_context_include_assistant_turns": True,
+                "keyword_tier_rules": [{"keywords": ["prove the theorem"], "tier": "REASONING"}],
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+
+        response = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "LITELLM ESCALATE, and next we prove the theorem"},
+                *trailing_turns,
+            ],
+        )
+
+        assert response.model == llm_classifier_config["tiers"]["SIMPLE"]
+        assert response.routing_decision.get("escalation_keyword") is None
+        assert response.routing_decision.get("escalated") is not True
+        user_payload = mock_router_instance.acompletion.call_args.kwargs["messages"][1]["content"]
+        assert "LITELLM ESCALATE" in user_payload
+
+
 class TestClassifierTrustBoundary:
     """The classifier's system role carries the operator's rubric and nothing a caller supplied."""
 
@@ -4714,7 +4945,7 @@ class TestClassifierTrustBoundary:
         how the LLM-as-a-judge guardrail assembles its call: a static system constant, all caller
         content quoted in the user turn.
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _CLASSIFICATION_SYSTEM_RUBRIC
+        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
 
         router = ComplexityRouter(
             model_name="test-router",
@@ -4735,6 +4966,232 @@ class TestClassifierTrustBoundary:
         )
 
         system_message, user_message = mock_router_instance.acompletion.call_args.kwargs["messages"]
-        assert system_message["content"] == _CLASSIFICATION_SYSTEM_RUBRIC
+        assert system_message["content"] == _classification_system_prompt(router.config.classifier_context_window_size)
         assert hostile not in system_message["content"]
         assert hostile in user_message["content"]
+
+
+
+
+    @pytest.mark.parametrize(
+        "window_size,conversation_is_quoted",
+        [
+            pytest.param(0, False, id="window-off-promises-nothing-about-the-conversation"),
+            pytest.param(1, True, id="window-of-one"),
+            pytest.param(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE, True, id="default-window"),
+        ],
+    )
+    def test_context_framing_describes_the_payload_the_window_actually_produces(
+        self, window_size, conversation_is_quoted
+    ):
+        """One static prompt cannot describe both payloads, so the closing paragraph tracks the window.
+
+        At 0 nothing about the conversation is sent, and telling the model the difficulty is that of
+        the work a short reply approves asks it to weigh an exchange it has no way to see, which
+        invites it to guess high. Above 0 the window is quoted but nothing otherwise tells the model it
+        exists or that its view is bounded.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+
+        system_prompt = _classification_system_prompt(window_size)
+
+        assert ("using the earlier turns quoted above it as context" in system_prompt) is conversation_is_quoted
+        assert ('short reply such as "yes" or "continue"' in system_prompt) is conversation_is_quoted
+        assert ("Classify only the current message" in system_prompt) is not conversation_is_quoted
+
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("include_assistant", [True, False])
+    async def test_context_framing_does_not_depend_on_which_roles_the_window_holds(
+        self, mock_router_instance, llm_classifier_config, include_assistant
+    ):
+        """Whose turns the window holds does not change the framing; that they exist is what matters.
+
+        Gating the wording on the assistant toggle instead would put the default deployment back on the
+        pre-context sentence, which is the exact configuration the reported misclassification was
+        raised against: window at its default, assistant turns off.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_context_include_assistant_turns": include_assistant,
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+
+        await router.aclassify("yes.", messages=[{"role": "user", "content": "yes."}])
+
+        system_content = mock_router_instance.acompletion.call_args.kwargs["messages"][0]["content"]
+        assert system_content == _classification_system_prompt(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
+
+    def test_a_window_of_zero_still_sends_the_original_wording(self):
+        """With no conversation quoted, the original line is the correct one and must stay reachable.
+
+        It is only wrong when turns ARE quoted, which is the case that produced the report: the model
+        was handed a window and told in the same breath to disregard it, so a request whose difficulty
+        was established earlier came back SIMPLE on the word "yes".
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+
+        assert _classification_system_prompt(0).endswith(
+            "Classify only the current message; use the other sections to disambiguate its difficulty."
+        )
+
+    def test_a_window_stops_telling_the_model_to_disregard_it(self):
+        """With turns quoted, the original line is the defect and must not come back.
+
+        It was applied literally: a conversation whose difficulty was established earlier came back
+        SIMPLE because the message being rated was the word "yes". A window the rubric then instructs
+        the model to disregard buys nothing, so the replacement is pinned here rather than left to be
+        rediscovered.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+
+        system_prompt = _classification_system_prompt(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
+
+        assert "Classify only the current message" not in system_prompt
+        assert "using the earlier turns quoted above it as context" in system_prompt
+        assert "rate the work it approves rather than the reply itself" in system_prompt
+
+
+class TestConversationShapeDiscriminator:
+    """Whether the counterfactual single model would already have had the prompt cached."""
+
+    @staticmethod
+    def _router(mock_router_instance, basic_config) -> ComplexityRouter:
+        return ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "session_affinity": False},
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_single_ask_is_a_first_turn(self, mock_router_instance, basic_config):
+        """Nothing is cached for any model yet, so the baseline would have paid the same
+        cache write and the saving is the plain rate difference."""
+        mock_router_instance.cache = DualCache()
+        result = await self._router(mock_router_instance, basic_config).async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"metadata": {}},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert result.routing_decision["conversation_continuing"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_second_ask_means_the_baseline_was_already_warm(self, mock_router_instance, basic_config):
+        """An earlier turn was served, so a single-model deployment wrote the prompt then
+        and would only read it now; this request's write is what switching cost."""
+        mock_router_instance.cache = DualCache()
+        result = await self._router(mock_router_instance, basic_config).async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"metadata": {}},
+            messages=[
+                {"role": "user", "content": "First question about the codebase"},
+                {"role": "assistant", "content": "Here is the answer"},
+                {"role": "user", "content": "Hello!"},
+            ],
+        )
+        assert result.routing_decision["conversation_continuing"] is True
+
+    @pytest.mark.asyncio
+    async def test_it_needs_no_session_id(self, mock_router_instance, basic_config):
+        """The whole point of reading the conversation rather than remembering it: a
+        caller that sends no session header is still classified correctly."""
+        mock_router_instance.cache = DualCache()
+        router = self._router(mock_router_instance, basic_config)
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "Hello!"}]
+        )
+        later = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[
+                {"role": "user", "content": "First question"},
+                {"role": "assistant", "content": "Answer"},
+                {"role": "user", "content": "Hello!"},
+            ],
+        )
+        assert first.routing_decision["conversation_continuing"] is False
+        assert later.routing_decision["conversation_continuing"] is True
+
+    @pytest.mark.asyncio
+    async def test_it_touches_no_cache(self, mock_router_instance, basic_config):
+        """Reading the request instead of remembering it is what removes the routing-path
+        round-trip, and with it a cache failure that would read as a first turn."""
+        cache = AsyncMock()
+        cache.async_get_cache = AsyncMock(return_value=None)
+        mock_router_instance.cache = cache
+        result = await self._router(mock_router_instance, basic_config).async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"metadata": {}},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert result.routing_decision["conversation_continuing"] is False
+        assert cache.async_get_cache.await_count == 0
+        assert cache.async_set_cache.await_count == 0
+
+    @pytest.mark.parametrize(
+        "history",
+        [
+            pytest.param(
+                [
+                    {"role": "user", "content": "do X"},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": "1", "name": "t", "input": {}}]},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "1", "content": "r"}]},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": "2", "name": "t", "input": {}}]},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "2", "content": "r"}]},
+                ],
+                id="messages-api-tool-result-blocks",
+            ),
+            pytest.param(
+                [
+                    {"role": "user", "content": "do X"},
+                    {"role": "assistant", "tool_calls": [{"id": "1"}]},
+                    {"role": "tool", "tool_call_id": "1", "content": "r"},
+                ],
+                id="chat-completions-tool-role",
+            ),
+        ],
+    )
+    def test_an_agent_loop_on_one_human_ask_is_not_a_first_turn(self, history):
+        """An agent can run twenty turns on a single human ask: its tool traffic rides
+        `tool_result` blocks that flatten to empty text and `tool` roles. Counting human
+        asks read that as a first turn and handed it the untouched-write arithmetic,
+        which is the one direction this must never fail in, because it inflates."""
+        from litellm.router_strategy.complexity_router.complexity_router import _conversation_is_continuing
+
+        assert _conversation_is_continuing(history) is True
+
+    def test_a_system_prompt_does_not_make_a_first_turn_look_continued(self):
+        from litellm.router_strategy.complexity_router.complexity_router import _conversation_is_continuing
+
+        assert _conversation_is_continuing([{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}]) is False
+
+    def test_unreadable_messages_stay_conservative(self):
+        """No messages says nothing about the baseline's cache, so it keeps charging the
+        write and under-claims rather than inflating."""
+        from litellm.router_strategy.complexity_router.complexity_router import _conversation_is_continuing
+
+        assert _conversation_is_continuing(None) is True
+        assert _conversation_is_continuing([]) is True
+        assert _conversation_is_continuing([{"role": "user", "content": ""}]) is False
+
+    @pytest.mark.asyncio
+    async def test_the_shape_travels_on_every_pre_routing_response(self):
+        """A response without it defaults to charging the write, silently undoing the fix
+        for whichever routing path forgot it."""
+        import inspect
+
+        from litellm.router_strategy.complexity_router import complexity_router as module
+
+        source = inspect.getsource(module.ComplexityRouter.async_pre_routing_hook) + inspect.getsource(
+            module.ComplexityRouter._classify_and_route
+        )
+        builds = source.split("self._build_routing_decision(")[1:]
+        assert builds
+        missing = [i for i, block in enumerate(builds) if "conversation_continuing=conversation_continuing" not in block.split("),")[0]]
+        assert not missing, f"routing decisions {missing} do not carry the conversation shape"

@@ -30,8 +30,9 @@ Usage:
 
 import asyncio
 import contextvars
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -70,14 +71,14 @@ def _get_agents_api_config(custom_llm_provider: str):
 
 
 def _make_logging_obj(
-    kwargs: Dict[str, Any],
+    kwargs: dict[str, Any],
     model: str,
     custom_llm_provider: str,
     call_type: str,
-    optional_params: Dict[str, Any],
+    optional_params: dict[str, Any],
 ) -> LiteLLMLoggingObj:
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-    litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+    litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model,
@@ -96,13 +97,13 @@ def _make_logging_obj(
 @client
 async def acreate(
     name: str,
-    base_agent: Optional[str] = None,
-    instructions: Optional[str] = None,
-    base_environment: Optional[InteractionEnvironment] = None,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    base_agent: str | None = None,
+    instructions: str | None = None,
+    base_environment: InteractionEnvironment | None = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentCreateResponse:
     """Async: Create a managed agent on the provider side."""
@@ -140,15 +141,15 @@ async def acreate(
 @client
 def create(
     name: str,
-    base_agent: Optional[str] = None,
-    instructions: Optional[str] = None,
-    base_environment: Optional[InteractionEnvironment] = None,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    base_agent: str | None = None,
+    instructions: str | None = None,
+    base_environment: InteractionEnvironment | None = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
-) -> Union[AgentCreateResponse, Coroutine[Any, Any, AgentCreateResponse]]:
+) -> AgentCreateResponse | Coroutine[Any, Any, AgentCreateResponse]:
     """
     Sync: Create a managed agent on the provider side.
 
@@ -205,9 +206,9 @@ def create(
 
 @client
 async def alist(
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentListResponse:
     """Async: List all agents on the provider side."""
@@ -239,11 +240,11 @@ async def alist(
 
 @client
 def list(
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
-) -> Union[AgentListResponse, Coroutine[Any, Any, AgentListResponse]]:
+) -> AgentListResponse | Coroutine[Any, Any, AgentListResponse]:
     """Sync: List all agents on the provider side."""
     local_vars = locals()
     custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
@@ -279,9 +280,9 @@ def list(
 @client
 async def aget(
     name: str,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentCreateResponse:
     """Async: Get a specific agent by name."""
@@ -315,11 +316,11 @@ async def aget(
 @client
 def get(
     name: str,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
-) -> Union[AgentCreateResponse, Coroutine[Any, Any, AgentCreateResponse]]:
+) -> AgentCreateResponse | Coroutine[Any, Any, AgentCreateResponse]:
     """Sync: Get a specific agent by name."""
     local_vars = locals()
     custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
@@ -356,9 +357,9 @@ def get(
 @client
 async def adelete(
     name: str,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentDeleteResult:
     """Async: Delete a specific agent by name."""
@@ -392,11 +393,11 @@ async def adelete(
 @client
 def delete(
     name: str,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
-) -> Union[AgentDeleteResult, Coroutine[Any, Any, AgentDeleteResult]]:
+) -> AgentDeleteResult | Coroutine[Any, Any, AgentDeleteResult]:
     """Sync: Delete a specific agent by name."""
     local_vars = locals()
     custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
@@ -433,9 +434,9 @@ def delete(
 @client
 async def alist_versions(
     name: str,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentVersionsResponse:
     """Async: List versions of a specific agent."""
@@ -469,11 +470,11 @@ async def alist_versions(
 @client
 def list_versions(
     name: str,
-    custom_llm_provider: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
-) -> Union[AgentVersionsResponse, Coroutine[Any, Any, AgentVersionsResponse]]:
+) -> AgentVersionsResponse | Coroutine[Any, Any, AgentVersionsResponse]:
     """Sync: List versions of a specific agent."""
     local_vars = locals()
     custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"

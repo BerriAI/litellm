@@ -1,7 +1,9 @@
 import asyncio
 import json
 import time
-from typing import Any, AsyncIterator, Dict, Optional, cast
+from collections.abc import AsyncIterator, Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, NamedTuple, cast, get_args
 from uuid import uuid4
 
 import fastapi
@@ -17,10 +19,133 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket,
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.llms.openai import REASONING_EFFORT, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
 
+if TYPE_CHECKING:
+    from litellm.router import Router
+
 router = APIRouter()
+
+_user_api_key_auth_dep = Depends(user_api_key_auth)
+_RESPONSES_TAGS = ["responses"]  # mutable-ok: fastapi's route signature requires List[str] tags
+
+_TOOL_PAYLOAD_KEYS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        "custom": ("name", "description", "format"),
+        "function": ("name", "description", "parameters", "strict"),
+    }
+)
+_EMPTY_TOOL_PAYLOAD: Mapping[str, Any] = MappingProxyType({})
+
+
+def _convert_tool_payload_value(key: str, value: object, *, to_chat: bool) -> object:
+    if key != "format" or not isinstance(value, dict):
+        return value
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        convert_custom_tool_format_to_chat_shape,
+        convert_custom_tool_format_to_responses_shape,
+    )
+
+    convert = convert_custom_tool_format_to_chat_shape if to_chat else convert_custom_tool_format_to_responses_shape
+    return convert(value)
+
+
+def _convert_tool_envelope(obj: object, *, to_chat: bool) -> object:
+    if not isinstance(obj, dict):
+        return obj
+    tool_type = obj.get("type")
+    payload_keys = _TOOL_PAYLOAD_KEYS.get(tool_type)
+    if payload_keys is None:
+        return obj
+    nested = obj.get(tool_type)
+    nested_source = nested if isinstance(nested, dict) else _EMPTY_TOOL_PAYLOAD
+    payload = {  # mutable-ok: tool entries are embedded verbatim in the JSON request body
+        key: _convert_tool_payload_value(key, nested_source[key] if key in nested_source else obj[key], to_chat=to_chat)
+        for key in payload_keys
+        if key in nested_source or key in obj
+    }
+    if "name" not in payload:
+        return obj
+    return {"type": tool_type, tool_type: payload} if to_chat else {"type": tool_type, **payload}  # mutable-ok: same
+
+
+def _normalize_tool_dialect(
+    data: dict, *, to_chat: bool
+) -> dict:  # mutable-ok: the parsed request body contract is a plain dict
+    tools = data.get("tools")
+    tool_choice = data.get("tool_choice")
+    normalized_tools = (
+        [
+            _convert_tool_envelope(tool, to_chat=to_chat) for tool in tools
+        ]  # mutable-ok: body's tools stays a plain JSON list
+        if isinstance(tools, list)
+        else tools
+    )
+    normalized_choice = _convert_tool_envelope(tool_choice, to_chat=to_chat)
+    if normalized_tools == tools and normalized_choice == tool_choice:
+        return data
+    replaceable = (("tools", normalized_tools), ("tool_choice", normalized_choice))
+    return {**data, **{key: value for key, value in replaceable if key in data}}  # mutable-ok: plain body dict
+
+
+def _is_chat_completions_body(data: Mapping[str, Any]) -> bool:
+    messages = data.get("messages")
+    if isinstance(messages, list) and len(messages) > 0:
+        return True
+    return "messages" in data and "input" not in data
+
+
+_CURSOR_THINKING_SEPARATOR = "-thinking-"
+_CURSOR_FAST_SUFFIX = "-fast"
+_CURSOR_THINKING_LEVELS: frozenset[str] = frozenset(get_args(REASONING_EFFORT))
+
+
+class _CursorModelVariant(NamedTuple):
+    base_model: str
+    reasoning_effort: str | None
+
+
+def _parse_cursor_model_variant(model: str) -> _CursorModelVariant:
+    stripped = model.removesuffix(_CURSOR_FAST_SUFFIX)
+    base, separator, level = stripped.rpartition(_CURSOR_THINKING_SEPARATOR)
+    if separator and base and level in _CURSOR_THINKING_LEVELS:
+        return _CursorModelVariant(base, level)
+    return _CursorModelVariant(stripped, None)
+
+
+def _router_can_serve(model: str, llm_router: "Router | None") -> bool:
+    if llm_router is None:
+        return False
+    if model in llm_router.model_names or model in llm_router.model_group_alias:
+        return True
+    if model in llm_router.team_public_model_names:
+        return True
+    return bool(llm_router.pattern_router.get_pattern(model))
+
+
+def _resolve_cursor_model_variant(
+    data: dict, llm_router: "Router | None"
+) -> dict:  # mutable-ok: the parsed request body contract is a plain dict
+    model = data.get("model")
+    if not isinstance(model, str) or _router_can_serve(model, llm_router):
+        return data
+    variant = _parse_cursor_model_variant(model)
+    if variant.base_model == model or not _router_can_serve(variant.base_model, llm_router):
+        return data
+    resolved = {**data, "model": variant.base_model}  # mutable-ok: plain body dict
+    if variant.reasoning_effort is None:
+        return resolved
+    if _is_chat_completions_body(data):
+        if "reasoning_effort" in data:
+            return resolved
+        return {**resolved, "reasoning_effort": variant.reasoning_effort}  # mutable-ok: plain body dict
+    reasoning = data.get("reasoning")
+    if isinstance(reasoning, dict):
+        if reasoning.get("effort"):
+            return resolved
+        return {**resolved, "reasoning": {**reasoning, "effort": variant.reasoning_effort}}  # mutable-ok: same
+    return {**resolved, "reasoning": {"effort": variant.reasoning_effort}}  # mutable-ok: plain body dict
 
 
 @router.post(
@@ -115,7 +240,7 @@ async def responses_api(
             ResponsePollingHandler,
         )
 
-        verbose_proxy_logger.info(f"Starting background response with polling for model={data.get('model')}")
+        verbose_proxy_logger.info("Starting background response with polling for model=%s", data.get("model"))
 
         # Run pre-call checks (rate limits, guardrails, budget) BEFORE creating
         # polling ID. This ensures rate-limited requests get a synchronous 429
@@ -220,7 +345,7 @@ async def responses_api(
                 )
 
                 managed_files_obj = cast(
-                    Optional[_PROXY_LiteLLMManagedFiles],
+                    _PROXY_LiteLLMManagedFiles | None,
                     proxy_logging_obj.get_proxy_hook("managed_files"),
                 )
 
@@ -232,7 +357,8 @@ async def responses_api(
 
                         if not model_id:
                             verbose_proxy_logger.warning(
-                                f"No model_id found in response hidden params for response {response.id}, skipping managed object storage"
+                                "No model_id found in response hidden params for response %s, skipping managed object storage",
+                                response.id,
                             )
                             raise Exception("No model_id found in response hidden params")
                         # Store in managed objects table
@@ -246,11 +372,13 @@ async def responses_api(
                         )
 
                         verbose_proxy_logger.info(
-                            f"Stored background response {response.id} in managed objects table with unified_id={response.id}"
+                            "Stored background response %s in managed objects table with unified_id=%s",
+                            response.id,
+                            response.id,
                         )
                     except Exception as e:
                         verbose_proxy_logger.error(
-                            f"Failed to store background response in managed objects table: {str(e)}"
+                            "Failed to store background response in managed objects table: %s", e
                         )
 
         return response
@@ -283,6 +411,33 @@ async def responses_api(
         )
 
 
+@router.get(
+    "/cursor/models",
+    dependencies=(_user_api_key_auth_dep,),
+    tags=_RESPONSES_TAGS,
+)
+@router.get(
+    "/cursor/v1/models",
+    dependencies=(_user_api_key_auth_dep,),
+    tags=_RESPONSES_TAGS,
+)
+async def cursor_model_list(
+    user_api_key_dict: UserAPIKeyAuth = _user_api_key_auth_dep,
+):
+    """
+    OpenAI-compatible model listing for the Cursor BYOK base URL.
+
+    Clients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and
+    verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
+    route those requests fall through to the Cursor Cloud Agents passthrough, which
+    demands a Cursor API key and 401s, so key verification silently fails before any
+    chat request is ever sent. Delegates to the standard `/v1/models` handler.
+    """
+    from litellm.proxy.proxy_server import model_list
+
+    return await model_list(user_api_key_dict=user_api_key_dict)
+
+
 @router.post(
     "/cursor/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
@@ -294,11 +449,21 @@ async def cursor_chat_completions(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Cursor-specific endpoint that accepts Responses API input format but returns chat completions format.
-    
-    This endpoint handles requests from Cursor IDE which sends Responses API format (`input` field)
-    but expects chat completions format response (`choices`, `messages`, etc.).
-    
+    Cursor BYOK endpoint. Accepts both request shapes Cursor sends to its OpenAI-compatible
+    base URL and always answers in chat completions format.
+
+    Cursor agent mode sends Responses API format bodies (`input`, flat tool defs, `reasoning`,
+    custom tools) to the chat/completions path while expecting chat completions responses;
+    those are routed through the Responses API pipeline and converted back. Genuine chat
+    completions bodies (`messages` present) are routed through the standard chat completions
+    pipeline, after normalizing each level of the `tools` array and `tool_choice` to the chat
+    completions shapes OpenAI requires. Cursor mixes Responses API shapes into chat bodies
+    per level, independently: a flat tool def (`{"type": "custom", "name": "ApplyPatch", ...}`)
+    gets nested under `custom`, and a flat grammar format
+    (`{"type": "grammar", "definition", "syntax"}`) gets wrapped as
+    `{"type": "grammar", "grammar": {...}}` wherever it appears, including inside tool defs
+    Cursor already sent pre-nested.
+
     ```bash
     curl -X POST http://localhost:4000/cursor/chat/completions \
     -H "Content-Type: application/json" \
@@ -314,9 +479,11 @@ async def cursor_chat_completions(
         responses_api_bridge,
     )
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.proxy.common_utils.http_parsing_utils import _safe_set_request_parsed_body
     from litellm.proxy.proxy_server import (
         _read_request_body,
         async_data_generator,
+        chat_completion,
         general_settings,
         llm_router,
         proxy_config,
@@ -328,20 +495,39 @@ async def cursor_chat_completions(
         user_temperature,
         version,
     )
-    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
     from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import ModelResponse
 
-    data = await _read_request_body(request=request)
+    raw_body = await _read_request_body(request=request)
+    data = _resolve_cursor_model_variant(raw_body, llm_router)
 
-    # Convert 'messages' to 'input' for Responses API compatibility
-    # Cursor sends 'messages' but Responses API expects 'input'
-    if "messages" in data and "input" not in data:
-        data["input"] = data.pop("messages")
+    if _is_chat_completions_body(data):
+        # Genuine chat completions body (Cursor sends these for models whose BYOK it
+        # already fixed); delegate so behavior matches /chat/completions exactly.
+        # Keyed on messages CONTENT, not key presence: Cursor can send a null or
+        # empty messages stub alongside a real agent-mode input array
+        normalized = _normalize_tool_dialect(data, to_chat=True)
+        if normalized is not raw_body:
+            _safe_set_request_parsed_body(request=request, parsed_body=normalized)
+        return await chat_completion(
+            request=request,
+            fastapi_response=fastapi_response,
+            model=None,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    # OpenAI's Responses API rejects chat-completions-only stream_options
+    # (Cursor sends include_usage); usage arrives via response.completed anyway.
+    # Rebuild rather than pop: _read_request_body can return the request-scope
+    # cached parsed-body dict itself, and removing keys from it corrupts the
+    # cache's key snapshot so later readers get an empty body
+    data = {key: value for key, value in data.items() if key != "stream_options"}  # mutable-ok: plain body dict
+
+    data = _normalize_tool_dialect(data, to_chat=False)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
 
-    def cursor_data_generator(response, user_api_key_dict, request_data):
+    def cursor_data_generator(response, user_api_key_dict, request_data, request=None):
         """
         Custom generator that transforms Responses API streaming chunks to chat completion chunks.
 
@@ -349,17 +535,21 @@ async def cursor_chat_completions(
         to chat completion format that Cursor IDE expects.
 
         Args:
-            response: The streaming response (BaseResponsesAPIStreamingIterator or other)
+            response: The streaming Responses API event iterator (router-wrapped or not)
             user_api_key_dict: User API key authentication dict
             request_data: Request data containing model, logging_obj, etc.
+            request: The originating FastAPI request, forwarded for disconnect handling
 
         Returns:
             Async generator that yields SSE-formatted chat completion chunks
         """
-        # If response is a BaseResponsesAPIStreamingIterator, transform it first
-        if isinstance(response, BaseResponsesAPIStreamingIterator):
+        # Any async-iterable here is a Responses API event stream needing conversion.
+        # Class-identity checks miss router-wrapped streams (e.g.
+        # HiddenParamsAsyncIteratorWrapper around LiteLLMCompletionStreamingIterator),
+        # which previously leaked raw Responses events to the client.
+        if hasattr(response, "__anext__"):
             # Transform Responses API iterator to chat completion iterator
-            # Cast to AsyncIterator[str] since BaseResponsesAPIStreamingIterator implements __aiter__/__anext__
+            # Cast to AsyncIterator[str] since the stream implements __aiter__/__anext__
             completion_stream = responses_api_bridge.transformation_handler.get_model_response_iterator(
                 streaming_response=cast(AsyncIterator[str], response),
                 sync_stream=False,
@@ -378,12 +568,14 @@ async def cursor_chat_completions(
                 response=streamwrapper,
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
+                request=request,
             )
         # Otherwise, use the default generator
         return async_data_generator(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
+            request=request,
         )
 
     try:
@@ -921,7 +1113,7 @@ async def cancel_response(
 
 async def _read_ws_model_from_first_frame(
     websocket: WebSocket,
-) -> Optional[tuple]:
+) -> tuple | None:
     """Read the first WS frame and return (model, raw_message), or None on error.
 
     Sends an appropriate error frame and closes the socket before returning None.
@@ -989,7 +1181,7 @@ async def _read_ws_model_from_first_frame(
     return model, first_message
 
 
-def _extract_model_from_first_ws_event(first_event: Any) -> Optional[str]:
+def _extract_model_from_first_ws_event(first_event: Any) -> str | None:
     """Extract model from a response.create WS event, handling flat and nested formats.
 
     Flat:   {"type": "response.create", "model": "gpt-4o", ...}
@@ -1005,7 +1197,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
     request: Request,
     model: str,
     user_api_key_dict: UserAPIKeyAuth,
-    llm_router: Optional[Any],
+    llm_router: Any | None,
 ) -> None:
     from litellm.proxy.auth.user_api_key_auth import (
         _enforce_key_and_fallback_model_access,
@@ -1048,7 +1240,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
 @router.websocket("/responses")
 async def responses_websocket_endpoint(
     websocket: WebSocket,
-    model: Optional[str] = fastapi.Query(None, description="The model to use for the responses WebSocket session."),
+    model: str | None = fastapi.Query(None, description="The model to use for the responses WebSocket session."),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
     """
@@ -1087,14 +1279,14 @@ async def responses_websocket_endpoint(
         accept_kwargs["subprotocol"] = requested_protocols[0]
     await websocket.accept(**accept_kwargs)
 
-    first_message: Optional[str] = None
+    first_message: str | None = None
     if not model:
         result = await _read_ws_model_from_first_frame(websocket)
         if result is None:
             return
         model, first_message = result
 
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "model": model,
         "websocket": websocket,
     }
@@ -1103,7 +1295,7 @@ async def responses_websocket_endpoint(
 
     # Construct a synthetic Request for pre-call processing
     headers_list = list(websocket.scope.get("headers") or [])
-    scope: Dict[str, Any] = {
+    scope: dict[str, Any] = {
         "type": "http",
         "method": "POST",
         "path": "/v1/responses",

@@ -1,6 +1,7 @@
 import json
 import time
 from enum import Enum
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -1084,6 +1085,43 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
         setattr(self, key, value)
 
 
+class _CustomToolCallAccess(OpenAIObject):
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
+
+class ChatCompletionCustomToolCallPayload(_CustomToolCallAccess):
+    name: str
+    input: str
+
+
+class ChatCompletionDeltaCustomToolCallPayload(_CustomToolCallAccess):
+    name: str | None = None
+    input: str | None = None
+
+
+class ChatCompletionMessageCustomToolCall(_CustomToolCallAccess):
+    id: str
+    type: Literal["custom"] = "custom"
+    custom: ChatCompletionCustomToolCallPayload
+
+
+class ChatCompletionDeltaCustomToolCall(_CustomToolCallAccess):
+    id: str | None = None
+    type: str | None = None
+    custom: ChatCompletionDeltaCustomToolCallPayload
+    index: int
+
+
 class ChatCompletionMessageToolCall(OpenAIObject):
     def __init__(
         self,
@@ -1123,6 +1161,20 @@ class ChatCompletionMessageToolCall(OpenAIObject):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+def is_custom_tool_call_dict(tool_call: Mapping[str, Any]) -> bool:
+    return tool_call.get("type") == "custom" or tool_call.get("custom") is not None
+
+
+def chat_completion_tool_call_from_dict(
+    tool_call: Mapping[str, Any],
+) -> "ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall":
+    if is_custom_tool_call_dict(tool_call):
+        return ChatCompletionMessageCustomToolCall(
+            **MappingProxyType({k: v for k, v in tool_call.items() if not (k in ("function", "type") and v is None)})
+        )
+    return ChatCompletionMessageToolCall(**tool_call)
 
 
 from openai.types.chat.chat_completion_audio import ChatCompletionAudio
@@ -1177,7 +1229,9 @@ def add_provider_specific_fields(object: BaseModel, provider_specific_fields: Op
 class Message(SafeAttributeModel, OpenAIObject):
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
-    tool_calls: Optional[List[ChatCompletionMessageToolCall]]
+    tool_calls: Optional[
+        List[Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]]
+    ]  # mutable-ok: public pydantic response field; only the union member is new
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
     images: Optional[List[ImageURLListItem]] = None
@@ -1208,7 +1262,7 @@ class Message(SafeAttributeModel, OpenAIObject):
             "function_call": (FunctionCall(**function_call) if function_call is not None else None),
             "tool_calls": (
                 [
-                    (ChatCompletionMessageToolCall(**tool_call) if isinstance(tool_call, dict) else tool_call)
+                    (chat_completion_tool_call_from_dict(tool_call) if isinstance(tool_call, dict) else tool_call)
                     for tool_call in tool_calls
                 ]
                 if tool_calls is not None and len(tool_calls) > 0
@@ -1301,7 +1355,9 @@ class Delta(SafeAttributeModel, OpenAIObject):
         content: Optional[str]
         role: Optional[str]
         function_call: Optional[FunctionCall]
-        tool_calls: Optional[List[ChatCompletionDeltaToolCall]]
+        tool_calls: Optional[
+            List[Union[ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall]]
+        ]  # mutable-ok: public pydantic response field; only the union member is new
         audio: Optional[ChatCompletionAudioResponse]
         images: Optional[List[ImageURLListItem]]
         annotations: Optional[List[ChatCompletionAnnotation]]
@@ -1338,18 +1394,29 @@ class Delta(SafeAttributeModel, OpenAIObject):
         if function_call is not None and isinstance(function_call, dict):
             function_call = FunctionCall(**function_call)
 
-        if tool_calls is not None and isinstance(tool_calls, list):
-            coerced_tool_calls: List[ChatCompletionDeltaToolCall] = []
+        if tool_calls is not None and isinstance(tool_calls, (list, tuple)):
+            coerced_tool_calls: List[
+                Union[ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall]
+            ] = []  # mutable-ok: public Delta.tool_calls contract is a list
             current_index = 0
             for tool_call in tool_calls:
                 if isinstance(tool_call, dict):
                     if tool_call.get("index", None) is None:
                         tool_call["index"] = current_index
                         current_index += 1
-                    if tool_call.get("type", None) is None:
-                        tool_call["type"] = "function"
-                    coerced_tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
-                elif isinstance(tool_call, ChatCompletionDeltaToolCall):
+                    if is_custom_tool_call_dict(tool_call):
+                        coerced_tool_calls.append(
+                            ChatCompletionDeltaCustomToolCall(
+                                **MappingProxyType(
+                                    {k: v for k, v in tool_call.items() if not (k == "function" and v is None)}
+                                )
+                            )
+                        )
+                    else:
+                        if tool_call.get("type", None) is None:
+                            tool_call["type"] = "function"
+                        coerced_tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
+                elif isinstance(tool_call, (ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall)):
                     coerced_tool_calls.append(tool_call)
             tool_calls = coerced_tool_calls
 
@@ -1587,6 +1654,7 @@ class PromptTokensDetailsWrapper(
 class ServerToolUse(BaseModel):
     web_search_requests: Optional[int] = None
     tool_search_requests: Optional[int] = None
+    browser_open_requests: Optional[int] = None
 
     def __getitem__(self, key: str) -> Optional[int]:
         if key not in self.__class__.model_fields:
@@ -2734,6 +2802,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_model: str
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
+    conversation_continuing: bool
 
 
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
@@ -2753,6 +2822,7 @@ DERIVED_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset(
         "classifier_model",
         "escalated",
         "tier_boundaries",
+        "conversation_continuing",
     }
 )
 
@@ -2989,9 +3059,18 @@ class CachingDetails(TypedDict):
 
 class CostBreakdown(TypedDict, total=False):
     """
-    Detailed cost breakdown for a request
+    Detailed cost breakdown for a request.
+
+    ``service_tier`` and ``data_residency`` record the pricing basis the cost was
+    computed on, not what the caller asked for. A consumer that has to price a
+    counterfactual against this request (what another model would have charged for
+    it) needs the same basis to compare like with like, and re-deriving it from the
+    request is not possible after the fact: the tier the biller used comes from
+    ``optional_params``, which no log record carries.
     """
 
+    service_tier: Optional[str]
+    data_residency: Optional[str]
     input_cost: float  # Cost of raw (non-cached) input tokens only
     cache_read_cost: float  # Cost of cache-read tokens (discounted rate)
     cache_creation_cost: float  # Cost of cache-write tokens (premium rate)
@@ -3286,8 +3365,15 @@ agentic_loop_internal_litellm_params = [
     "_code_interpreter_interception_converted_stream",
 ]
 
+# Proxy-owned callback credentials, stamped from admin-configured team/key callback
+# settings. Listed in all_litellm_params for the same reason as the agentic-loop
+# fields above: an unrecognized top-level key is swept into extra_body and sent to
+# the provider.
+TRUSTED_CALLBACK_VARS_FIELD = "litellm_trusted_callback_vars"
+
 all_litellm_params = (
     agentic_loop_internal_litellm_params
+    + [TRUSTED_CALLBACK_VARS_FIELD]
     + [
         "metadata",
         "litellm_metadata",

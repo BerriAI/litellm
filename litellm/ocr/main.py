@@ -119,7 +119,7 @@ def _prepare_ocr_request(
     if ocr_provider_config is None:
         raise ValueError(f"OCR is not supported for provider: {custom_llm_provider}")
 
-    verbose_logger.debug(f"OCR call - model: {model}, provider: {custom_llm_provider}")
+    verbose_logger.debug("OCR call - model: %s, provider: %s", model, custom_llm_provider)
 
     litellm_params = GenericLiteLLMParams.model_validate(kwargs)
 
@@ -135,7 +135,7 @@ def _prepare_ocr_request(
         model=model,
     )
 
-    verbose_logger.debug(f"OCR optional_params after mapping: {optional_params}")
+    verbose_logger.debug("OCR optional_params after mapping: %s", optional_params)
 
     effective_timeout = timeout or request_timeout
 
@@ -553,14 +553,18 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
 
     if mime_type.startswith("image/"):
         verbose_logger.debug(
-            f"OCR file input: Converted file to image_url data URI "
-            f"(mime={mime_type}, size={len(file_bytes)} bytes, name={file_name})"
+            "OCR file input: Converted file to image_url data URI (mime=%s, size=%s bytes, name=%s)",
+            mime_type,
+            len(file_bytes),
+            file_name,
         )
         return {"type": "image_url", "image_url": data_uri}
 
     verbose_logger.debug(
-        f"OCR file input: Converted file to document_url data URI "
-        f"(mime={mime_type}, size={len(file_bytes)} bytes, name={file_name})"
+        "OCR file input: Converted file to document_url data URI (mime=%s, size=%s bytes, name=%s)",
+        mime_type,
+        len(file_bytes),
+        file_name,
     )
     return {"type": "document_url", "document_url": data_uri}
 
