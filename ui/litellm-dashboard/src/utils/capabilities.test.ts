@@ -10,7 +10,7 @@ describe("hasCapability", () => {
     },
   );
 
-  it.each(["Internal User", "Internal Viewer", "App User", "Unknown Role", "", null, undefined])(
+  it.each(["Internal User", "Internal Viewer", "App User", "Org Admin", "Unknown Role", "", null, undefined])(
     "should deny viewToolPolicies to %s",
     (role) => {
       expect(hasCapability(role, "viewToolPolicies")).toBe(false);
