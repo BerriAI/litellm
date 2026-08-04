@@ -197,11 +197,16 @@ if MCP_AVAILABLE:
         expires_at: datetime
 
     def _validate_mcp_server_name_fields(payload: Any) -> None:
-        candidates: list[tuple[str, str | None]] = []
-
         server_name = getattr(payload, "server_name", None)
         alias = getattr(payload, "alias", None)
 
+        if not server_name and not alias:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "An MCP server requires a server_name or alias."},
+            )
+
+        candidates: list[tuple[str, str | None]] = []
         if server_name:
             candidates.append(("server_name", server_name))
         if alias:
