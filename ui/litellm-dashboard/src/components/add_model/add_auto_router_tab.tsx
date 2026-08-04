@@ -7,7 +7,7 @@ import { all_admin_roles } from "@/utils/roles";
 import { type ModelWriteScope } from "@/utils/modelPermissions";
 import TeamDropdown from "../common_components/team_dropdown";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
-import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   DEFAULT_ADAPTIVE_WEIGHTS,
@@ -204,13 +204,20 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   // background refetch failure keeps trusting the stale cache by design - see modelsUnverifiable
   // above). The backend does not re-check a router's referenced model names against the caller's
   // access either, so this is the only place that can catch it: force a fresh fetch right before
-  // creating the router, rather than trusting whatever's cached.
+  // creating the router, rather than trusting whatever's cached. Fetch directly against
+  // accessTokenRef instead of the query's own refetch, which stays bound to whichever token was
+  // current when this render's useQuery was set up - using it here could verify one caller's
+  // models and create the router under another if the token rotates mid-check.
   const verifyPresetStillAvailable = async (presetKey: string): Promise<boolean> => {
     const preset = getPresetByKey(presetKey);
     if (!preset) return false;
-    const { data: freshModels, isError: freshError } = await refetchModels();
-    if (freshError) return false;
-    const freshSet = new Set((freshModels ?? []).map((m) => m.model_group));
+    let freshModels: ModelGroup[];
+    try {
+      freshModels = await fetchAvailableModels(accessTokenRef.current);
+    } catch {
+      return false;
+    }
+    const freshSet = new Set(freshModels.map((m) => m.model_group));
     return getMissingModelsInPreset(preset, freshSet).length === 0;
   };
 
