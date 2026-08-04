@@ -101,116 +101,81 @@ class BedrockConverseLLM(BaseAWSLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def _resign_without_rejected_tool_fields(
+    def _signer(
         self,
         *,
-        request_data: Mapping[str, Any],
-        error_text: str,
         credentials: Credentials,
         aws_region_name: str,
-        extra_headers: Mapping[str, str] | None,
         endpoint_url: str,
         headers: Mapping[str, str],
+        extra_headers: Mapping[str, str] | None,
         api_key: str | None,
-    ) -> tuple[str, Mapping[str, str]] | None:
+    ) -> Callable[[str], Mapping[str, str]]:
         """
-        Build a re-signed payload with the ``toolSpec`` members Bedrock just rejected removed.
+        Capture everything needed to SigV4-sign a body for this request.
 
-        SigV4 signs a hash of the body, so a retry that edits the body has to be signed
-        again; reusing the original headers would fail as ``SignatureDoesNotMatch`` rather
-        than succeed. Returns ``None`` when the error is not a rejection of extra tool
-        fields, which callers treat as "surface the original error".
+        SigV4 commits to a hash of the body, so the first attempt and any retry of an
+        edited body must be signed with identical inputs. Holding those inputs in one
+        callable is what makes signing the retry against the wrong header set impossible.
         """
-        retry_data = drop_bedrock_rejected_tool_fields(request_data, error_text)
-        if retry_data is None:
-            return None
 
-        data = json.dumps(retry_data)
-        prepped = self.get_request_headers(
-            credentials=credentials,
-            aws_region_name=aws_region_name,
-            extra_headers=extra_headers,
-            endpoint_url=endpoint_url,
-            data=data,
-            headers=headers,
-            api_key=api_key,
-        )
-        return data, prepped.headers
+        def sign(data: str) -> Mapping[str, str]:
+            return self.get_request_headers(
+                credentials=credentials,
+                aws_region_name=aws_region_name,
+                extra_headers=extra_headers,
+                endpoint_url=endpoint_url,
+                data=data,
+                headers=headers,
+                api_key=api_key,
+            ).headers
 
-    async def _asend_retrying_rejected_tool_fields(
+        return sign
+
+    async def _asend_with_tool_field_retry(
         self,
         *,
         send: Callable[[str, Mapping[str, str]], Awaitable[_SendResultT]],
+        sign: Callable[[str], Mapping[str, str]],
         request_data: Mapping[str, Any],
         data: str,
         headers: Mapping[str, str],
-        credentials: Credentials,
-        aws_region_name: str,
-        caller_headers: Mapping[str, str],
-        extra_headers: Mapping[str, str] | None,
-        endpoint_url: str,
-        api_key: str | None,
     ) -> tuple[_SendResultT, str]:
         """
-        Send once, and if Bedrock rejects extra ``toolSpec`` members, drop them and send again.
+        Send once, and if Bedrock rejects extra ``toolSpec`` members, drop them and resend.
 
-        ``send`` owns the transport and the provider-error contract, so a request that
-        fails for any other reason raises exactly what it raised before. The retry is
-        single-shot: a second rejection surfaces rather than looping.
-
-        Returns the result together with the body that actually produced it, so callers
-        log and transform against what was sent rather than the payload that was rejected.
+        ``send`` owns the transport and the provider error contract, so anything failing
+        for another reason raises exactly what it raised before. Single-shot by
+        construction. Returns the body that actually produced the result, so callers log
+        what was sent rather than what was rejected.
         """
         try:
             return await send(data, headers), data
         except (BedrockError, httpx.HTTPStatusError) as err:
-            retry = self._resign_without_rejected_tool_fields(
-                request_data=request_data,
-                error_text=_provider_error_text(err),
-                credentials=credentials,
-                aws_region_name=aws_region_name,
-                extra_headers=extra_headers,
-                endpoint_url=endpoint_url,
-                headers=caller_headers,
-                api_key=api_key,
-            )
-            if retry is None:
+            retried = drop_bedrock_rejected_tool_fields(request_data, _provider_error_text(err))
+            if retried is None:
                 raise
-            retry_data, retry_headers = retry
-            return await send(retry_data, retry_headers), retry_data
+            body = json.dumps(retried)
+            return await send(body, sign(body)), body
 
-    def _send_retrying_rejected_tool_fields(
+    def _send_with_tool_field_retry(
         self,
         *,
         send: Callable[[str, Mapping[str, str]], _SendResultT],
+        sign: Callable[[str], Mapping[str, str]],
         request_data: Mapping[str, Any],
         data: str,
         headers: Mapping[str, str],
-        credentials: Credentials,
-        aws_region_name: str,
-        caller_headers: Mapping[str, str],
-        extra_headers: Mapping[str, str] | None,
-        endpoint_url: str,
-        api_key: str | None,
     ) -> tuple[_SendResultT, str]:
-        """Synchronous twin of ``_asend_retrying_rejected_tool_fields``."""
+        """Synchronous twin of ``_asend_with_tool_field_retry``."""
         try:
             return send(data, headers), data
         except (BedrockError, httpx.HTTPStatusError) as err:
-            retry = self._resign_without_rejected_tool_fields(
-                request_data=request_data,
-                error_text=_provider_error_text(err),
-                credentials=credentials,
-                aws_region_name=aws_region_name,
-                extra_headers=extra_headers,
-                endpoint_url=endpoint_url,
-                headers=caller_headers,
-                api_key=api_key,
-            )
-            if retry is None:
+            retried = drop_bedrock_rejected_tool_fields(request_data, _provider_error_text(err))
+            if retried is None:
                 raise
-            retry_data, retry_headers = retry
-            return send(retry_data, retry_headers), retry_data
+            body = json.dumps(retried)
+            return send(body, sign(body)), body
 
     async def async_streaming(
         self,
@@ -242,15 +207,15 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
         data = json.dumps(request_data)
 
-        prepped = self.get_request_headers(
+        sign = self._signer(
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
-            extra_headers=headers,
             endpoint_url=api_base,
-            data=data,
             headers=headers,
+            extra_headers=headers,
             api_key=api_key,
         )
+        signed_headers = sign(data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -259,7 +224,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": dict(prepped.headers),
+                "headers": signed_headers,
             },
         )
 
@@ -277,17 +242,8 @@ class BedrockConverseLLM(BaseAWSLLM):
                 stream_chunk_size=stream_chunk_size,
             )
 
-        completion_stream, data = await self._asend_retrying_rejected_tool_fields(
-            send=_send,
-            request_data=request_data,
-            data=data,
-            headers=prepped.headers,
-            credentials=credentials,
-            aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
-            caller_headers=headers,
-            extra_headers=headers,
-            endpoint_url=api_base,
-            api_key=api_key,
+        completion_stream, data = await self._asend_with_tool_field_retry(
+            send=_send, sign=sign, request_data=request_data, data=data, headers=signed_headers
         )
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -324,15 +280,15 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
         data = json.dumps(request_data)
 
-        prepped = self.get_request_headers(
+        sign = self._signer(
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
-            extra_headers=headers,
             endpoint_url=api_base,
-            data=data,
             headers=headers,
+            extra_headers=headers,
             api_key=api_key,
         )
+        signed_headers = sign(data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -341,12 +297,10 @@ class BedrockConverseLLM(BaseAWSLLM):
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": prepped.headers,
+                "headers": signed_headers,
             },
         )
 
-        caller_headers = headers
-        headers = dict(prepped.headers)
         if client is None or not isinstance(client, AsyncHTTPHandler):
             _params = {}
             if timeout is not None:
@@ -372,17 +326,8 @@ class BedrockConverseLLM(BaseAWSLLM):
             except httpx.TimeoutException:
                 raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        response, data = await self._asend_retrying_rejected_tool_fields(
-            send=_send,
-            request_data=request_data,
-            data=data,
-            headers=headers,
-            credentials=credentials,
-            aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
-            caller_headers=caller_headers,
-            extra_headers=caller_headers,
-            endpoint_url=api_base,
-            api_key=api_key,
+        response, data = await self._asend_with_tool_field_retry(
+            send=_send, sign=sign, request_data=request_data, data=data, headers=signed_headers
         )
 
         return litellm.AmazonConverseConfig()._transform_response(
@@ -569,15 +514,15 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
         data = json.dumps(_data)
 
-        prepped = self.get_request_headers(
+        sign = self._signer(
             credentials=credentials,
             aws_region_name=aws_region_name,
-            extra_headers=extra_headers,
             endpoint_url=proxy_endpoint_url,
-            data=data,
             headers=headers,
+            extra_headers=extra_headers,
             api_key=api_key,
         )
+        signed_headers = sign(data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -586,7 +531,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             additional_args={
                 "complete_input_dict": data,
                 "api_base": proxy_endpoint_url,
-                "headers": prepped.headers,
+                "headers": signed_headers,
             },
         )
         if client is None or isinstance(client, AsyncHTTPHandler):
@@ -615,17 +560,8 @@ class BedrockConverseLLM(BaseAWSLLM):
                     stream_chunk_size=stream_chunk_size,
                 )
 
-            completion_stream, data = self._send_retrying_rejected_tool_fields(
-                send=_send_stream,
-                request_data=_data,
-                data=data,
-                headers=prepped.headers,
-                credentials=credentials,
-                aws_region_name=aws_region_name,
-                caller_headers=headers,
-                extra_headers=extra_headers,
-                endpoint_url=proxy_endpoint_url,
-                api_key=api_key,
+            completion_stream, data = self._send_with_tool_field_retry(
+                send=_send_stream, sign=sign, request_data=_data, data=data, headers=signed_headers
             )
             streaming_response = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -653,17 +589,8 @@ class BedrockConverseLLM(BaseAWSLLM):
             except httpx.TimeoutException:
                 raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        response, data = self._send_retrying_rejected_tool_fields(
-            send=_send,
-            request_data=_data,
-            data=data,
-            headers=prepped.headers,
-            credentials=credentials,
-            aws_region_name=aws_region_name,
-            caller_headers=headers,
-            extra_headers=extra_headers,
-            endpoint_url=proxy_endpoint_url,
-            api_key=api_key,
+        response, data = self._send_with_tool_field_retry(
+            send=_send, sign=sign, request_data=_data, data=data, headers=signed_headers
         )
 
         return litellm.AmazonConverseConfig()._transform_response(

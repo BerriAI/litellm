@@ -35,23 +35,25 @@ _REQUEST_DATA = {
 }
 
 
-def _credentials():
+def _signer(headers=None, extra_headers=None):
     from botocore.credentials import Credentials
 
-    return Credentials(access_key="AKIAEXAMPLE", secret_key="secret", token=None)
+    return BedrockConverseLLM()._signer(
+        credentials=Credentials(access_key="AKIAEXAMPLE", secret_key="secret", token=None),
+        aws_region_name="us-east-1",
+        endpoint_url="https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse",
+        headers=headers or {"Content-Type": "application/json"},
+        extra_headers=extra_headers,
+        api_key=None,
+    )
 
 
 def _retry_kwargs():
     return {
+        "sign": _signer(),
         "request_data": _REQUEST_DATA,
         "data": "original-body",
         "headers": {"Authorization": "signature-over-original"},
-        "credentials": _credentials(),
-        "aws_region_name": "us-east-1",
-        "caller_headers": {"Content-Type": "application/json"},
-        "extra_headers": None,
-        "endpoint_url": "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse",
-        "api_key": None,
     }
 
 
@@ -126,7 +128,7 @@ def test_sync_retry_resends_without_the_rejected_field_and_resigns(raised: Excep
             raise raised
         return "ok"
 
-    result, sent_body = BedrockConverseLLM()._send_retrying_rejected_tool_fields(send=send, **_retry_kwargs())
+    result, sent_body = BedrockConverseLLM()._send_with_tool_field_retry(send=send, **_retry_kwargs())
 
     assert result == "ok"
     assert len(attempts) == 2
@@ -151,7 +153,7 @@ def test_sync_retry_leaves_unrelated_errors_alone() -> None:
         raise BedrockError(status_code=429, message="ThrottlingException: rate exceeded")
 
     with pytest.raises(BedrockError) as excinfo:
-        BedrockConverseLLM()._send_retrying_rejected_tool_fields(send=send, **_retry_kwargs())
+        BedrockConverseLLM()._send_with_tool_field_retry(send=send, **_retry_kwargs())
 
     assert excinfo.value.status_code == 429
     assert len(attempts) == 1
@@ -166,7 +168,7 @@ def test_sync_retry_is_single_shot() -> None:
         raise BedrockError(status_code=400, message=_STRICT_REJECTION)
 
     with pytest.raises(BedrockError):
-        BedrockConverseLLM()._send_retrying_rejected_tool_fields(send=send, **_retry_kwargs())
+        BedrockConverseLLM()._send_with_tool_field_retry(send=send, **_retry_kwargs())
 
     assert len(attempts) == 2
 
@@ -181,7 +183,7 @@ async def test_async_retry_resends_without_the_rejected_field_and_resigns() -> N
             raise BedrockError(status_code=400, message=_STRICT_REJECTION)
         return "ok"
 
-    result, sent_body = await BedrockConverseLLM()._asend_retrying_rejected_tool_fields(
+    result, sent_body = await BedrockConverseLLM()._asend_with_tool_field_retry(
         send=send, **_retry_kwargs()
     )
 
@@ -193,9 +195,9 @@ async def test_async_retry_resends_without_the_rejected_field_and_resigns() -> N
 
 
 def test_retry_preserves_a_caller_supplied_authorization_header() -> None:
-    """``extra_headers`` is not a duplicate of ``caller_headers``: it is the only thing
-    that restores a caller's non-SigV4 ``Authorization`` after signing, so the retry has
-    to pass it through or a proxied bearer token is silently replaced by a SigV4 one."""
+    """``extra_headers`` is the only thing that restores a caller's non-SigV4
+    ``Authorization`` after signing, so a retry signed through the same signer keeps a
+    proxied bearer token instead of replacing it with a SigV4 signature."""
     bearer = {"Authorization": "Bearer caller-supplied-token"}
     attempts: list[dict] = []
 
@@ -205,9 +207,9 @@ def test_retry_preserves_a_caller_supplied_authorization_header() -> None:
             raise BedrockError(status_code=400, message=_STRICT_REJECTION)
         return "ok"
 
-    BedrockConverseLLM()._send_retrying_rejected_tool_fields(
+    BedrockConverseLLM()._send_with_tool_field_retry(
         send=send,
-        **{**_retry_kwargs(), "caller_headers": {"Content-Type": "application/json", **bearer}, "extra_headers": bearer},
+        **{**_retry_kwargs(), "sign": _signer(headers={"Content-Type": "application/json", **bearer}, extra_headers=bearer)},
     )
 
     assert attempts[1]["Authorization"] == "Bearer caller-supplied-token"
@@ -219,7 +221,7 @@ def test_reported_body_is_the_original_when_no_retry_happens() -> None:
     def send(body: str, headers) -> str:
         return "ok"
 
-    _, sent_body = BedrockConverseLLM()._send_retrying_rejected_tool_fields(send=send, **_retry_kwargs())
+    _, sent_body = BedrockConverseLLM()._send_with_tool_field_retry(send=send, **_retry_kwargs())
     assert sent_body == "original-body"
 
 
@@ -232,7 +234,7 @@ async def test_async_retry_leaves_unrelated_errors_alone() -> None:
         raise BedrockError(status_code=500, message="InternalServerException")
 
     with pytest.raises(BedrockError) as excinfo:
-        await BedrockConverseLLM()._asend_retrying_rejected_tool_fields(send=send, **_retry_kwargs())
+        await BedrockConverseLLM()._asend_with_tool_field_retry(send=send, **_retry_kwargs())
 
     assert excinfo.value.status_code == 500
     assert len(attempts) == 1
