@@ -7922,3 +7922,19 @@ export const deleteMemory = async (accessToken: string, key: string): Promise<vo
     throw new Error(errorData);
   }
 };
+
+export const autoRouterBenchmarksCall = async (accessToken: string, startDate: string, endDate: string) => {
+  /**
+   * Session-level benchmarks for every configured auto-router, read from the
+   * per-session rollup. Admin-only; 404s when no auto-router is configured.
+   */
+  try {
+    return await apiClient.get(`/auto_router/benchmarks`, {
+      accessToken,
+      query: { start_date: startDate, end_date: endDate },
+    });
+  } catch (error) {
+    console.error("Failed to get auto-router benchmarks:", error);
+    throw error;
+  }
+};

@@ -7,6 +7,7 @@ import { Alert, Tabs } from "antd";
 import UsageTab from "./UsageTab";
 import PromptCompressionTab from "./PromptCompressionTab";
 import PromptCachingTab from "./PromptCachingTab";
+import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
 import { useDailyActivityRange } from "./useDailyActivityRange";
 
 interface CostOptimizationViewProps {
@@ -33,6 +34,11 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
       key: "caching",
       label: "Prompt Caching",
       children: <PromptCachingTab accessToken={accessToken} activity={activity} />,
+    },
+    {
+      key: "autorouter-benchmarks",
+      label: "Auto-Router Benchmarks",
+      children: <AutoRouterBenchmarksTab accessToken={accessToken} />,
     },
   ];
 
