@@ -382,6 +382,27 @@ def test_rebind_ok_without_reason_is_flagged_and_does_not_suppress(tmp_path):
     assert "LIT010" in codes
 
 
+def _codes_at(tmp_path, parts, source):
+    f = tmp_path.joinpath(*parts)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(source, encoding="utf-8")
+    return [v.code for v in checker.check_file(f)]
+
+
+def test_config_surface_module_scope_is_exempt(tmp_path):
+    src = "api_key = None\napi_key = 'sk'\n"
+    assert "LIT010" not in _codes_at(tmp_path, ("litellm", "__init__.py"), src)
+
+
+def test_config_surface_function_scopes_are_still_checked(tmp_path):
+    src = "def f() -> None:\n    x = 1\n"
+    assert "LIT010" in _codes_at(tmp_path, ("litellm", "__init__.py"), src)
+
+
+def test_nested_init_modules_are_not_config_surface(tmp_path):
+    assert "LIT010" in _codes_at(tmp_path, ("litellm", "types", "__init__.py"), "x = 1\n")
+
+
 # --------------------------------------------------------------------------- #
 # Parameter rebinding and in-place mutation (LIT011)
 # --------------------------------------------------------------------------- #
