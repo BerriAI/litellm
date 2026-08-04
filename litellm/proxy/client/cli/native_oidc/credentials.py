@@ -29,7 +29,7 @@ from .metadata import (
     fetch_native_oidc_metadata,
     fetch_provider_metadata,
 )
-from .tokens import TokenResponse, describe_token_error, parse_token_response
+from .tokens import TokenResponse, describe_token_error, extract_oauth_error, parse_token_response
 
 AUTH_TYPE_NATIVE_OIDC = "native_oidc"
 TOKEN_SCHEMA_VERSION = 2
@@ -216,6 +216,8 @@ def _request_refreshed_token(token_endpoint: str, *, refresh_token: str, client_
         },
     )
     if response.status_code != 200 or response.payload is None:
+        if extract_oauth_error(response.payload) == "invalid_grant":
+            raise NativeOIDCError("the identity provider revoked or expired this session")
         raise NativeOIDCError(describe_token_error(response.status_code, response.payload))
     return parse_token_response(response.payload)
 

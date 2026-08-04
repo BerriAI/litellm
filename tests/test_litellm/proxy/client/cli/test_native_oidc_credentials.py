@@ -526,6 +526,55 @@ def test_refresh_without_a_base_url_tells_the_user_to_log_in(home):
         refresh_native_credential({"refresh_token": "refresh-1"})
 
 
+def install_failing_token_endpoint(monkeypatch, status_code, payload):
+    monkeypatch.setattr(
+        creds,
+        "post_form",
+        lambda url, data, **kwargs: type("R", (), {"status_code": status_code, "payload": payload})(),
+    )
+
+
+def test_refresh_after_the_idp_revoked_the_session_tells_the_user_to_log_in(stored, monkeypatch):
+    # Keycloak answers a refresh made after an admin user-logout with
+    # invalid_grant / "Stale token"; the offline token is dead, not retryable.
+    install_failing_token_endpoint(
+        monkeypatch,
+        400,
+        {"error": "invalid_grant", "error_description": "Stale token"},
+    )
+
+    with pytest.raises(NativeOIDCError) as excinfo:
+        refresh_native_credential(
+            stored,
+            verify=lambda *a: None,
+            fetch_metadata=lambda base_url: make_metadata(),
+            fetch_provider=lambda issuer: make_provider(),
+        )
+
+    message = str(excinfo.value)
+    assert "revoked or expired this session" in message
+    # The provider's error_description is never echoed back.
+    assert "Stale token" not in message
+    assert load_cli_token()["key"] == "old-access"
+
+
+def test_refresh_keeps_the_generic_message_for_other_token_errors(stored, monkeypatch):
+    install_failing_token_endpoint(monkeypatch, 503, {"error": "temporarily_unavailable"})
+
+    with pytest.raises(NativeOIDCError) as excinfo:
+        refresh_native_credential(
+            stored,
+            verify=lambda *a: None,
+            fetch_metadata=lambda base_url: make_metadata(),
+            fetch_provider=lambda issuer: make_provider(),
+        )
+
+    message = str(excinfo.value)
+    assert "temporarily_unavailable" in message
+    assert "HTTP 503" in message
+    assert "revoked" not in message
+
+
 def test_refresh_surfaces_a_rejected_new_token(stored, monkeypatch):
     install_token_endpoint(
         monkeypatch,
@@ -544,21 +593,6 @@ def test_refresh_surfaces_a_rejected_new_token(stored, monkeypatch):
         )
     # An unverified token is never written.
     assert load_cli_token()["key"] == "old-access"
-
-
-def test_refresh_surfaces_the_oauth_error_code(stored, monkeypatch):
-    def fake_post_form(url, data, **kwargs):
-        return type("R", (), {"status_code": 400, "payload": {"error": "invalid_grant"}})()
-
-    monkeypatch.setattr(creds, "post_form", fake_post_form)
-
-    with pytest.raises(NativeOIDCError, match="invalid_grant"):
-        refresh_native_credential(
-            stored,
-            verify=lambda *a: None,
-            fetch_metadata=lambda base_url: make_metadata(),
-            fetch_provider=lambda issuer: make_provider(),
-        )
     assert load_cli_token()["key"] == "old-access"
 
 
