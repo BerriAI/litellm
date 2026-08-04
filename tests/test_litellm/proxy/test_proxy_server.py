@@ -10825,3 +10825,50 @@ def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
         ProxyStartupEvent._warn_if_mock_testing_params_enabled(general_settings={})
 
     assert MOCK_TESTING_CONFIG_KEY not in caplog.text
+
+
+def _auto_router_benchmarks_client(monkeypatch):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    monkeypatch.setattr(ps, "llm_router", None)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    return TestClient(app)
+
+
+@pytest.mark.parametrize(
+    "params, expected_status",
+    [
+        ({"start_date": "not-a-date", "end_date": "2026-08-01"}, 422),
+        ({"start_date": "2026-08-01", "end_date": "2026-13-45"}, 422),
+        ({"start_date": "2026-08-01", "end_date": "2026-07-02"}, 400),
+    ],
+)
+def test_auto_router_benchmarks_rejects_windows_it_cannot_serve(
+    monkeypatch, params, expected_status
+):
+    """A malformed date used to surface as a 500 and an inverted range as an empty
+    dashboard, which reads to an operator as "no auto-router traffic" rather than as a
+    bad request. Both are the caller's error and must say so. 404 (no auto-router
+    configured) is checked last in the handler, so reaching it means the window passed."""
+    client = _auto_router_benchmarks_client(monkeypatch)
+    try:
+        resp = client.get("/auto_router/benchmarks", params=params)
+        assert resp.status_code == expected_status, resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_auto_router_benchmarks_accepts_a_well_formed_window(monkeypatch):
+    """The guard must not reject the windows the dashboard actually sends."""
+    client = _auto_router_benchmarks_client(monkeypatch)
+    try:
+        resp = client.get(
+            "/auto_router/benchmarks",
+            params={"start_date": "2026-07-02", "end_date": "2026-08-01"},
+        )
+        assert resp.status_code == 404, resp.text
+    finally:
+        app.dependency_overrides.clear()

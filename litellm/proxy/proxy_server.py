@@ -16,10 +16,11 @@ import time
 import traceback
 import warnings
 from collections.abc import AsyncGenerator, Callable, Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import UnionType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Final,
     Literal,
@@ -16475,6 +16476,71 @@ async def get_adaptive_router_state(
         for tagged in tagged_routers
     ]
     return {"routers": snapshots}
+
+
+@router.get(
+    "/auto_router/benchmarks",
+    tags=["auto_router"],  # mutable-ok: HTTPException takes a dict detail
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI takes a list of dependencies
+)
+async def get_auto_router_benchmarks(
+    start_date: date,
+    end_date: date,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """Session-level benchmarks for every configured auto-router.
+
+    Admin-only. For each auto-router alias, reports turns per session, session
+    length, tokens per session, the dollar savings of the routed mix against the
+    counterfactual baseline, and how the provider prompt cache behaved.
+
+    Reads the per-session rollup, never the per-request spend logs.
+    ``start_date`` / ``end_date`` are ``YYYY-MM-DD``, rejected by the framework
+    when malformed; the window is clamped to the most recent
+    ``BENCHMARKS_MAX_WINDOW_DAYS`` days and the response echoes the window
+    actually served. Sessions are counted whole when they were active in the
+    window. Returns 404 when no auto-router is configured.
+    """
+    from litellm.proxy.spend_tracking.auto_router_benchmarks import compute_benchmarks
+    from litellm.proxy.spend_tracking.auto_router_sessions import auto_router_group_kinds
+
+    if not _user_has_admin_view(user_api_key_dict):
+        raise HTTPException(
+            status_code=403,
+            detail={  # mutable-ok: HTTPException takes a dict detail
+                "error": CommonProxyErrors.not_allowed_access.value
+            },
+        )
+    if end_date < start_date:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: HTTPException takes a dict detail
+                "error": "end_date must not be earlier than start_date."
+            },
+        )
+    if llm_router is None:
+        raise HTTPException(
+            status_code=404,
+            detail={  # mutable-ok: HTTPException takes a dict detail
+                "error": "No auto_router is configured on this proxy."
+            },
+        )
+    group_kinds = auto_router_group_kinds(llm_router)
+    if not group_kinds:
+        raise HTTPException(
+            status_code=404,
+            detail={  # mutable-ok: HTTPException takes a dict detail
+                "error": "No auto_router is configured on this proxy."
+            },
+        )
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={  # mutable-ok: HTTPException takes a dict detail
+                "error": CommonProxyErrors.db_not_connected_error.value
+            },
+        )
+    return await compute_benchmarks(prisma_client, group_kinds, start_date, end_date)
 
 
 @router.get("/routes", dependencies=[Depends(user_api_key_auth)])

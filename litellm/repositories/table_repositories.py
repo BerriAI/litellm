@@ -224,3 +224,7 @@ class AuditLogRepository(PrismaTableRepository):
 
 class AdaptiveRouterSessionRepository(PrismaTableRepository):
     table_name = "litellm_adaptiveroutersession"
+
+
+class AutoRouterSessionRepository(PrismaTableRepository):
+    table_name = "litellm_autoroutersession"
