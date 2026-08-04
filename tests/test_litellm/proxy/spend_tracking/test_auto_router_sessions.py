@@ -407,6 +407,18 @@ class _RecordingTable:
         self.upserts.extend(statements)
 
 
+class _RefillingTable(_RecordingTable):
+    """Lets turns arrive in the middle of a flush, between the drain and the replay."""
+
+    def __init__(self, arrive, **kwargs):
+        super().__init__(**kwargs)
+        self._arrive = arrive
+
+    async def find_many(self, where):
+        await self._arrive()
+        return await super().find_many(where)
+
+
 class _RecordingBatchActions:
     """Prisma's batcher: statements queue up and land only when the batch commits."""
 
@@ -580,6 +592,38 @@ class TestFlushDurability:
 
 
 @pytest.mark.asyncio
+class TestTheRowRecordsTheFoldsAnswer:
+    """Session progress on the row comes from the folded state, not the staged turns.
+
+    They agree until a turn arrives late, at which point `fold_turn` refuses to
+    advance the state and the staged turns still carry the late timestamp.
+    """
+
+    async def test_a_late_turn_does_not_rewind_the_rows_last_activity(self):
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        table = _RecordingTable(rows=(_stored_session(),))
+        queue = AutoRouterSessionQueue()
+        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(30))
+
+        assert await queue.flush(_RecordingPrisma(table)) == 1
+        update = table.upserts[0][1]["update"]
+        assert update["last_turn_at"] == datetime.fromtimestamp(60.0, tz=timezone.utc)
+
+    async def test_a_turn_that_did_advance_the_session_moves_last_activity_forward(self):
+        """The guard must not freeze the column for ordinary in-order traffic."""
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        table = _RecordingTable(rows=(_stored_session(),))
+        queue = AutoRouterSessionQueue()
+        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(300))
+
+        assert await queue.flush(_RecordingPrisma(table)) == 1
+        update = table.upserts[0][1]["update"]
+        assert update["last_turn_at"] == datetime.fromtimestamp(300.0, tz=timezone.utc)
+
+
+@pytest.mark.asyncio
 class TestStagingCostsTheSamePerTurn:
     """Staging must not re-copy the turns already staged for that session.
 
@@ -652,6 +696,31 @@ class TestStagingIsBounded:
         await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(60))
         assert await queue.flush(prisma) == 1
         assert table.upserts[1][1]["update"]["turns"] == {"increment": 1}
+
+    async def test_a_replayed_batch_is_bounded_by_the_same_ceiling(self):
+        """A database that stays down must not grow the staging one failed flush at a time.
+
+        The window that matters is inside the flush: the drain has already zeroed
+        the counter, turns keep arriving against it, and only then is the failed
+        batch put back. A ceiling checked by the arriving path alone lets the
+        replay land on top of a staging that is already full.
+        """
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        queue = AutoRouterSessionQueue(max_staged_turns=2)
+
+        async def arrive_mid_flush():
+            for at in (200, 260):
+                await queue.record_turn(("s2", "g"), "complexity", None, _turn_at(at))
+
+        table = _RefillingTable(arrive_mid_flush, fail_write=True)
+        for at in (0, 60):
+            await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(at))
+
+        await queue.flush(_RecordingPrisma(table))
+
+        held = sum(len(pending.turns) for pending in queue._pending.values())
+        assert held <= 2, f"staging grew past its ceiling to {held} turns"
 
 
 def test_chunking_caps_what_one_statement_carries_and_keeps_it_in_key_order():

@@ -110,11 +110,20 @@ def _increment(value: float) -> Mapping[str, float]:
 
 
 def _upsert_data(key: SessionKey, pending: _Pending, delta: TurnDelta) -> Mapping[str, Mapping[str, object]]:
-    """One session's write: create its row, or add this interval onto the row already there."""
+    """One session's write: create its row, or add this interval onto the row already there.
+
+    Every field the row carries about session progress is read off the folded
+    state rather than re-derived from the staged turns. ``fold_turn`` refuses to
+    advance the state for a turn that started before the session's last, so the
+    two disagree exactly when a late turn is in the batch, and the staged turns
+    are the wrong one of the pair: taking their maximum would move the row's last
+    activity backwards, shortening the session, moving its retention cutoff, and
+    changing what the next turn is classified against after a reload.
+    """
     counters = counters_of(delta)
     increments = MappingProxyType({name: _increment(value) for name, value in counters.items()})
     shared = {  # mutable-ok: prisma's write API takes dict payloads
-        "last_turn_at": _epoch_to_datetime(max(turn.started_at for turn in pending.turns)),
+        "last_turn_at": _epoch_to_datetime(delta.state.last_turn_at),
         "last_model": delta.state.last_model,
         "model_state": state_column(delta.state),
         "baseline_model": pending.baseline_model,
@@ -147,7 +156,8 @@ class AutoRouterSessionQueue:
         ``session_id`` is caller-controlled, so the staging is capped on turns
         held rather than on sessions seen, which is the quantity that actually
         bounds the memory. Past the cap a turn is dropped and logged, because
-        benchmark rows are not worth an out-of-memory kill.
+        benchmark rows are not worth an out-of-memory kill. ``_stage`` owns that
+        cap, so every path into the staging is bounded by it and not just this one.
 
         That cap is counted here rather than inherited from ``BaseUpdateQueue``,
         which ``SpendUpdateQueue`` and ``DailySpendUpdateQueue`` both use, on
@@ -157,25 +167,41 @@ class AutoRouterSessionQueue:
         number on one tab; a stalled spend write is money that went unbilled.
         """
         async with self._lock:
-            if self._staged_turns >= self._max_staged_turns:
-                _warn_staging_full(self._max_staged_turns)
-                return
             self._stage(key, router_kind, baseline_model, [turn])  # mutable-ok: becomes this session's staging buffer
 
     def _stage(self, key: SessionKey, router_kind: str, baseline_model: str | None, turns: list[TurnFacts]) -> None:
         """Add turns to whatever this session already has staged; callers hold the lock.
 
+        The ceiling is applied here because this is the only point the staging
+        grows. Enforcing it in one caller instead would leave every other caller
+        unbounded, and the replay path is exactly such a caller: turns keep
+        arriving between the drain that zeroes the count and the replay that puts
+        a failed batch back, so a database fault that persists would grow the
+        staging by an interval each time, which is the out-of-memory kill the cap
+        exists to prevent.
+
+        Once the staging is full the replay is what gets refused, since it stages
+        last. Under a sustained fault something has to be dropped, and losing the
+        older interval's counters is no worse than refusing the traffic still
+        arriving; both are an undercounted dashboard rather than a lost spend row.
+
         Arriving turns and a replayed batch stage identically, because the fold
         sorts by start time and so does not care which of the two came first.
         """
-        self._staged_turns += len(turns)
+        room = self._max_staged_turns - self._staged_turns
+        admitted = turns if len(turns) <= room else turns[: max(room, 0)]
+        if len(admitted) < len(turns):
+            _warn_staging_full(self._max_staged_turns)
+        if not admitted:
+            return
+        self._staged_turns += len(admitted)
         current = self._pending.get(key)
         if current is None:
-            self._pending[key] = _Pending(router_kind=router_kind, baseline_model=baseline_model, turns=turns)
+            self._pending[key] = _Pending(router_kind=router_kind, baseline_model=baseline_model, turns=admitted)
             return
         current.router_kind = router_kind
         current.baseline_model = baseline_model or current.baseline_model
-        current.turns.extend(turns)
+        current.turns.extend(admitted)
 
     async def flush(self, prisma_client: "PrismaClient") -> int:
         """Fold and write every staged session. Returns rows written.
