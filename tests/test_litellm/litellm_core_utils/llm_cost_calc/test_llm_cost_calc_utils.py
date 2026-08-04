@@ -757,11 +757,11 @@ def test_generic_cost_per_token_gpt56_terra_cache_costs_by_tier_and_context(
     [
         ("azure/gpt-5.6", 5e-6, 3e-5, 5e-7),
         ("azure/gpt-5.6-sol", 5e-6, 3e-5, 5e-7),
-        ("azure/gpt-5.6-terra", 2.5e-6, 1.5e-5, 2.5e-7),
-        ("azure/gpt-5.6-luna", 1e-6, 6e-6, 1e-7),
+        ("azure/gpt-5.6-terra", 2e-6, 1.2e-5, 2e-7),
+        ("azure/gpt-5.6-luna", 2e-7, 1.2e-6, 2e-8),
         ("azure/us/gpt-5.6", 5.5e-6, 3.3e-5, 5.5e-7),
-        ("azure/eu/gpt-5.6-terra", 2.75e-6, 1.65e-5, 2.75e-7),
-        ("azure/eu/gpt-5.6-luna", 1.1e-6, 6.6e-6, 1.1e-7),
+        ("azure/eu/gpt-5.6-terra", 2.2e-6, 1.32e-5, 2.2e-7),
+        ("azure/eu/gpt-5.6-luna", 2.2e-7, 1.32e-6, 2.2e-8),
     ],
 )
 def test_generic_cost_per_token_azure_gpt56(
@@ -793,6 +793,51 @@ def test_generic_cost_per_token_azure_gpt56(
     )
     assert round(prompt_cost, 10) == round(input_cost * prompt_tokens, 10)
     assert round(completion_cost, 10) == round(output_cost * completion_tokens, 10)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "azure/gpt-5.6",
+        "azure/gpt-5.6-sol",
+    ],
+)
+def test_generic_cost_per_token_azure_gpt56_sol_cache_write(model):
+    """Azure Sol cache-write rate from the Foundry pricing table ($6.25/M)."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    cache_write_rate = 6.25e-6
+    cache_read_rate = 5e-7
+    input_rate = 5e-6
+    model_cost_map = litellm.model_cost[model]
+    assert model_cost_map["cache_creation_input_token_cost"] == cache_write_rate
+    assert model_cost_map["cache_creation_input_token_cost_above_272k_tokens"] == 1.25e-5
+    assert model_cost_map["cache_creation_input_token_cost_priority"] == 1.25e-5
+
+    cached_tokens = 50000
+    cache_write_tokens = 40000
+    prompt_tokens = 100000
+    text_tokens = prompt_tokens - cached_tokens - cache_write_tokens
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=100,
+        total_tokens=prompt_tokens + 100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens
+        ),
+    )
+    prompt_cost, _ = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="azure",
+    )
+    expected_prompt_cost = (
+        text_tokens * input_rate
+        + cached_tokens * cache_read_rate
+        + cache_write_tokens * cache_write_rate
+    )
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
 
 
 @pytest.mark.parametrize(
