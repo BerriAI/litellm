@@ -249,6 +249,30 @@ class ClassifierLLMConfig(BaseModel):
         default=3000,
         description="Timeout budget for the classification call, in milliseconds",
     )
+    system_prompt: str | None = Field(
+        default=None,
+        description=(
+            "Replaces the built-in complexity rubric as the classifier's entire system role. When set, "
+            "neither the default rubric nor the context-window closing line is appended, so the prompt "
+            "owns the whole taxonomy and the tier names SIMPLE/MEDIUM/COMPLEX/REASONING become whatever "
+            "buckets it defines: a prompt that classifies data sensitivity routes on that instead of on "
+            "difficulty. Two consequences of full replacement. The default rubric's closing paragraph is "
+            "the classifier's prompt-injection defense, telling it that the caller's quoted system prompt "
+            "and prior turns are material to judge and never instructions; a replacement that omits it "
+            "lets a caller ask for a tier and get it. And the heuristic fallback still scores complexity, "
+            "so a router on some other taxonomy wants classifier_fallback='default_model'. Leave unset "
+            "for the built-in rubric. Only applies when classifier_type is 'llm'."
+        ),
+    )
+
+    @field_validator("system_prompt")
+    @classmethod
+    def _reject_blank_system_prompt(cls, value: str | None) -> str | None:
+        # A blank string is a misconfiguration, not a request for the default: it would send an
+        # empty system role and leave the classifier with no rubric at all. None means default.
+        if value is not None and not value.strip():
+            raise ValueError("classifier_llm_config.system_prompt must be non-empty; omit it to use the default rubric")
+        return value
 
 
 class ComplexityRouterConfig(BaseModel):
@@ -330,6 +354,19 @@ class ComplexityRouterConfig(BaseModel):
     classifier_llm_config: ClassifierLLMConfig | None = Field(
         default=None,
         description="Configuration for the LLM classifier; required when classifier_type is 'llm'",
+    )
+
+    classifier_fallback: Literal["heuristic", "default_model"] = Field(
+        default="heuristic",
+        description=(
+            "What classifies the request when the LLM classifier errors, times out, or returns an "
+            "unparseable response. 'heuristic' runs the local complexity scorer, which is right when the "
+            "classifier grades complexity too. 'default_model' skips scoring and routes to default_model, "
+            "which is what a classifier on some other taxonomy wants: a prompt that grades data "
+            "sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to "
+            "what the operator configured. Requires default_model when set to 'default_model'. Only "
+            "applies when classifier_type is 'llm'."
+        ),
     )
 
     classifier_context_window_size: int = Field(

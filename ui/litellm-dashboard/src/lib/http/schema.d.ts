@@ -760,6 +760,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/classifier/default_prompt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Auto Router Classifier Default Prompt
+         * @description Get the built-in system prompt used by an auto-router's LLM classifier
+         */
+        get: operations["get_auto_router_classifier_default_prompt_auto_router_classifier_default_prompt_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/azure/{endpoint}": {
         parameters: {
             query?: never;
@@ -21062,6 +21082,17 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /**
+         * AutoRouterClassifierDefaultPromptResponse
+         * @description The built-in system prompt an auto-router's LLM classifier uses when none is configured.
+         *
+         *     Served so the dashboard's prompt editor prefills the rubric the proxy actually sends, rather than
+         *     a copy in the frontend that drifts the moment the rubric is edited.
+         */
+        AutoRouterClassifierDefaultPromptResponse: {
+            /** System Prompt */
+            system_prompt: string;
+        };
         /** BaseLitellmParams */
         "BaseLitellmParams-Input": {
             /**
@@ -35695,6 +35726,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_auto_router_classifier_default_prompt_auto_router_classifier_default_prompt_get: {
+        parameters: {
+            query?: {
+                context_window_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterClassifierDefaultPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

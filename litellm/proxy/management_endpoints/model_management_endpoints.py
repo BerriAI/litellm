@@ -59,12 +59,17 @@ from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import ModelTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
+from litellm.router_strategy.complexity_router import (
+    DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+    classification_system_prompt,
+)
 from litellm.router_utils.auto_router_model_naming import (
     STRATEGY_ROUTER_PARAM_FIELDS,
     validate_complexity_router_config_write,
     validate_strategy_router_model_write,
 )
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+    AutoRouterClassifierDefaultPromptResponse,
     UpdateUsefulLinksRequest,
 )
 from litellm.types.router import (
@@ -1764,6 +1769,37 @@ async def update_useful_links(
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             param=None,
         )
+
+
+@router.get(
+    "/auto_router/classifier/default_prompt",
+    description="Get the built-in system prompt used by an auto-router's LLM classifier",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_auto_router_classifier_default_prompt(
+    context_window_size: int = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+) -> AutoRouterClassifierDefaultPromptResponse:
+    """
+    Get the default classifier system prompt, so the dashboard's prompt editor can prefill it.
+
+    The prompt's closing line depends on whether prior conversation turns are quoted to the
+    classifier, so the caller passes the router's configured `context_window_size` to get the text
+    that router would actually send.
+
+    Parameters:
+    - context_window_size: int - The router's classifier_context_window_size. Defaults to the
+      built-in default.
+    """
+    if context_window_size < 0:
+        raise ProxyException(
+            message="context_window_size must be non-negative",
+            type=ProxyErrorTypes.bad_request_error,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="context_window_size",
+        )
+
+    return AutoRouterClassifierDefaultPromptResponse(system_prompt=classification_system_prompt(context_window_size))
 
 
 def _deduplicate_litellm_router_models(models: list[dict]) -> list[dict]:

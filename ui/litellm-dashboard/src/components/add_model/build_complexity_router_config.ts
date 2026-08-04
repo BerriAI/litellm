@@ -3,10 +3,19 @@ import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./comple
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
+  ClassifierFallback,
   ClassifierLLMConfig,
   ClassifierType,
   ComplexityTiers,
 } from "./ComplexityRouterConfig";
+
+/**
+ * Drop an empty system_prompt so the payload carries an override only when there is one. The
+ * backend rejects a blank string rather than reading it as "use the default", and sending `""`
+ * would turn an untouched editor into a validation error.
+ */
+export const normalizeClassifierLlmConfig = (config: ClassifierLLMConfig): ClassifierLLMConfig =>
+  config.system_prompt?.trim() ? config : { model: config.model, timeout_ms: config.timeout_ms };
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
@@ -15,6 +24,7 @@ export interface BuildComplexityRouterConfigParams {
   classifierContextWindowSize: number | undefined;
   classifierContextPerTurnChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
+  classifierFallback: ClassifierFallback | undefined;
   sessionAffinity: boolean;
   customTechnicalKeywords: string[];
   keywordTierRules: KeywordTierRule[];
@@ -36,6 +46,7 @@ export interface ComplexityRouterConfigPayload {
   classifier_context_window_size?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
+  classifier_fallback?: ClassifierFallback;
   session_affinity: boolean;
   custom_technical_keywords?: string[];
   keyword_tier_rules?: { keywords: string[]; tier: KeywordTierRule["tier"] }[];
@@ -84,6 +95,7 @@ export const buildComplexityRouterConfig = ({
   classifierContextWindowSize,
   classifierContextPerTurnChars,
   classifierContextIncludeAssistantTurns,
+  classifierFallback,
   sessionAffinity,
   customTechnicalKeywords,
   keywordTierRules,
@@ -103,7 +115,9 @@ export const buildComplexityRouterConfig = ({
   return {
     tiers,
     classifier_type: classifierType,
-    ...(classifierType === "llm" && classifierLlmConfig && { classifier_llm_config: classifierLlmConfig }),
+    ...(classifierType === "llm" &&
+      classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
+    ...(classifierType === "llm" && classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
     ...(classifierType === "llm" &&
       classifierContextWindowSize !== undefined && {
         classifier_context_window_size: classifierContextWindowSize,

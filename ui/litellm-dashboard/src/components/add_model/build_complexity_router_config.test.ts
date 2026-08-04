@@ -1,5 +1,6 @@
 import {
   buildComplexityRouterConfig,
+  normalizeClassifierLlmConfig,
   getKeywordTierRulesError,
   getMissingTiersError,
   getSemanticConfigError,
@@ -20,6 +21,7 @@ const baseParams: BuildComplexityRouterConfigParams = {
   classifierContextWindowSize: undefined,
   classifierContextPerTurnChars: undefined,
   classifierContextIncludeAssistantTurns: undefined,
+  classifierFallback: undefined,
   sessionAffinity: false,
   customTechnicalKeywords: [],
   keywordTierRules: [],
@@ -397,5 +399,58 @@ describe("buildComplexityRouterConfig assistant turns", () => {
   it("omits it when unset, leaving the backend default", () => {
     const config = buildComplexityRouterConfig(llmParams);
     expect(config.classifier_context_include_assistant_turns).toBeUndefined();
+  });
+});
+
+describe("classifier prompt and fallback", () => {
+  const llmParams: BuildComplexityRouterConfigParams = {
+    ...baseParams,
+    classifierType: "llm",
+    classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400 },
+  };
+
+  it("omits system_prompt when the operator never edited the prompt", () => {
+    // The backend rejects a blank string, and storing a copy of the default would freeze the
+    // rubric so later improvements never reach this router.
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, system_prompt: "   " },
+    });
+    expect(config.classifier_llm_config).toEqual({ model: "haiku-classifier", timeout_ms: 400 });
+    expect(config.classifier_llm_config).not.toHaveProperty("system_prompt");
+  });
+
+  it("keeps a custom system_prompt verbatim, whitespace and all", () => {
+    const systemPrompt = "  Grade data sensitivity.\n\nSIMPLE=public  ";
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, system_prompt: systemPrompt },
+    });
+    expect(config.classifier_llm_config?.system_prompt).toBe(systemPrompt);
+  });
+
+  it("emits classifier_fallback only for the llm classifier", () => {
+    expect(buildComplexityRouterConfig({ ...llmParams, classifierFallback: "default_model" }).classifier_fallback).toBe(
+      "default_model",
+    );
+    expect(buildComplexityRouterConfig({ ...baseParams, classifierFallback: "default_model" })).not.toHaveProperty(
+      "classifier_fallback",
+    );
+  });
+
+  it("omits classifier_fallback when unset so the backend default applies", () => {
+    expect(buildComplexityRouterConfig(llmParams)).not.toHaveProperty("classifier_fallback");
+  });
+
+  it("normalizeClassifierLlmConfig leaves a real prompt untouched and strips an empty one", () => {
+    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "x" })).toEqual({
+      model: "m",
+      timeout_ms: 1,
+      system_prompt: "x",
+    });
+    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "" })).toEqual({
+      model: "m",
+      timeout_ms: 1,
+    });
   });
 });

@@ -446,3 +446,57 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.queryByText("Advanced: Escalation Keywords")).not.toBeInTheDocument();
   });
 });
+
+describe("ComplexityRouterConfig classifier fallback", () => {
+  const llmValue: ComplexityRouterConfigValue = {
+    ...defaultValue,
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+  };
+
+  it("defaults the fallback to the heuristic, matching the backend field default", () => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("radio", { name: /Score with the heuristic/ })).toBeChecked();
+  });
+
+  it("records a switch to the default model fallback", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.click(screen.getByRole("radio", { name: /Route to the default model/ }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ classifier_fallback: "default_model" }));
+  });
+
+  it("disables the default model fallback when no tier would produce one", () => {
+    // The deployment's default model is derived from the tiers on submit, so offering the option
+    // with no tiers picked would save a config the backend rejects at startup.
+    const noTiers: ComplexityRouterConfigValue = {
+      ...llmValue,
+      tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={noTiers} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("radio", { name: /Route to the default model/ })).toBeDisabled();
+  });
+
+  it("hides the fallback choice for the heuristic classifier, which has nothing to fall back from", () => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.queryByText("If the classifier fails")).not.toBeInTheDocument();
+  });
+
+  it("clears a stored fallback when switching back to the heuristic classifier", () => {
+    const onChange = vi.fn();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        modelInfo={mockModelInfo}
+        value={{ ...llmValue, classifier_fallback: "default_model" }}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.click(screen.getByRole("radio", { name: /rule-based scoring/ }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ classifier_fallback: undefined }));
+  });
+});

@@ -22,9 +22,13 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.router_strategy.complexity_router.complexity_router import (
+    _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
+    _CLASSIFICATION_SYSTEM_RUBRIC,
+    _CLASSIFICATION_WITH_CONVERSATION,
     ComplexityRouter,
     DimensionScore,
     KeywordOverride,
+    classification_system_prompt,
 )
 from litellm.router_strategy.complexity_router.config import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
@@ -4945,7 +4949,7 @@ class TestClassifierTrustBoundary:
         how the LLM-as-a-judge guardrail assembles its call: a static system constant, all caller
         content quoted in the user turn.
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+        from litellm.router_strategy.complexity_router.complexity_router import classification_system_prompt
 
         router = ComplexityRouter(
             model_name="test-router",
@@ -4966,7 +4970,7 @@ class TestClassifierTrustBoundary:
         )
 
         system_message, user_message = mock_router_instance.acompletion.call_args.kwargs["messages"]
-        assert system_message["content"] == _classification_system_prompt(router.config.classifier_context_window_size)
+        assert system_message["content"] == classification_system_prompt(router.config.classifier_context_window_size)
         assert hostile not in system_message["content"]
         assert hostile in user_message["content"]
 
@@ -4991,9 +4995,9 @@ class TestClassifierTrustBoundary:
         invites it to guess high. Above 0 the window is quoted but nothing otherwise tells the model it
         exists or that its view is bounded.
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+        from litellm.router_strategy.complexity_router.complexity_router import classification_system_prompt
 
-        system_prompt = _classification_system_prompt(window_size)
+        system_prompt = classification_system_prompt(window_size)
 
         assert ("using the earlier turns quoted above it as context" in system_prompt) is conversation_is_quoted
         assert ('short reply such as "yes" or "continue"' in system_prompt) is conversation_is_quoted
@@ -5011,7 +5015,7 @@ class TestClassifierTrustBoundary:
         pre-context sentence, which is the exact configuration the reported misclassification was
         raised against: window at its default, assistant turns off.
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+        from litellm.router_strategy.complexity_router.complexity_router import classification_system_prompt
 
         router = ComplexityRouter(
             model_name="test-complexity-router",
@@ -5026,7 +5030,7 @@ class TestClassifierTrustBoundary:
         await router.aclassify("yes.", messages=[{"role": "user", "content": "yes."}])
 
         system_content = mock_router_instance.acompletion.call_args.kwargs["messages"][0]["content"]
-        assert system_content == _classification_system_prompt(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
+        assert system_content == classification_system_prompt(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
 
     def test_a_window_of_zero_still_sends_the_original_wording(self):
         """With no conversation quoted, the original line is the correct one and must stay reachable.
@@ -5035,9 +5039,9 @@ class TestClassifierTrustBoundary:
         was handed a window and told in the same breath to disregard it, so a request whose difficulty
         was established earlier came back SIMPLE on the word "yes".
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+        from litellm.router_strategy.complexity_router.complexity_router import classification_system_prompt
 
-        assert _classification_system_prompt(0).endswith(
+        assert classification_system_prompt(0).endswith(
             "Classify only the current message; use the other sections to disambiguate its difficulty."
         )
 
@@ -5049,9 +5053,9 @@ class TestClassifierTrustBoundary:
         the model to disregard buys nothing, so the replacement is pinned here rather than left to be
         rediscovered.
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+        from litellm.router_strategy.complexity_router.complexity_router import classification_system_prompt
 
-        system_prompt = _classification_system_prompt(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
+        system_prompt = classification_system_prompt(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
 
         assert "Classify only the current message" not in system_prompt
         assert "using the earlier turns quoted above it as context" in system_prompt
@@ -5195,3 +5199,180 @@ class TestConversationShapeDiscriminator:
         assert builds
         missing = [i for i, block in enumerate(builds) if "conversation_continuing=conversation_continuing" not in block.split("),")[0]]
         assert not missing, f"routing decisions {missing} do not carry the conversation shape"
+
+
+class TestCustomClassifierSystemPrompt:
+    """An operator-supplied classifier prompt replaces the built-in rubric entirely."""
+
+    def test_default_prompt_carries_rubric_and_conversation_closing(self):
+        prompt = classification_system_prompt(5)
+        assert _CLASSIFICATION_SYSTEM_RUBRIC in prompt
+        assert _CLASSIFICATION_WITH_CONVERSATION in prompt
+        assert _CLASSIFICATION_CURRENT_MESSAGE_ONLY not in prompt
+
+    def test_default_prompt_uses_single_message_closing_without_context_window(self):
+        prompt = classification_system_prompt(0)
+        assert _CLASSIFICATION_SYSTEM_RUBRIC in prompt
+        assert _CLASSIFICATION_CURRENT_MESSAGE_ONLY in prompt
+        assert _CLASSIFICATION_WITH_CONVERSATION not in prompt
+
+    def test_explicit_none_is_byte_identical_to_omitting_the_argument(self):
+        assert classification_system_prompt(5, None) == classification_system_prompt(5)
+
+    @pytest.mark.parametrize("context_window_size", [0, 5])
+    def test_custom_prompt_replaces_rubric_and_closing_at_any_window_size(self, context_window_size):
+        """Full replacement: neither the rubric nor either closing line may be appended, or the
+        system role would argue with itself about what it is grading."""
+        custom = "Grade the data sensitivity of the request."
+        prompt = classification_system_prompt(context_window_size, custom)
+        assert prompt == custom
+        assert _CLASSIFICATION_SYSTEM_RUBRIC not in prompt
+        assert _CLASSIFICATION_WITH_CONVERSATION not in prompt
+        assert _CLASSIFICATION_CURRENT_MESSAGE_ONLY not in prompt
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\n\t "])
+    def test_blank_system_prompt_is_rejected(self, blank):
+        """A blank string would send an empty system role, leaving the classifier no rubric at
+        all; omitting the field is how you ask for the default."""
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(
+                classifier_type="llm",
+                classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400, "system_prompt": blank},
+            )
+
+    def test_unset_system_prompt_defaults_to_none(self):
+        config = ComplexityRouterConfig(
+            classifier_type="llm", classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400}
+        )
+        assert config.classifier_llm_config is not None
+        assert config.classifier_llm_config.system_prompt is None
+
+    @pytest.mark.asyncio
+    async def test_custom_prompt_is_sent_verbatim_as_the_system_role(self, mock_router_instance, llm_classifier_config):
+        custom = "Classify the data sensitivity: SIMPLE=public, MEDIUM=internal, COMPLEX=confidential, REASONING=regulated."
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_llm_config": {
+                    **llm_classifier_config["classifier_llm_config"],
+                    "system_prompt": custom,
+                },
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+        outcome = await router.aclassify("my ssn is 000-00-0000")
+        assert outcome.tier == ComplexityTier.COMPLEX
+        messages = mock_router_instance.acompletion.call_args.kwargs["messages"]
+        assert messages[0] == {"role": "system", "content": custom}
+        assert "Tiers:" not in messages[0]["content"]
+        # The user role still carries the request being classified.
+        assert "000-00-0000" in messages[1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_no_custom_prompt_keeps_the_built_in_rubric_on_the_wire(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        await llm_complexity_router.aclassify("hi")
+        messages = mock_router_instance.acompletion.call_args.kwargs["messages"]
+        assert messages[0]["content"] == classification_system_prompt(
+            llm_complexity_router.config.classifier_context_window_size
+        )
+
+
+class TestClassifierFallbackChoice:
+    """classifier_fallback decides what runs when the LLM classifier fails."""
+
+    @pytest.fixture
+    def default_model_fallback_router(self, mock_router_instance, llm_classifier_config):
+        return ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o",
+            },
+        )
+
+    def test_fallback_defaults_to_heuristic(self):
+        assert ComplexityRouterConfig().classifier_fallback == "heuristic"
+
+    def test_default_model_fallback_requires_a_default_model(self, mock_router_instance, llm_classifier_config):
+        """Without one there is nowhere to route, so this must fail at config time rather than
+        at the first classifier timeout in production."""
+        with pytest.raises(ValueError, match="requires a default model"):
+            ComplexityRouter(
+                model_name="test-complexity-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={**llm_classifier_config, "classifier_fallback": "default_model"},
+            )
+
+    def test_deployment_level_default_model_satisfies_the_requirement(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        """complexity_router_default_model arrives outside complexity_router_config, so a config-model
+        validator would have rejected this valid deployment."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**llm_classifier_config, "classifier_fallback": "default_model"},
+            default_model="gpt-4o",
+        )
+        assert router.config.default_model == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_classifier_failure_routes_to_default_model_without_scoring(
+        self, default_model_fallback_router, mock_router_instance
+    ):
+        """A classifier on some other taxonomy has no use for a complexity score, so the heuristic
+        scorer must not run at all."""
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        with patch.object(
+            ComplexityRouter, "_score_and_classify", side_effect=AssertionError("heuristic scorer must not run")
+        ):
+            outcome = await default_model_fallback_router.aclassify("Hello!")
+        assert outcome.cause == "default_model_fallback"
+        assert outcome.score is None
+
+    @pytest.mark.asyncio
+    async def test_heuristic_fallback_still_scores(self, llm_complexity_router, mock_router_instance):
+        """The pre-existing default must be unchanged by the new option."""
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        outcome = await llm_complexity_router.aclassify("Hello!")
+        assert outcome.cause == "heuristic_scorer"
+        assert outcome.score is not None
+
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_routes_to_default_model_on_classifier_failure(
+        self, default_model_fallback_router, mock_router_instance
+    ):
+        """The tier pool for the resolved tier must not get a say: a multi-model pool would
+        otherwise land somewhere other than the known destination the operator asked for."""
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        response = await default_model_fallback_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "prove the Riemann hypothesis step by step"}],
+        )
+        assert response is not None
+        assert response.model == "gpt-4o"
+        assert response.routing_decision is not None
+        assert response.routing_decision["cause"] == "default_model_fallback"
+
+    @pytest.mark.asyncio
+    async def test_successful_classification_ignores_the_fallback_setting(
+        self, default_model_fallback_router, mock_router_instance
+    ):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+        response = await default_model_fallback_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert response is not None
+        assert response.model == "o1-preview"
+        assert response.routing_decision is not None
+        assert response.routing_decision["cause"] == "llm_classifier"

@@ -18,6 +18,26 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
   }
 };
 
+export const getAutoRouterClassifierDefaultPromptCall = async (
+  accessToken: string,
+  contextWindowSize: number,
+): Promise<string> => {
+  /**
+   * Get the built-in system prompt an auto-router's LLM classifier uses when none is configured,
+   * so the prompt editor prefills what the proxy actually sends rather than a frontend copy.
+   */
+  try {
+    const response = await apiClient.get<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
+      accessToken,
+      query: { context_window_size: contextWindowSize },
+    });
+    return response.system_prompt;
+  } catch (error) {
+    console.error("Failed to get the default classifier prompt:", error);
+    throw error;
+  }
+};
+
 /**
  * Helper file for calls being made to proxy
  */

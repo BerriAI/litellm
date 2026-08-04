@@ -84,7 +84,7 @@ _CLASSIFICATION_CURRENT_MESSAGE_ONLY: Final = (
 _CLASSIFICATION_WITH_CONVERSATION = """Classify the current message, using the earlier turns quoted above it as context: when it is a short reply such as "yes" or "continue", rate the work it approves rather than the reply itself."""
 
 
-def _classification_system_prompt(context_window_size: int) -> str:
+def classification_system_prompt(context_window_size: int, custom_prompt: str | None = None) -> str:
     """The classifier's system role, closing on the line that matches the payload it will be sent.
 
     One static closing cannot serve both. With no window the classifier receives no conversation, so
@@ -96,7 +96,16 @@ def _classification_system_prompt(context_window_size: int) -> str:
     It keys on the operator's configuration and never on the individual request, so the system role
     stays prompt-cacheable across a session, and it does not key on which roles the window holds: that
     the turns exist is what the model needs told, and whose they are is already on the turns.
+
+    A custom prompt is returned verbatim, with neither the rubric nor a closing line appended. Both
+    describe grading difficulty over a "current message", which an operator classifying something else
+    is entitled to contradict: appending either would have the system role argue with itself, and the
+    closing line in particular would name sections a replacement prompt need not lay out that way. The
+    injection-defense sentence goes with the rubric it belongs to, so a replacement that wants it must
+    say so itself; the config field and the UI editor both warn about exactly that.
     """
+    if custom_prompt is not None:
+        return custom_prompt
     closing = _CLASSIFICATION_WITH_CONVERSATION if context_window_size > 0 else _CLASSIFICATION_CURRENT_MESSAGE_ONLY
     return f"{_CLASSIFICATION_SYSTEM_RUBRIC} {closing}"
 
@@ -368,14 +377,15 @@ class ClassificationOutcome(NamedTuple):
     """What the classifier decided and which mechanism actually produced it.
 
     `cause` reflects the path that ran, not the configured classifier_type: an LLM
-    classifier that fails falls back to the heuristic scorer and reports it.
-    `score` is None on the LLM path, which produces a tier label and no score.
+    classifier that fails falls back to whichever path classifier_fallback names and
+    reports that one. `score` is None on the LLM path, which produces a tier label and
+    no score, and on the default_model path, which produces neither.
     """
 
     tier: ComplexityTier
     score: float | None
     signals: tuple[str, ...]
-    cause: Literal["heuristic_scorer", "reasoning_override", "llm_classifier"]
+    cause: Literal["heuristic_scorer", "reasoning_override", "llm_classifier", "default_model_fallback"]
 
 
 class ComplexityRouter(CustomLogger):
@@ -421,6 +431,17 @@ class ComplexityRouter(CustomLogger):
         # Override default_model if provided
         if default_model:
             self.config.default_model = default_model
+
+        # Checked here rather than on the config model because the deployment's
+        # complexity_router_default_model arrives outside complexity_router_config and is
+        # applied just above, so a validator on the model would reject a deployment that
+        # does have a default model, just not in that dict.
+        if self.config.classifier_fallback == "default_model" and not self.config.default_model:
+            raise ValueError(
+                "classifier_fallback='default_model' requires a default model: set "
+                "complexity_router_default_model on the deployment or default_model in "
+                "complexity_router_config"
+            )
 
         # Build effective keyword lists (use config overrides or defaults)
         self.code_keywords = self.config.code_keywords or DEFAULT_CODE_KEYWORDS
@@ -731,9 +752,9 @@ class ComplexityRouter(CustomLogger):
         """
         Classify a prompt by complexity, using the LLM classifier when configured.
 
-        Falls back to the local heuristic scorer if classifier_type is "heuristic",
-        or if the LLM call fails, times out, or returns an unparseable response.
-        The outcome's `cause` reports which path actually classified the request.
+        Falls back to the local heuristic scorer if classifier_type is "heuristic". If the LLM call
+        fails, times out, or returns an unparseable response, classifier_fallback decides between the
+        heuristic scorer and default_model. The outcome's `cause` reports which path actually ran.
         """
         if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
@@ -744,12 +765,35 @@ class ComplexityRouter(CustomLogger):
             return ClassificationOutcome(
                 tier=tier, score=None, signals=(f"llm-classifier:{tier.value}",), cause="llm_classifier"
             )
-        except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the heuristic scorer
+        except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the configured fallback path
             verbose_router_logger.warning(
-                "ComplexityRouter: LLM classifier failed (%s), falling back to heuristic scoring", e
+                "ComplexityRouter: LLM classifier failed (%s), falling back to %s",
+                e,
+                self.config.classifier_fallback,
             )
+            if self.config.classifier_fallback == "default_model":
+                return self._default_model_fallback_outcome()
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+
+    def _default_model_fallback_outcome(self) -> ClassificationOutcome:
+        """The classifier-failed outcome for classifier_fallback='default_model'.
+
+        The outcome still carries a tier because every downstream consumer is keyed on one, so it
+        reports the tier whose pool holds default_model, and MEDIUM when no pool does. That tier is
+        provenance only: the pre-routing hook routes this cause straight to default_model rather than
+        picking from the tier's pool, since a pool with several models would otherwise land somewhere
+        else and the point of this fallback is a known destination when classification failed.
+        """
+        default_model: Final = self.config.default_model
+        pools: Final = self._tier_pools()
+        tier: Final = next(
+            (candidate for candidate in TIER_SEVERITY_ORDER if default_model in pools.get(candidate.value, ())),
+            ComplexityTier.MEDIUM,
+        )
+        return ClassificationOutcome(
+            tier=tier, score=None, signals=("classifier-failed:default-model",), cause="default_model_fallback"
+        )
 
     async def _classify_with_llm(
         self,
@@ -813,7 +857,9 @@ class ComplexityRouter(CustomLogger):
         messages_for_call: Final = [
             {
                 "role": "system",
-                "content": _classification_system_prompt(self.config.classifier_context_window_size),
+                "content": classification_system_prompt(
+                    self.config.classifier_context_window_size, llm_config.system_prompt
+                ),
             },
             {"role": "user", "content": user_payload},
         ]
@@ -1607,6 +1653,31 @@ class ComplexityRouter(CustomLogger):
         if escalated:
             signals = (*signals, "escalation")
         score_repr: Final = f"{score:.3f}" if score is not None else "n/a"
+        if outcome.cause == "default_model_fallback" and self.config.default_model is not None:
+            # Classification failed and the operator asked for default_model, so route there
+            # directly. Neither the tier pool nor the adaptive bandit gets a say: both answer
+            # "which model suits this tier", and no tier was decided. Escalation is skipped for
+            # the same reason, since there is no classified tier to bump away from.
+            verbose_router_logger.info(
+                "ComplexityRouter: routing decision cause=%s, tier=%s, score=n/a, signals=%s, routed_model=%s",
+                outcome.cause,
+                classified_tier.value,
+                outcome.signals,
+                self.config.default_model,
+            )
+            return PreRoutingHookResponse(
+                model=self.config.default_model,
+                messages=messages if has_original_messages else None,
+                routing_decision=self._build_routing_decision(
+                    routed_model=self.config.default_model,
+                    conversation_continuing=conversation_continuing,
+                    cause=outcome.cause,
+                    tier=classified_tier,
+                    signals=outcome.signals,
+                    escalation_keyword=escalation_keyword,
+                    escalated=False,
+                ),
+            )
         if self.config.adaptive:
             routed_model = self._soft_floor_pick(tier, user_message, request_kwargs)
             adaptive: Final = self._ensure_adaptive_router()
