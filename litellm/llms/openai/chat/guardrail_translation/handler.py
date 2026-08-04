@@ -14,6 +14,7 @@ Pattern Overview:
 This pattern can be replicated for other message formats (e.g., Anthropic).
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Union, cast
 
 import litellm
@@ -87,6 +88,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         images_to_check: list[str] = []
         tool_calls_to_check: list[ChatCompletionToolParam] = []
         text_task_mappings: list[tuple[int, int | None]] = []
+        image_task_mappings: list[tuple[int, int]] = []  # mutable-ok: accumulator appended in _extract_inputs
         tool_call_task_mappings: list[tuple[int, int]] = []
 
         # Step 1: Extract all text content, images, and tool calls
@@ -98,13 +100,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 images_to_check=images_to_check,
                 tool_calls_to_check=tool_calls_to_check,
                 text_task_mappings=text_task_mappings,
+                image_task_mappings=image_task_mappings,
                 tool_call_task_mappings=tool_call_task_mappings,
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
             )
 
-        # Step 2: Apply guardrail to all texts and tool calls in batch
-        if texts_to_check or tool_calls_to_check:
+        # Step 2: Apply guardrail to texts, tool calls, and images in batch.
+        # images_to_check is included so image-only requests still invoke the
+        # guardrail; otherwise a guardrail that strips/rewrites images would be
+        # bypassed when a message contains only image_url blocks (issue #31071).
+        if texts_to_check or tool_calls_to_check or images_to_check:
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
@@ -163,6 +169,16 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         task_mappings=tool_call_task_mappings,
                     )
 
+                # Step 5: Apply guardrailed images back to messages. No-op when
+                # no images were extracted or the guardrail returned no "images"
+                # key, so guardrails that do not touch images leave them
+                # unchanged (issue #31071).
+                await self._apply_guardrail_responses_to_input_images(
+                    messages=messages,
+                    responses=guardrailed_inputs.get("images"),
+                    task_mappings=image_task_mappings,
+                )
+
         verbose_proxy_logger.debug(
             "OpenAI Chat Completions: Processed input messages: %s",
             data.get("messages"),
@@ -191,6 +207,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         images_to_check: list[str],
         tool_calls_to_check: list[ChatCompletionToolParam],
         text_task_mappings: list[tuple[int, int | None]],
+        image_task_mappings: list[tuple[int, int]],  # mutable-ok: accumulator appended in _extract_inputs
         tool_call_task_mappings: list[tuple[int, int]],
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
@@ -229,8 +246,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                             url = image_url.get("url")
                             if url:
                                 images_to_check.append(url)
+                                image_task_mappings.append((msg_idx, int(content_idx)))
                         elif isinstance(image_url, str):
                             images_to_check.append(image_url)
+                            image_task_mappings.append((msg_idx, int(content_idx)))
 
         # Extract tool calls (typically in assistant messages)
         tool_calls = message.get("tool_calls", None)
@@ -292,6 +311,44 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     if tool_call_idx < len(message_tool_calls):
                         # Replace the tool call with the guardrailed version
                         message_tool_calls[tool_call_idx] = guardrailed_tool_call
+
+    async def _apply_guardrail_responses_to_input_images(
+        self,
+        messages: list[dict[str, Any]],  # mutable-ok: image content blocks rewritten/removed in place
+        responses: Sequence[Any] | None,
+        task_mappings: Sequence[tuple[int, int]],
+    ) -> None:
+        """
+        Apply guardrailed images back to input message content.
+
+        No-op when ``responses`` is None (the guardrail did not return an
+        "images" key), so guardrails that do not touch images leave them
+        unchanged. Mirrors the text/tool_call write-back: a returned image at
+        the same position replaces the original ``image_url``; positions with no
+        corresponding returned image (e.g. ``modify(images=[])`` to strip images)
+        have their image content block removed. Removals are applied per message
+        in descending content index so earlier indices stay valid.
+        """
+        if responses is None:
+            return
+        removals: list[tuple[Any, int]] = []  # mutable-ok: local accumulator, applied in a second pass
+        for task_idx, (msg_idx, content_idx) in enumerate(task_mappings):
+            content = messages[msg_idx].get("content")
+            if not isinstance(content, list) or content_idx >= len(content):
+                continue
+            if task_idx < len(responses):
+                new_image = responses[task_idx]
+                image_url = content[content_idx].get("image_url")
+                if isinstance(image_url, dict):
+                    content[content_idx]["image_url"]["url"] = new_image
+                else:
+                    content[content_idx]["image_url"] = new_image
+            else:
+                removals.append((content, content_idx))
+
+        # Delete the highest content index first so earlier indices stay valid.
+        for content, content_idx in sorted(removals, key=lambda r: r[1], reverse=True):
+            del content[content_idx]
 
     async def process_output_response(
         self,
