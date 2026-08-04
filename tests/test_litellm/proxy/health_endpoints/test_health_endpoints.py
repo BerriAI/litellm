@@ -1657,6 +1657,74 @@ async def test_health_endpoint_resolves_all_team_models_to_team_allowlist():
 
 
 @pytest.mark.asyncio
+async def test_health_endpoint_expands_access_group_models():
+    """
+    A key scoped to an access group carries the group name (not a real
+    model_name) in user_api_key_dict.models. health_endpoint() must expand the
+    group to its member model_names before filtering; otherwise the group name
+    matches nothing and the model list zeroes out (issue #28206).
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": "id-a"},
+        },
+        {
+            "model_name": "model-b",
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": "id-b"},
+        },
+    ]
+
+    mock_router = MagicMock()
+    mock_router.get_model_names.return_value = ["model-a", "model-b"]
+    mock_router.get_model_access_groups.return_value = {"beta-group": ["model-b"]}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-test-key",
+        models=["beta-group"],
+    )
+
+    captured: dict = {}
+
+    async def fake_perform(**kwargs):
+        captured["model_list"] = kwargs["model_list"]
+        return {
+            "healthy_endpoints": [],
+            "unhealthy_endpoints": [],
+            "healthy_count": 0,
+            "unhealthy_count": 0,
+        }
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", False),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", {}),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        from fastapi import Response
+
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict)
+
+    returned_names = {m["model_name"] for m in captured["model_list"]}
+    assert returned_names == {
+        "model-b"
+    }, f"access-group key should expand to its member models: {returned_names}"
+
+
+@pytest.mark.asyncio
 async def test_health_endpoint_filters_background_cache_by_user_access():
     """
     When background_health_checks is enabled, health_endpoint() should also
