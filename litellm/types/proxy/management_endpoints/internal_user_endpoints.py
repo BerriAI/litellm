@@ -1,13 +1,21 @@
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, field_validator
 
 from litellm.proxy._types import (
     LiteLLM_UserTableWithKeyCount,
     UpdateUserRequest,
     UpdateUserRequestNoUserIDorEmail,
 )
+
+
+class DirectoryUser(BaseModel):
+    """A single result row from a directory-search provider (see
+    `litellm.proxy.management_endpoints.directory_search`)."""
+
+    id: str
+    display_name: Optional[str] = None
+    email: str
 
 
 class UserListResponse(BaseModel):

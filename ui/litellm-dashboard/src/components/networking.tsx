@@ -885,6 +885,21 @@ export const userCreateCall = async (
   }
 };
 
+export interface DirectoryUser {
+  id: string;
+  display_name?: string | null;
+  email: string;
+}
+
+export const directoryUsersSearchCall = async (accessToken: string, query: string): Promise<DirectoryUser[]> => {
+  try {
+    return await apiClient.get(`/user/directory_search`, { accessToken, query: { query } });
+  } catch (error) {
+    console.error("Failed to search directory users:", error);
+    throw error;
+  }
+};
+
 export const keyDeleteCall = async (accessToken: string, user_key: string) => {
   try {
     return await apiClient.post(`/key/delete`, { accessToken, body: { keys: [user_key] } });

@@ -17,10 +17,11 @@ import json
 import traceback
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+import httpx
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -43,6 +44,10 @@ from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_view,
     require_caller_user_id_for_non_admin,
     validate_finite_spend,
+)
+from litellm.proxy.management_endpoints.directory_search.base import (
+    DIRECTORY_SEARCH_MIN_QUERY_LENGTH,
+    get_configured_directory_search_provider,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_permissions_caller_permission,
@@ -72,6 +77,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkUpdateUserRequest,
     BulkUpdateUserResponse,
+    DirectoryUser,
     UserListResponse,
     UserUpdateResult,
 )
@@ -148,6 +154,80 @@ def _team_membership_table(
         TeamMembershipRepository(prisma_client).table
     )
     return team_membership_table
+
+
+@router.get(
+    "/user/directory_search",
+    tags=("Internal User management",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=list[DirectoryUser],
+)
+@management_endpoint_wrapper
+async def directory_user_search(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    query: str = Query(...),
+) -> tuple[DirectoryUser, ...]:
+    """
+    Search the configured identity provider's directory for the Admin UI
+    invite-user flow.
+
+    Backed by the first configured provider in
+    `litellm.proxy.management_endpoints.directory_search` (currently Microsoft
+    Entra ID only - see `directory_search/microsoft.py` for its required
+    config). A 404 is returned if no provider is configured.
+
+    Restricted to `PROXY_ADMIN` - this searches an external directory (e.g.
+    Microsoft Entra ID), not existing LiteLLM resources, so admin viewers
+    don't get read access to it just because they can view proxy state.
+    Queries shorter than `DIRECTORY_SEARCH_MIN_QUERY_LENGTH` return `[]`
+    without contacting the provider.
+    """
+    try:
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail="Only proxy admins can search directory users.",
+            )
+
+        cleaned_query = query.strip()
+        if len(cleaned_query) < DIRECTORY_SEARCH_MIN_QUERY_LENGTH:
+            return ()
+
+        provider = get_configured_directory_search_provider()
+        if provider is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Directory search is not configured.",
+            )
+
+        return await provider.search(cleaned_query)
+    except HTTPException as e:
+        # Deliberate errors (403/404 above, or a provider's own 500 for
+        # missing credentials) - preserves their status code/detail via
+        # handle_exception_on_proxy instead of falling into the 500 below.
+        raise handle_exception_on_proxy(e)
+    except httpx.HTTPStatusError as e:
+        verbose_proxy_logger.exception("Directory search failed - %s", e)
+        raise handle_exception_on_proxy(
+            HTTPException(
+                status_code=502,
+                detail="Directory search failed.",
+            )
+        )
+    except httpx.HTTPError as e:
+        verbose_proxy_logger.exception("Directory search request failed - %s", e)
+        raise handle_exception_on_proxy(
+            HTTPException(
+                status_code=502,
+                detail="Directory search request failed.",
+            )
+        )
+    except ValueError as e:
+        # The provider's response body wasn't valid JSON - every other
+        # failure mode (auth, transport, deliberate HTTPException) is
+        # already handled above.
+        verbose_proxy_logger.exception("directory_user_search(): failed to parse provider response - %s", e)
+        raise handle_exception_on_proxy(e)
 
 
 def _hash_password_in_dict(data: dict) -> None:
@@ -783,7 +863,11 @@ async def _get_user_info_teams(
 
 
 _SCIM_DIRECTORY_METADATA_KEYS = frozenset(
-    {SCIM_ENTERPRISE_METADATA_KEY, SCIM_ENTITLEMENTS_METADATA_KEY, SCIM_ROLES_METADATA_KEY}
+    {
+        SCIM_ENTERPRISE_METADATA_KEY,
+        SCIM_ENTITLEMENTS_METADATA_KEY,
+        SCIM_ROLES_METADATA_KEY,
+    }
 )
 
 
@@ -1235,7 +1319,11 @@ async def _schedule_user_update_audit_log(
                 )
             )
     except Exception as audit_error:
-        verbose_proxy_logger.warning("Failed to create audit log for user %s: %s", response.get("user_id"), audit_error)
+        verbose_proxy_logger.warning(
+            "Failed to create audit log for user %s: %s",
+            response.get("user_id"),
+            audit_error,
+        )
 
 
 def _check_user_update_authz(
@@ -1620,12 +1708,16 @@ async def bulk_update_processed_users(
                 successful_updates += 1
             except Exception as e:
                 verbose_proxy_logger.exception(
-                    "Failed to update user %s: %s", user_request.user_id or user_request.user_email, e
+                    "Failed to update user %s: %s",
+                    user_request.user_id or user_request.user_email,
+                    e,
                 )
                 # Record failure
                 error_message = str(e)
                 verbose_proxy_logger.error(
-                    "Failed to update user %s: %s", user_request.user_id or user_request.user_email, error_message
+                    "Failed to update user %s: %s",
+                    user_request.user_id or user_request.user_email,
+                    error_message,
                 )
 
                 results.append(

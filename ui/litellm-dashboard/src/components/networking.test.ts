@@ -594,3 +594,31 @@ describe("testMCPToolsListRequest auth headers", () => {
     expect(headers["Authorization"]).toBe("Bearer sk-key");
   });
 });
+
+describe("directoryUsersSearchCall", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("should throw with the readable message from litellm's ProxyException error envelope", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      text: vi.fn().mockResolvedValue(
+        JSON.stringify({
+          error: {
+            message: "Directory search is not configured.",
+            type: "internal_server_error",
+            param: "None",
+            code: "404",
+          },
+        }),
+      ),
+    } as any);
+
+    await expect(Networking.directoryUsersSearchCall("token", "alice")).rejects.toThrow(
+      "Directory search is not configured.",
+    );
+  });
+});
