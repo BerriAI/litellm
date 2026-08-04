@@ -3,7 +3,7 @@ import mimetypes
 import re
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
@@ -23,10 +23,10 @@ def _is_base64_encoded_unified_file_id(b64_uid: str) -> str | Literal[False]:
     if not isinstance(b64_uid, str):
         return False
     # Add padding back if needed
-    padded = b64_uid + "=" * (-len(b64_uid) % 4)
+    padded: Final = b64_uid + "=" * (-len(b64_uid) % 4)
     # Decode from base64
     try:
-        decoded = base64.urlsafe_b64decode(padded).decode()
+        decoded: Final = base64.urlsafe_b64decode(padded).decode()
         if decoded.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
             return decoded
         else:
@@ -36,7 +36,7 @@ def _is_base64_encoded_unified_file_id(b64_uid: str) -> str | Literal[False]:
 
 
 def convert_b64_uid_to_unified_uid(b64_uid: str) -> str:
-    is_base64_unified_file_id = _is_base64_encoded_unified_file_id(b64_uid)
+    is_base64_unified_file_id: Final = _is_base64_encoded_unified_file_id(b64_uid)
     if is_base64_unified_file_id:
         return is_base64_unified_file_id
     else:
@@ -55,7 +55,7 @@ def get_models_from_unified_file_id(unified_file_id: str) -> list[str]:
         # Ensure unified_file_id is a string and not a mock object
         if not isinstance(unified_file_id, str):
             return []
-        match = re.search(r"target_model_names,([^;]+)", unified_file_id)
+        match: Final = re.search(r"target_model_names,([^;]+)", unified_file_id)
         if match:
             # Split on comma and strip whitespace from each model name
             return [model.strip() for model in match.group(1).split(",")]
@@ -119,9 +119,9 @@ def encode_file_id_with_model(file_id: str, model: str, id_type: Literal["file",
         encode_file_id_with_model("3814889423749775360", "gemini-2.5-pro", id_type="batch")
         -> "batch_bGl0ZWxsbTozODE0ODg5NDIzNzQ5Nzc1MzYwO21vZGVsLGdlbWluaS0yLjUtcHJv"
     """
-    encoded_str = f"litellm:{file_id};model,{model}"
-    encoded_bytes = base64.urlsafe_b64encode(encoded_str.encode())
-    encoded_b64 = encoded_bytes.decode().rstrip("=")
+    encoded_str: Final = f"litellm:{file_id};model,{model}"
+    encoded_bytes: Final = base64.urlsafe_b64encode(encoded_str.encode())
+    encoded_b64: Final = encoded_bytes.decode().rstrip("=")
 
     # Detect the prefix from the original ID (file-, batch_, etc.)
     # For provider-specific IDs without a recognizable prefix (e.g., Vertex AI
@@ -167,10 +167,10 @@ def decode_model_from_file_id(encoded_id: str) -> str | None:
         else:
             b64_part = encoded_id
 
-        padded = b64_part + "=" * (-len(b64_part) % 4)
-        decoded = base64.urlsafe_b64decode(padded).decode()
+        padded: Final = b64_part + "=" * (-len(b64_part) % 4)
+        decoded: Final = base64.urlsafe_b64decode(padded).decode()
         if decoded.startswith("litellm:") and ";model," in decoded:
-            match = re.search(r";model,([^;]+)", decoded)
+            match: Final = re.search(r";model,([^;]+)", decoded)
             if match:
                 return match.group(1).strip()
 
@@ -196,11 +196,11 @@ def get_original_file_id(encoded_id: str) -> str:
         else:
             b64_part = encoded_id
 
-        padded = b64_part + "=" * (-len(b64_part) % 4)
-        decoded = base64.urlsafe_b64decode(padded).decode()
+        padded: Final = b64_part + "=" * (-len(b64_part) % 4)
+        decoded: Final = base64.urlsafe_b64decode(padded).decode()
 
         if decoded.startswith("litellm:") and ";model," in decoded:
-            match = re.search(r"litellm:([^;]+);model,", decoded)
+            match: Final = re.search(r"litellm:([^;]+);model,", decoded)
             if match:
                 return match.group(1)
 
@@ -247,7 +247,7 @@ def extract_model_from_sources(
         data = {}
 
     # Check if file_id has embedded model info
-    model_from_id = decode_model_from_file_id(file_id)
+    model_from_id: Final = decode_model_from_file_id(file_id)
 
     # Check other sources for model parameter
     model_from_param = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
@@ -282,7 +282,7 @@ def get_credentials_for_model(
             detail={"error": "Router not initialized. Cannot use model-based routing."},
         )
 
-    credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
 
     if credentials is None:
         raise HTTPException(
@@ -325,19 +325,19 @@ def get_team_provider_credentials(
     from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.auth.model_checks import get_complete_model_list, get_key_models
 
-    team_id = user_api_key_dict.team_id
-    team_models = user_api_key_dict.team_models or []
+    team_id: Final = user_api_key_dict.team_id
+    team_models: Final = user_api_key_dict.team_models or []
 
-    proxy_model_list = llm_router.get_model_names(team_id=team_id)
-    model_access_groups = llm_router.get_model_access_groups()
+    proxy_model_list: Final = llm_router.get_model_names(team_id=team_id)
+    model_access_groups: Final = llm_router.get_model_access_groups()
 
-    raw_key_models = user_api_key_dict.models or []
-    sentinel_values = {
+    raw_key_models: Final = user_api_key_dict.models or []
+    sentinel_values: Final = {
         SpecialModelNames.all_proxy_models.value,
         SpecialModelNames.all_team_models.value,
     }
-    key_is_restricted = bool(raw_key_models) and not (set(raw_key_models) & sentinel_values)
-    key_model_allowlist = (
+    key_is_restricted: Final = bool(raw_key_models) and not (set(raw_key_models) & sentinel_values)
+    key_model_allowlist: Final = (
         tuple(
             dict.fromkeys(
                 get_key_models(
@@ -350,7 +350,7 @@ def get_team_provider_credentials(
         if key_is_restricted
         else ()
     )
-    key_model_allowlist_set = frozenset(key_model_allowlist)
+    key_model_allowlist_set: Final = frozenset(key_model_allowlist)
 
     def _key_may_use(public_model_name: str | None) -> bool:
         if not key_model_allowlist_set:
@@ -358,7 +358,7 @@ def get_team_provider_credentials(
         return public_model_name is not None and public_model_name in key_model_allowlist_set
 
     def _provider_credentials(model_id: str) -> dict | None:
-        credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
+        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
         if credentials is not None and credentials.get("custom_llm_provider") == custom_llm_provider:
             return credentials
         return None
@@ -386,10 +386,10 @@ def get_team_provider_credentials(
     #    defers to the team-scoped proxy model list. A team or key with a
     #    restricted allowlist (e.g. anthropic only) therefore never resolves
     #    another provider's key.
-    grants_all_models = SpecialModelNames.all_proxy_models.value in team_models
-    effective_team_models = [] if grants_all_models else team_models
+    grants_all_models: Final = SpecialModelNames.all_proxy_models.value in team_models
+    effective_team_models: Final = [] if grants_all_models else team_models
 
-    models_to_try = list(
+    models_to_try: Final = list(
         dict.fromkeys(
             get_complete_model_list(
                 key_models=list(key_model_allowlist),
@@ -425,7 +425,7 @@ def apply_team_provider_credentials(
     Leaves ``data`` untouched when no authorized deployment matches, so the
     caller falls back to environment-variable credentials exactly as before.
     """
-    credentials = get_team_provider_credentials(
+    credentials: Final = get_team_provider_credentials(
         llm_router=llm_router,
         user_api_key_dict=user_api_key_dict,
         custom_llm_provider=custom_llm_provider,
@@ -500,7 +500,7 @@ def handle_model_based_routing(
             model_id=model_from_id,
             operation_context=f"file operation (file created with model '{model_from_id}')",
         )
-        original_file_id = get_original_file_id(file_id)
+        original_file_id: Final = get_original_file_id(file_id)
         return True, model_from_id, original_file_id, credentials
 
     # Priority 2: Model from header/query/body
@@ -522,14 +522,14 @@ def handle_model_based_routing(
 
 
 # Gemini-supported image MIME types
-GEMINI_SUPPORTED_IMAGE_TYPES = {
+GEMINI_SUPPORTED_IMAGE_TYPES: Final = {
     "image/png",
     "image/jpeg",
     "image/webp",
 }
 
 # Gemini-supported video MIME types
-GEMINI_SUPPORTED_VIDEO_TYPES = {
+GEMINI_SUPPORTED_VIDEO_TYPES: Final = {
     "video/3gpp",
     "video/wmv",
     "video/webm",
@@ -542,7 +542,7 @@ GEMINI_SUPPORTED_VIDEO_TYPES = {
 }
 
 # Gemini-supported audio MIME types
-GEMINI_SUPPORTED_AUDIO_TYPES = {
+GEMINI_SUPPORTED_AUDIO_TYPES: Final = {
     "audio/webm",
     "audio/wav",
     "audio/pcm",
@@ -557,14 +557,14 @@ GEMINI_SUPPORTED_AUDIO_TYPES = {
 }
 
 # Gemini-supported document MIME types
-GEMINI_SUPPORTED_DOCUMENT_TYPES = {
+GEMINI_SUPPORTED_DOCUMENT_TYPES: Final = {
     "text/plain",
     "application/pdf",
 }
 
 # Mapping of common file extensions to MIME types
 # This extends Python's mimetypes with custom mappings
-EXTENSION_TO_MIME_TYPE = {
+EXTENSION_TO_MIME_TYPE: Final = {
     ".jpg": "image/jpeg",  # Normalize jpg to jpeg
     ".jpeg": "image/jpeg",
     ".png": "image/png",
@@ -587,7 +587,7 @@ def detect_content_type_from_filename(filename: str) -> str:
         return "application/octet-stream"
 
     # Try custom mapping first
-    filename_lower = filename.lower()
+    filename_lower: Final = filename.lower()
     for ext, mime_type in EXTENSION_TO_MIME_TYPE.items():
         if filename_lower.endswith(ext):
             return mime_type
@@ -644,7 +644,7 @@ def is_gemini_supported_mime_type(mime_type: str) -> bool:
     Returns:
         bool: True if supported, False otherwise
     """
-    normalized = normalize_mime_type_for_provider(mime_type, provider="gemini")
+    normalized: Final = normalize_mime_type_for_provider(mime_type, provider="gemini")
     return normalized in (
         GEMINI_SUPPORTED_IMAGE_TYPES
         | GEMINI_SUPPORTED_VIDEO_TYPES
@@ -682,7 +682,7 @@ def get_content_type_from_file_object(file_object: dict | None) -> str:
         return "application/octet-stream"
 
     # Try to get filename
-    filename = file_object.get("filename", "")
+    filename: Final = file_object.get("filename", "")
     if filename:
         return detect_content_type_from_filename(filename)
 
@@ -746,7 +746,7 @@ async def extract_file_creation_params(
         request_body = await _read_request_body(request=request) or {}
 
     # Extract target_storage (simplified - just use form parameter)
-    target_storage = _extract_target_storage_simple(target_storage_form)
+    target_storage: Final = _extract_target_storage_simple(target_storage_form)
 
     # Extract target_model_names from the form field, then fall back to the raw form
     target_model_names = _extract_target_model_names_simple(target_model_names_form)
@@ -754,7 +754,7 @@ async def extract_file_creation_params(
         target_model_names = await _extract_target_model_names_from_form(request)
 
     # Extract model parameter
-    model = _extract_model_param(request, request_body)
+    model: Final = _extract_model_param(request, request_body)
 
     return FileCreationParams(
         target_storage=target_storage,
@@ -810,15 +810,15 @@ async def _extract_target_model_names_from_form(request: "Request") -> list[str]
     fields, so reading the form preserves every value instead of truncating to one.
     Indexed keys like ``target_model_names[0]`` are handled the same way.
     """
-    form_data = await request.form()
+    form_data: Final = await request.form()
 
-    names: list[str] = []
+    names: Final[list[str]] = []
     for key, value in form_data.multi_items():
         if _is_target_model_names_key(key) and isinstance(value, str):
             names.extend(_extract_target_model_names_simple(value))
 
-    seen = set()
-    result: list[str] = []
+    seen: Final = set()
+    result: Final[list[str]] = []
     for name in names:
         if name and name not in seen:
             seen.add(name)
@@ -896,7 +896,7 @@ async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
         and prisma_client
     ):
         try:
-            managed_file = await ManagedFileRepository(prisma_client).table.find_first(
+            managed_file: Final = await ManagedFileRepository(prisma_client).table.find_first(
                 where={"flat_model_file_ids": {"has": response.input_file_id}}
             )
             if managed_file:
@@ -942,16 +942,16 @@ async def ensure_batch_response_managed_file_ids(
     if managed_files_obj is None:
         return
 
-    hidden_params = getattr(response, "_hidden_params", None) or {}
-    model_id = hidden_params.get("model_id")
+    hidden_params: Final = getattr(response, "_hidden_params", None) or {}
+    model_id: Final = hidden_params.get("model_id")
     if not model_id:
         return
 
     model_name = hidden_params.get("model_name")
-    unified_file_id = hidden_params.get("unified_file_id")
+    unified_file_id: Final = hidden_params.get("unified_file_id")
     if not model_name and isinstance(unified_file_id, str):
-        decoded_unified_file_id = _is_base64_encoded_unified_file_id(unified_file_id) or unified_file_id
-        target_model_names = get_models_from_unified_file_id(decoded_unified_file_id)
+        decoded_unified_file_id: Final = _is_base64_encoded_unified_file_id(unified_file_id) or unified_file_id
+        target_model_names: Final = get_models_from_unified_file_id(decoded_unified_file_id)
         if target_model_names:
             model_name = ",".join(target_model_names)
 
@@ -1023,7 +1023,7 @@ async def get_batch_from_database(
         if not prisma_client:
             return None, None
 
-        db_batch_object = await ManagedObjectRepository(prisma_client).table.find_first(
+        db_batch_object: Final = await ManagedObjectRepository(prisma_client).table.find_first(
             where={"unified_object_id": batch_id}
         )
 
@@ -1031,12 +1031,12 @@ async def get_batch_from_database(
             return None, None
 
         # Parse the batch object from database
-        batch_data = (
+        batch_data: Final = (
             json.loads(db_batch_object.file_object)
             if isinstance(db_batch_object.file_object, str)
             else db_batch_object.file_object
         )
-        response = LiteLLMBatch.model_validate(batch_data)
+        response: Final = LiteLLMBatch.model_validate(batch_data)
         response.id = batch_id
 
         # The stored batch object has the raw provider input_file_id. Resolve to unified ID.
@@ -1113,9 +1113,9 @@ async def update_batch_in_database(
             verbose_proxy_logger.info("Updating batch %s status to %s after %s", batch_id, response.status, operation)
 
         # Normalize status for database storage
-        db_status = response.status if response.status != "completed" else "complete"
+        db_status: Final = response.status if response.status != "completed" else "complete"
 
-        update_data: dict = {
+        update_data: Final[dict] = {
             "status": db_status,
             "file_object": response.model_dump_json(),
             "updated_at": litellm.utils.get_utc_datetime(),
@@ -1140,7 +1140,7 @@ async def update_batch_in_database(
         except Exception as col_err:
             # If the batch_processed column doesn't exist (old schema),
             # retry without it so the status update still succeeds.
-            err_str = str(col_err).lower()
+            err_str: Final = str(col_err).lower()
             if "batch_processed" in err_str and update_data.get("batch_processed") is not None:
                 verbose_proxy_logger.warning(
                     "batch_processed column not found, retrying update without it: %s", col_err

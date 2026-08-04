@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 from pydantic import AwareDatetime, Base64Str, BaseModel, Field, RootModel
 
@@ -1175,7 +1175,7 @@ class CancelInteractionResult(BaseLiteLLMOpenAIResponseObject):
 
 # Backwards compatibility aliases
 InteractionTool = Tool
-InteractionToolChoiceConfig = ToolChoiceConfig
+InteractionToolChoiceConfig: Final = ToolChoiceConfig
 InteractionsAPIOptionalRequestParams = Dict[str, Any]
 
 # Agent interaction execution environment

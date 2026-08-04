@@ -12,7 +12,7 @@ MCP Spec Reference:
 
 import typing
 from collections.abc import Mapping, Sequence
-from typing import Any, NamedTuple, Optional, Protocol, Union
+from typing import Any, Final, NamedTuple, Optional, Protocol, Union
 
 if typing.TYPE_CHECKING:
     from fastapi import Request
@@ -117,7 +117,7 @@ def _resolve_model_from_preferences(
 
     # 2. Priority-based selection (cost/speed/intelligence)
     if model_preferences and available_model_names and _has_priorities(model_preferences):
-        best = _select_model_by_priority(available_model_names, model_preferences)
+        best: Final = _select_model_by_priority(available_model_names, model_preferences)
         if best is not None:
             verbose_logger.debug(
                 "MCP sampling model resolution: priority-based selection chose '%s'",
@@ -140,7 +140,7 @@ def _resolve_model_from_preferences(
         )
         return available_model_names[0]
     # Last resort - use LiteLLM default or raise error
-    default_sampling_model: str | None = getattr(litellm, "default_mcp_sampling_model", None)
+    default_sampling_model: Final[str | None] = getattr(litellm, "default_mcp_sampling_model", None)
     if default_sampling_model:
         verbose_logger.debug(
             "MCP sampling model resolution: using litellm.default_mcp_sampling_model='%s'",
@@ -197,12 +197,12 @@ def _select_model_by_priority(
     """
     import litellm as _litellm
 
-    cost_weight: float = getattr(model_preferences, "costPriority", None) or 0.0
-    speed_weight: float = getattr(model_preferences, "speedPriority", None) or 0.0
-    intel_weight: float = getattr(model_preferences, "intelligencePriority", None) or 0.0
+    cost_weight: Final[float] = getattr(model_preferences, "costPriority", None) or 0.0
+    speed_weight: Final[float] = getattr(model_preferences, "speedPriority", None) or 0.0
+    intel_weight: Final[float] = getattr(model_preferences, "intelligencePriority", None) or 0.0
 
     # Gather raw metrics for each model
-    scored: list[_ScoredModel] = []
+    scored: Final[list[_ScoredModel]] = []
     for name in model_names:
         try:
             info = _litellm.get_model_info(name)
@@ -236,12 +236,12 @@ def _select_model_by_priority(
             normed = [1.0 - n for n in normed]
         return normed
 
-    costs = [s.cost for s in scored]
-    max_outputs = [float(s.max_output) for s in scored]
-    output_tps_values = [s.output_tps for s in scored]
+    costs: Final = [s.cost for s in scored]
+    max_outputs: Final = [float(s.max_output) for s in scored]
+    output_tps_values: Final = [s.output_tps for s in scored]
 
     # costPriority: lower cost → higher score  (invert)
-    cost_scores = _normalise(costs, invert=True)
+    cost_scores: Final = _normalise(costs, invert=True)
     # speedPriority: use output_tokens_per_second if any model has it,
     # otherwise a neutral score (no reliable latency proxy is available).
     if any(v > 0 for v in output_tps_values):
@@ -249,7 +249,7 @@ def _select_model_by_priority(
     else:
         speed_scores = [0.5] * len(scored)
     # intelligencePriority: higher max_output → smarter
-    intel_scores = _normalise(max_outputs, invert=False)
+    intel_scores: Final = _normalise(max_outputs, invert=False)
 
     best_name = None
     best_score = -1.0
@@ -284,7 +284,7 @@ def _convert_mcp_content_to_openai(
     - List of mixed content → list of content parts
     """
     if isinstance(content, list):
-        parts = []
+        parts: Final = []
         for item in content:
             converted = _convert_single_content(item)
             if isinstance(converted, list):
@@ -308,7 +308,7 @@ def _convert_single_content(
     """
     import json
 
-    content_type = getattr(content, "type", None)
+    content_type: Final = getattr(content, "type", None)
     if content_type == "text":
         return {"type": "text", "text": content.text}
     elif content_type == "image":
@@ -322,14 +322,14 @@ def _convert_single_content(
         data = getattr(content, "data", "")
         mime_type = getattr(content, "mimeType", "audio/wav")
         # Map MIME type to OpenAI audio format
-        format_map = {
+        format_map: Final = {
             "audio/wav": "wav",
             "audio/mp3": "mp3",
             "audio/mpeg": "mp3",
             "audio/flac": "flac",
             "audio/ogg": "ogg",
         }
-        audio_format = format_map.get(mime_type, "wav")
+        audio_format: Final = format_map.get(mime_type, "wav")
         return {
             "type": "input_audio",
             "input_audio": {"data": data, "format": audio_format},
@@ -352,8 +352,8 @@ def _convert_single_content(
         # ToolResultContent → proper OpenAI tool-role message.
         # Marked so the message-level converter can emit it as a
         # separate ``{"role": "tool", ...}`` message.
-        tool_use_id = getattr(content, "toolUseId", "")
-        nested_content: Sequence[ContentBlock] = getattr(content, "content", [])
+        tool_use_id: Final = getattr(content, "toolUseId", "")
+        nested_content: Final[Sequence[ContentBlock]] = getattr(content, "content", [])
         if isinstance(nested_content, list):
             text_parts = [getattr(c, "text", str(c)) for c in nested_content if getattr(c, "type", None) == "text"]
             result_text = "\n".join(text_parts) if text_parts else ""
@@ -383,7 +383,7 @@ def _convert_mcp_messages_to_openai(
     - role: "system" | "user" | "assistant" | "tool"
     - content: str | list[content_part]
     """
-    openai_messages: list[Mapping[str, object]] = []
+    openai_messages: Final[list[Mapping[str, object]]] = []
     # Add system prompt if provided
     if system_prompt:
         openai_messages.append({"role": "system", "content": system_prompt})
@@ -460,7 +460,7 @@ def _has_tool_use(content: "SamplingMessageContentBlock | Sequence[SamplingMessa
     """Check if content contains ToolUseContent."""
     if isinstance(content, list):
         return any(getattr(c, "type", None) == "tool_use" for c in content)
-    content_type: str | None = getattr(content, "type", None)
+    content_type: Final[str | None] = getattr(content, "type", None)
     return content_type == "tool_use"
 
 
@@ -468,7 +468,7 @@ def _has_tool_result(content: "SamplingMessageContentBlock | Sequence[SamplingMe
     """Check if content contains ToolResultContent."""
     if isinstance(content, list):
         return any(getattr(c, "type", None) == "tool_result" for c in content)
-    content_type: str | None = getattr(content, "type", None)
+    content_type: Final[str | None] = getattr(content, "type", None)
     return content_type == "tool_result"
 
 
@@ -478,8 +478,8 @@ def _extract_tool_calls(
     """Extract OpenAI-format tool_calls from MCP ToolUseContent."""
     import json
 
-    items = content if isinstance(content, list) else [content]
-    tool_calls = []
+    items: Final = content if isinstance(content, list) else [content]
+    tool_calls: Final = []
     for item in items:
         if getattr(item, "type", None) == "tool_use":
             tool_calls.append(
@@ -499,8 +499,8 @@ def _extract_text_parts(
     content: "SamplingMessageContentBlock | Sequence[SamplingMessageContentBlock]",
 ) -> str | None:
     """Extract text parts from mixed content."""
-    items = content if isinstance(content, list) else [content]
-    texts = []
+    items: Final = content if isinstance(content, list) else [content]
+    texts: Final = []
     for item in items:
         if getattr(item, "type", None) == "text":
             texts.append(getattr(item, "text", ""))
@@ -511,8 +511,8 @@ def _extract_tool_results(
     content: "SamplingMessageContentBlock | Sequence[SamplingMessageContentBlock]",
 ) -> "Sequence[Mapping[str, object]]":
     """Extract OpenAI-format tool messages from MCP ToolResultContent."""
-    items = content if isinstance(content, list) else [content]
-    results = []
+    items: Final = content if isinstance(content, list) else [content]
+    results: Final = []
     for item in items:
         if getattr(item, "type", None) == "tool_result":
             tool_use_id = getattr(item, "toolUseId", "")
@@ -543,7 +543,7 @@ def _convert_mcp_tools_to_openai(
     """
     if not tools:
         return None
-    openai_tools = []
+    openai_tools: Final = []
     for tool in tools:
         openai_tool = {
             "type": "function",
@@ -571,7 +571,7 @@ def _convert_mcp_tool_choice_to_openai(
     """
     if not tool_choice:
         return None
-    mode = getattr(tool_choice, "mode", "auto")
+    mode: Final = getattr(tool_choice, "mode", "auto")
     if mode == "auto":
         return "auto"
     elif mode == "required":
@@ -629,22 +629,22 @@ def _convert_openai_response_to_mcp_result(
                 "This may indicate content filtering or a provider-side error."
             ),
         )
-    choice = response.choices[0]
-    message = choice.message
+    choice: Final = response.choices[0]
+    message: Final = choice.message
     # Determine stop reason
-    finish_reason = getattr(choice, "finish_reason", "stop")
+    finish_reason: Final = getattr(choice, "finish_reason", "stop")
     if finish_reason == "tool_calls":
         stop_reason = "toolUse"
     elif finish_reason == "length":
         stop_reason = "maxTokens"
     else:
         stop_reason = "endTurn"
-    actual_model: str = getattr(response, "model", model_name) or model_name
+    actual_model: Final[str] = getattr(response, "model", model_name) or model_name
     # Check if response has tool calls
-    tool_calls = getattr(message, "tool_calls", None)
+    tool_calls: Final = getattr(message, "tool_calls", None)
     if tool_calls:
         # Build ToolUseContent items
-        content_parts: list[SamplingMessageContentBlock] = []
+        content_parts: Final[list[SamplingMessageContentBlock]] = []
         # Include text content if present
         if message.content:
             content_parts.append(TextContent(type="text", text=message.content))
@@ -673,7 +673,7 @@ def _convert_openai_response_to_mcp_result(
             stopReason=stop_reason,
         )
     # Simple text response
-    text = message.content or ""
+    text: Final = message.content or ""
     return CreateMessageResult(
         role="assistant",
         content=TextContent(type="text", text=text),
@@ -695,12 +695,12 @@ async def _check_model_access(model: str, user_api_key_auth: "UserAPIKeyAuth | N
     if user_api_key_auth is None:
         return None
 
-    _api_key = getattr(user_api_key_auth, "api_key", None)
-    _token = getattr(user_api_key_auth, "token", None)
-    _user_role = getattr(user_api_key_auth, "user_role", None)
+    _api_key: Final = getattr(user_api_key_auth, "api_key", None)
+    _token: Final = getattr(user_api_key_auth, "token", None)
+    _user_role: Final = getattr(user_api_key_auth, "user_role", None)
 
-    _has_real_credential = bool(_api_key) or bool(_token)
-    _is_admin = _user_role in ("proxy_admin", "proxy_admin_viewer") if _user_role else False
+    _has_real_credential: Final = bool(_api_key) or bool(_token)
+    _is_admin: Final = _user_role in ("proxy_admin", "proxy_admin_viewer") if _user_role else False
 
     if not _has_real_credential and not _is_admin:
         verbose_logger.warning(
@@ -746,9 +746,9 @@ async def _check_model_access(model: str, user_api_key_auth: "UserAPIKeyAuth | N
             llm_router=_llm_router,
         )
 
-        _team_id: str | None = getattr(user_api_key_auth, "team_id", None)
-        _user_id: str | None = getattr(user_api_key_auth, "user_id", None)
-        _project_id: str | None = getattr(user_api_key_auth, "project_id", None)
+        _team_id: Final[str | None] = getattr(user_api_key_auth, "team_id", None)
+        _user_id: Final[str | None] = getattr(user_api_key_auth, "user_id", None)
+        _project_id: Final[str | None] = getattr(user_api_key_auth, "project_id", None)
 
         try:
             from litellm.proxy.proxy_server import (
@@ -886,8 +886,8 @@ async def _run_budget_checks(
         verbose_logger.warning("MCP sampling: budget check imports unavailable: %s", import_err)
         return None  # Can't enforce budgets without the modules
 
-    _team_id: str | None = getattr(user_api_key_auth, "team_id", None)
-    _user_id: str | None = getattr(user_api_key_auth, "user_id", None)
+    _team_id: Final[str | None] = getattr(user_api_key_auth, "team_id", None)
+    _user_id: Final[str | None] = getattr(user_api_key_auth, "user_id", None)
 
     team_obj = None
     if _team_id and _prisma_client and _user_api_key_cache:
@@ -914,7 +914,7 @@ async def _run_budget_checks(
         except Exception:
             pass
 
-    dummy_request = _build_sampling_request(
+    dummy_request: Final = _build_sampling_request(
         raw_headers=raw_headers,
         client_ip=client_ip,
     )
@@ -941,13 +941,13 @@ async def _run_budget_checks(
             message=f"Sampling denied: virtual key is not allowed to call /chat/completions. {route_err.detail}",
         )
 
-    global_proxy_spend = getattr(litellm, "_global_proxy_spend", None)
+    global_proxy_spend: Final = getattr(litellm, "_global_proxy_spend", None)
 
     # Build request body and merge x-litellm-tags from MCP headers BEFORE
     # common_checks runs. _tag_max_budget_check inside common_checks only
     # inspects request_body; without this pre-merge, header-supplied tags
     # bypass per-tag budget enforcement (mirroring the regular auth path).
-    request_body: dict[str, object] = {"model": model}
+    request_body: Final[dict[str, object]] = {"model": model}
     try:
         from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
@@ -1019,11 +1019,11 @@ def _build_sampling_request(
     from fastapi import Request
 
     # --- Build ASGI headers ---
-    _scope_headers: list[tuple[bytes, bytes]] = [(b"content-type", b"application/json")]
+    _scope_headers: Final[list[tuple[bytes, bytes]]] = [(b"content-type", b"application/json")]
     # Hop-by-hop headers that must NOT be forwarded into the
     # synthetic request (they describe the original HTTP framing,
     # not the logical request).
-    _HOP_BY_HOP = frozenset(
+    _HOP_BY_HOP: Final = frozenset(
         {
             "content-length",
             "transfer-encoding",
@@ -1059,8 +1059,8 @@ def _build_sampling_request(
     try:
         from litellm.proxy import proxy_server
 
-        _proxy_host: str | None = getattr(proxy_server, "server_host", None)
-        _proxy_port: str | int | None = getattr(proxy_server, "server_port", None)
+        _proxy_host: Final[str | None] = getattr(proxy_server, "server_host", None)
+        _proxy_port: Final[str | int | None] = getattr(proxy_server, "server_port", None)
 
         if _proxy_host:
             _server_host = str(_proxy_host)
@@ -1074,7 +1074,7 @@ def _build_sampling_request(
     if client_ip:
         _client_tuple = (client_ip, 0)
 
-    scope: dict[str, object] = {
+    scope: Final[dict[str, object]] = {
         "type": "http",
         "method": "POST",
         "path": "/mcp/sampling/createMessage",
@@ -1097,7 +1097,7 @@ async def _build_completion_kwargs(
     raw_headers: dict[str, str] | None,
     client_ip: str | None,
 ) -> dict[str, Any]:
-    openai_messages = _convert_mcp_messages_to_openai(
+    openai_messages: Final = _convert_mcp_messages_to_openai(
         messages=params.messages,
         system_prompt=params.systemPrompt,
     )
@@ -1110,10 +1110,10 @@ async def _build_completion_kwargs(
         completion_kwargs["temperature"] = params.temperature
     if params.stopSequences:
         completion_kwargs["stop"] = params.stopSequences
-    openai_tools = _convert_mcp_tools_to_openai(params.tools)
+    openai_tools: Final = _convert_mcp_tools_to_openai(params.tools)
     if openai_tools:
         completion_kwargs["tools"] = openai_tools
-    openai_tool_choice = _convert_mcp_tool_choice_to_openai(params.toolChoice)
+    openai_tool_choice: Final = _convert_mcp_tool_choice_to_openai(params.toolChoice)
     if openai_tool_choice is not None:
         completion_kwargs["tool_choice"] = openai_tool_choice
     completion_kwargs["metadata"] = {}
@@ -1124,7 +1124,7 @@ async def _build_completion_kwargs(
     from litellm.proxy.proxy_server import proxy_config
 
     completion_kwargs["user"] = getattr(user_api_key_auth, "user_id", None)
-    _dummy_request = _build_sampling_request(raw_headers=raw_headers, client_ip=client_ip)
+    _dummy_request: Final = _build_sampling_request(raw_headers=raw_headers, client_ip=client_ip)
     completion_kwargs = await add_litellm_data_to_request(
         data=completion_kwargs,
         request=_dummy_request,
@@ -1211,7 +1211,7 @@ async def handle_sampling_create_message(
         )
 
     try:
-        model = _resolve_model_from_preferences(
+        model: Final = _resolve_model_from_preferences(
             model_preferences=params.modelPreferences,
             default_model=default_model,
         )
@@ -1221,11 +1221,11 @@ async def handle_sampling_create_message(
             params.modelPreferences,
         )
 
-        access_denial = await _check_model_access(model, user_api_key_auth)
+        access_denial: Final = await _check_model_access(model, user_api_key_auth)
         if access_denial is not None:
             return access_denial
 
-        budget_denial = await _run_budget_checks(
+        budget_denial: Final = await _run_budget_checks(
             model=model,
             user_api_key_auth=user_api_key_auth,
             raw_headers=raw_headers,
@@ -1234,7 +1234,7 @@ async def handle_sampling_create_message(
         if budget_denial is not None:
             return budget_denial
 
-        completion_kwargs = await _build_completion_kwargs(
+        completion_kwargs: Final = await _build_completion_kwargs(
             params=params,
             model=model,
             user_api_key_auth=user_api_key_auth,
@@ -1242,8 +1242,8 @@ async def handle_sampling_create_message(
             client_ip=client_ip,
         )
 
-        openai_messages: Sequence[Mapping[str, object]] = completion_kwargs["messages"]
-        openai_tools = completion_kwargs.get("tools")
+        openai_messages: Final[Sequence[Mapping[str, object]]] = completion_kwargs["messages"]
+        openai_tools: Final = completion_kwargs.get("tools")
         verbose_logger.debug(
             "MCP sampling: calling litellm.acompletion with model=%s, num_messages=%d, has_tools=%s",
             model,
@@ -1251,12 +1251,12 @@ async def handle_sampling_create_message(
             bool(openai_tools),
         )
 
-        response: _SamplingCompletionResponse = await _run_guardrails_and_call_llm(
+        response: Final[_SamplingCompletionResponse] = await _run_guardrails_and_call_llm(
             completion_kwargs=completion_kwargs,
             user_api_key_auth=user_api_key_auth,
         )
 
-        result = _convert_openai_response_to_mcp_result(response=response, model_name=model)
+        result: Final = _convert_openai_response_to_mcp_result(response=response, model_name=model)
         verbose_logger.info(
             "MCP sampling: completed successfully, model=%s, stopReason=%s",
             getattr(result, "model", "unknown"),

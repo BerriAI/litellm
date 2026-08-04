@@ -4,6 +4,7 @@
 import json
 from collections.abc import Callable
 from functools import partial
+from typing import Final
 
 import httpx  # type: ignore
 
@@ -27,12 +28,12 @@ async def make_call(
     logging_obj,
     timeout: float | httpx.Timeout | None,
 ):
-    response = await client.post(api_base, headers=headers, data=data, stream=True, timeout=timeout)
+    response: Final = await client.post(api_base, headers=headers, data=data, stream=True, timeout=timeout)
 
     if response.status_code != 200:
         raise PredibaseError(status_code=response.status_code, message=response.text)
 
-    completion_stream = response.aiter_lines()
+    completion_stream: Final = response.aiter_lines()
     # LOGGING
     logging_obj.post_call(
         input=messages,
@@ -67,7 +68,7 @@ class PredibaseChatCompletion:
         logger_fn=None,
         headers: dict = {},
     ) -> ModelResponse | CustomStreamWrapper:
-        predibase_config = litellm.PredibaseConfig()
+        predibase_config: Final = litellm.PredibaseConfig()
         headers = predibase_config.validate_environment(
             api_key=api_key,
             headers=headers,
@@ -76,14 +77,14 @@ class PredibaseChatCompletion:
             model=model,
             litellm_params=litellm_params,
         )
-        request_optional_params = {**optional_params}
-        stream = request_optional_params.get("stream", False)
-        request_litellm_params = {
+        request_optional_params: Final = {**optional_params}
+        stream: Final = request_optional_params.get("stream", False)
+        request_litellm_params: Final = {
             **litellm_params,
             "custom_prompt_dict": custom_prompt_dict,
             "predibase_tenant_id": tenant_id,
         }
-        completion_url = predibase_config.get_complete_url(
+        completion_url: Final = predibase_config.get_complete_url(
             api_base=api_base,
             api_key=api_key,
             model=model,
@@ -91,7 +92,7 @@ class PredibaseChatCompletion:
             litellm_params=request_litellm_params,
             stream=stream,
         )
-        data = predibase_config.transform_request(
+        data: Final = predibase_config.transform_request(
             model=model,
             messages=messages,
             optional_params=request_optional_params,
@@ -160,7 +161,7 @@ class PredibaseChatCompletion:
                 stream=stream,
                 timeout=timeout,  # type: ignore
             )
-            _response = CustomStreamWrapper(
+            _response: Final = CustomStreamWrapper(
                 response.iter_lines(),
                 model,
                 custom_llm_provider="predibase",
@@ -209,12 +210,12 @@ class PredibaseChatCompletion:
     ) -> ModelResponse:
         if predibase_config is None:
             predibase_config = litellm.PredibaseConfig()
-        async_handler = get_async_httpx_client(
+        async_handler: Final = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.PREDIBASE,
             params={"timeout": timeout},
         )
         try:
-            response = await async_handler.post(api_base, headers=headers, data=json.dumps(data))
+            response: Final = await async_handler.post(api_base, headers=headers, data=json.dumps(data))
         except httpx.HTTPStatusError as e:
             raise PredibaseError(
                 status_code=e.response.status_code,
@@ -259,7 +260,7 @@ class PredibaseChatCompletion:
     ) -> CustomStreamWrapper:
         data["stream"] = True
 
-        streamwrapper = CustomStreamWrapper(
+        streamwrapper: Final = CustomStreamWrapper(
             completion_stream=None,
             make_call=partial(
                 make_call,

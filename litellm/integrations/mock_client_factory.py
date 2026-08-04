@@ -10,7 +10,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import cast
+from typing import Final, cast
 
 import httpx
 
@@ -85,9 +85,9 @@ class MockResponse:
 def _is_url_match(url, matchers: list[str]) -> bool:
     """Check if URL matches any of the provided matchers."""
     try:
-        parsed_url = httpx.URL(url) if isinstance(url, str) else url
-        url_str = str(parsed_url).lower()
-        hostname = parsed_url.host or ""
+        parsed_url: Final = httpx.URL(url) if isinstance(url, str) else url
+        url_str: Final = str(parsed_url).lower()
+        hostname: Final = parsed_url.host or ""
 
         for matcher in matchers:
             if matcher.lower() in url_str or matcher.lower() in hostname.lower():
@@ -120,8 +120,8 @@ def create_mock_client_factory(config: MockClientConfig):
     # Calculate mock latency
     import os
 
-    latency_env = f"{config.name.upper()}_MOCK_LATENCY_MS"
-    _MOCK_LATENCY_SECONDS = float(os.getenv(latency_env, str(config.default_latency_ms))) / 1000.0
+    latency_env: Final = f"{config.name.upper()}_MOCK_LATENCY_MS"
+    _MOCK_LATENCY_SECONDS: Final = float(os.getenv(latency_env, str(config.default_latency_ms))) / 1000.0
 
     # Create URL matcher function
     def _is_mock_url(url) -> bool:
@@ -269,7 +269,7 @@ def create_mock_client_factory(config: MockClientConfig):
 
         from litellm.secret_managers.main import str_to_bool
 
-        mock_mode = os.getenv(config.env_var, "false")
+        mock_mode: Final = os.getenv(config.env_var, "false")
         result = str_to_bool(mock_mode)
         result = bool(result) if result is not None else False
 

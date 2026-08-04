@@ -15,7 +15,7 @@ restriction intact.
 """
 
 import operator
-from typing import Any
+from typing import Any, Final
 
 from RestrictedPython import (
     RestrictingNodeTransformer,
@@ -58,7 +58,7 @@ class AsyncAwareTransformer(RestrictingNodeTransformer):
         return self.node_contents_visit(node)
 
 
-_INPLACE_OPS: dict[str, Any] = {
+_INPLACE_OPS: Final[dict[str, Any]] = {
     "+=": operator.iadd,
     "-=": operator.isub,
     "*=": operator.imul,
@@ -80,7 +80,7 @@ def _inplacevar_(op: str, x: Any, y: Any) -> Any:
     # ``x = _inplacevar_("+=", x, 1)``. The package deliberately ships no
     # default, so we dispatch through ``operator``'s in-place helpers, which
     # honour Python's normal ``__iadd__``/``__add__`` fallback.
-    fn = _INPLACE_OPS.get(op)
+    fn: Final = _INPLACE_OPS.get(op)
     if fn is None:
         raise SyntaxError(f"augmented assignment {op!r} is not supported")
     return fn(x, y)
@@ -105,7 +105,7 @@ def build_sandbox_globals() -> dict[str, Any]:
     ``allow``/``block``/``modify``, etc.) plus the RestrictedPython guards
     that the compiled bytecode expects to find by name.
     """
-    sandbox: dict[str, Any] = get_custom_code_primitives().copy()
+    sandbox: Final[dict[str, Any]] = get_custom_code_primitives().copy()
     sandbox["__builtins__"] = _build_sandbox_builtins()
     sandbox["_getattr_"] = safer_getattr
     sandbox["_getitem_"] = default_guarded_getitem
