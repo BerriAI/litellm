@@ -537,9 +537,11 @@ async def cursor_chat_completions(
     # Rebuild rather than pop: _read_request_body can return the request-scope
     # cached parsed-body dict itself, and removing keys from it corrupts the
     # cache's key snapshot so later readers get an empty body
-    data = {key: value for key, value in raw_body.items() if key != "stream_options"}  # mutable-ok: plain body dict
+    body_without_stream_options: Final = {  # mutable-ok: base_process_llm_request mutates the body dict in place
+        key: value for key, value in raw_body.items() if key != "stream_options"
+    }
 
-    data = _normalize_tool_dialect(data, to_chat=False)
+    data: Final = _normalize_tool_dialect(body_without_stream_options, to_chat=False)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
 
