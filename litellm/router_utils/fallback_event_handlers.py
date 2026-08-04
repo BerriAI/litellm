@@ -99,9 +99,9 @@ def _trigger_cooldown_for_failed_deployment(
             time_to_cooldown=time_to_cooldown,
         )
 
-        verbose_router_logger.debug(f"Triggered cooldown for fallback deployment {deployment_id}")
+        verbose_router_logger.debug("Triggered cooldown for fallback deployment %s", deployment_id)
     except Exception as e:  # noqa: BLE001 - best-effort cooldown trigger must never break the fallback response itself
-        verbose_router_logger.debug(f"Error triggering cooldown for fallback deployment: {e}")
+        verbose_router_logger.debug("Error triggering cooldown for fallback deployment: %s", e)
 
 
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
