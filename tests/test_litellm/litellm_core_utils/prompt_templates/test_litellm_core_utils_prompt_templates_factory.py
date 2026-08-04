@@ -3197,3 +3197,94 @@ def test_get_tool_calls_from_response_include_all_choices_reads_every_choice():
 
     names = [tc["name"] for tc in get_tool_calls_from_response(response, include_all_choices=True)]
     assert names == ["tool_alpha", "tool_beta"]
+
+
+def test_hf_chat_template_forwards_chat_template_kwargs():
+    """chat_template_kwargs must be forwarded verbatim to template.render()."""
+    from litellm.litellm_core_utils.prompt_templates.factory import hf_chat_template
+
+    template = (
+        "{% for message in messages %}{{ message['content'] }}{% endfor %}"
+        "{% if enable_thinking %}<think>{% endif %}"
+    )
+    out = hf_chat_template(
+        model="any-model",
+        messages=[{"role": "user", "content": "hi"}],
+        chat_template=template,
+        chat_template_kwargs={"enable_thinking": True},
+    )
+    assert "<think>" in out
+
+    out_off = hf_chat_template(
+        model="any-model",
+        messages=[{"role": "user", "content": "hi"}],
+        chat_template=template,
+        chat_template_kwargs={"enable_thinking": False},
+    )
+    assert "<think>" not in out_off
+
+
+def test_render_chat_template_kwargs_survive_alternation_fallback():
+    """
+    When the template rejects a system probe, then rejects non-alternating
+    roles, the fallback re-render (with interleaved empty messages) must still
+    receive the chat_template_kwargs.
+
+    The env's raise_exception global returns (not raises) an Exception, so a
+    real template cannot drive this path deterministically; a mock template
+    scripts the three renders: system probe fails -> alternation error ->
+    fallback succeeds.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _render_chat_template,
+    )
+
+    mock_template = MagicMock()
+    mock_template.render.side_effect = [
+        Exception("no system role supported"),  # _is_system_in_template probe
+        Exception("Conversation roles must alternate user/assistant/..."),
+        "fallback-rendered",
+    ]
+    mock_env = MagicMock()
+    mock_env.from_string.return_value = mock_template
+
+    out = _render_chat_template(
+        env=mock_env,
+        chat_template="{# no 'sys tem' keyword here #}",
+        bos_token="<s>",
+        eos_token="</s>",
+        messages=[
+            {"role": "user", "content": "first"},
+            {"role": "user", "content": "second"},
+        ],
+        chat_template_kwargs={"enable_thinking": True},
+    )
+
+    assert out == "fallback-rendered"
+    # the fallback render (third call) must carry the kwargs and the
+    # interleaved messages
+    final_kwargs = mock_template.render.call_args_list[-1].kwargs
+    assert final_kwargs["enable_thinking"] is True
+    roles = [m["role"] for m in final_kwargs["messages"]]
+    assert roles == ["user", "assistant", "user"]
+
+
+def test_prompt_factory_forwards_chat_template_kwargs_to_hf_fallback():
+    """prompt_factory's generic-model fallback must forward chat_template_kwargs."""
+    from unittest.mock import patch as mock_patch
+
+    from litellm.litellm_core_utils.prompt_templates import factory as factory_mod
+
+    with mock_patch.object(
+        factory_mod, "hf_chat_template", return_value="hf-rendered"
+    ) as mock_hf:
+        out = factory_mod.prompt_factory(
+            model="some-org/some-unknown-model",
+            messages=[{"role": "user", "content": "hi"}],
+            chat_template_kwargs={"enable_thinking": False},
+        )
+
+    assert out == "hf-rendered"
+    assert mock_hf.call_args.kwargs["chat_template_kwargs"] == {"enable_thinking": False}
