@@ -15,6 +15,7 @@ import math
 import traceback
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import (
     Annotated,
     Protocol,
@@ -223,6 +224,9 @@ class _PrismaTableActions(Protocol[_DbRecordT]):
         self,
         where: Mapping[str, object] | None = None,
     ) -> int: ...
+
+
+_INCLUDE_OBJECT_PERMISSION: Mapping[str, bool] = MappingProxyType({"object_permission": True})
 
 
 def _team_db(prisma_client: PrismaClient | None) -> "_PrismaTableActions[LiteLLM_TeamTable]":
@@ -4145,7 +4149,11 @@ async def block_team(
 
 
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise Exception("No DB Connected.")
@@ -4166,6 +4174,13 @@ async def block_team(
     record = await _team_db(prisma_client).update(
         where={"team_id": data.team_id},
         data={"blocked": True},  # type: ignore
+        include=_INCLUDE_OBJECT_PERMISSION,
+    )
+
+    await _refresh_cached_team(
+        team_row=record,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     return record
@@ -4194,7 +4209,11 @@ async def unblock_team(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise Exception("No DB Connected.")
@@ -4215,6 +4234,13 @@ async def unblock_team(
     record = await _team_db(prisma_client).update(
         where={"team_id": data.team_id},
         data={"blocked": False},  # type: ignore
+        include=_INCLUDE_OBJECT_PERMISSION,
+    )
+
+    await _refresh_cached_team(
+        team_row=record,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     return record
