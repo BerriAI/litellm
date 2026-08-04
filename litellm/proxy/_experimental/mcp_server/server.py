@@ -779,10 +779,20 @@ if MCP_AVAILABLE:
                 from mcp.types import Tool
 
                 from litellm.proxy._experimental.mcp_server.tool_search import (
+                    get_mcp_tool_search_default_top_k,
                     get_virtual_tool_definitions,
                 )
+                from litellm.proxy.proxy_server import proxy_config
 
-                return [Tool(**d) for d in get_virtual_tool_definitions()]
+                return [
+                    Tool(**d)
+                    for d in get_virtual_tool_definitions(
+                        default_top_k=get_mcp_tool_search_default_top_k(
+                            user_api_key_auth,
+                            proxy_config.get_config_state().get("litellm_settings") or {},
+                        )
+                    )
+                ]
 
             # Get mcp_servers from context variable
             verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
@@ -906,9 +916,9 @@ if MCP_AVAILABLE:
         from litellm.proxy._experimental.mcp_server.tool_search import (
             MCP_TOOL_CALL_TOOL_NAME,
             MCP_TOOL_SEARCH_TOOL_NAME,
-            coerce_top_k,
             handle_mcp_tool_call,
             handle_mcp_tool_search,
+            resolve_mcp_tool_search_top_k,
         )
 
         if name not in (MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME):
@@ -931,9 +941,15 @@ if MCP_AVAILABLE:
 
         args = arguments or {}
         if name == MCP_TOOL_SEARCH_TOOL_NAME:
+            from litellm.proxy.proxy_server import proxy_config
+
             return await handle_mcp_tool_search(
                 query=args.get("query", ""),
-                top_k=coerce_top_k(args.get("top_k", 5)),
+                top_k=resolve_mcp_tool_search_top_k(
+                    args.get("top_k"),
+                    user_api_key_auth,
+                    proxy_config.get_config_state().get("litellm_settings") or {},
+                ),
                 user_api_key_dict=user_api_key_auth,
                 client_ip=client_ip,
                 mcp_servers=mcp_servers,

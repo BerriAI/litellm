@@ -25791,6 +25791,8 @@ export interface components {
             } | null;
             /** Mcp Tool Search Enabled */
             mcp_tool_search_enabled?: boolean | null;
+            /** Mcp Tool Search Top K */
+            mcp_tool_search_top_k?: number | null;
             /** Mcp Toolsets */
             mcp_toolsets?: string[] | null;
             /** Models */
@@ -25836,6 +25838,8 @@ export interface components {
             } | null;
             /** Mcp Tool Search Enabled */
             mcp_tool_search_enabled?: boolean | null;
+            /** Mcp Tool Search Top K */
+            mcp_tool_search_top_k?: number | null;
             /** Mcp Toolsets */
             mcp_toolsets?: string[] | null;
             /**
