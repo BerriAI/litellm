@@ -4957,7 +4957,7 @@ class PrismaClient:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                if isinstance(e, asyncio.TimeoutError) or PrismaDBExceptionHandler.is_database_connection_error(e):
+                if isinstance(e, asyncio.TimeoutError) or PrismaDBExceptionHandler.is_database_infrastructure_error(e):
                     await self.attempt_db_reconnect(
                         reason="db_health_watchdog_connection_error",
                         timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
