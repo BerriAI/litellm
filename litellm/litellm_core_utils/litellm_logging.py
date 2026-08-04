@@ -167,6 +167,9 @@ from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from .exception_mapping_utils import _get_response_headers
 from .initialize_dynamic_callback_params import (
+    get_trusted_callback_params,
+)
+from .initialize_dynamic_callback_params import (
     initialize_standard_callback_dynamic_params as _initialize_standard_callback_dynamic_params,
 )
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
@@ -362,6 +365,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.standard_callback_dynamic_params: StandardCallbackDynamicParams = (
             self.initialize_standard_callback_dynamic_params(kwargs)
         )
+        self._trusted_callback_vars: tuple[tuple[str, str], ...] = get_trusted_callback_params(kwargs)
 
         # Process dynamic callbacks (after standard_callback_dynamic_params is initialized,
         # so team-scoped credentials are available for callback initialization)
@@ -459,9 +463,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 # pass only the relevant dynamic params as custom_logger_init_args.
                 _custom_logger_init_args: dict | None = None
                 if callback == "datadog":
-                    _custom_logger_init_args = {
-                        k: v for k, v in self.standard_callback_dynamic_params.items() if k.startswith("dd_")
-                    }
+                    # dd_* params are blocked from standard_callback_dynamic_params
+                    # (request-level security); only the proxy-stamped team/key
+                    # callback vars are admin-configured and trusted.
+                    _custom_logger_init_args = {k: v for k, v in self._trusted_callback_vars if k.startswith("dd_")}
 
                 callback_class = _init_custom_logger_compatible_class(
                     callback,  # type: ignore[arg-type]

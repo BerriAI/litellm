@@ -4,6 +4,7 @@ import json
 import re
 import time
 from collections import OrderedDict
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Request
@@ -20,6 +21,8 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    TRUSTED_CALLBACK_VARS_FIELD,
+    _request_blocked_callback_params,
     iter_client_callback_metadata_dicts,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -45,6 +48,12 @@ from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_head
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE = frozenset(v.value.lower() for v in SpecialHeaders._member_map_.values())
+
+_REDACTED_HEADER_VALUE = "***REDACTED***"
+_CREDENTIAL_HEADER_NAMES = SpecialHeaders.litellm_credential_header_names() | frozenset(
+    {"cookie", "proxy-authorization"}
+)
+_TRANSPORT_ONLY_CREDENTIAL_KEYS = frozenset({"provider_specific_header", "headers", "api_key"})
 
 # Matches any header of the form x-<something>-session-id (case-insensitive).
 # Excludes the two explicit litellm headers which are handled with higher priority.
@@ -356,6 +365,39 @@ def _strip_client_message_redaction_opt_out(data: dict[str, Any]) -> None:
         )
 
 
+def _strip_client_callback_credentials(
+    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+) -> None:
+    """Drop callback credentials and destinations supplied by the caller.
+
+    ``_request_blocked_callback_params`` (Datadog + GCS credentials, sites and agent
+    hosts) are already ignored when building ``standard_callback_dynamic_params``.
+    Strip them from the body and every client metadata slot as well, so a caller
+    cannot pair its own ``dd_site``/``dd_agent_host`` with the team's admin-configured
+    ``dd_api_key`` and have the resulting logs shipped to a host it controls.
+
+    ``TRUSTED_CALLBACK_VARS_FIELD`` is proxy-owned; it is cleared here and repopulated
+    from team/key callback settings in ``add_litellm_data_to_request``.
+    """
+    containers = (("body", data), *iter_client_callback_metadata_dicts(data))
+    stripped = tuple(
+        f"{label}.{field}"
+        for label, container in containers
+        for field in _request_blocked_callback_params
+        if field in container
+    )
+    for _, container in containers:
+        for field in _request_blocked_callback_params:
+            container.pop(field, None)
+    data.pop(TRUSTED_CALLBACK_VARS_FIELD, None)
+    if stripped:
+        verbose_proxy_logger.debug(
+            "Stripped client-supplied callback credentials from request: %s. "
+            "Configure these on the team or key callback settings instead.",
+            ", ".join(sorted(stripped)),
+        )
+
+
 def _strip_client_pricing_overrides(data: dict[str, Any]) -> None:
     """Drop pricing overrides from the request body and any metadata variant.
 
@@ -524,7 +566,8 @@ def safe_add_api_version_from_query_params(data: dict, request: Request):
 
 
 def convert_key_logging_metadata_to_callback(
-    data: AddTeamCallback, team_callback_settings_obj: TeamCallbackMetadata | None
+    data: AddTeamCallback,
+    team_callback_settings_obj: TeamCallbackMetadata | None,
 ) -> TeamCallbackMetadata:
     if team_callback_settings_obj is None:
         team_callback_settings_obj = TeamCallbackMetadata()
@@ -709,6 +752,30 @@ def clean_headers(
         ):
             clean_headers[header] = value
     return clean_headers
+
+
+def _is_credential_header(header: str) -> bool:
+    """Whether `header` carries a caller credential rather than request context."""
+    return header.lower() in _CREDENTIAL_HEADER_NAMES
+
+
+def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    """Return a copy of `headers` with credential-bearing values masked.
+
+    `clean_headers` deliberately preserves some credential headers so they can be
+    forwarded to the upstream provider; an Anthropic subscription OAuth token in
+    `Authorization`, or a client-supplied provider key in `x-api-key`. Those values
+    must never reach a logging callback or a spend log, so every observability-facing
+    copy of the header dict is built through this helper while the copy that is
+    forwarded upstream keeps the real values.
+
+    The returned object is a plain dict; guardrail hooks stamp their own headers onto
+    the stored copy and the logging callbacks JSON-serialize it.
+    """
+    return {
+        header: (_REDACTED_HEADER_VALUE if _is_credential_header(header) else value)
+        for header, value in headers.items()
+    }
 
 
 class LiteLLMProxyRequestSetup:
@@ -1407,7 +1474,8 @@ async def add_litellm_data_to_request(
         _headers,
         allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
     )
-    verbose_proxy_logger.debug(f"Request Headers: {_headers}")
+    _logging_safe_headers = redact_credential_headers(_headers)
+    verbose_proxy_logger.debug(f"Request Headers: {_logging_safe_headers}")
     verbose_proxy_logger.debug(f"Raw Headers: {_raw_headers}")
 
     if forward_llm_auth and "x-api-key" in _headers:
@@ -1428,7 +1496,7 @@ async def add_litellm_data_to_request(
     data["proxy_server_request"] = {
         "url": str(request.url),
         "method": request.method,
-        "headers": _headers,
+        "headers": _logging_safe_headers,
         "body": None,  # filled in post-strip; see below
         "arrival_time": arrival_time,  # Track when request arrived at proxy
     }
@@ -1454,7 +1522,7 @@ async def add_litellm_data_to_request(
 
     # Expose request headers under the metadata field for guardrails (fixes #17477)
     if _metadata_variable_name in data and isinstance(data[_metadata_variable_name], dict):
-        data[_metadata_variable_name]["headers"] = _headers
+        data[_metadata_variable_name]["headers"] = _logging_safe_headers
 
     # check for forwardable headers
     data = LiteLLMProxyRequestSetup.add_headers_to_llm_call_by_model_group(
@@ -1563,6 +1631,10 @@ async def add_litellm_data_to_request(
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
         _strip_client_pricing_overrides(data)
 
+    # Same reason as the strips above: runs after the metadata string-to-dict parse
+    # so JSON-string metadata cannot smuggle callback credentials past the dict guard.
+    _strip_client_callback_credentials(data)
+
     if not _allow_client_message_redaction_opt_out and litellm.turn_off_message_logging is True:
         _strip_client_message_redaction_opt_out(data)
 
@@ -1579,7 +1651,7 @@ async def add_litellm_data_to_request(
     #     self-reference — body.proxy_server_request.body would be the same
     #     dict as body, producing an infinite traversal loop for any consumer
     #     that walks the structure.
-    _body_snapshot_exclude = {"secret_fields", "proxy_server_request"}
+    _body_snapshot_exclude = frozenset({"secret_fields", "proxy_server_request"}) | _TRANSPORT_ONLY_CREDENTIAL_KEYS
     _body_snapshot = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
     data["proxy_server_request"]["body"] = _body_snapshot
 
@@ -1686,7 +1758,7 @@ async def add_litellm_data_to_request(
     data[_metadata_variable_name]["user_api_key_team_object_permission_id"] = getattr(
         user_api_key_dict, "team_object_permission_id", None
     )
-    data[_metadata_variable_name]["headers"] = _headers
+    data[_metadata_variable_name]["headers"] = _logging_safe_headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
     # Carry the proxy-receive instant via metadata (like `endpoint`) so the
     # OTel layer can compute pre-request latency, including on the failure
@@ -1771,6 +1843,9 @@ async def add_litellm_data_to_request(
             # unpack callback_vars in data
             for k, v in callback_settings_obj.callback_vars.items():
                 data[k] = v
+            # Callbacks that must not honour request-supplied credentials read this
+            # proxy-owned field instead of the raw request kwargs.
+            data[TRUSTED_CALLBACK_VARS_FIELD] = callback_settings_obj.callback_vars
 
     # Add disabled callbacks from key metadata
     if user_api_key_dict.metadata and "litellm_disabled_callbacks" in user_api_key_dict.metadata:

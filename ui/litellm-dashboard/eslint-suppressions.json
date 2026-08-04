@@ -779,6 +779,11 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/mcp-servers/_components/AwsSigV4Fields.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/mcp-servers/_components/CreateMCPServer.tsx": {
     "max-lines": {
       "count": 1
@@ -867,6 +872,11 @@
   },
   "src/app/(dashboard)/mcp-servers/_components/OpenAPIQuickPicker.tsx": {
     "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/OpenApiByokFields.tsx": {
+    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -4129,11 +4139,6 @@
   },
   "src/components/view_logs/LogDetailsDrawer/TruncatedValue.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/prettyMessagesUtils.ts": {
-    "no-nested-ternary": {
       "count": 1
     }
   },
