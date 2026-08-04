@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from litellm.integrations.s3_v2 import S3Logger
@@ -1760,3 +1761,259 @@ async def test_download_signs_object_key_with_space_the_way_s3_does():
         body=None,
         headers=call.kwargs["headers"],
     )
+
+
+AWS_TEST_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
+AWS_TEST_SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+S3_OBJECT_KEY_CASES = (
+    ("space", "LOGS/LLM AI Projects/2026-08-04/log.json", "/LOGS/LLM%20AI%20Projects/2026-08-04/log.json"),
+    ("plus", "LOGS/Team+Plus/2026-08-04/log.json", "/LOGS/Team%2BPlus/2026-08-04/log.json"),
+    ("ampersand", "LOGS/A&B Team/2026-08-04/log.json", "/LOGS/A%26B%20Team/2026-08-04/log.json"),
+    ("hash", "LOGS/Team#Hash/2026-08-04/log.json", "/LOGS/Team%23Hash/2026-08-04/log.json"),
+    ("unicode", "LOGS/Equipe Café/2026-08-04/log.json", "/LOGS/Equipe%20Caf%C3%A9/2026-08-04/log.json"),
+    ("percent", "LOGS/100%Team/2026-08-04/log.json", "/LOGS/100%25Team/2026-08-04/log.json"),
+)
+
+
+def _signing_logger() -> S3Logger:
+    return S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id=AWS_TEST_ACCESS_KEY,
+        s3_aws_secret_access_key=AWS_TEST_SECRET_KEY,
+        s3_region_name="us-east-1",
+    )
+
+
+def _resign(signer_cls, method: str, url: str, body, sent_headers):
+    """Recompute the signature over the URL actually put on the wire, the way S3 does."""
+    from botocore.awsrequest import AWSRequest
+    from botocore.credentials import Credentials
+
+    lowered = {name.lower(): value for name, value in sent_headers.items()}
+    signed_names = lowered["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
+    request = AWSRequest(
+        method=method,
+        url=url,
+        data=body,
+        headers={name: lowered[name] for name in signed_names if name in lowered},
+    )
+    request.context["timestamp"] = lowered["x-amz-date"]
+    signer = signer_cls(Credentials(AWS_TEST_ACCESS_KEY, AWS_TEST_SECRET_KEY), "s3", "us-east-1")
+    return signer.signature(signer.string_to_sign(request, signer.canonical_request(request)), request)
+
+
+def _assert_signature_matches_wire(method: str, url: str, body, sent_headers, expected_path: str):
+    """Assert the sent signature is the one S3 computes, and not the generic SigV4Auth one."""
+    from urllib.parse import urlsplit
+
+    from botocore.auth import S3SigV4Auth, SigV4Auth
+
+    assert urlsplit(url).path == expected_path
+    assert httpx.Request(method, url).url.raw_path.decode().split("?")[0] == expected_path
+    sent_signature = sent_headers["Authorization"].split("Signature=")[1].strip()
+    assert sent_signature == _resign(S3SigV4Auth, method, url, body, sent_headers)
+    assert sent_signature != _resign(SigV4Auth, method, url, body, sent_headers)
+
+
+def _put_element(s3_object_key: str):
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    return s3BatchLoggingElement(
+        s3_object_key=s3_object_key,
+        payload={"test": "lit5146"},
+        s3_object_download_filename="log.json",
+    )
+
+
+@pytest.mark.parametrize(
+    "case_id,s3_object_key,expected_path",
+    S3_OBJECT_KEY_CASES,
+    ids=[case[0] for case in S3_OBJECT_KEY_CASES],
+)
+@pytest.mark.asyncio
+async def test_async_upload_signs_the_url_it_sends(case_id, s3_object_key, expected_path):
+    from unittest.mock import AsyncMock
+
+    logger = _signing_logger()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = response
+
+    await logger.async_upload_data_to_s3(_put_element(s3_object_key))
+
+    call = logger.async_httpx_client.put.call_args
+    _assert_signature_matches_wire(
+        method="PUT",
+        url=call[0][0],
+        body=call.kwargs["data"].encode("utf-8"),
+        sent_headers=call.kwargs["headers"],
+        expected_path=expected_path,
+    )
+
+
+@pytest.mark.parametrize(
+    "case_id,s3_object_key,expected_path",
+    S3_OBJECT_KEY_CASES,
+    ids=[case[0] for case in S3_OBJECT_KEY_CASES],
+)
+def test_sync_upload_signs_the_url_it_sends(case_id, s3_object_key, expected_path):
+    logger = _signing_logger()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    sync_client = MagicMock()
+    sync_client.put.return_value = response
+
+    with patch("litellm.integrations.s3_v2._get_httpx_client", return_value=sync_client):
+        logger.upload_data_to_s3(_put_element(s3_object_key))
+
+    call = sync_client.put.call_args
+    _assert_signature_matches_wire(
+        method="PUT",
+        url=call[0][0],
+        body=call.kwargs["data"].encode("utf-8"),
+        sent_headers=call.kwargs["headers"],
+        expected_path=expected_path,
+    )
+
+
+@pytest.mark.parametrize(
+    "case_id,s3_object_key,expected_path",
+    S3_OBJECT_KEY_CASES,
+    ids=[case[0] for case in S3_OBJECT_KEY_CASES],
+)
+@pytest.mark.asyncio
+async def test_download_signs_the_url_it_sends(case_id, s3_object_key, expected_path):
+    from unittest.mock import AsyncMock
+
+    logger = _signing_logger()
+    response = MagicMock()
+    response.status_code = 200
+    response.json = MagicMock(return_value={"downloaded": "ok"})
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.get.return_value = response
+
+    assert await logger._download_object_from_s3(s3_object_key) == {"downloaded": "ok"}
+
+    call = logger.async_httpx_client.get.call_args
+    _assert_signature_matches_wire(
+        method="GET",
+        url=call[0][0],
+        body=None,
+        sent_headers=call.kwargs["headers"],
+        expected_path=expected_path,
+    )
+    credential = call.kwargs["headers"]["Authorization"].split("Credential=")[1].split(",")[0]
+    assert credential.split("/")[2] == "us-east-1"
+
+
+@pytest.mark.asyncio
+async def test_async_upload_preserves_payload_hash_header():
+    """S3SigV4Auth recomputes x-amz-content-sha256; it must still describe the body we send."""
+    import hashlib
+    from unittest.mock import AsyncMock
+
+    logger = _signing_logger()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = response
+
+    await logger.async_upload_data_to_s3(_put_element("LOGS/LLM AI Projects/2026-08-04/log.json"))
+
+    call = logger.async_httpx_client.put.call_args
+    sent = {name.lower(): value for name, value in call.kwargs["headers"].items()}
+    assert sent["x-amz-content-sha256"] == hashlib.sha256(call.kwargs["data"].encode("utf-8")).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "s3_object_key,expected_path",
+    [
+        ("LOGS/a/./b/log.json", "/LOGS/a/b/log.json"),
+        ("LOGS/a/../b/log.json", "/LOGS/b/log.json"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_dot_segment_keys_keep_collapsing_and_stay_signable(s3_object_key, expected_path):
+    """Dot segments collapse as before, and the signature covers the collapsed path."""
+    from unittest.mock import AsyncMock
+
+    from botocore.auth import S3SigV4Auth
+
+    logger = _signing_logger()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = response
+
+    await logger.async_upload_data_to_s3(_put_element(s3_object_key))
+
+    call = logger.async_httpx_client.put.call_args
+    url = call[0][0]
+    assert str(httpx.URL(url)) == url
+    from urllib.parse import urlsplit
+
+    assert urlsplit(url).path == expected_path
+    sent_signature = call.kwargs["headers"]["Authorization"].split("Signature=")[1].strip()
+    assert sent_signature == _resign(
+        S3SigV4Auth, "PUT", url, call.kwargs["data"].encode("utf-8"), call.kwargs["headers"]
+    )
+
+
+@pytest.mark.parametrize(
+    "endpoint_url,virtual_hosted,expected_url",
+    [
+        (None, False, "https://test-bucket.s3.us-east-1.amazonaws.com/LOGS/My%20Team/log.json"),
+        ("https://s3.example.com", False, "https://s3.example.com/test-bucket/LOGS/My%20Team/log.json"),
+        ("https://s3.example.com", True, "https://test-bucket.s3.example.com/LOGS/My%20Team/log.json"),
+        ("http://localhost:9000", False, "http://localhost:9000/test-bucket/LOGS/My%20Team/log.json"),
+    ],
+)
+def test_build_object_url_shapes(endpoint_url, virtual_hosted, expected_url):
+    """Each endpoint shape must encode the object key and leave the rest of the URL alone."""
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_endpoint_url=endpoint_url,
+        s3_use_virtual_hosted_style=virtual_hosted,
+        s3_aws_access_key_id=AWS_TEST_ACCESS_KEY,
+        s3_aws_secret_access_key=AWS_TEST_SECRET_KEY,
+        s3_region_name="us-east-1",
+    )
+    built = logger._build_object_url("LOGS/My Team/log.json")
+    assert built == expected_url
+
+
+@pytest.mark.parametrize(
+    "s3_object_key",
+    [
+        "LOGS/LLM AI Projects/log.json",
+        "LOGS/100%Team/log.json",
+        "LOGS/A%20B/log.json",
+        "LOGS/Sale%2FDiscount/log.json",
+        "LOGS/..%2F..%2Fescape/2026-08-04/log.json",
+    ],
+)
+def test_object_key_round_trips_through_the_url(s3_object_key):
+    """The path we send must decode back to the exact key we were asked to write."""
+    from urllib.parse import unquote, urlsplit
+
+    url = _signing_logger()._build_object_url(s3_object_key)
+    assert unquote(urlsplit(url).path.lstrip("/")) == s3_object_key
+
+
+def test_object_key_cannot_escape_the_bucket_path_style():
+    """A key holding encoded traversal must stay one path segment, bucket included."""
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_endpoint_url="https://minio.internal",
+        s3_aws_access_key_id=AWS_TEST_ACCESS_KEY,
+        s3_aws_secret_access_key=AWS_TEST_SECRET_KEY,
+        s3_region_name="us-east-1",
+    )
+    url = logger._build_object_url("LOGS/..%2F..%2Fescape/log.json")
+    assert url.startswith("https://minio.internal/test-bucket/LOGS/")
