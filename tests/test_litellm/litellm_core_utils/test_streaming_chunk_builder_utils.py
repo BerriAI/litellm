@@ -1066,7 +1066,7 @@ def test_get_combined_tool_content_custom_tool_call_without_type_field():
     }
 
 
-def _tool_call_delta_chunk(tool_call):
+def _tool_call_delta_chunk(tool_call: dict[str, object] | ChatCompletionDeltaToolCall) -> dict[str, object]:
     return {"choices": [{"delta": {"tool_calls": [tool_call]}}]}
 
 
@@ -1093,6 +1093,28 @@ def test_get_combined_tool_content_joins_many_dict_shaped_argument_fragments_in_
     assert combined[1].function.name == "tool_b"
     assert combined[1].function.arguments == "".join(second_fragments)
     assert combined[2].function.arguments == "{}"
+
+
+def test_get_combined_tool_content_joins_fragments_across_many_parallel_tool_calls():
+    processor = ChunkProcessor.__new__(ChunkProcessor)
+    indexes = range(40)
+    header_chunks = [
+        _tool_call_delta_chunk(
+            {"index": index, "id": f"call_{index}", "type": "function", "function": {"name": f"tool_{index}"}}
+        )
+        for index in indexes
+    ]
+    fragment_chunks = [
+        _tool_call_delta_chunk({"index": index, "function": {"arguments": f"{index}.{position};"}})
+        for position in range(5)
+        for index in indexes
+    ]
+
+    combined = processor.get_combined_tool_content(header_chunks + fragment_chunks)
+
+    assert [tool_call.id for tool_call in combined] == [f"call_{index}" for index in indexes]
+    for index, tool_call in zip(indexes, combined):
+        assert tool_call.function.arguments == "".join(f"{index}.{position};" for position in range(5))
 
 
 def test_get_combined_tool_content_joins_many_object_shaped_argument_fragments_in_order():
