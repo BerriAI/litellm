@@ -21,7 +21,6 @@ pytestmark = pytest.mark.e2e
 
 class SearchToolLiteLLMParams(BaseModel):
     search_provider: str
-    api_key: str
 
 
 class SearchToolBody(BaseModel):
@@ -56,17 +55,16 @@ class SearchResponse(BaseModel):
     results: list[SearchResultItem] = []
 
 
-def _search_credentials() -> tuple[str, str]:
+def _search_provider() -> str:
     if os.environ.get("PERPLEXITY_API_KEY") or os.environ.get("PERPLEXITYAI_API_KEY"):
-        env_name = "PERPLEXITY_API_KEY" if os.environ.get("PERPLEXITY_API_KEY") else "PERPLEXITYAI_API_KEY"
-        return "perplexity", f"os.environ/{env_name}"
+        return "perplexity"
     if os.environ.get("TAVILY_API_KEY"):
-        return "tavily", "os.environ/TAVILY_API_KEY"
+        return "tavily"
     pytest.fail("set PERPLEXITY_API_KEY or TAVILY_API_KEY for /v1/search e2e coverage")
 
 
 def _register_search_tool(proxy: ProxyClient, resources: ResourceManager) -> str:
-    provider, api_key = _search_credentials()
+    provider = _search_provider()
     name = f"e2e-search-{unique_marker()}"
     created = unwrap(
         proxy.transport.post(
@@ -75,9 +73,7 @@ def _register_search_tool(proxy: ProxyClient, resources: ResourceManager) -> str
             json=CreateSearchToolRequest(
                 search_tool=SearchToolBody(
                     search_tool_name=name,
-                    litellm_params=SearchToolLiteLLMParams(
-                        search_provider=provider, api_key=api_key
-                    ),
+                    litellm_params=SearchToolLiteLLMParams(search_provider=provider),
                     search_tool_info={"description": "e2e search tool"},
                 )
             ),
