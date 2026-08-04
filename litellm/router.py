@@ -128,6 +128,7 @@ from litellm.router_utils.cooldown_handlers import (
 )
 from litellm.router_utils.fallback_event_handlers import (
     _check_non_standard_fallback_format,
+    _FallbackContinuationState,
     get_fallback_model_group,
     run_async_fallback,
 )
@@ -6138,6 +6139,23 @@ class Router:
             input_kwargs["fallback_depth"] = 0
         if include_fallback_errors:
             input_kwargs["include_fallback_errors"] = True
+
+        from litellm.exceptions import MidStreamFallbackError
+
+        request_metadata = kwargs.get("metadata")
+        fallback_continuation_state = request_metadata.get("_fallback_continuation_state") if request_metadata else None
+        if (
+            isinstance(e, MidStreamFallbackError)
+            and isinstance(fallback_continuation_state, _FallbackContinuationState)
+            and fallback_continuation_state.litellm_router is self
+        ):
+            response = await run_async_fallback(
+                *args,
+                **input_kwargs,
+                fallback_model_group=fallback_continuation_state.remaining_model_groups,
+                original_model_group=fallback_continuation_state.root_model_group,
+            )
+            return response
 
         # ORDER-BASED FALLBACKS: prepend higher order levels to the fallback list
         # Skip for error types that have their own dedicated fallback handlers
