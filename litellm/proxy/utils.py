@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import traceback
+import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -3943,6 +3944,101 @@ class PrismaClient:
             pass
         return 0
 
+    def _get_db_watchdog_diagnostics(self) -> Dict[str, Union[str, int]]:
+        """Capture local query-engine state without issuing another DB query."""
+        pid = self._get_engine_pid()
+        diagnostics: Dict[str, Union[str, int]] = {
+            "engine_pid": pid if pid > 0 else "unavailable",
+            "engine_port": "unavailable",
+            "engine_alive": "unknown",
+            "engine_state": "unavailable",
+            "engine_started_at": "unavailable",
+            "engine_process_error_type": "none",
+            "pool_active": "unavailable",
+            "pool_wait": "unavailable",
+            "pool_busy": "unavailable",
+            "pool_idle": "unavailable",
+            "pool_open": "unavailable",
+            "pool_opened_total": "unavailable",
+            "pool_closed_total": "unavailable",
+            "pool_wait_histogram_count": "unavailable",
+            "pool_wait_histogram_sum_ms": "unavailable",
+            "pool_wait_histogram_le_1000": "unavailable",
+            "pool_wait_histogram_le_5000": "unavailable",
+            "pool_target": os.getenv("DATABASE_CONNECTION_POOL_LIMIT", "unset"),
+            "pool_metrics_error_type": "none",
+        }
+        if pid <= 0:
+            diagnostics["pool_metrics_error_type"] = "EnginePidUnavailable"
+            return diagnostics
+
+        try:
+            os.kill(pid, 0)
+            diagnostics["engine_alive"] = "true"
+        except ProcessLookupError:
+            diagnostics["engine_alive"] = "false"
+        except (PermissionError, OSError):
+            diagnostics["engine_alive"] = "unknown"
+
+        try:
+            with open(f"/proc/{pid}/stat", "r") as proc_stat:
+                process_fields = proc_stat.read().split()
+            diagnostics["engine_state"] = process_fields[2]
+            process_start_ticks = int(process_fields[21])
+            with open("/proc/stat", "r") as host_stat:
+                boot_time_seconds = next(
+                    int(line.split()[1])
+                    for line in host_stat
+                    if line.startswith("btime ")
+                )
+            clock_ticks = int(os.sysconf("SC_CLK_TCK"))
+            diagnostics["engine_started_at"] = datetime.fromtimestamp(
+                boot_time_seconds + (process_start_ticks / clock_ticks),
+                tz=timezone.utc,
+            ).isoformat()
+        except Exception as process_error:
+            diagnostics["engine_process_error_type"] = type(process_error).__name__
+
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as proc_cmdline:
+                arguments = [
+                    argument.decode("utf-8", errors="replace")
+                    for argument in proc_cmdline.read().split(b"\0")
+                    if argument
+                ]
+            port_index = arguments.index("-p")
+            port = int(arguments[port_index + 1])
+            if not 1 <= port <= 65535:
+                raise ValueError("query-engine port out of range")
+            diagnostics["engine_port"] = port
+
+            wanted_metrics = {
+                "prisma_client_queries_active": "pool_active",
+                "prisma_client_queries_wait": "pool_wait",
+                "prisma_pool_connections_busy": "pool_busy",
+                "prisma_pool_connections_idle": "pool_idle",
+                "prisma_pool_connections_open": "pool_open",
+                "prisma_pool_connections_opened_total": "pool_opened_total",
+                "prisma_pool_connections_closed_total": "pool_closed_total",
+                "prisma_client_queries_wait_histogram_ms_count": "pool_wait_histogram_count",
+                "prisma_client_queries_wait_histogram_ms_sum": "pool_wait_histogram_sum_ms",
+                'prisma_client_queries_wait_histogram_ms_bucket{le="1000"}': "pool_wait_histogram_le_1000",
+                'prisma_client_queries_wait_histogram_ms_bucket{le="5000"}': "pool_wait_histogram_le_5000",
+            }
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/metrics", timeout=0.2
+            ) as response:
+                body = response.read(200000).decode("utf-8", errors="replace")
+            for raw_line in body.splitlines():
+                metric_name, separator, metric_value = raw_line.partition(" ")
+                diagnostic_name = wanted_metrics.get(metric_name)
+                if diagnostic_name is not None and separator:
+                    diagnostics[diagnostic_name] = metric_value.strip() or "unavailable"
+        except Exception as metrics_error:
+            diagnostics["pool_metrics_error_type"] = type(metrics_error).__name__
+
+        return diagnostics
+
     def _is_engine_alive(self) -> bool:
         if self._engine_pid <= 0:
             return True
@@ -4474,8 +4570,10 @@ class PrismaClient:
 
     async def _db_health_watchdog_loop(self) -> None:
         while True:
+            probe_started: Optional[float] = None
             try:
                 await asyncio.sleep(self._db_health_watchdog_interval_seconds)
+                probe_started = time.perf_counter()
                 await asyncio.wait_for(
                     self.db.query_raw("SELECT 1"),
                     timeout=self._db_health_watchdog_probe_timeout_seconds,
@@ -4483,11 +4581,66 @@ class PrismaClient:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                if isinstance(
-                    e, asyncio.TimeoutError
-                ) or PrismaDBExceptionHandler.is_database_connection_error(e):
+                is_probe_timeout = isinstance(e, asyncio.TimeoutError)
+                is_connection_error = (
+                    False
+                    if is_probe_timeout
+                    else PrismaDBExceptionHandler.is_database_connection_error(e)
+                )
+                if is_probe_timeout or is_connection_error:
+                    elapsed_ms = (
+                        int(round((time.perf_counter() - probe_started) * 1000))
+                        if probe_started is not None
+                        else -1
+                    )
+                    failure_kind = (
+                        "probe_timeout" if is_probe_timeout else "connection_error"
+                    )
+                    reconnect_reason = (
+                        "db_health_watchdog_probe_timeout"
+                        if is_probe_timeout
+                        else "db_health_watchdog_connection_error"
+                    )
+                    diagnostics = self._get_db_watchdog_diagnostics()
+                    verbose_proxy_logger.warning(
+                        "Prisma DB health watchdog probe failed before reconnect. "
+                        "failure_kind=%s exception_type=%s elapsed_ms=%s error=%s "
+                        "consecutive_reconnect_failures=%s engine_pid=%s "
+                        "engine_port=%s engine_alive=%s engine_state=%s "
+                        "engine_started_at=%s engine_process_error_type=%s "
+                        "pool_active=%s pool_wait=%s pool_busy=%s pool_idle=%s "
+                        "pool_open=%s pool_opened_total=%s pool_closed_total=%s "
+                        "pool_wait_histogram_count=%s pool_wait_histogram_sum_ms=%s "
+                        "pool_wait_histogram_le_1000=%s pool_wait_histogram_le_5000=%s "
+                        "pool_target=%s "
+                        "pool_metrics_error_type=%s",
+                        failure_kind,
+                        type(e).__name__,
+                        elapsed_ms,
+                        _redact_string(str(e)),
+                        self._consecutive_reconnect_failures,
+                        diagnostics["engine_pid"],
+                        diagnostics["engine_port"],
+                        diagnostics["engine_alive"],
+                        diagnostics["engine_state"],
+                        diagnostics["engine_started_at"],
+                        diagnostics["engine_process_error_type"],
+                        diagnostics["pool_active"],
+                        diagnostics["pool_wait"],
+                        diagnostics["pool_busy"],
+                        diagnostics["pool_idle"],
+                        diagnostics["pool_open"],
+                        diagnostics["pool_opened_total"],
+                        diagnostics["pool_closed_total"],
+                        diagnostics["pool_wait_histogram_count"],
+                        diagnostics["pool_wait_histogram_sum_ms"],
+                        diagnostics["pool_wait_histogram_le_1000"],
+                        diagnostics["pool_wait_histogram_le_5000"],
+                        diagnostics["pool_target"],
+                        diagnostics["pool_metrics_error_type"],
+                    )
                     await self.attempt_db_reconnect(
-                        reason="db_health_watchdog_connection_error",
+                        reason=reconnect_reason,
                         timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
                     )
                 else:
@@ -4689,8 +4842,9 @@ class PrismaClient:
         """
         Get the latest health check for each model.
 
-        Uses DB-level DISTINCT ON (model_id, model_name) with ORDER BY checked_at DESC
-        (via Prisma ``distinct`` + ``order``) so we never load the full history into memory.
+        Uses DB-level DISTINCT ON (model_id, model_name) with deterministic
+        checked_at/health_check_id ordering (via Prisma ``distinct`` + ``order``)
+        so we never load the full history into memory.
         """
         try:
             return await self.db.litellm_healthchecktable.find_many(
@@ -4699,6 +4853,7 @@ class PrismaClient:
                     {"model_id": "asc"},
                     {"model_name": "asc"},
                     {"checked_at": "desc"},
+                    {"health_check_id": "desc"},
                 ],
             )
         except Exception as e:

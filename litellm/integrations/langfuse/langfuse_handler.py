@@ -21,7 +21,7 @@ else:
 class LangFuseHandler:
     @staticmethod
     def get_langfuse_logger_for_request(
-        standard_callback_dynamic_params: StandardCallbackDynamicParams,
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams],
         in_memory_dynamic_logger_cache: DynamicLoggingCache,
         globalLangfuseLogger: Optional[LangFuseLogger] = None,
     ) -> LangFuseLogger:
@@ -151,7 +151,7 @@ class LangFuseHandler:
 
     @staticmethod
     def _dynamic_langfuse_credentials_are_passed(
-        standard_callback_dynamic_params: StandardCallbackDynamicParams,
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams],
     ) -> bool:
         """
         This function is used to check if the dynamic langfuse credentials are passed in standard_callback_dynamic_params
@@ -159,6 +159,9 @@ class LangFuseHandler:
         Returns:
             bool: True if the dynamic langfuse credentials are passed, False otherwise
         """
+
+        if standard_callback_dynamic_params is None:
+            return False
 
         if (
             standard_callback_dynamic_params.get("langfuse_host") is not None
