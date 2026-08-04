@@ -73,6 +73,7 @@ class NetworkError(BaseModel):
 
 class UnauthorizedError(BaseModel):
     kind: Literal["unauthorized"] = "unauthorized"
+    call_id: str | None = None
 
 
 class RateLimitedError(BaseModel):
@@ -80,17 +81,128 @@ class RateLimitedError(BaseModel):
     retry_after_seconds: int | None = None
     # litellm overloads 429 for budget_exceeded too, so keep the body to tell them apart.
     body: str = ""
+    call_id: str | None = None
 
 
 class ValidationError(BaseModel):
     kind: Literal["validation"] = "validation"
     message: str
+    call_id: str | None = None
+
+
+class InfraUnavailable(BaseModel):
+    """The request never reached a litellm handler: an edge proxy (ALB, nginx,
+    envoy) answered instead, or the pod behind it was not accepting traffic.
+
+    Distinct from UnknownApiError because the blame is different: an edge proxy
+    answering on its own says nothing about the behavior under test, so a run full
+    of these is an unhealthy environment rather than a product regression.
+
+    Status code alone cannot decide this. litellm returns 503 itself ("Database not
+    available", budget reservation) and 504 itself (an MCP handler that did not
+    respond in time), and those are real defects that must stay visible. What
+    separates them is who wrote the body: litellm answers application/json through
+    FastAPI, while an edge proxy emits its own HTML error page. Both signals must
+    agree before blame moves off the product.
+    """
+
+    kind: Literal["infra_unavailable"] = "infra_unavailable"
+    status_code: int
+    body: str
+    #: Usually absent: an edge proxy answering on its own never reaches the gateway,
+    #: so there is no call id to report. Present when the header did survive.
+    call_id: str | None = None
 
 
 class UnknownApiError(BaseModel):
     kind: Literal["unknown"] = "unknown"
     status_code: int
     body: str
+    #: x-litellm-call-id of the failing request. The gateway tags its own logs and
+    #: OTEL spans with this id, so carrying it in the failure is what turns a red
+    #: test on the cluster into a lookup instead of a guess.
+    call_id: str | None = None
+
+
+#: Statuses an edge proxy returns when it cannot get a usable answer from the
+#: gateway. Necessary but not sufficient (see is_edge_proxy_failure): litellm emits
+#: 503 and 504 itself for real defects. 500 is excluded outright, since litellm
+#: returns it for its own unhandled errors (the "reload it triggered degraded"
+#: class) and no edge proxy in this path invents a 500.
+EDGE_PROXY_STATUS: frozenset[int] = frozenset({502, 503, 504})
+
+#: Marker that opens the failure message for every edge-proxy failure, so a run can
+#: be triaged as "unhealthy environment" vs "real regression" by grepping the log,
+#: and so the Loki dashboard can split the two without parsing tracebacks.
+INFRA_FAILURE_PREFIX = "E2E_INFRA_UNAVAILABLE"
+
+#: Field name used when a failure message carries the gateway's x-litellm-call-id,
+#: so log tooling has one token to search for instead of a prose variant per site.
+CALL_ID_FIELD = "call_id"
+
+
+#: Gateway-answered statuses that are worth another attempt rather than an
+#: assertion: a request timeout and litellm's own unhandled-error 500.
+TRANSIENT_API_STATUS: frozenset[int] = frozenset({408, 500})
+
+
+def is_transient_failure[R: BaseModel](result: Result[R]) -> bool:
+    """True when a failure is worth retrying rather than asserting on.
+
+    Retry-worthiness follows the variant, not a status list a caller keeps its own
+    copy of: an edge proxy answering 504 is exactly as transient as the gateway
+    answering 500, so both belong here. Callers that need a retry predicate should
+    use this instead of re-deriving one, so adding a variant to Result can never
+    silently shrink someone's retry budget again.
+    """
+    match result:
+        case InfraUnavailable():
+            return True
+        case RateLimitedError():
+            return True
+        case NetworkError():
+            return True
+        case UnknownApiError(status_code=status_code):
+            return status_code in TRANSIENT_API_STATUS
+        case _:
+            return False
+
+
+def is_edge_proxy_failure(
+    status_code: int,
+    *,
+    body: str,
+    content_type: str | None,
+    call_id: str | None = None,
+) -> bool:
+    """True only when nothing in the response could have come from litellm.
+
+    Status code cannot decide this on its own. litellm returns 503 from its own
+    handlers for a paused model, a fail-closed budget check, a guardrail configured
+    to block on error, and an unreachable database, and 504 when an MCP handler
+    times out. Those are product behavior - several of them security-relevant - so
+    calling them environmental would suppress exactly what the suite exists to
+    catch.
+
+    Positive proof that litellm answered:
+      - x-litellm-call-id, which only the gateway mints
+      - a JSON content type, since every FastAPI error response is JSON
+      - a body that names a litellm exception
+    Absent all of those, an edge-proxy status with an HTML error page is the ALB or
+    nginx answering on its own. Anything ambiguous resolves to False, which keeps
+    blame on the product: a false "product bug" costs an investigation, while a
+    false "bad environment" silently discards a real regression.
+    """
+    if status_code not in EDGE_PROXY_STATUS:
+        return False
+    if call_id:
+        return False
+    if content_type is not None and "json" in content_type.lower():
+        return False
+    head = body[:400].lower()
+    if "litellm" in head:
+        return False
+    return "<html" in head
 
 
 type Result[R: BaseModel] = (
@@ -99,6 +211,7 @@ type Result[R: BaseModel] = (
     | UnauthorizedError
     | RateLimitedError
     | ValidationError
+    | InfraUnavailable
     | UnknownApiError
 )
 
@@ -179,11 +292,27 @@ def _hdr(resp: requests.Response, name: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def call_id_suffix(call_id: str | None) -> str:
+    """A greppable `call_id=<id>` tail for a failure message, or empty when the
+    gateway returned no id. Every failure that carries one becomes searchable in
+    the gateway's own logs and traces by the same token."""
+    return f" {CALL_ID_FIELD}={call_id}" if call_id else ""
+
+
 def unwrap[R: BaseModel](result: Result[R]) -> R:
     match result:
         case Success(data=data):
             return data
+        case InfraUnavailable(status_code=status_code, body=body, call_id=call_id):
+            raise AssertionError(
+                f"{INFRA_FAILURE_PREFIX}: the request never reached litellm - an edge proxy "
+                f"answered {status_code}. The environment is unhealthy; this is not a "
+                f"behavior regression in the code under test. "
+                f"body={body[:300]}{call_id_suffix(call_id)}"
+            )
         case _:
+            # Every other variant carries call_id as a field, so pydantic's repr
+            # already puts it in the message; no special-casing needed.
             raise AssertionError(result)
 
 
@@ -209,11 +338,28 @@ def is_ok[R: BaseModel](result: Result[R]) -> bool:
 
 def require_successful_call(result: StreamingResponse) -> None:
     """A call that should have succeeded but didn't is a hard failure, never a skip:
-    if the proxy can't make a call it's expected to, the test must fail."""
+    if the proxy can't make a call it's expected to, the test must fail.
+
+    Streaming/native calls skip classify_response (no response model to validate), so
+    edge-proxy split is applied here too - otherwise an ALB 504 on a streamed call
+    reads as an ordinary upstream failure."""
     if result.ok:
         return
+    if is_edge_proxy_failure(
+        result.status_code,
+        body=result.body,
+        content_type=result.content_type,
+        call_id=result.call_id,
+    ):
+        pytest.fail(
+            f"{INFRA_FAILURE_PREFIX}: the request never reached litellm - an edge proxy "
+            f"answered {result.status_code}. The environment is unhealthy; this is not a "
+            f"behavior regression in the code under test. "
+            f"body={result.body[:300]}{call_id_suffix(result.call_id)}"
+        )
     pytest.fail(
-        f"upstream call failed (status {result.status_code}); body={result.body[:300]}"
+        f"upstream call failed (status {result.status_code}); "
+        f"body={result.body[:300]}{call_id_suffix(result.call_id)}"
     )
 
 
@@ -229,19 +375,33 @@ def _params(params: BaseModel | None) -> dict[str, str]:
     return {key: str(value) for key, value in dumped.items()}
 
 
-def _classify[R: BaseModel](
+def classify_response[R: BaseModel](
     resp: requests.Response, response_type: type[R]
 ) -> Result[R]:
+    """Map one HTTP response onto the Result union.
+
+    This is the suite's single blame-assignment rule - which failures are the
+    environment's fault (edge proxy) versus the gateway's - so it is public and
+    directly tested rather than reached only through the verb helpers.
+    """
+    call_id = _hdr(resp, "x-litellm-call-id")
     if resp.status_code == 401:
-        return UnauthorizedError()
+        return UnauthorizedError(call_id=call_id)
     if resp.status_code == 429:
-        return RateLimitedError(body=resp.text)
+        return RateLimitedError(body=resp.text, call_id=call_id)
+    if is_edge_proxy_failure(
+        resp.status_code,
+        body=resp.text,
+        content_type=_hdr(resp, "content-type"),
+        call_id=call_id,
+    ):
+        return InfraUnavailable(status_code=resp.status_code, body=resp.text, call_id=call_id)
     if not resp.ok:
-        return UnknownApiError(status_code=resp.status_code, body=resp.text)
+        return UnknownApiError(status_code=resp.status_code, body=resp.text, call_id=call_id)
     try:
         return Success(status_code=resp.status_code, data=response_type.model_validate(resp.json()))
     except Exception as exc:  # noqa: BLE001 - any parse/validation failure is a value
-        return ValidationError(message=str(exc))
+        return ValidationError(message=str(exc), call_id=call_id)
 
 
 def post[R: BaseModel](
@@ -261,7 +421,7 @@ def post[R: BaseModel](
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
-    return _classify(resp, response_type)
+    return classify_response(resp, response_type)
 
 
 def get[R: BaseModel](
@@ -281,7 +441,7 @@ def get[R: BaseModel](
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
-    return _classify(resp, response_type)
+    return classify_response(resp, response_type)
 
 
 def get_external[R: BaseModel](
@@ -301,7 +461,7 @@ def get_external[R: BaseModel](
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
-    return _classify(resp, response_type)
+    return classify_response(resp, response_type)
 
 
 def delete[R: BaseModel](
@@ -323,7 +483,7 @@ def delete[R: BaseModel](
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
-    return _classify(resp, response_type)
+    return classify_response(resp, response_type)
 
 
 def patch[R: BaseModel](
@@ -343,7 +503,7 @@ def patch[R: BaseModel](
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
-    return _classify(resp, response_type)
+    return classify_response(resp, response_type)
 
 
 def put[R: BaseModel](
@@ -363,7 +523,7 @@ def put[R: BaseModel](
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
-    return _classify(resp, response_type)
+    return classify_response(resp, response_type)
 
 
 def probe(
@@ -507,7 +667,7 @@ def upload[R: BaseModel](
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
-    return _classify(resp, response_type)
+    return classify_response(resp, response_type)
 
 
 def stream_binary(

@@ -48,11 +48,14 @@ from capabilities import (
     raw_id_matches_provider,
 )
 from e2e_http import (
+    EDGE_PROXY_STATUS,
+    TRANSIENT_API_STATUS,
     FileUploadForm,
     Result,
     StreamingResponse,
     Success,
     UnknownApiError,
+    is_transient_failure,
     require_successful_call,
     unwrap,
 )
@@ -73,7 +76,10 @@ _CANCEL_ASSERTED_PROVIDERS = frozenset({"openai"})
 
 
 def _transient_status(status_code: int) -> bool:
-    return status_code in {408, 429, 500, 502, 503, 504}
+    """Retry predicate for the raw StreamingResponse path, which has no Result
+    variant to consult. Typed results use e2e_http.is_transient_failure instead, so
+    the two paths cannot drift on which statuses are worth another attempt."""
+    return status_code in {429, *TRANSIENT_API_STATUS, *EDGE_PROXY_STATUS}
 
 
 def _backoff_seconds(attempt: int) -> float:
@@ -89,7 +95,7 @@ def cancel_batch(
         match last:
             case Success(data=data):
                 return data
-            case UnknownApiError(status_code=code) if _transient_status(code):
+            case _ if is_transient_failure(last):
                 time.sleep(_backoff_seconds(attempt))
                 last = client.cancel_batch(batch_id, key=key, provider=provider)
             case _:
@@ -105,7 +111,7 @@ def retrieve_batch(
         match last:
             case Success(data=data):
                 return data
-            case UnknownApiError(status_code=code) if _transient_status(code):
+            case _ if is_transient_failure(last):
                 time.sleep(_backoff_seconds(attempt))
                 last = client.retrieve_batch(batch_id, key=key, provider=provider)
             case _:
