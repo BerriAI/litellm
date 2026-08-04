@@ -63,11 +63,17 @@ class AnthropicTokenCounter(BaseTokenCounter):
             verbose_logger.warning("No Anthropic API key found for token counting")
             return None
 
+        # Read api_base too — without this the handler silently falls back
+        # to api.anthropic.com even when the deployment is configured against
+        # an Anthropic-compatible backend (self-hosted vLLM, etc.) (#29764).
+        api_base = litellm_params.get("api_base") or os.getenv("ANTHROPIC_API_BASE")
+
         try:
             result = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 messages=messages,
                 api_key=api_key,
+                api_base=api_base,
                 tools=tools,
                 system=system,
             )
