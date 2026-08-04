@@ -7,7 +7,7 @@ FakeAnthropicMessagesStreamIterator when the original request was streaming
 but converted to non-streaming for WebSearch interception.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -16,7 +16,10 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
     FakeAnthropicMessagesStreamIterator,
 )
-from litellm.types.integrations.custom_logger import AgenticLoopPlan
+from litellm.types.integrations.custom_logger import (
+    AgenticLoopPlan,
+    AgenticLoopRequestPatch,
+)
 
 
 def _anthropic_response() -> dict:
@@ -218,6 +221,55 @@ class TestCallAgenticCompletionHooksWrapping:
         result = await _run_hooks(_StubExecuteHandler(), logging_obj)
 
         assert isinstance(result, FakeAnthropicMessagesStreamIterator)
+
+    @pytest.mark.asyncio
+    async def test_anthropic_plan_execution_drops_forced_tool_choice(self):
+        """Regression (#35334): the plan-based follow-up /v1/messages call must
+        not inherit the caller's forced tool_choice (repointed to
+        litellm_web_search). The base optional params still carry it, so the
+        executor must strip it even though the patch already dropped it. tools
+        stays available."""
+        captured: dict = {}
+
+        async def fake_acreate(**kwargs):
+            captured.update(kwargs)
+            return _anthropic_response()
+
+        plan = AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                model="bedrock/claude-3-5-sonnet",
+                messages=[{"role": "user", "content": "results"}],
+                max_tokens=1024,
+                optional_params={"temperature": 0.2},
+            ),
+        )
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+
+        with patch(
+            "litellm.anthropic_interface.messages.acreate",
+            new=AsyncMock(side_effect=fake_acreate),
+        ):
+            await BaseLLMHTTPHandler()._execute_anthropic_agentic_plan(
+                plan=plan,
+                model="bedrock/claude-3-5-sonnet",
+                messages=[{"role": "user", "content": "search"}],
+                anthropic_messages_optional_request_params={
+                    "max_tokens": 1024,
+                    "tools": [{"name": "litellm_web_search", "input_schema": {}}],
+                    "tool_choice": {"type": "tool", "name": "litellm_web_search"},
+                },
+                logging_obj=logging_obj,
+                kwargs={},
+                depth=0,
+                max_loops=3,
+                fingerprints=[],
+                fingerprint="fp",
+            )
+
+        assert "tool_choice" not in captured
+        assert captured["tools"] == [{"name": "litellm_web_search", "input_schema": {}}]
 
     @pytest.mark.asyncio
     async def test_tail_path_wraps_when_no_loop_runs(self):

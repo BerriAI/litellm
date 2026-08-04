@@ -1134,6 +1134,8 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         optional_params = dict(anthropic_messages_optional_request_params)
         optional_params.update(request_patch.optional_params)
+        if "tool_choice" not in request_patch.optional_params:
+            optional_params.pop("tool_choice", None)
         max_tokens = request_patch.max_tokens
         if max_tokens is None:
             max_tokens = cast(int | None, optional_params.pop("max_tokens", None))
@@ -1237,8 +1239,10 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         verbose_logger.debug("WebSearchInterception: Using max_tokens=%s for follow-up request", max_tokens)
 
-        optional_params_without_max_tokens = {
-            k: v for k, v in anthropic_messages_optional_request_params.items() if k != "max_tokens"
+        followup_optional_params = {
+            k: v
+            for k, v in anthropic_messages_optional_request_params.items()
+            if k not in {"max_tokens", "tool_choice"}
         }
         kwargs_for_followup = self._prepare_followup_kwargs(kwargs)
 
@@ -1256,7 +1260,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             model=full_model_name,
             messages=follow_up_messages,
             max_tokens=max_tokens,
-            optional_params=optional_params_without_max_tokens,
+            optional_params=followup_optional_params,
             kwargs=kwargs_for_followup,
         )
         return patch, structured_results

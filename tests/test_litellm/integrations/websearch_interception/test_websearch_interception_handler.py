@@ -4,7 +4,7 @@ Unit tests for WebSearch Interception Handler
 Tests the WebSearchInterceptionLogger class and helper functions.
 """
 
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -150,6 +150,82 @@ async def test_async_build_agentic_loop_plan_returns_request_patch():
     assert "_websearch_interception_converted_stream" not in plan.request_patch.kwargs
     assert "litellm_logging_obj" not in plan.request_patch.kwargs
     assert plan.request_patch.kwargs["temperature"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_build_anthropic_request_patch_drops_forced_tool_choice():
+    """Regression (#35334): the follow-up /v1/messages patch must not carry a
+    forced tool_choice. The deployment hook repoints a caller's forced
+    tool_choice at litellm_web_search; if it survives into the follow-up call
+    the model is obliged to call the search tool again and that tool_use leaks
+    to a client that never declared it. tools is kept, matching the
+    chat-completions and Responses paths."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+    logger._execute_search = AsyncMock(return_value=("results", None))  # type: ignore
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+
+    patch_obj, _ = await logger._build_anthropic_request_patch(
+        model="bedrock/claude-3-5-sonnet",
+        messages=[{"role": "user", "content": "search litellm"}],
+        tool_calls=[
+            {"id": "toolu_1", "type": "tool_use", "name": "litellm_web_search", "input": {"query": "litellm"}}
+        ],
+        thinking_blocks=[],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "tools": [{"name": "litellm_web_search", "input_schema": {}}],
+            "tool_choice": {"type": "tool", "name": "litellm_web_search"},
+        },
+        logging_obj=logging_obj,
+        kwargs={},
+    )
+
+    assert "tool_choice" not in patch_obj.optional_params
+    assert patch_obj.optional_params["tools"] == [{"name": "litellm_web_search", "input_schema": {}}]
+
+
+@pytest.mark.asyncio
+async def test_execute_agentic_loop_does_not_force_tool_choice_on_followup():
+    """Regression (#35334): even though the base optional params still carry a
+    forced tool_choice (repointed to litellm_web_search), the follow-up
+    /v1/messages call must not receive it. Dropping it only from the request
+    patch is insufficient because the executor merges the base params back in,
+    so the executor must strip it too. tools stays available."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+    logger._execute_search = AsyncMock(return_value=("results", None))  # type: ignore
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+
+    captured: dict = {}
+
+    async def fake_acreate(**kwargs):
+        captured.update(kwargs)
+        return {"id": "msg", "content": [{"type": "text", "text": "answer"}]}
+
+    with patch(
+        "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+        new=AsyncMock(side_effect=fake_acreate),
+    ):
+        await logger._execute_agentic_loop(
+            model="bedrock/claude-3-5-sonnet",
+            messages=[{"role": "user", "content": "search litellm"}],
+            tool_calls=[
+                {"id": "toolu_1", "type": "tool_use", "name": "litellm_web_search", "input": {"query": "litellm"}}
+            ],
+            thinking_blocks=[],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 1024,
+                "tools": [{"name": "litellm_web_search", "input_schema": {}}],
+                "tool_choice": {"type": "tool", "name": "litellm_web_search"},
+            },
+            logging_obj=logging_obj,
+            stream=False,
+            kwargs={},
+        )
+
+    assert "tool_choice" not in captured
+    assert captured["tools"] == [{"name": "litellm_web_search", "input_schema": {}}]
 
 
 @pytest.mark.asyncio
