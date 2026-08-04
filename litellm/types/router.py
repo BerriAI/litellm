@@ -157,6 +157,8 @@ class ModelInfo(BaseModel):
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
     blocked: Optional[bool] = None
 
+    cost_discount: Optional[float] = None
+
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
@@ -165,6 +167,13 @@ class ModelInfo(BaseModel):
         super().__init__(id=id, **params)
 
     model_config = ConfigDict(extra="allow")
+
+    @field_validator("cost_discount")
+    @classmethod
+    def validate_cost_discount(cls, value: Optional[float]) -> Optional[float]:
+        if value is not None and not (0 <= value <= 1):
+            raise ValueError(f"cost_discount must be between 0 and 1 (0% to 100%), got {value}")
+        return value
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -442,6 +451,7 @@ SPECIAL_MODEL_INFO_PARAMS = [
     "output_cost_per_character",
     "cache_read_input_token_cost",
     "cache_creation_input_token_cost",
+    "cost_discount",
 ]
 
 
