@@ -18,7 +18,7 @@ Endpoints:
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -33,7 +33,7 @@ from litellm.types.proxy.claude_code_endpoints import (
     RegisterPluginRequest,
 )
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 async def _get_prisma_client():
@@ -70,21 +70,21 @@ async def get_marketplace():
         ```
     """
     try:
-        prisma_client = await _get_prisma_client()
+        prisma_client: Final = await _get_prisma_client()
 
-        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(where={"enabled": True})
+        plugins: Final = await ClaudeCodePluginRepository(prisma_client).table.find_many(where={"enabled": True})
 
-        plugin_list = []
+        plugin_list: Final = []
         for plugin in plugins:
             try:
                 manifest = json.loads(plugin.manifest_json)
             except json.JSONDecodeError:
-                verbose_proxy_logger.warning(f"Plugin {plugin.name} has invalid manifest JSON, skipping")
+                verbose_proxy_logger.warning("Plugin %s has invalid manifest JSON, skipping", plugin.name)
                 continue
 
             # Source must be specified for URL-based marketplaces
             if "source" not in manifest:
-                verbose_proxy_logger.warning(f"Plugin {plugin.name} has no source field, skipping")
+                verbose_proxy_logger.warning("Plugin %s has no source field, skipping", plugin.name)
                 continue
 
             entry: dict[str, Any] = {
@@ -107,7 +107,7 @@ async def get_marketplace():
 
             plugin_list.append(entry)
 
-        marketplace = {
+        marketplace: Final = {
             "name": "litellm",
             "owner": {"name": "LiteLLM", "email": "support@litellm.ai"},
             "plugins": plugin_list,
@@ -118,10 +118,10 @@ async def get_marketplace():
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error generating marketplace: {e}")
+        verbose_proxy_logger.exception("Error generating marketplace: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to generate marketplace: {e!s}"},
+            detail={"error": f"Failed to generate marketplace: {e}"},
         )
 
 
@@ -129,12 +129,12 @@ async def get_marketplace():
 # Each segment must start with an alphanumeric character and contain only
 # alphanumeric characters, dots, hyphens, and underscores.
 # This implicitly blocks '..', leading '/', backslashes, and percent-encoded sequences.
-_VALID_GIT_SUBDIR_PATH_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$")
+_VALID_GIT_SUBDIR_PATH_RE: Final = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$")
 
 
 def _validate_plugin_source(source: dict[str, Any]) -> None:
     """Validate plugin source format, raising HTTPException on invalid input."""
-    source_type = source.get("source")
+    source_type: Final = source.get("source")
     if source_type == "github":
         if "repo" not in source:
             raise HTTPException(
@@ -217,7 +217,7 @@ async def register_plugin(
         ```
     """
     try:
-        prisma_client = await _get_prisma_client()
+        prisma_client: Final = await _get_prisma_client()
 
         # Validate name format
         if not re.match(r"^[a-z0-9-]+$", request.name):
@@ -227,11 +227,11 @@ async def register_plugin(
             )
 
         # Validate source format
-        source = request.source
+        source: Final = request.source
         _validate_plugin_source(source)
 
         # Build manifest for storage
-        manifest: dict[str, Any] = {
+        manifest: Final[dict[str, Any]] = {
             "name": request.name,
             "source": request.source,
         }
@@ -283,7 +283,7 @@ async def register_plugin(
             )
             action = "created"
 
-        verbose_proxy_logger.info(f"Plugin {request.name} {action} successfully")
+        verbose_proxy_logger.info("Plugin %s %s successfully", request.name, action)
 
         return {
             "status": "success",
@@ -301,10 +301,10 @@ async def register_plugin(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error registering plugin: {e}")
+        verbose_proxy_logger.exception("Error registering plugin: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Registration failed: {e!s}"},
+            detail={"error": f"Registration failed: {e}"},
         )
 
 
@@ -328,12 +328,12 @@ async def list_plugins(
         List of plugins with their metadata.
     """
     try:
-        prisma_client = await _get_prisma_client()
+        prisma_client: Final = await _get_prisma_client()
 
-        where = {"enabled": True} if enabled_only else {}
-        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(where=where)
+        where: Final = {"enabled": True} if enabled_only else {}
+        plugins: Final = await ClaudeCodePluginRepository(prisma_client).table.find_many(where=where)
 
-        plugin_list = []
+        plugin_list: Final = []
         for p in plugins:
             # Parse manifest to get additional fields
             manifest = json.loads(p.manifest_json) if p.manifest_json else {}
@@ -368,7 +368,7 @@ async def list_plugins(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error listing plugins: {e}")
+        verbose_proxy_logger.exception("Error listing plugins: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": str(e)},
@@ -394,9 +394,9 @@ async def get_plugin(
         Plugin details including source and metadata.
     """
     try:
-        prisma_client = await _get_prisma_client()
+        prisma_client: Final = await _get_prisma_client()
 
-        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
+        plugin: Final = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
 
         if not plugin:
             raise HTTPException(
@@ -404,7 +404,7 @@ async def get_plugin(
                 detail={"error": f"Plugin '{plugin_name}' not found"},
             )
 
-        manifest = json.loads(plugin.manifest_json) if plugin.manifest_json else {}
+        manifest: Final = json.loads(plugin.manifest_json) if plugin.manifest_json else {}
 
         return {
             "id": plugin.id,
@@ -425,7 +425,7 @@ async def get_plugin(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting plugin: {e}")
+        verbose_proxy_logger.exception("Error getting plugin: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": str(e)},
@@ -448,9 +448,9 @@ async def enable_plugin(
         - plugin_name: The name of the plugin to enable
     """
     try:
-        prisma_client = await _get_prisma_client()
+        prisma_client: Final = await _get_prisma_client()
 
-        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
+        plugin: Final = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
         if not plugin:
             raise HTTPException(
                 status_code=404,
@@ -462,13 +462,13 @@ async def enable_plugin(
             data={"enabled": True, "updated_at": datetime.now(timezone.utc)},
         )
 
-        verbose_proxy_logger.info(f"Plugin {plugin_name} enabled")
+        verbose_proxy_logger.info("Plugin %s enabled", plugin_name)
         return {"status": "success", "message": f"Plugin '{plugin_name}' enabled"}
 
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error enabling plugin: {e}")
+        verbose_proxy_logger.exception("Error enabling plugin: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": str(e)},
@@ -491,9 +491,9 @@ async def disable_plugin(
         - plugin_name: The name of the plugin to disable
     """
     try:
-        prisma_client = await _get_prisma_client()
+        prisma_client: Final = await _get_prisma_client()
 
-        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
+        plugin: Final = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
         if not plugin:
             raise HTTPException(
                 status_code=404,
@@ -505,13 +505,13 @@ async def disable_plugin(
             data={"enabled": False, "updated_at": datetime.now(timezone.utc)},
         )
 
-        verbose_proxy_logger.info(f"Plugin {plugin_name} disabled")
+        verbose_proxy_logger.info("Plugin %s disabled", plugin_name)
         return {"status": "success", "message": f"Plugin '{plugin_name}' disabled"}
 
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error disabling plugin: {e}")
+        verbose_proxy_logger.exception("Error disabling plugin: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": str(e)},
@@ -534,9 +534,9 @@ async def delete_plugin(
         - plugin_name: The name of the plugin to delete
     """
     try:
-        prisma_client = await _get_prisma_client()
+        prisma_client: Final = await _get_prisma_client()
 
-        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
+        plugin: Final = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
         if not plugin:
             raise HTTPException(
                 status_code=404,
@@ -545,13 +545,13 @@ async def delete_plugin(
 
         await ClaudeCodePluginRepository(prisma_client).table.delete(where={"name": plugin_name})
 
-        verbose_proxy_logger.info(f"Plugin {plugin_name} deleted")
+        verbose_proxy_logger.info("Plugin %s deleted", plugin_name)
         return {"status": "success", "message": f"Plugin '{plugin_name}' deleted"}
 
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error deleting plugin: {e}")
+        verbose_proxy_logger.exception("Error deleting plugin: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": str(e)},

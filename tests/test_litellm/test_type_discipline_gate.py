@@ -50,3 +50,16 @@ def test_update_ratchets_limit_down_by_what_the_branch_fixed_never_up():
         "LIT001": {"limit": 85},
         "LIT006": {"limit": 10},
     }
+
+
+def test_update_leaves_rules_seeded_on_this_branch_untouched():
+    # A rule absent from the base budget was seeded with grandfathered headroom on
+    # this branch; the base tree predates the rule (e.g. no Final annotations yet),
+    # so ratcheting against it would collapse the deliberate headroom.
+    budget = {"LIT001": {"limit": 100}, "LIT010": {"limit": 24600}}
+    current = {"LIT001": 45, "LIT010": 16400}
+    base = {"LIT001": 60, "LIT010": 40000}
+    assert gate.ratcheted_budget(budget, current, base, frozenset({"LIT010"})) == {
+        "LIT001": {"limit": 85},
+        "LIT010": {"limit": 24600},
+    }

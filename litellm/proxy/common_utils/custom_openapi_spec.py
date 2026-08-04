@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 
@@ -49,7 +49,7 @@ class CustomOpenAPISpec:
         except Exception as e:
             # FastAPI 0.120+ may fail schema generation for certain types (e.g., openai.Timeout)
             # Log the error and return None to skip schema generation for this model
-            verbose_proxy_logger.debug(f"Failed to generate schema for {model_class}: {e}")
+            verbose_proxy_logger.debug("Failed to generate schema for %s: %s", model_class, e)
             return None
 
     @staticmethod
@@ -171,7 +171,7 @@ class CustomOpenAPISpec:
             Schema with rewritten references
         """
         if isinstance(schema, dict):
-            result = {}
+            result: Final = {}
             for key, value in schema.items():
                 if key == "$ref" and isinstance(value, str) and value.startswith("#/$defs/"):
                     # Rewrite the reference to use components/schemas
@@ -206,7 +206,7 @@ class CustomOpenAPISpec:
 
         # Handle anyOf (Optional fields in Pydantic v2)
         if "anyOf" in field_def:
-            any_of = field_def["anyOf"]
+            any_of: Final = field_def["anyOf"]
             # Find the non-null type
             for option in any_of:
                 if option.get("type") != "null":
@@ -255,7 +255,7 @@ class CustomOpenAPISpec:
         """
         try:
             # Get the schema for the model class
-            request_schema = CustomOpenAPISpec.get_pydantic_schema(model_class)
+            request_schema: Final = CustomOpenAPISpec.get_pydantic_schema(model_class)
 
             # Only proceed if we successfully got the schema
             if request_schema is not None:
@@ -267,13 +267,13 @@ class CustomOpenAPISpec:
                     openapi_schema, paths, f"#/components/schemas/{schema_name}"
                 )
 
-                verbose_proxy_logger.debug(f"Successfully added {schema_name} schema to OpenAPI spec")
+                verbose_proxy_logger.debug("Successfully added %s schema to OpenAPI spec", schema_name)
             else:
-                verbose_proxy_logger.debug(f"Could not get schema for {schema_name}")
+                verbose_proxy_logger.debug("Could not get schema for %s", schema_name)
 
         except Exception as e:
             # If schema addition fails, continue without it
-            verbose_proxy_logger.debug(f"Failed to add {operation_name} request schema: {e!s}")
+            verbose_proxy_logger.debug("Failed to add %s request schema: %s", operation_name, e)
 
         return openapi_schema
 
@@ -302,7 +302,7 @@ class CustomOpenAPISpec:
                 operation_name="chat completion",
             )
         except ImportError as e:
-            verbose_proxy_logger.debug(f"Failed to import ProxyChatCompletionRequest: {e!s}")
+            verbose_proxy_logger.debug("Failed to import ProxyChatCompletionRequest: %s", e)
             return openapi_schema
 
     @staticmethod
@@ -328,7 +328,7 @@ class CustomOpenAPISpec:
                 operation_name="embedding",
             )
         except ImportError as e:
-            verbose_proxy_logger.debug(f"Failed to import EmbeddingRequest: {e!s}")
+            verbose_proxy_logger.debug("Failed to import EmbeddingRequest: %s", e)
             return openapi_schema
 
     @staticmethod
@@ -356,7 +356,7 @@ class CustomOpenAPISpec:
                 operation_name="responses API",
             )
         except ImportError as e:
-            verbose_proxy_logger.debug(f"Failed to import ResponsesAPIRequestParams: {e!s}")
+            verbose_proxy_logger.debug("Failed to import ResponsesAPIRequestParams: %s", e)
             return openapi_schema
 
     @staticmethod

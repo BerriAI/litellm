@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Final, cast
 from urllib.parse import urlparse
 
 import litellm
@@ -31,27 +31,27 @@ def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
 
     def _parse(value: str):
         # Ensure urlparse sees a scheme so it populates hostname / path.
-        normalized = value if "://" in value else f"https://{value}"
+        normalized: Final = value if "://" in value else f"https://{value}"
         return urlparse(normalized)
 
-    parsed_endpoint = _parse(endpoint)
-    parsed_url = _parse(api_base)
+    parsed_endpoint: Final = _parse(endpoint)
+    parsed_url: Final = _parse(api_base)
 
-    endpoint_host = (parsed_endpoint.hostname or "").lower()
-    url_host = (parsed_url.hostname or "").lower()
+    endpoint_host: Final = (parsed_endpoint.hostname or "").lower()
+    url_host: Final = (parsed_url.hostname or "").lower()
     if not endpoint_host or endpoint_host != url_host:
         return False
 
-    endpoint_path = parsed_endpoint.path.rstrip("/")
+    endpoint_path: Final = parsed_endpoint.path.rstrip("/")
     if not endpoint_path:
         return True
-    url_path = parsed_url.path.rstrip("/")
+    url_path: Final = parsed_url.path.rstrip("/")
     return url_path == endpoint_path or url_path.startswith(endpoint_path + "/")
 
 
 def _is_non_openai_azure_model(model: str) -> bool:
     try:
-        model_name = model.split("/", 1)[1]
+        model_name: Final = model.split("/", 1)[1]
         if model_name in litellm.cohere_chat_models or f"mistral/{model_name}" in litellm.mistral_chat_models:
             return True
     except Exception:
@@ -65,7 +65,7 @@ def _is_azure_claude_model(model: str) -> bool:
     Used to detect Claude models that need Anthropic-specific handling.
     """
     try:
-        model_lower = model.lower()
+        model_lower: Final = model.lower()
         return "claude" in model_lower or model_lower.startswith("claude")
     except Exception:
         return False
@@ -187,13 +187,13 @@ def get_llm_provider(
         # like "openrouter/anthropic/claude-3.5-sonnet" must become
         # "anthropic/claude-3.5-sonnet" (OpenRouter expects provider/model).
         if custom_llm_provider == "openrouter" and model.startswith("openrouter/"):
-            remainder = model[len("openrouter/") :]
+            remainder: Final = model[len("openrouter/") :]
             if "/" in remainder:
                 return remainder, custom_llm_provider, dynamic_api_key, api_base
             return model, custom_llm_provider, dynamic_api_key, api_base
 
         # Check JSON-configured providers FIRST (before enum-based provider_list)
-        provider_prefix = model.split("/", 1)[0]
+        provider_prefix: Final = model.split("/", 1)[0]
         if len(model.split("/")) > 1 and JSONProviderRegistry.exists(provider_prefix):
             return _get_openai_compatible_provider_info(
                 model=model,
@@ -383,7 +383,7 @@ def get_llm_provider(
             custom_llm_provider = "cohere_chat"
         ## replicate
         elif model in litellm.replicate_models or (":" in model and len(model) > REPLICATE_MODEL_NAME_WITH_ID_LENGTH):
-            model_parts = model.split(":")
+            model_parts: Final = model.split(":")
             if (
                 len(model_parts) > 1 and len(model_parts[1]) == REPLICATE_MODEL_NAME_WITH_ID_LENGTH
             ):  ## checks if model name has a 64 digit code - e.g. "meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3"
@@ -501,9 +501,9 @@ def get_llm_provider(
         if isinstance(e, litellm.exceptions.BadRequestError):
             raise e
         else:
-            error_str = f"GetLLMProvider Exception - {e!s}\n\noriginal model: {model}"
+            error_str = f"GetLLMProvider Exception - {e}\n\noriginal model: {model}"
             raise litellm.exceptions.BadRequestError(  # type: ignore
-                message=f"GetLLMProvider Exception - {e!s}\n\noriginal model: {model}",
+                message=f"GetLLMProvider Exception - {e}\n\noriginal model: {model}",
                 model=model,
                 response=None,
                 llm_provider="",
@@ -534,10 +534,10 @@ def _get_openai_compatible_provider_info(
     from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
     if JSONProviderRegistry.exists(custom_llm_provider):
-        provider_config = JSONProviderRegistry.get(custom_llm_provider)
+        provider_config: Final = JSONProviderRegistry.get(custom_llm_provider)
         if provider_config is None:
             raise ValueError(f"Provider {custom_llm_provider} not found")
-        config_class = create_config_class(provider_config)
+        config_class: Final = create_config_class(provider_config)
         api_base, dynamic_api_key = config_class()._get_openai_compatible_provider_info(api_base, api_key)
         return model, custom_llm_provider, dynamic_api_key, api_base
 
@@ -829,7 +829,7 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.ClarifaiConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "ragflow":
-        full_model = f"ragflow/{model}"
+        full_model: Final = f"ragflow/{model}"
         (
             api_base,
             dynamic_api_key,

@@ -1975,6 +1975,7 @@
         "prompt_cache_min_tokens": 2048
     },
     "anthropic.claude-sonnet-5": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
         "cache_read_input_token_cost": 2e-07,
@@ -2011,6 +2012,7 @@
         "prompt_cache_min_tokens": 1024
     },
     "global.anthropic.claude-sonnet-5": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
         "cache_read_input_token_cost": 2e-07,
@@ -2047,6 +2049,7 @@
         "prompt_cache_min_tokens": 1024
     },
     "us.anthropic.claude-sonnet-5": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
         "cache_read_input_token_cost": 2.2e-07,
@@ -2083,6 +2086,7 @@
         "prompt_cache_min_tokens": 1024
     },
     "eu.anthropic.claude-sonnet-5": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
         "cache_read_input_token_cost": 2.2e-07,
@@ -2119,6 +2123,7 @@
         "prompt_cache_min_tokens": 1024
     },
     "au.anthropic.claude-sonnet-5": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
         "cache_read_input_token_cost": 2.2e-07,
@@ -2155,6 +2160,7 @@
         "prompt_cache_min_tokens": 1024
     },
     "jp.anthropic.claude-sonnet-5": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
         "cache_read_input_token_cost": 2.2e-07,
@@ -18961,6 +18967,99 @@
             "search_context_size_high": 0.035
         }
     },
+    "gemini/gemini-robotics-er-2-preview": {
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_audio_token": 2e-06,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 1e-05,
+        "output_cost_per_token": 1e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
+        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-robotics-er-2",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "web_search_billing_unit": "per_query"
+    },
+    "gemini/gemini-robotics-er-1.6-preview": {
+        "input_cost_per_audio_token": 2e-06,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 5e-06,
+        "output_cost_per_token": 5e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
+        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-robotics-er",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "web_search_billing_unit": "per_query"
+    },
     "gemini-2.5-computer-use-preview-10-2025": {
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
@@ -25750,6 +25849,11 @@
         "max_tokens": 32766,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.005,
+            "search_context_size_low": 0.005,
+            "search_context_size_medium": 0.005
+        },
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
@@ -25766,6 +25870,11 @@
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 3e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.005,
+            "search_context_size_low": 0.005,
+            "search_context_size_medium": 0.005
+        },
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
@@ -25782,6 +25891,11 @@
         "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 3e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.005,
+            "search_context_size_low": 0.005,
+            "search_context_size_medium": 0.005
+        },
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,

@@ -1,3 +1,5 @@
+from typing import Final
+
 import litellm
 
 
@@ -18,7 +20,7 @@ def _ensure_extra_body_is_safe(extra_body: dict | None) -> dict | None:
 
     if "metadata" in extra_body and isinstance(extra_body["metadata"], dict):
         if "prompt" in extra_body["metadata"]:
-            _prompt = extra_body["metadata"].get("prompt")
+            _prompt: Final = extra_body["metadata"].get("prompt")
 
             # users can send Langfuse TextPromptClient objects, so we need to convert them to dicts
             # Langfuse TextPromptClients have .__dict__ attribute
@@ -42,8 +44,8 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
     if custom_llm_provider not in litellm.models_by_provider:
         return []
 
-    known_models = litellm.models_by_provider.get(custom_llm_provider, [])
-    model_costs = []
+    known_models: Final = litellm.models_by_provider.get(custom_llm_provider, [])
+    model_costs: Final = []
 
     for model in known_models:
         try:
@@ -71,6 +73,6 @@ def get_proxy_server_request_headers(litellm_params: dict | None) -> dict:
     if litellm_params is None:
         return {}
 
-    proxy_request_headers = (litellm_params.get("proxy_server_request") or {}).get("headers") or {}
+    proxy_request_headers: Final = (litellm_params.get("proxy_server_request") or {}).get("headers") or {}
 
     return proxy_request_headers

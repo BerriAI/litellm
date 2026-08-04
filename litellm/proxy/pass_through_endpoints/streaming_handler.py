@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Final
 
 import httpx
 
@@ -39,9 +40,9 @@ class PassThroughStreamingHandler:
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
     ):
-        raw_bytes: list[bytes] = []
+        raw_bytes: Final[list[bytes]] = []
         logging_scheduled = False
-        model_name = PassThroughStreamingHandler._extract_model_for_cost_injection(
+        model_name: Final = PassThroughStreamingHandler._extract_model_for_cost_injection(
             request_body=request_body,
             url_route=url_route,
             endpoint_type=endpoint_type,
@@ -52,7 +53,7 @@ class PassThroughStreamingHandler:
         # re-branching on every chunk. ``include_cost_in_streaming_usage`` is
         # set at config load and stable for the process, matching how the
         # proxy-level streaming fast path resolves it.
-        cost_injection_active = (
+        cost_injection_active: Final = (
             bool(getattr(litellm, "include_cost_in_streaming_usage", False))
             and bool(model_name)
             and endpoint_type in (EndpointType.VERTEX_AI, EndpointType.ANTHROPIC)
@@ -69,7 +70,7 @@ class PassThroughStreamingHandler:
                 # be truthy; pin to a typed local so mypy narrows ``Optional[str]``
                 # -> ``str`` for the per-chunk call site.
                 assert model_name is not None
-                resolved_model_name: str = model_name
+                resolved_model_name: Final[str] = model_name
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
@@ -89,7 +90,7 @@ class PassThroughStreamingHandler:
 
                     yield chunk
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in chunk_processor: {e!s}")
+            verbose_proxy_logger.error("Error in chunk_processor: %s", e)
             raise
         finally:
             # GeneratorExit (raised on client disconnect) is not caught by
@@ -115,7 +116,7 @@ class PassThroughStreamingHandler:
                         )
                     )
                 except Exception as e:
-                    verbose_proxy_logger.error(f"Error scheduling chunk_processor logging: {e!s}")
+                    verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
 
     @staticmethod
     async def _route_streaming_logging_to_handler(
@@ -165,7 +166,7 @@ class PassThroughStreamingHandler:
                 **kwargs,
             )
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in _route_streaming_logging_to_handler: {e!s}")
+            verbose_proxy_logger.error("Error in _route_streaming_logging_to_handler: %s", e)
 
     @staticmethod
     def _build_passthrough_logging_result(
@@ -186,11 +187,11 @@ class PassThroughStreamingHandler:
         be unit-tested in isolation. Still invoked synchronously on the event
         loop; an off-loop dispatch is a future change, not part of this PR.
         """
-        all_chunks = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
+        all_chunks: Final = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
         standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
         kwargs: dict = {}
         if endpoint_type == EndpointType.ANTHROPIC:
-            anthropic_passthrough_logging_handler_result = (
+            anthropic_passthrough_logging_handler_result: Final = (
                 AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
                     litellm_logging_obj=litellm_logging_obj,
                     passthrough_success_handler_obj=passthrough_success_handler_obj,
@@ -205,7 +206,7 @@ class PassThroughStreamingHandler:
             standard_logging_response_object = anthropic_passthrough_logging_handler_result["result"]
             kwargs = anthropic_passthrough_logging_handler_result["kwargs"]
         elif endpoint_type == EndpointType.VERTEX_AI:
-            vertex_passthrough_logging_handler_result = (
+            vertex_passthrough_logging_handler_result: Final = (
                 VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
                     litellm_logging_obj=litellm_logging_obj,
                     passthrough_success_handler_obj=passthrough_success_handler_obj,
@@ -221,7 +222,7 @@ class PassThroughStreamingHandler:
             standard_logging_response_object = vertex_passthrough_logging_handler_result["result"]
             kwargs = vertex_passthrough_logging_handler_result["kwargs"]
         elif endpoint_type == EndpointType.OPENAI:
-            openai_passthrough_logging_handler_result = (
+            openai_passthrough_logging_handler_result: Final = (
                 OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
                     litellm_logging_obj=litellm_logging_obj,
                     passthrough_success_handler_obj=passthrough_success_handler_obj,
@@ -286,9 +287,9 @@ class PassThroughStreamingHandler:
         # errors="replace" so a stream cut mid-multibyte-sequence (client disconnect)
         # still decodes and logs the usage events already received, instead of raising
         # and dropping the whole request from SpendLogs
-        combined_str = b"".join(raw_bytes).decode("utf-8", errors="replace")
+        combined_str: Final = b"".join(raw_bytes).decode("utf-8", errors="replace")
 
         # Split by newlines and filter out empty lines
-        lines = [line.strip() for line in combined_str.split("\n") if line.strip()]
+        lines: Final = [line.strip() for line in combined_str.split("\n") if line.strip()]
 
         return lines

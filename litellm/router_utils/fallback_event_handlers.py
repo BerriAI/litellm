@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -127,7 +127,7 @@ async def run_async_fallback(
         try:
             # LOGGING
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
-            verbose_router_logger.info(f"Falling back to model_group = {mask_sensitive_structure(mg)}")
+            verbose_router_logger.info("Falling back to model_group = %s", mask_sensitive_structure(mg))
             if isinstance(mg, str):
                 kwargs["model"] = mg
             elif isinstance(mg, dict):
@@ -180,7 +180,7 @@ async def log_success_fallback_event(original_model_group: str, kwargs: dict, or
         Errors during logging are caught and reported but do not interrupt the process.
     """
     # Get deduplicated CustomLogger instances from all callback lists
-    custom_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
+    custom_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
 
     for _callback_custom_logger in custom_loggers:
         try:
@@ -190,7 +190,7 @@ async def log_success_fallback_event(original_model_group: str, kwargs: dict, or
                 original_exception=original_exception,
             )
         except Exception as e:
-            verbose_router_logger.error(f"Error in log_success_fallback_event: {e!s}")
+            verbose_router_logger.error("Error in log_success_fallback_event: %s", e)
 
 
 async def log_failure_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
@@ -208,7 +208,7 @@ async def log_failure_fallback_event(original_model_group: str, kwargs: dict, or
         Errors during logging are caught and reported but do not interrupt the process.
     """
     # Get deduplicated CustomLogger instances from all callback lists
-    custom_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
+    custom_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
 
     for _callback_custom_logger in custom_loggers:
         try:
@@ -218,7 +218,7 @@ async def log_failure_fallback_event(original_model_group: str, kwargs: dict, or
                 original_exception=original_exception,
             )
         except Exception as e:
-            verbose_router_logger.error(f"Error in log_failure_fallback_event: {e!s}")
+            verbose_router_logger.error("Error in log_failure_fallback_event: %s", e)
 
 
 def _check_non_standard_fallback_format(fallbacks: list[Any] | None) -> bool:

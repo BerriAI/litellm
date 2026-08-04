@@ -607,6 +607,55 @@ async def test_default_team_params(team_params):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "team_params",
+    [
+        DefaultTeamSSOParams(max_budget=10, budget_duration="1d", organization_id="default-org"),
+        {"max_budget": 10, "budget_duration": "1d", "organization_id": "default-org"},
+    ],
+)
+async def test_default_team_params_organization_id_reaches_sso_created_team(team_params):
+    """The SSO auto-team path builds NewTeamRequest straight from default_team_params,
+    so a default organization_id must land on the created team row and be validated."""
+    from litellm.proxy._types import LiteLLM_OrganizationTable
+
+    litellm.default_team_params = team_params
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_first = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_teamtable.create = AsyncMock()
+    mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_prisma.get_data = AsyncMock(return_value=None)
+    mock_prisma.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
+
+    mock_org = LiteLLM_OrganizationTable(
+        organization_id="default-org",
+        budget_id="budget-id",
+        created_by="admin",
+        updated_by="admin",
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        AsyncMock(return_value=mock_org),
+    ) as mock_get_org:
+        team_id = str(uuid.uuid4())
+        await MicrosoftSSOHandler.create_litellm_teams_from_service_principal_team_ids(
+            service_principal_teams=[
+                MicrosoftServicePrincipalTeam(
+                    principalId=team_id,
+                    principalDisplayName="Test Team",
+                )
+            ]
+        )
+
+        mock_prisma.db.litellm_teamtable.create.assert_called_once()
+        create_call_args = mock_prisma.db.litellm_teamtable.create.call_args.kwargs["data"]
+        assert create_call_args["organization_id"] == "default-org"
+        assert mock_get_org.call_args.kwargs["org_id"] == "default-org"
+
+
+@pytest.mark.asyncio
 async def test_create_team_without_default_params():
     """
     Test team creation when litellm.default_team_params is None

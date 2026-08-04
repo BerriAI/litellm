@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -38,7 +38,7 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         for k in non_default_params:
             if k not in optional_params:
                 if k in supported_params:
@@ -82,7 +82,7 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        final_api_key: str | None = api_key or get_secret_str("RECRAFT_API_KEY")
+        final_api_key: Final[str | None] = api_key or get_secret_str("RECRAFT_API_KEY")
         if not final_api_key:
             raise ValueError("RECRAFT_API_KEY is not set")
 
@@ -102,7 +102,7 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
 
         https://www.recraft.ai/docs#generate-image
         """
-        recratft_image_generation_request_body: RecraftImageGenerationRequestParams = (
+        recratft_image_generation_request_body: Final[RecraftImageGenerationRequestParams] = (
             RecraftImageGenerationRequestParams(
                 prompt=prompt,
                 model=model,
@@ -130,7 +130,7 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
         https://www.recraft.ai/docs#generate-image
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
