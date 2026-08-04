@@ -10825,3 +10825,106 @@ def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
         ProxyStartupEvent._warn_if_mock_testing_params_enabled(general_settings={})
 
     assert MOCK_TESTING_CONFIG_KEY not in caplog.text
+
+
+def _snapshot_yaml_ssrf_state(monkeypatch, proxy_server_module, allowed_hosts):
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", allowed_hosts)
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", [])
+    return proxy_server_module._snapshot_ssrf_yaml_baseline()
+
+
+def test_reconcile_ssrf_settings_reverts_removed_db_overrides(monkeypatch):
+    """A DB override that disappears reverts to the yaml baseline instead of staying applied."""
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    baseline = _snapshot_yaml_ssrf_state(monkeypatch, proxy_server_module, ["yaml.example"])
+
+    proxy_server_module._reconcile_ssrf_settings_from_db(
+        {"user_url_allowed_hosts": ["db.example"], "user_url_validation": False}, baseline
+    )
+    assert litellm.user_url_allowed_hosts == ["db.example"]
+    assert litellm.user_url_validation is False
+
+    proxy_server_module._reconcile_ssrf_settings_from_db({}, baseline)
+    assert litellm.user_url_allowed_hosts == ["yaml.example"]
+    assert litellm.user_url_validation is True
+
+
+def test_reconcile_ssrf_settings_explicit_empty_overrides_baseline(monkeypatch):
+    """An explicit empty allowlist in the DB wins over a non-empty yaml baseline."""
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    baseline = _snapshot_yaml_ssrf_state(monkeypatch, proxy_server_module, ["yaml.example"])
+
+    proxy_server_module._reconcile_ssrf_settings_from_db({"user_url_allowed_hosts": []}, baseline)
+    assert litellm.user_url_allowed_hosts == []
+
+
+@pytest.mark.asyncio
+async def test_add_deployment_reconciles_ssrf_from_both_db_rows(monkeypatch):
+    """add_deployment applies SSRF keys from both config rows with general_settings winning, and a deleted row reverts them."""
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    baseline = _snapshot_yaml_ssrf_state(monkeypatch, proxy_server_module, ["yaml.example"])
+
+    rows = {
+        "general_settings": types.SimpleNamespace(param_value={"user_url_allowed_hosts": ["general.example"]}),
+        "litellm_settings": types.SimpleNamespace(param_value={"user_url_allowed_hosts": ["litellm.example"]}),
+    }
+
+    async def fake_get_config_param(prisma_client, param_name):
+        return rows.get(param_name)
+
+    monkeypatch.setattr(proxy_server_module, "prefetch_config_params", AsyncMock())
+    monkeypatch.setattr(proxy_server_module, "get_config_param", fake_get_config_param)
+
+    proxy_config = proxy_server_module.ProxyConfig()
+    proxy_config._ssrf_yaml_baseline = baseline
+    monkeypatch.setattr(proxy_config, "_should_load_db_object", lambda object_type: False)
+    monkeypatch.setattr(proxy_config, "_init_non_llm_objects_in_db", AsyncMock())
+    monkeypatch.setattr(proxy_config, "_update_general_settings", AsyncMock())
+
+    await proxy_config.add_deployment(prisma_client=MagicMock(), proxy_logging_obj=MagicMock())
+    assert litellm.user_url_allowed_hosts == ["general.example"]
+
+    rows.clear()
+    await proxy_config.add_deployment(prisma_client=MagicMock(), proxy_logging_obj=MagicMock())
+    assert litellm.user_url_allowed_hosts == ["yaml.example"]
+
+
+@pytest.mark.asyncio
+async def test_load_config_snapshots_ssrf_baseline_without_general_settings(tmp_path, monkeypatch):
+    """A config with no general_settings section still gets a baseline, so DB overrides keep applying."""
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [])
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", [])
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"model_list": []}))
+
+    proxy_config = proxy_server_module.ProxyConfig()
+    await proxy_config.load_config(router=MagicMock(), config_file_path=str(config_file))
+
+    assert proxy_config._ssrf_yaml_baseline is not None
+
+    proxy_server_module._reconcile_ssrf_settings_from_db(
+        {"user_url_allowed_hosts": ["db.example"]}, proxy_config._ssrf_yaml_baseline
+    )
+    assert litellm.user_url_allowed_hosts == ["db.example"]
+
+    proxy_server_module._reconcile_ssrf_settings_from_db({}, proxy_config._ssrf_yaml_baseline)
+    assert litellm.user_url_allowed_hosts == []
+
+
+def test_reconcile_ssrf_settings_applies_db_values_without_a_baseline(monkeypatch):
+    """With no baseline captured yet the DB values still apply rather than being dropped."""
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [])
+
+    proxy_server_module._reconcile_ssrf_settings_from_db({"user_url_allowed_hosts": ["db.example"]}, None)
+    assert litellm.user_url_allowed_hosts == ["db.example"]
+
