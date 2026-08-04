@@ -159,7 +159,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   }));
 
   const availableModelSet = React.useMemo(() => new Set(modelInfo.map((m) => m.model_group)), [modelInfo]);
-  const presets = React.useMemo(() => getAllPresets(), []);
+  const presets = getAllPresets();
 
   // A preset's models can only be trusted against a successfully loaded list. Selection and the
   // greyed-out state derive from this one function, so a preset that cannot be selected can never
