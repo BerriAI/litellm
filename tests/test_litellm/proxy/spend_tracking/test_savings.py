@@ -534,3 +534,86 @@ def test_a_baseline_with_no_cache_read_rate_is_charged_its_input_rate():
         20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
     )
     assert reported == pytest.approx(baseline_pays_input - actually_paid)
+
+
+def _breakdown(input_cost: float, output_cost: float = 0.0, **extra: object) -> dict:
+    """A `cost_breakdown` as the cost calculator records it on the spend log."""
+    return {"input_cost": input_cost, "output_cost": output_cost, **extra}
+
+
+def test_the_served_arm_is_read_from_the_record_not_repriced():
+    """What the request cost on the model that served it is not a counterfactual; the
+    cost calculator already billed it and wrote the number down. Recomputing it restates
+    every pricing dimension the biller applied and drops the ones it forgets, so the
+    driver disagrees with the `spend` column beside it.
+
+    Pinned with a negotiated rate no public map lookup can produce, so re-pricing from
+    the model name cannot land on this number. Tool spend and margin are recorded too and
+    must stay out: the baseline cannot be priced with them, so charging them to the
+    served arm alone would read as the router losing money on every tool call.
+    """
+    usage = _usage(fresh=20_000, cached=0, written=0, out=1_000)
+    negotiated_input, negotiated_output = 0.0123, 0.0456
+
+    reported = compute_autorouter_savings(
+        baseline_model="anthropic/claude-opus-5",
+        selected_model="gpt-5.5",
+        selected_provider="openai",
+        usage=usage,
+        conversation_continuing=False,
+        cost_breakdown=_breakdown(
+            negotiated_input,
+            negotiated_output,
+            tool_usage_cost=5.0,
+            margin_total_amount=2.0,
+            total_cost=negotiated_input + negotiated_output + 7.0,
+        ),
+    )
+
+    opus = litellm.get_model_info("claude-opus-5", "anthropic")
+    public = 20_000 * opus["input_cost_per_token"] + 1_000 * opus["output_cost_per_token"]
+    assert reported == pytest.approx(public - (negotiated_input + negotiated_output))
+
+
+@pytest.mark.parametrize(
+    "basis, expected_multiplier",
+    [
+        pytest.param({"service_tier": "priority"}, 2.0, id="priority tier doubles the baseline"),
+        pytest.param({"data_residency": "eu"}, 1.1, id="eu residency uplifts the baseline"),
+        pytest.param({}, 1.0, id="no basis recorded prices at standard"),
+        pytest.param(None, 1.0, id="row predating the field prices at standard"),
+        pytest.param({"service_tier": True, "data_residency": 17}, 1.0, id="a non-string basis is dropped"),
+    ],
+)
+def test_the_baseline_is_priced_on_the_basis_the_request_was_billed_at(basis, expected_multiplier):
+    """A request billed at a priority tier, or through a regional host, would have been
+    billed the same way on the single model an operator ran instead of the router, so the
+    counterfactual carries that basis too. Dropping it prices the two arms from different
+    books; neither multiplier cancels out of the difference, because both are per-model.
+
+    The served model has no tiered rates and no uplift of its own, so only the baseline
+    can move: a fix that forwards the basis to the served arm alone leaves these numbers
+    unchanged. The non-string case guards the JSON round trip, where `.lower()` inside
+    the pricer would raise and be swallowed into a silent $0.00 for the whole row.
+    """
+    gpt = litellm.get_model_info("gpt-5.5", "openai")
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    assert gpt.get("input_cost_per_token_priority") == 2 * gpt["input_cost_per_token"]
+    assert gpt.get("regional_processing_uplift_multiplier_eu") == 1.1
+    assert haiku.get("input_cost_per_token_priority") is None, "served model must not move with the basis"
+    assert haiku.get("regional_processing_uplift_multiplier_eu") is None
+
+    usage = _usage(fresh=20_000, cached=0, written=0, out=1_000)
+    served = 20_000 * haiku["input_cost_per_token"] + 1_000 * haiku["output_cost_per_token"]
+
+    reported = compute_autorouter_savings(
+        baseline_model="openai/gpt-5.5",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=usage,
+        conversation_continuing=False,
+        cost_breakdown=None if basis is None else _breakdown(served, **basis),
+    )
+
+    baseline = 20_000 * gpt["input_cost_per_token"] + 1_000 * gpt["output_cost_per_token"]
+    assert reported == pytest.approx(expected_multiplier * baseline - served)

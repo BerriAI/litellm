@@ -1885,8 +1885,9 @@ class DBSpendUpdateWriter:
                 cache_read_input_tokens=cache_read_input_tokens,
                 routing_decision=_metadata.get("routing_decision"),
                 model_id=payload.get("model_id"),
-                llm_router=_get_llm_router(),
+                llm_router=_get_llm_router,
                 usage_object=usage_obj,
+                cost_breakdown=_metadata.get("cost_breakdown"),
             )
 
             daily_transaction = BaseDailySpendTransaction(

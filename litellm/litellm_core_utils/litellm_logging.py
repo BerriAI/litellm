@@ -1286,6 +1286,8 @@ class Logging(LiteLLMLoggingBaseClass):
         cache_read_cost: float | None = None,
         cache_creation_cost: float | None = None,
         reasoning_cost: float | None = None,
+        service_tier: str | None = None,
+        data_residency: str | None = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1302,6 +1304,8 @@ class Logging(LiteLLMLoggingBaseClass):
             margin_percent: Margin percentage applied (0.10 = 10%)
             margin_fixed_amount: Fixed margin amount in USD
             margin_total_amount: Total margin added in USD
+            service_tier: Tier the costs above were priced on, already resolved
+            data_residency: Region uplift the costs above were priced on, already resolved
         """
 
         self.cost_breakdown = CostBreakdown(
@@ -1309,6 +1313,8 @@ class Logging(LiteLLMLoggingBaseClass):
             output_cost=output_cost,
             total_cost=total_cost,
             tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
+            service_tier=service_tier,
+            data_residency=data_residency,
         )
         if cache_read_cost is not None and cache_read_cost > 0:
             self.cost_breakdown["cache_read_cost"] = cache_read_cost
