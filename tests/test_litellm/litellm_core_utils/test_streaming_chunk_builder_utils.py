@@ -992,3 +992,75 @@ def test_cost_field_in_usage_chunks():
     assert usage.cost == 0.00025
     assert usage.prompt_tokens == 10
     assert usage.completion_tokens == 5
+
+
+def test_get_combined_tool_content_custom_tool_call():
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
+    from litellm.types.utils import ChatCompletionMessageCustomToolCall
+
+    processor = ChunkProcessor.__new__(ChunkProcessor)
+    tool_call_chunks = [
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_TBs",
+                                "type": "custom",
+                                "custom": {"name": "ApplyPatch", "input": ""},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "custom": {"input": "*** Begin Patch\n"}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "custom": {"input": "*** End Patch\n"}}]}}]},
+    ]
+    combined = processor.get_combined_tool_content(tool_call_chunks)
+    assert len(combined) == 1
+    assert isinstance(combined[0], ChatCompletionMessageCustomToolCall)
+    assert combined[0].model_dump() == {
+        "id": "call_TBs",
+        "type": "custom",
+        "custom": {"name": "ApplyPatch", "input": "*** Begin Patch\n*** End Patch\n"},
+    }
+
+
+def test_get_combined_tool_content_custom_tool_call_without_type_field():
+    """Delta coercion classifies a tool-call chunk as custom from its ``custom`` payload
+    alone (``type`` may never arrive on any chunk). The assembler must use the same
+    evidence; requiring ``type == "custom"`` dropped the whole tool call from the
+    combined message (it matched neither the custom nor the function branch)."""
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
+    from litellm.types.utils import ChatCompletionMessageCustomToolCall
+
+    processor = ChunkProcessor.__new__(ChunkProcessor)
+    tool_call_chunks = [
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_TBs",
+                                "custom": {"name": "ApplyPatch", "input": "*** Begin"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "custom": {"input": " Patch"}}]}}]},
+    ]
+    combined = processor.get_combined_tool_content(tool_call_chunks)
+    assert len(combined) == 1
+    assert isinstance(combined[0], ChatCompletionMessageCustomToolCall)
+    assert combined[0].model_dump() == {
+        "id": "call_TBs",
+        "type": "custom",
+        "custom": {"name": "ApplyPatch", "input": "*** Begin Patch"},
+    }

@@ -11,7 +11,7 @@ from typing import (
 )
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -27,9 +27,19 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
-from litellm.types.utils import ModelResponse, ModelResponseStream
+from litellm.types.utils import ModelResponse, ModelResponseStream, ServerToolUse
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
+
+GROQ_COMPOUND_MODELS = frozenset({"compound", "compound-mini"})
+
+
+class GroqExecutedToolIdentity(BaseModel):
+    name: str | None = None
+    type: str | None = None
+
+
+_EXECUTED_TOOLS_ADAPTER = TypeAdapter(tuple[GroqExecutedToolIdentity, ...])
 
 
 class GroqChatConfig(OpenAILikeChatConfig):
@@ -95,6 +105,12 @@ class GroqChatConfig(OpenAILikeChatConfig):
         except ValueError:
             pass
 
+        if not (
+            self._is_compound_model(model)
+            or litellm.supports_web_search(model=model, custom_llm_provider=self.custom_llm_provider)
+        ):
+            base_params.remove("web_search_options")
+
         try:
             if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
                 base_params.append("reasoning_effort")
@@ -102,6 +118,10 @@ class GroqChatConfig(OpenAILikeChatConfig):
             verbose_logger.debug("Error checking if model supports reasoning: %s", e)
 
         return base_params
+
+    @staticmethod
+    def _is_compound_model(model: str) -> bool:
+        return model.removeprefix("groq/") in GROQ_COMPOUND_MODELS
 
     @overload
     def _transform_messages(
@@ -238,7 +258,23 @@ class GroqChatConfig(OpenAILikeChatConfig):
                         "response_format", None
                     )  # only remove if it's a json_schema - handled via using groq's tool calling params.
                 # else: model supports native json_schema, let response_format pass through
+        web_search_options = non_default_params.pop("web_search_options", None)
         optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        if web_search_options is None:
+            return optional_params
+
+        if web_search_options:
+            verbose_logger.info(
+                "Groq web search enabled; ignoring unsupported web_search_options fields: %s",
+                sorted(web_search_options),
+            )
+        if self._is_compound_model(model):
+            return optional_params
+        if not any(tool.get("type") == "browser_search" for tool in optional_params.get("tools") or ()):
+            optional_params = self._add_tools_to_optional_params(
+                optional_params=optional_params,
+                tools=[{"type": "browser_search"}],  # mutable-ok: request tools must be json dicts in a list
+            )
 
         return optional_params
 
@@ -274,7 +310,33 @@ class GroqChatConfig(OpenAILikeChatConfig):
             original_service_tier=getattr(model_response, "service_tier")
         )
         setattr(model_response, "service_tier", mapped_service_tier)
+        self._add_web_search_usage(model_response=model_response)
         return model_response
+
+    def _add_web_search_usage(self, model_response: ModelResponse) -> None:
+        usage = getattr(model_response, "usage", None)
+        if usage is None:
+            return
+        actions = self._executed_tool_actions(model_response)
+        searches = actions.count("browser.search") + actions.count("browser_search")
+        opens = actions.count("browser.open")
+        if searches == 0 and opens == 0:
+            return
+        usage.server_tool_use = ServerToolUse(web_search_requests=searches, browser_open_requests=opens)
+
+    @staticmethod
+    def _executed_tool_actions(model_response: ModelResponse) -> tuple[str | None, ...]:
+        try:
+            return tuple(
+                identity.name or identity.type
+                for choice in model_response.choices
+                for identity in _EXECUTED_TOOLS_ADAPTER.validate_python(
+                    getattr(getattr(choice, "message", None), "executed_tools", None) or ()
+                )
+            )
+        except ValidationError as e:
+            verbose_logger.info("Groq executed_tools entries did not match the expected shape; not billed: %s", e)
+            return ()
 
     def _map_groq_service_tier(self, original_service_tier: str | None) -> Literal["auto", "default", "flex"]:
         """

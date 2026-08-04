@@ -1343,6 +1343,83 @@ def test_ProxyConfig__load_alerting_settings_does_not_log_general_settings_dict(
 
 
 # ---------------------------------------------------------------------------
+# ProxyConfig._warn_on_misplaced_jwt_keys
+# ---------------------------------------------------------------------------
+
+
+def _capture_proxy_warnings(config: dict) -> tuple[tuple[str, ...], list[str]]:
+    """Run ``_warn_on_misplaced_jwt_keys`` and return (result, warning messages).
+
+    Uses a dedicated handler rather than caplog because caplog is unreliable
+    under pytest-xdist (see the LIT-4152 alerting test above).
+    """
+    import logging
+
+    from litellm._logging import verbose_proxy_logger
+
+    class LogRecordHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    handler = LogRecordHandler()
+    handler.setLevel(logging.WARNING)
+    original_level = verbose_proxy_logger.level
+    verbose_proxy_logger.setLevel(logging.WARNING)
+    verbose_proxy_logger.addHandler(handler)
+    try:
+        result = ProxyConfig()._warn_on_misplaced_jwt_keys(config=config)
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(original_level)
+
+    warnings = [r.getMessage() for r in handler.records if r.levelno == logging.WARNING]
+    return result, warnings
+
+
+def test_ProxyConfig__warn_on_misplaced_jwt_keys_warns_on_top_level_keys():
+    """LIT-4584 Issue 3: JWT keys at the YAML top level are silently dropped, so
+    load_config must warn. Both recognized keys are reported."""
+    result, warnings = _capture_proxy_warnings(
+        {"enable_jwt_auth": True, "litellm_jwtauth": {"team_id_jwt_field": "client_id"}}
+    )
+
+    assert result == ("enable_jwt_auth", "litellm_jwtauth")
+    assert len(warnings) == 1
+    assert "enable_jwt_auth" in warnings[0]
+    assert "litellm_jwtauth" in warnings[0]
+    assert "general_settings" in warnings[0]
+
+
+def test_ProxyConfig__warn_on_misplaced_jwt_keys_warns_even_when_also_under_general_settings():
+    """A stale top-level copy is dead config even when the correct copy lives
+    under general_settings, so the warning must still fire on dual placement."""
+    result, warnings = _capture_proxy_warnings(
+        {
+            "enable_jwt_auth": True,
+            "general_settings": {"enable_jwt_auth": True},
+        }
+    )
+
+    assert result == ("enable_jwt_auth",)
+    assert len(warnings) == 1
+    assert "enable_jwt_auth" in warnings[0]
+
+
+def test_ProxyConfig__warn_on_misplaced_jwt_keys_silent_when_correctly_placed():
+    """Keys living only under general_settings are valid, so no warning fires."""
+    result, warnings = _capture_proxy_warnings(
+        {"general_settings": {"enable_jwt_auth": True, "litellm_jwtauth": {}}}
+    )
+
+    assert result == ()
+    assert warnings == []
+
+
+# ---------------------------------------------------------------------------
 # ProxyConfig.initialize_secret_manager
 # ---------------------------------------------------------------------------
 
