@@ -8,6 +8,7 @@ from litellm.proxy.spend_tracking.auto_router_sessions import (
     PROMPT_CACHE_TTL_SECONDS,
     SessionState,
     TurnFacts,
+    fold_session,
     fold_turn,
     merge_deltas,
     state_from_row,
@@ -201,6 +202,36 @@ class TestTtlSelection:
         assert inside_the_hour.stale_return_misses == 0
 
 
+class TestFoldSession:
+    """An interval's turns are folded in start order, not in arrival order."""
+
+    def test_turns_that_arrived_out_of_order_still_all_classify(self):
+        """Two turns in flight together finish in whichever order the providers answer."""
+        arrival_order = (turn(MODEL_B, at=60, created=5000), turn(MODEL_A, at=0, created=5000))
+        folded = fold_session(EMPTY_SESSION_STATE, arrival_order, rates=rates)
+        assert folded.turns == 2
+        assert buckets(folded) == 2
+        assert folded.state.last_model == MODEL_B
+
+    def test_folding_an_interval_matches_folding_its_turns_one_at_a_time(self):
+        turns = (
+            turn(MODEL_A, at=0, created=5000),
+            turn(MODEL_A, at=60, read=5000),
+            turn(MODEL_B, at=400, created=5000),
+            turn(MODEL_A, at=800, created=5000),
+        )
+        deltas, state = fold_all(turns)
+        folded = fold_session(EMPTY_SESSION_STATE, turns, rates=rates)
+        assert folded.turns == sum(d.turns for d in deltas)
+        assert folded.return_turns == sum(d.return_turns for d in deltas)
+        assert folded.replay_spend == pytest.approx(sum(d.replay_spend for d in deltas))
+        assert folded.state == state
+
+    def test_an_empty_interval_folds_to_the_state_it_was_given(self):
+        _, state = fold_all((turn(MODEL_A, at=0, created=5000),))
+        assert fold_session(state, (), rates=rates).state is state
+
+
 class TestOutOfOrderTurns:
     def test_a_late_turn_keeps_its_spend_but_not_its_classification(self):
         first = fold_turn(EMPTY_SESSION_STATE, turn(MODEL_A, at=100, created=5000, spend=0.02), rates=rates)
@@ -336,18 +367,33 @@ def test_state_from_row_without_a_timestamp_starts_at_the_epoch():
     )
 
 
-class _RecordingTable:
-    """A session-rollup table that can be told to fail."""
+class _StoredRow:
+    """A session rollup as prisma hands it back."""
 
-    def __init__(self, fail: bool = False):
-        self.fail = fail
+    def __init__(self, last_model: str, last_turn_at: float, model_state: dict):
+        self.last_model = last_model
+        self.last_turn_at = datetime.fromtimestamp(last_turn_at, tz=timezone.utc)
+        self.model_state = model_state
+
+
+class _RecordingTable:
+    """A session-rollup table that can be told to fail on either side."""
+
+    def __init__(self, fail_read: bool = False, fail_write: bool = False, row=None):
+        self.fail_read = fail_read
+        self.fail_write = fail_write
+        self.row = row
+        self.reads = 0
         self.upserts: list = []
 
     async def find_unique(self, where):
-        return None
+        self.reads += 1
+        if self.fail_read:
+            raise RuntimeError("transient database fault")
+        return self.row
 
     async def upsert(self, where, data):
-        if self.fail:
+        if self.fail_write:
             raise RuntimeError("transient database fault")
         self.upserts.append((where, data))
 
@@ -361,74 +407,156 @@ def _turn_at(at: float, model: str = MODEL_A) -> TurnFacts:
     return turn(model, at=at, created=5000)
 
 
+def _stored_session() -> _StoredRow:
+    """A session last served on MODEL_B that has already used MODEL_A."""
+    return _StoredRow(
+        last_model=MODEL_B,
+        last_turn_at=60.0,
+        model_state={
+            MODEL_A: {"last_used_at": 0.0, "provisioned_replay_spend": 0.0},
+            MODEL_B: {"last_used_at": 60.0, "provisioned_replay_spend": 0.0},
+        },
+    )
+
+
+@pytest.mark.asyncio
+class TestTheLoggingPathNeverTouchesTheDatabase:
+    """Staging a turn must not put a database round trip in front of spend tracking."""
+
+    async def test_turns_can_be_recorded_with_no_database_in_sight(self):
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        queue = AutoRouterSessionQueue()
+        for at in (0, 60, 120):
+            await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(at))
+
+        table = _RecordingTable()
+        assert await queue.flush(_RecordingPrisma(table)) == 1
+        assert table.upserts[0][1]["create"]["turns"] == 3
+
+    async def test_a_session_costs_one_read_per_flush_at_most_not_one_per_turn(self):
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        table = _RecordingTable()
+        prisma = _RecordingPrisma(table)
+        queue = AutoRouterSessionQueue()
+        for at in (0, 60, 120):
+            await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(at))
+        await queue.flush(prisma)
+
+        assert table.reads == 1
+
+        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(180))
+        await queue.flush(prisma)
+        assert table.reads == 1
+
+
 @pytest.mark.asyncio
 class TestFlushDurability:
-    """A transient write fault must not silently delete an interval of traffic."""
+    """A transient database fault must not delete an interval of traffic or its history."""
 
     async def test_a_failed_write_is_restaged_rather_than_dropped(self):
         from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
 
-        table = _RecordingTable(fail=True)
+        table = _RecordingTable(fail_write=True)
         prisma = _RecordingPrisma(table)
         queue = AutoRouterSessionQueue()
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(0), prisma)
+        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(0))
 
         assert await queue.flush(prisma) == 0
 
-        table.fail = False
+        table.fail_write = False
         assert await queue.flush(prisma) == 1
         assert table.upserts[0][1]["create"]["turns"] == 1
 
     async def test_a_restaged_batch_merges_under_turns_staged_since(self):
         from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
 
-        table = _RecordingTable(fail=True)
+        table = _RecordingTable(fail_write=True)
         prisma = _RecordingPrisma(table)
         queue = AutoRouterSessionQueue()
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(0), prisma)
+        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(0))
         await queue.flush(prisma)
 
-        table.fail = False
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(60), prisma)
+        table.fail_write = False
+        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(60))
         assert await queue.flush(prisma) == 1
-        # Both turns land, once each
         assert table.upserts[0][1]["create"]["turns"] == 2
+
+    async def test_a_failed_state_read_writes_nothing_at_all(self):
+        """The corrupting move was folding onto an empty state and persisting it."""
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        table = _RecordingTable(fail_read=True, row=_stored_session())
+        prisma = _RecordingPrisma(table)
+        queue = AutoRouterSessionQueue()
+        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(120))
+
+        assert await queue.flush(prisma) == 0
+        assert table.upserts == []
+
+    async def test_history_survives_a_failed_read_and_still_classifies_the_turn(self):
+        """Returning to a tier this session already used is a return, not a first visit."""
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        table = _RecordingTable(fail_read=True, row=_stored_session())
+        prisma = _RecordingPrisma(table)
+        queue = AutoRouterSessionQueue()
+        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(120))
+        await queue.flush(prisma)
+
+        table.fail_read = False
+        assert await queue.flush(prisma) == 1
+        update = table.upserts[0][1]["update"]
+        assert update["return_turns"] == {"increment": 1}
+        assert update["first_visit_turns"] == {"increment": 0}
+        assert update["turns"] == {"increment": 1}
 
     async def test_a_successful_flush_stages_nothing_back(self):
         from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
 
         prisma = _RecordingPrisma(_RecordingTable())
         queue = AutoRouterSessionQueue()
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(0), prisma)
+        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(0))
         assert await queue.flush(prisma) == 1
         assert await queue.flush(prisma) == 0
 
 
 @pytest.mark.asyncio
-class TestPendingIsBounded:
-    """`session_id` is caller-controlled, so the staged aggregate needs a ceiling."""
+class TestStagingIsBounded:
+    """`session_id` is caller-controlled, so what is held between flushes needs a ceiling."""
 
-    async def test_new_sessions_are_refused_once_the_aggregate_is_full(self):
+    async def test_turns_are_refused_once_the_staging_is_full(self):
         from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
 
-        prisma = _RecordingPrisma(_RecordingTable())
-        queue = AutoRouterSessionQueue(max_tracked_sessions=2)
+        table = _RecordingTable()
+        queue = AutoRouterSessionQueue(max_staged_turns=2)
         for i in range(5):
-            await queue.record_turn((f"s{i}", "g"), "complexity", None, _turn_at(0), prisma)
+            await queue.record_turn((f"s{i}", "g"), "complexity", None, _turn_at(0))
 
-        assert await queue.flush(prisma) == 2
+        assert await queue.flush(_RecordingPrisma(table)) == 2
 
-    async def test_a_session_already_staged_keeps_accumulating_at_the_cap(self):
-        """Refusing new keys must not stall the conversations already in flight."""
+    async def test_the_ceiling_counts_turns_not_sessions(self):
+        """One caller replaying a long session must not evade the memory bound."""
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        table = _RecordingTable()
+        queue = AutoRouterSessionQueue(max_staged_turns=2)
+        for at in (0, 60, 120, 180):
+            await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(at))
+
+        await queue.flush(_RecordingPrisma(table))
+        assert table.upserts[0][1]["create"]["turns"] == 2
+
+    async def test_staging_reopens_once_it_has_drained(self):
         from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
 
         table = _RecordingTable()
         prisma = _RecordingPrisma(table)
-        queue = AutoRouterSessionQueue(max_tracked_sessions=1)
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(0), prisma)
-        await queue.record_turn(("s2", "g"), "complexity", None, _turn_at(0), prisma)
-        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(60), prisma)
-
+        queue = AutoRouterSessionQueue(max_staged_turns=1)
+        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(0))
         await queue.flush(prisma)
-        assert len(table.upserts) == 1
-        assert table.upserts[0][1]["create"]["turns"] == 2
+
+        await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(60))
+        assert await queue.flush(prisma) == 1
+        assert table.upserts[1][1]["update"]["turns"] == {"increment": 1}

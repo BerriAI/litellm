@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, timedelta
 
 import pytest
 
@@ -67,23 +67,25 @@ def group_row(**overrides):
     return row
 
 
+START = date(2026, 7, 2)
+END = date(2026, 8, 1)
+
+
 async def benchmarks_for(**overrides):
     prisma = _FakePrisma([group_row(**overrides)])
-    return await compute_benchmarks(prisma, GROUP_KINDS, "2026-07-02", "2026-08-01")
+    return await compute_benchmarks(prisma, GROUP_KINDS, START, END)
 
 
 class TestWindowClamping:
     def test_a_wider_request_is_clamped_to_the_maximum_window(self):
-        window = clamp_window("2020-01-01", "2026-08-01")
-        expected = (datetime(2026, 8, 1, tzinfo=timezone.utc) - timedelta(days=BENCHMARKS_MAX_WINDOW_DAYS)).date()
-        assert window.start == expected.isoformat()
+        window = clamp_window(date(2020, 1, 1), END)
+        assert window.start == (END - timedelta(days=BENCHMARKS_MAX_WINDOW_DAYS)).isoformat()
 
     def test_a_narrower_request_is_served_as_asked(self):
-        assert clamp_window("2026-07-25", "2026-08-01").start == "2026-07-25"
+        assert clamp_window(date(2026, 7, 25), END).start == "2026-07-25"
 
     def test_the_response_echoes_the_window_actually_served(self):
-        window = clamp_window("2020-01-01", "2026-08-01")
-        assert window.end == "2026-08-01"
+        assert clamp_window(date(2020, 1, 1), END).end == "2026-08-01"
 
 
 @pytest.mark.asyncio
@@ -189,7 +191,7 @@ class TestWarmingEstimate:
 class TestReadPathSource:
     async def test_the_dashboard_query_never_touches_the_spend_logs(self):
         prisma = _FakePrisma([group_row()])
-        await compute_benchmarks(prisma, GROUP_KINDS, "2026-07-02", "2026-08-01")
+        await compute_benchmarks(prisma, GROUP_KINDS, START, END)
         sql = prisma.db.queries[0][0]
         assert "LiteLLM_SpendLogs" not in sql
         assert "LiteLLM_AutoRouterSession" in sql
@@ -197,14 +199,14 @@ class TestReadPathSource:
     async def test_one_query_covers_every_configured_auto_router(self):
         prisma = _FakePrisma([group_row(), group_row(model_group="claude-router-2")])
         result = await compute_benchmarks(
-            prisma, {"claude-auto": "semantic", "claude-router-2": "complexity"}, "2026-07-02", "2026-08-01"
+            prisma, {"claude-auto": "semantic", "claude-router-2": "complexity"}, START, END
         )
         assert len(prisma.db.queries) == 1
         assert {g.model_group for g in result.groups} == {"claude-auto", "claude-router-2"}
 
     async def test_each_group_is_labelled_with_its_router_kind(self):
         prisma = _FakePrisma([group_row(model_group="claude-router-2")])
-        result = await compute_benchmarks(prisma, {"claude-router-2": "complexity"}, "2026-07-02", "2026-08-01")
+        result = await compute_benchmarks(prisma, {"claude-router-2": "complexity"}, START, END)
         assert result.groups[0].router_kind == "complexity"
 
 

@@ -20,6 +20,7 @@ models. This is the same reason ``savings.py`` prices in the spend writer.
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from datetime import datetime, timezone
+from functools import reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, Protocol
 
@@ -78,6 +79,19 @@ EMPTY_SESSION_STATE = SessionState(
     last_turn_at=0.0,
     model_marks=MappingProxyType({}),  # mutable-ok: frozen by MappingProxyType on this line
 )
+
+
+@dataclass(frozen=True, slots=True)
+class StateUnavailable:
+    """The session's stored state could not be read, so there is nothing to fold onto.
+
+    Distinct from a session with no history: an absent row means start from empty
+    and write the result, an unreadable one means try again rather than replace a
+    history that really happened with one derived from a single turn.
+    """
+
+
+StateLookup = SessionState | StateUnavailable
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,4 +461,18 @@ def merge_deltas(left: TurnDelta, right: TurnDelta) -> TurnDelta:
         **{  # mutable-ok: a JSON object is a dict by definition
             name: getattr(left, name) + getattr(right, name) for name in COUNTER_FIELDS
         },  # mutable-ok: a JSON object is a dict by definition
+    )
+
+
+def fold_session(state: SessionState, turns: tuple[TurnFacts, ...], rates: RateLookup = cache_rates) -> TurnDelta:
+    """Fold an interval of one session's turns onto its prior state, oldest first.
+
+    Ordering happens here rather than at arrival because completion order is not
+    start order: turns in flight together finish in whichever order the providers
+    answer, and the earlier one would otherwise read as a late arrival.
+    """
+    return reduce(
+        lambda folded, turn: merge_deltas(folded, fold_turn(folded.state, turn, rates)),
+        sorted(turns, key=lambda turn: turn.started_at),
+        TurnDelta(state=state),
     )

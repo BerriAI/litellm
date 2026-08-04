@@ -346,7 +346,6 @@ class DBSpendUpdateWriter:
                 cache_creation_tokens=_extract_cache_creation_tokens(usage_obj),
                 usage_object=usage_obj,
             ),
-            prisma_client=prisma_client,
         )
 
     async def _enqueue_tool_usage_transaction(

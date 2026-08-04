@@ -15,7 +15,7 @@ One aggregate query covers every auto-router, rather than four per router.
 """
 
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import date, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -158,18 +158,16 @@ GROUP BY model_group
 """
 
 
-def clamp_window(start_date: str, end_date: str) -> _Window:
-    """Parse the range and enforce ``start >= end - BENCHMARKS_MAX_WINDOW_DAYS``.
+def clamp_window(start_date: date, end_date: date) -> _Window:
+    """Enforce ``start >= end - BENCHMARKS_MAX_WINDOW_DAYS``.
 
     The returned start reflects the window actually served, which the response
     echoes so the dashboard can label what it is showing rather than what it
-    asked for.
+    asked for. The dates arrive already parsed, because a malformed one is the
+    route's contract to reject rather than this module's to discover.
     """
-    start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
-    end = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
-    floor = (end - timedelta(days=BENCHMARKS_MAX_WINDOW_DAYS)).replace(hour=0, minute=0, second=0, microsecond=0)
-    clamped = max(start, floor)
-    return _Window(start=clamped.date().isoformat(), end=end.date().isoformat())
+    floor = end_date - timedelta(days=BENCHMARKS_MAX_WINDOW_DAYS)
+    return _Window(start=max(start_date, floor).isoformat(), end=end_date.isoformat())
 
 
 def _rate_pct(part: int, whole: int) -> float:
@@ -259,8 +257,8 @@ def summarize_group(row: _GroupRow, router_kind: str) -> AutoRouterGroupBenchmar
 async def compute_benchmarks(
     prisma_client: "PrismaClient",
     group_kinds: Mapping[str, str],
-    start_date: str,
-    end_date: str,
+    start_date: date,
+    end_date: date,
 ) -> AutoRouterBenchmarksResponse:
     """Aggregate the session rollup for every configured auto-router."""
     window = clamp_window(start_date, end_date)

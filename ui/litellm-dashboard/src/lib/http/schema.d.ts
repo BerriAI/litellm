@@ -776,10 +776,11 @@ export interface paths {
          *     counterfactual baseline, and how the provider prompt cache behaved.
          *
          *     Reads the per-session rollup, never the per-request spend logs.
-         *     ``start_date`` / ``end_date`` are ``YYYY-MM-DD``; the window is clamped to
-         *     the most recent ``BENCHMARKS_MAX_WINDOW_DAYS`` days and the response echoes
-         *     the window actually served. Sessions are counted whole when they were active
-         *     in the window. Returns 404 when no auto-router is configured.
+         *     ``start_date`` / ``end_date`` are ``YYYY-MM-DD``, rejected by the framework
+         *     when malformed; the window is clamped to the most recent
+         *     ``BENCHMARKS_MAX_WINDOW_DAYS`` days and the response echoes the window
+         *     actually served. Sessions are counted whole when they were active in the
+         *     window. Returns 404 when no auto-router is configured.
          */
         get: operations["get_auto_router_benchmarks_auto_router_benchmarks_get"];
         put?: never;
