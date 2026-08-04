@@ -3684,11 +3684,12 @@ def _reconcile_ssrf_settings_from_db(
     Apply the SSRF keys present in the DB rows; absent keys revert to the yaml
     baseline. Callers must only pass a successfully read DB state, so a failed
     read skips reconciling instead of wiping an operator's restrictions.
+
+    Without a baseline (no `load_config` yet) the DB values still apply, they
+    just have nothing to revert to.
     """
-    if yaml_baseline is None:
-        return
     overrides = {k: db_settings[k] for k in _SSRF_SETTINGS_KEYS if k in db_settings}  # mutable-ok: one-shot
-    _apply_ssrf_general_settings({**yaml_baseline, **overrides})  # mutable-ok: applied immediately
+    _apply_ssrf_general_settings({**(yaml_baseline or {}), **overrides})  # mutable-ok: applied immediately
 
 
 def _set_redis_usage_cache(coordination_redis_cache: RedisCache | None) -> None:
@@ -4949,7 +4950,6 @@ class ProxyConfig:
 
             ### SSRF URL VALIDATION SETTINGS ###
             _apply_ssrf_general_settings(general_settings)
-            self._ssrf_yaml_baseline = _snapshot_ssrf_yaml_baseline()
 
             ## check if user has set a premium feature in general_settings
             if general_settings.get("enforced_params") is not None and premium_user is not True:
@@ -4959,6 +4959,10 @@ class ProxyConfig:
             if "litellm_license" in general_settings:
                 _license_check.license_str = general_settings["litellm_license"]
                 premium_user = _license_check.is_premium()
+
+        # Snapshot outside the general_settings block: a config without that
+        # section still needs a baseline for the DB sync to reconcile against
+        self._ssrf_yaml_baseline = _snapshot_ssrf_yaml_baseline()
 
         router_params: dict = {
             "cache_responses": litellm.cache is not None,  # cache if user passed in cache values
