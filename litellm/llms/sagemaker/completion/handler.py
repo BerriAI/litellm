@@ -1,6 +1,7 @@
 import json
+from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, Callable, List, Optional, Union, cast
+from typing import Any, cast
 
 import httpx
 
@@ -21,8 +22,8 @@ from litellm.utils import (
 )
 
 from ..common_utils import AWSEventStreamDecoder, SagemakerError
-from .transformation import SagemakerConfig
 from ..embedding.transformation import SagemakerEmbeddingConfig
+from .transformation import SagemakerConfig
 
 sagemaker_config = SagemakerConfig()
 
@@ -89,11 +90,11 @@ class SagemakerLLM(BaseAWSLLM):
         credentials,
         model: str,
         data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         litellm_params: dict,
         optional_params: dict,
         aws_region_name: str,
-        extra_headers: Optional[dict] = None,
+        extra_headers: dict | None = None,
     ):
         try:
             from botocore.auth import SigV4Auth
@@ -140,7 +141,7 @@ class SagemakerLLM(BaseAWSLLM):
         logging_obj,
         optional_params: dict,
         litellm_params: dict,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
         custom_prompt_dict={},
         hf_model_name=None,
         logger_fn=None,
@@ -200,23 +201,12 @@ class SagemakerLLM(BaseAWSLLM):
                     # Add model_id as InferenceComponentName header
                     # boto3 doc: https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_runtime_InvokeEndpoint.html
                     prepared_request.headers.update({"X-Amzn-SageMaker-Inference-Component": model_id})
-                sync_handler = _get_httpx_client()
-                sync_response = sync_handler.post(
-                    url=prepared_request.url,
+                completion_stream = self.make_sync_call(
+                    api_base=prepared_request.url,
                     headers=prepared_request.headers,  # type: ignore
-                    data=prepared_request.body,
-                    stream=stream,
+                    data=cast(str, prepared_request.body),  # cast-ok: signed body is a JSON str, mirrors async path
+                    logging_obj=logging_obj,
                 )
-
-                if sync_response.status_code != 200:
-                    raise SagemakerError(
-                        status_code=sync_response.status_code,
-                        message=str(sync_response.read()),
-                    )
-
-                decoder = AWSEventStreamDecoder(model="")
-
-                completion_stream = decoder.iter_bytes(sync_response.iter_bytes(chunk_size=1024))
                 streaming_response = CustomStreamWrapper(
                     completion_stream=completion_stream,
                     model=model,
@@ -334,6 +324,29 @@ class SagemakerLLM(BaseAWSLLM):
             litellm_params=litellm_params,
         )
 
+    def make_sync_call(
+        self,
+        api_base: str,
+        headers: dict,
+        data: str,
+        logging_obj,
+        client=None,
+    ):
+        if client is None:
+            client = _get_httpx_client()
+        sync_response = client.post(
+            api_base,
+            headers=headers,
+            data=data,
+            stream=True,
+        )
+
+        if sync_response.status_code != 200:
+            raise SagemakerError(status_code=sync_response.status_code, message=str(sync_response.read()))
+
+        decoder = AWSEventStreamDecoder(model="")
+        return decoder.iter_bytes(sync_response.iter_bytes())
+
     async def make_async_call(
         self,
         api_base: str,
@@ -358,7 +371,7 @@ class SagemakerLLM(BaseAWSLLM):
                 raise SagemakerError(status_code=response.status_code, message=response.text)
 
             decoder = AWSEventStreamDecoder(model="")
-            completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
+            completion_stream = decoder.aiter_bytes(response.aiter_bytes())
 
             return completion_stream
 
@@ -380,16 +393,16 @@ class SagemakerLLM(BaseAWSLLM):
 
     async def async_streaming(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
         custom_prompt_dict: dict,
-        hf_model_name: Optional[str],
+        hf_model_name: str | None,
         credentials,
         aws_region_name: str,
         optional_params,
         encoding,
         model_response: ModelResponse,
-        model_id: Optional[str],
+        model_id: str | None,
         logging_obj: Any,
         litellm_params: dict,
         headers: dict,
@@ -443,17 +456,17 @@ class SagemakerLLM(BaseAWSLLM):
 
     async def async_completion(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
         custom_prompt_dict: dict,
-        hf_model_name: Optional[str],
+        hf_model_name: str | None,
         credentials,
         aws_region_name: str,
         encoding,
         model_response: ModelResponse,
         optional_params: dict,
         logging_obj: Any,
-        model_id: Optional[str],
+        model_id: str | None,
         headers: dict,
         litellm_params: dict,
     ):
@@ -516,7 +529,7 @@ class SagemakerLLM(BaseAWSLLM):
                 )
                 raise e
         except Exception as e:
-            error_message = f"{str(e)}"
+            error_message = f"{e}"
             if "Inference Component Name header is required" in error_message:
                 error_message += "\n pass in via `litellm.completion(..., model_id={InferenceComponentName})`"
             raise SagemakerError(status_code=500, message=error_message)

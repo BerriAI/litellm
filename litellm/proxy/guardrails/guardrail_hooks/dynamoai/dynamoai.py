@@ -6,8 +6,9 @@
 # +-------------------------------------------------------------+
 
 import os
+from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Optional, Type, Union
+from typing import Any
 
 import httpx
 
@@ -42,10 +43,10 @@ class DynamoAIGuardrails(CustomGuardrail):
     def __init__(
         self,
         guardrail_name: str = "litellm_test",
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         model_id: str = "",
-        policy_ids: List[str] = [],
+        policy_ids: list[str] = [],
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -85,10 +86,10 @@ class DynamoAIGuardrails(CustomGuardrail):
 
     async def _call_dynamoai_guardrails(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         event_type: GuardrailEventHooks,
         text_type: str = "input",
-        request_data: Optional[dict] = None,
+        request_data: dict | None = None,
     ) -> DynamoAIResponse:
         """
         Call DynamoAI Guardrails API to analyze messages for policy violations.
@@ -186,8 +187,8 @@ class DynamoAIGuardrails(CustomGuardrail):
         final_action = response.get("finalAction", "NONE")
         applied_policies = response.get("appliedPolicies", [])
 
-        violations_detected: List[str] = []
-        violation_details: Dict[str, Any] = {}
+        violations_detected: list[str] = []
+        violation_details: dict[str, Any] = {}
 
         # For now, only handle BLOCK action
         if final_action == "BLOCK":
@@ -290,7 +291,7 @@ class DynamoAIGuardrails(CustomGuardrail):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Union[Exception, str, dict, None]:
+    ) -> Exception | str | dict | None:
         """
         Runs before the LLM API call
         Runs on only Input
@@ -403,7 +404,7 @@ class DynamoAIGuardrails(CustomGuardrail):
         # to avoid sending empty content to DynamoAI (e.g., during tool calls)
         if isinstance(response, litellm.ModelResponse):
             has_text_content = False
-            dynamoai_messages: List[Dict[str, Any]] = []
+            dynamoai_messages: list[dict[str, Any]] = []
 
             for choice in response.choices:
                 if isinstance(choice, litellm.Choices):
@@ -459,7 +460,7 @@ class DynamoAIGuardrails(CustomGuardrail):
             yield item
 
     @staticmethod
-    def get_config_model() -> Optional[Type[GuardrailConfigModel]]:
+    def get_config_model() -> type[GuardrailConfigModel] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.dynamoai import (
             DynamoAIGuardrailConfigModel,
         )
@@ -467,7 +468,7 @@ class DynamoAIGuardrails(CustomGuardrail):
         return DynamoAIGuardrailConfigModel
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,

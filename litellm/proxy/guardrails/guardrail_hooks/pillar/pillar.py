@@ -8,8 +8,8 @@
 # Standard library imports
 import json
 import os
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import quote
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Type, Union
 
 # Third-party imports
 from fastapi import HTTPException
@@ -50,7 +50,7 @@ def _encode_json_for_header(data: Any) -> str:
     return quote(json_payload, safe="")
 
 
-def _truncate_evidence_payload(evidence: Any, max_bytes: int = MAX_PILLAR_HEADER_VALUE_BYTES) -> Tuple[Any, str, bool]:
+def _truncate_evidence_payload(evidence: Any, max_bytes: int = MAX_PILLAR_HEADER_VALUE_BYTES) -> tuple[Any, str, bool]:
     """
     Truncate evidence payload so the encoded header value stays within max_bytes.
 
@@ -66,7 +66,7 @@ def _truncate_evidence_payload(evidence: Any, max_bytes: int = MAX_PILLAR_HEADER
         truncated_value = "[truncated]"
         return truncated_value, _encode_json_for_header(truncated_value), True
 
-    truncated: List[Any] = []
+    truncated: list[Any] = []
     encoded = _encode_json_for_header(truncated)
     truncated_flag = False
 
@@ -105,11 +105,11 @@ def _truncate_evidence_payload(evidence: Any, max_bytes: int = MAX_PILLAR_HEADER
     return truncated, encoded, truncated_flag
 
 
-def build_pillar_response_headers(metadata_store: Dict[str, Any]) -> Dict[str, str]:
+def build_pillar_response_headers(metadata_store: dict[str, Any]) -> dict[str, str]:
     """
     Create URL-safe Pillar response headers and apply truncation metadata.
     """
-    headers: Dict[str, str] = {}
+    headers: dict[str, str] = {}
 
     if "pillar_flagged" in metadata_store:
         headers["x-pillar-flagged"] = str(metadata_store["pillar_flagged"]).lower()
@@ -140,13 +140,9 @@ def build_pillar_response_headers(metadata_store: Dict[str, Any]) -> Dict[str, s
 class PillarGuardrailMissingSecrets(Exception):
     """Exception raised when Pillar API key is missing."""
 
-    pass
-
 
 class PillarGuardrailAPIError(Exception):
     """Exception raised when there's an error calling the Pillar API."""
-
-    pass
 
 
 # Main guardrail class
@@ -167,16 +163,16 @@ class PillarGuardrail(CustomGuardrail):
 
     def __init__(
         self,
-        guardrail_name: Optional[str] = "pillar-security",
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        on_flagged_action: Optional[str] = None,
-        async_mode: Optional[bool] = None,
-        persist_session: Optional[bool] = None,
-        include_scanners: Optional[bool] = None,
-        include_evidence: Optional[bool] = None,
-        fallback_on_error: Optional[str] = None,
-        timeout: Optional[float] = None,
+        guardrail_name: str | None = "pillar-security",
+        api_key: str | None = None,
+        api_base: str | None = None,
+        on_flagged_action: str | None = None,
+        async_mode: bool | None = None,
+        persist_session: bool | None = None,
+        include_scanners: bool | None = None,
+        include_evidence: bool | None = None,
+        fallback_on_error: str | None = None,
+        timeout: float | None = None,
         **kwargs,
     ) -> None:
         """
@@ -213,10 +209,10 @@ class PillarGuardrail(CustomGuardrail):
             self.on_flagged_action = action
         else:
             if action:
-                verbose_proxy_logger.warning(f"Invalid action '{action}', using default")
+                verbose_proxy_logger.warning("Invalid action '%s', using default", action)
             self.on_flagged_action = self.DEFAULT_ON_FLAGGED_ACTION
 
-        verbose_proxy_logger.debug(f"Pillar Guardrail: Initialized with on_flagged_action: {self.on_flagged_action}")
+        verbose_proxy_logger.debug("Pillar Guardrail: Initialized with on_flagged_action: %s", self.on_flagged_action)
 
         self.async_mode = self._resolve_bool_config(
             provided_value=async_mode,
@@ -250,11 +246,11 @@ class PillarGuardrail(CustomGuardrail):
         else:
             if action:
                 verbose_proxy_logger.warning(
-                    f"Invalid fallback action '{action}', using default '{self.DEFAULT_FALLBACK_ACTION}'"
+                    "Invalid fallback action '%s', using default '%s'", action, self.DEFAULT_FALLBACK_ACTION
                 )
             self.fallback_on_error = self.DEFAULT_FALLBACK_ACTION
 
-        verbose_proxy_logger.debug(f"Pillar Guardrail: Initialized with fallback_on_error: {self.fallback_on_error}")
+        verbose_proxy_logger.debug("Pillar Guardrail: Initialized with fallback_on_error: %s", self.fallback_on_error)
 
         # Set timeout with graceful fallback on invalid configuration
         if timeout is not None:
@@ -264,8 +260,9 @@ class PillarGuardrail(CustomGuardrail):
                 self.timeout = float(os.environ.get("PILLAR_TIMEOUT", str(self.DEFAULT_TIMEOUT)))
             except (ValueError, TypeError):
                 verbose_proxy_logger.warning(
-                    f"Pillar Guardrail: Invalid PILLAR_TIMEOUT value '{os.environ.get('PILLAR_TIMEOUT')}', "
-                    f"falling back to default {self.DEFAULT_TIMEOUT}s"
+                    "Pillar Guardrail: Invalid PILLAR_TIMEOUT value '%s', falling back to default %ss",
+                    os.environ.get("PILLAR_TIMEOUT"),
+                    self.DEFAULT_TIMEOUT,
                 )
                 self.timeout = self.DEFAULT_TIMEOUT
 
@@ -297,7 +294,7 @@ class PillarGuardrail(CustomGuardrail):
             "mcp_call",
             "anthropic_messages",
         ],
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         """
         Pre-call hook to scan the request for security threats before sending to LLM.
 
@@ -315,7 +312,7 @@ class PillarGuardrail(CustomGuardrail):
         """
         event_type = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            verbose_proxy_logger.debug(f"Pillar Guardrail: Pre-call scanning disabled for {self.guardrail_name}")
+            verbose_proxy_logger.debug("Pillar Guardrail: Pre-call scanning disabled for %s", self.guardrail_name)
             return data
 
         verbose_proxy_logger.debug("Pillar Guardrail: Pre-call hook")
@@ -341,7 +338,7 @@ class PillarGuardrail(CustomGuardrail):
             "mcp_call",
             "anthropic_messages",
         ],
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         """
         During-call hook to scan the request in parallel with LLM processing.
 
@@ -358,7 +355,7 @@ class PillarGuardrail(CustomGuardrail):
         """
         event_type = GuardrailEventHooks.during_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            verbose_proxy_logger.debug(f"Pillar Guardrail: During-call scanning disabled for {self.guardrail_name}")
+            verbose_proxy_logger.debug("Pillar Guardrail: During-call scanning disabled for %s", self.guardrail_name)
             return data
 
         verbose_proxy_logger.debug("Pillar Guardrail: During-call moderation hook")
@@ -392,7 +389,7 @@ class PillarGuardrail(CustomGuardrail):
         """
         event_type = GuardrailEventHooks.post_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            verbose_proxy_logger.debug(f"Pillar Guardrail: Post-call scanning disabled for {self.guardrail_name}")
+            verbose_proxy_logger.debug("Pillar Guardrail: Post-call scanning disabled for %s", self.guardrail_name)
             return response
 
         verbose_proxy_logger.debug("Pillar Guardrail: Post-call hook")
@@ -461,7 +458,7 @@ class PillarGuardrail(CustomGuardrail):
                 raise e
 
             # Handle API communication errors based on fallback_on_error setting
-            verbose_proxy_logger.error(f"Pillar Guardrail: API communication failed - {str(e)}")
+            verbose_proxy_logger.error("Pillar Guardrail: API communication failed - %s", e)
 
             return self._handle_api_error(e, data)
 
@@ -501,7 +498,7 @@ class PillarGuardrail(CustomGuardrail):
                 },
             )
 
-    def _prepare_headers(self, user_api_key_dict: UserAPIKeyAuth) -> Dict[str, str]:
+    def _prepare_headers(self, user_api_key_dict: UserAPIKeyAuth) -> dict[str, str]:
         """
         Prepare headers for the Pillar API request.
 
@@ -518,7 +515,7 @@ class PillarGuardrail(CustomGuardrail):
             )
             raise PillarGuardrailMissingSecrets(msg)
 
-        headers: Dict[str, str] = {
+        headers: dict[str, str] = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
@@ -545,7 +542,7 @@ class PillarGuardrail(CustomGuardrail):
 
         return headers
 
-    def _set_bool_header(self, headers: Dict[str, str], header_name: str, value: Optional[bool]) -> None:
+    def _set_bool_header(self, headers: dict[str, str], header_name: str, value: bool | None) -> None:
         """Apply a boolean value as a lowercase string HTTP header when provided."""
 
         if value is None:
@@ -554,11 +551,11 @@ class PillarGuardrail(CustomGuardrail):
 
     def _resolve_bool_config(
         self,
-        provided_value: Optional[Union[bool, str, int]],
-        env_var: Optional[str],
-        default: Optional[bool],
+        provided_value: bool | str | int | None,
+        env_var: str | None,
+        default: bool | None,
         setting_name: str,
-    ) -> Optional[bool]:
+    ) -> bool | None:
         """Resolve configuration precedence: explicit value -> environment -> default."""
 
         if provided_value is not None:
@@ -588,7 +585,7 @@ class PillarGuardrail(CustomGuardrail):
         return default
 
     @staticmethod
-    def _parse_bool_value(value: Union[bool, str, int]) -> bool:
+    def _parse_bool_value(value: bool | str | int) -> bool:
         """Normalise various truthy/falsey inputs to a strict boolean."""
 
         if isinstance(value, bool):
@@ -603,7 +600,7 @@ class PillarGuardrail(CustomGuardrail):
             return False
         raise ValueError(f"Unrecognised boolean value: {value}")
 
-    def _extract_model_and_provider(self, data: dict) -> Tuple[str, str]:
+    def _extract_model_and_provider(self, data: dict) -> tuple[str, str]:
         """
         Extract the model and provider from the request data.
 
@@ -633,7 +630,7 @@ class PillarGuardrail(CustomGuardrail):
                 data.get("custom_llm_provider") or data.get("provider") or "unknown",
             )
 
-    def _prepare_payload(self, data: dict) -> Dict[str, Any]:
+    def _prepare_payload(self, data: dict) -> dict[str, Any]:
         """
         Prepare the payload for the Pillar API request following the /api/v1/protect contract.
 
@@ -681,12 +678,15 @@ class PillarGuardrail(CustomGuardrail):
         payload["provider"] = provider
 
         verbose_proxy_logger.debug(
-            f"Pillar Guardrail: Request context - user={user_id}, session={session_id}, "
-            f"model={model}, provider={provider}"
+            "Pillar Guardrail: Request context - user=%s, session=%s, model=%s, provider=%s",
+            user_id,
+            session_id,
+            model,
+            provider,
         )
         return payload
 
-    async def _call_pillar_api(self, headers: Dict[str, str], payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def _call_pillar_api(self, headers: dict[str, str], payload: dict[str, Any]) -> dict[str, Any]:
         """
         Call the Pillar API and return the response.
 
@@ -698,7 +698,7 @@ class PillarGuardrail(CustomGuardrail):
             Pillar API response as dictionary
         """
         verbose_proxy_logger.debug(
-            f"Pillar Guardrail: Scanning {len(payload.get('messages', []))} messages for security threats"
+            "Pillar Guardrail: Scanning %s messages for security threats", len(payload.get("messages", []))
         )
         response = await self.async_handler.post(
             url=f"{self.api_base}/api/v1/protect",
@@ -711,10 +711,10 @@ class PillarGuardrail(CustomGuardrail):
 
         flagged = res.get("flagged")
         session_id = res.get("session_id")
-        verbose_proxy_logger.debug(f"Pillar Guardrail: Analysis complete - flagged={flagged}, session={session_id}")
+        verbose_proxy_logger.debug("Pillar Guardrail: Analysis complete - flagged=%s, session=%s", flagged, session_id)
         return res
 
-    def _process_pillar_response(self, pillar_response: Dict[str, Any], original_data: dict) -> None:
+    def _process_pillar_response(self, pillar_response: dict[str, Any], original_data: dict) -> None:
         """
         Process the Pillar API response and handle detections based on configuration.
 
@@ -743,7 +743,7 @@ class PillarGuardrail(CustomGuardrail):
         # Store session_id from Pillar response for potential reuse
         pillar_session_id = pillar_response.get("session_id")
         if pillar_session_id:
-            verbose_proxy_logger.debug(f"Pillar Guardrail: Received session_id from server: {pillar_session_id}")
+            verbose_proxy_logger.debug("Pillar Guardrail: Received session_id from server: %s", pillar_session_id)
             # Store in request metadata for use in subsequent hooks
             if "pillar_session_id" not in metadata_store:
                 metadata_store["pillar_session_id"] = pillar_session_id
@@ -774,7 +774,7 @@ class PillarGuardrail(CustomGuardrail):
 
         build_pillar_response_headers(metadata_store)
 
-    def _raise_pillar_detection_exception(self, pillar_response: Dict[str, Any]) -> None:
+    def _raise_pillar_detection_exception(self, pillar_response: dict[str, Any]) -> None:
         """
         Raise an HTTPException for Pillar security detections.
 
@@ -809,7 +809,7 @@ class PillarGuardrail(CustomGuardrail):
     # =========================================================================
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         """
         Get the configuration model for this guardrail.
 
@@ -823,7 +823,7 @@ class PillarGuardrail(CustomGuardrail):
         return PillarGuardrailConfigModel
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,

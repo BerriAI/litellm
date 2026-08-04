@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
@@ -172,15 +173,16 @@ export function KeyEditView({
     form.setFieldValue("disabled_callbacks", disabledCallbacks);
   }, [form, disabledCallbacks]);
 
-  // Convert API budget duration to form format
+  // Normalize any legacy word-form budget duration to the canonical value the dropdown uses
   const getBudgetDuration = (duration: string | null) => {
     if (!duration) return null;
-    const durationMap: Record<string, string> = {
-      "24h": "daily",
-      "7d": "weekly",
-      "30d": "monthly",
+    const wordToCanonical: Record<string, string> = {
+      hourly: "1h",
+      daily: "24h",
+      weekly: "7d",
+      monthly: "30d",
     };
-    return durationMap[duration] || null;
+    return wordToCanonical[duration] ?? duration;
   };
 
   // Set initial form values
@@ -198,6 +200,7 @@ export function KeyEditView({
     mcp_servers_and_groups: {
       servers: keyData.object_permission?.mcp_servers || [],
       accessGroups: keyData.object_permission?.mcp_access_groups || [],
+      toolsets: keyData.object_permission?.mcp_toolsets || [],
     },
     mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
     agents_and_groups: {
@@ -231,6 +234,7 @@ export function KeyEditView({
       mcp_servers_and_groups: {
         servers: keyData.object_permission?.mcp_servers || [],
         accessGroups: keyData.object_permission?.mcp_access_groups || [],
+        toolsets: keyData.object_permission?.mcp_toolsets || [],
       },
       mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
       throttle_on_budget_exceeded: keyData.metadata?.throttle_on_budget_exceeded || false,
@@ -506,11 +510,7 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">
-        <Select placeholder="n/a">
-          <Select.Option value="daily">Daily</Select.Option>
-          <Select.Option value="weekly">Weekly</Select.Option>
-          <Select.Option value="monthly">Monthly</Select.Option>
-        </Select>
+        <BudgetDurationDropdown />
       </Form.Item>
 
       <Form.Item
@@ -689,26 +689,23 @@ export function KeyEditView({
         <AccessGroupSelector placeholder="Select access groups (optional)" />
       </Form.Item>
 
-      <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
-        <Tooltip
-          title={!premiumUser ? "Setting allowed pass through routes by key is a premium feature" : ""}
-          placement="top"
-        >
-          <PassThroughRoutesSelector
-            onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
-            value={form.getFieldValue("allowed_passthrough_routes")}
-            accessToken={accessToken || ""}
-            placeholder={
-              !premiumUser
-                ? "Premium feature - Upgrade to set allowed pass through routes by key"
-                : Array.isArray(keyData.metadata?.allowed_passthrough_routes) &&
-                    keyData.metadata.allowed_passthrough_routes.length > 0
-                  ? `Current: ${keyData.metadata.allowed_passthrough_routes.join(", ")}`
-                  : "Select or enter allowed pass through routes"
-            }
-            disabled={!premiumUser}
-          />
-        </Tooltip>
+      <Form.Item
+        label="Allowed Pass Through Routes"
+        name="allowed_passthrough_routes"
+        tooltip={!premiumUser ? "Setting allowed pass through routes by key is a premium feature" : undefined}
+      >
+        <PassThroughRoutesSelector
+          accessToken={accessToken || ""}
+          placeholder={
+            !premiumUser
+              ? "Premium feature - Upgrade to set allowed pass through routes by key"
+              : Array.isArray(keyData.metadata?.allowed_passthrough_routes) &&
+                  keyData.metadata.allowed_passthrough_routes.length > 0
+                ? `Current: ${keyData.metadata.allowed_passthrough_routes.join(", ")}`
+                : "Select or enter allowed pass through routes"
+          }
+          disabled={!premiumUser}
+        />
       </Form.Item>
 
       <Form.Item label="Vector Stores" name="vector_stores">
@@ -860,9 +857,6 @@ export function KeyEditView({
           neverExpire={neverExpire}
           onNeverExpireChange={setNeverExpire}
         />
-        <Form.Item name="duration" hidden initialValue="">
-          <Input />
-        </Form.Item>
       </div>
 
       {/* Hidden form field for token */}

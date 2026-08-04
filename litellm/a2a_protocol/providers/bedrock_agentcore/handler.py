@@ -6,7 +6,8 @@ completion bridge that would otherwise strip the envelope.
 """
 
 import json
-from typing import Any, AsyncIterator, Dict, Optional, cast
+from collections.abc import AsyncIterator
+from typing import Any, cast
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
@@ -27,10 +28,10 @@ class BedrockAgentCoreA2AHandler:
     @staticmethod
     async def handle_non_streaming(
         request_id: str,
-        params: Dict[str, Any],
-        litellm_params: Dict[str, Any],
-        agent_extra_headers: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any],
+        litellm_params: dict[str, Any],
+        agent_extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """
         Handle non-streaming A2A request to AgentCore.
 
@@ -52,7 +53,7 @@ class BedrockAgentCoreA2AHandler:
             agent_extra_headers=agent_extra_headers,
         )
 
-        verbose_logger.info(f"BedrockAgentCore A2A: Sending non-streaming request to {url}")
+        verbose_logger.info("BedrockAgentCore A2A: Sending non-streaming request to %s", url)
 
         client = get_async_httpx_client(
             llm_provider=cast(Any, httpxSpecialProvider.A2AProvider),
@@ -66,17 +67,17 @@ class BedrockAgentCoreA2AHandler:
         response_data = response.json()
 
         if "error" in response_data:
-            verbose_logger.warning(f"BedrockAgentCore A2A: Agent returned error: {response_data['error']}")
+            verbose_logger.warning("BedrockAgentCore A2A: Agent returned error: %s", response_data["error"])
 
         return response_data
 
     @staticmethod
     async def handle_streaming(
         request_id: str,
-        params: Dict[str, Any],
-        litellm_params: Dict[str, Any],
-        agent_extra_headers: Optional[Dict[str, str]] = None,
-    ) -> AsyncIterator[Dict[str, Any]]:
+        params: dict[str, Any],
+        litellm_params: dict[str, Any],
+        agent_extra_headers: dict[str, str] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
         """
         Handle streaming A2A request to AgentCore.
 
@@ -99,7 +100,7 @@ class BedrockAgentCoreA2AHandler:
             agent_extra_headers=agent_extra_headers,
         )
 
-        verbose_logger.info(f"BedrockAgentCore A2A: Sending streaming request to {url}")
+        verbose_logger.info("BedrockAgentCore A2A: Sending streaming request to %s", url)
 
         client = get_async_httpx_client(
             llm_provider=cast(Any, httpxSpecialProvider.A2AProvider),

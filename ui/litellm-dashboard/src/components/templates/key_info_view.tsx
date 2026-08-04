@@ -295,14 +295,15 @@ export default function KeyInfoView({
       }
       delete formValues.logging_settings;
 
-      // Convert budget_duration to API format
+      // Normalize any legacy word-form budget_duration to the canonical API format
       if (formValues.budget_duration) {
-        const durationMap: Record<string, string> = {
+        const wordToCanonical: Record<string, string> = {
+          hourly: "1h",
           daily: "24h",
           weekly: "7d",
           monthly: "30d",
         };
-        formValues.budget_duration = durationMap[formValues.budget_duration];
+        formValues.budget_duration = wordToCanonical[formValues.budget_duration] ?? formValues.budget_duration;
       }
 
       const newKeyValues = await keyUpdateCall(accessToken, formValues);

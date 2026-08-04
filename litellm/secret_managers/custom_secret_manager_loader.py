@@ -6,7 +6,6 @@ Handles dynamic loading of user-defined secret manager classes from Python files
 
 import importlib.util
 import os
-from typing import Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -14,7 +13,7 @@ from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.types.secret_managers.main import KeyManagementSystem
 
 
-def load_custom_secret_manager(config_file_path: Optional[str] = None) -> None:
+def load_custom_secret_manager(config_file_path: str | None = None) -> None:
     """
     Load and initialize a custom secret manager from a python file.
 

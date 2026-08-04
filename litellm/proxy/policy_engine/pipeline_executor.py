@@ -6,7 +6,7 @@ pass/fail actions (allow, block, next, modify_response) and data forwarding.
 """
 
 import time
-from typing import Any, List, Literal, Optional
+from typing import Any, Literal
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -35,7 +35,7 @@ class PipelineExecutor:
 
     @staticmethod
     async def execute_steps(
-        steps: List[PipelineStep],
+        steps: list[PipelineStep],
         mode: str,
         data: dict,
         user_api_key_dict: Any,
@@ -56,7 +56,7 @@ class PipelineExecutor:
         Returns:
             PipelineExecutionResult with terminal action and step results
         """
-        step_results: List[PipelineStepResult] = []
+        step_results: list[PipelineStepResult] = []
         working_data = data.copy()
         if "metadata" in working_data:
             working_data["metadata"] = working_data["metadata"].copy()
@@ -92,7 +92,12 @@ class PipelineExecutor:
             step_results.append(step_result)
 
             verbose_proxy_logger.debug(
-                f"Pipeline '{policy_name}' step {i}: guardrail={step.guardrail}, outcome={outcome}, action={action}"
+                "Pipeline '%s' step %s: guardrail=%s, outcome=%s, action=%s",
+                policy_name,
+                i,
+                step.guardrail,
+                outcome,
+                action,
             )
 
             # Forward modified data to next step if pass_data is True
@@ -140,9 +145,9 @@ class PipelineExecutor:
         call_type: str,
     ) -> tuple[
         Literal["pass", "fail", "error"],
-        Optional[dict],
-        Optional[str],
-        Optional[Exception],
+        dict | None,
+        str | None,
+        Exception | None,
     ]:
         """
         Run a single pipeline step's guardrail.
@@ -158,7 +163,7 @@ class PipelineExecutor:
         """
         callback = PipelineExecutor.find_guardrail_callback(step.guardrail)
         if callback is None:
-            verbose_proxy_logger.warning(f"Pipeline: guardrail '{step.guardrail}' not found in callbacks")
+            verbose_proxy_logger.warning("Pipeline: guardrail '%s' not found in callbacks", step.guardrail)
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
 
         try:
@@ -205,11 +210,11 @@ class PipelineExecutor:
                 error_msg = _extract_error_message(e)
                 return ("fail", None, error_msg, e)
             else:
-                verbose_proxy_logger.error(f"Pipeline: unexpected error from guardrail '{step.guardrail}': {e}")
+                verbose_proxy_logger.error("Pipeline: unexpected error from guardrail '%s': %s", step.guardrail, e)
                 return ("error", None, str(e), e)
 
     @staticmethod
-    def find_guardrail_callback(guardrail_name: str) -> Optional[CustomGuardrail]:
+    def find_guardrail_callback(guardrail_name: str) -> CustomGuardrail | None:
         """Look up an initialized guardrail callback by name from litellm.callbacks."""
         for callback in litellm.callbacks:
             if isinstance(callback, CustomGuardrail):

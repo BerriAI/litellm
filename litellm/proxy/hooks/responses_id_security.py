@@ -5,7 +5,8 @@ This hook uses the DBSpendUpdateWriter to batch-write response IDs to the databa
 instead of writing immediately on each request.
 """
 
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional, Tuple, Union, cast
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import HTTPException
 
@@ -37,7 +38,7 @@ class ResponsesIDSecurity(CustomLogger):
         cache: "DualCache",
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         # MAP all the responses api response ids to the encrypted response ids
         responses_api_call_types = {
             "aresponses",
@@ -67,8 +68,8 @@ class ResponsesIDSecurity(CustomLogger):
 
     def check_user_access_to_response_id(
         self,
-        response_id_user_id: Optional[str],
-        response_id_team_id: Optional[str],
+        response_id_user_id: str | None,
+        response_id_team_id: str | None,
         user_api_key_dict: "UserAPIKeyAuth",
     ) -> bool:
         from litellm.proxy.proxy_server import general_settings
@@ -82,7 +83,9 @@ class ResponsesIDSecurity(CustomLogger):
         if response_id_user_id and response_id_user_id != user_api_key_dict.user_id:
             if general_settings.get("disable_responses_id_security", False):
                 verbose_proxy_logger.debug(
-                    f"Responses ID Security is disabled. User {user_api_key_dict.user_id} is accessing response id {response_id_user_id} which is not associated with them."
+                    "Responses ID Security is disabled. User %s is accessing response id %s which is not associated with them.",
+                    user_api_key_dict.user_id,
+                    response_id_user_id,
                 )
                 return True
             raise HTTPException(
@@ -93,7 +96,10 @@ class ResponsesIDSecurity(CustomLogger):
         if response_id_team_id and response_id_team_id != user_api_key_dict.team_id:
             if general_settings.get("disable_responses_id_security", False):
                 verbose_proxy_logger.debug(
-                    f"Responses ID Security is disabled. Response belongs to team {response_id_team_id} but user {user_api_key_dict.user_id} is accessing it with team id {user_api_key_dict.team_id}."
+                    "Responses ID Security is disabled. Response belongs to team %s but user %s is accessing it with team id %s.",
+                    response_id_team_id,
+                    user_api_key_dict.user_id,
+                    user_api_key_dict.team_id,
                 )
                 return True
             raise HTTPException(
@@ -118,7 +124,7 @@ class ResponsesIDSecurity(CustomLogger):
             return True
         return False
 
-    def _decrypt_response_id(self, response_id: str) -> Tuple[str, Optional[str], Optional[str]]:
+    def _decrypt_response_id(self, response_id: str) -> tuple[str, str | None, str | None]:
         """
         Returns:
          - original_response_id: the original response id
@@ -158,7 +164,7 @@ class ResponsesIDSecurity(CustomLogger):
                 return response_id, None, None
         return response_id, None, None
 
-    def _get_signing_key(self) -> Optional[str]:
+    def _get_signing_key(self) -> str | None:
         """Get the signing key for encryption/decryption."""
         import os
 
@@ -173,7 +179,7 @@ class ResponsesIDSecurity(CustomLogger):
         self,
         response: BaseLiteLLMOpenAIResponseObject,
         user_api_key_dict: "UserAPIKeyAuth",
-        request_cache: Optional[dict[str, str]] = None,
+        request_cache: dict[str, str] | None = None,
     ) -> BaseLiteLLMOpenAIResponseObject:
         # encrypt the response id using the symmetric key
         # encrypt the response id, and encode the user id and response id in base64

@@ -18,7 +18,7 @@ Endpoints:
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -79,15 +79,15 @@ async def get_marketplace():
             try:
                 manifest = json.loads(plugin.manifest_json)
             except json.JSONDecodeError:
-                verbose_proxy_logger.warning(f"Plugin {plugin.name} has invalid manifest JSON, skipping")
+                verbose_proxy_logger.warning("Plugin %s has invalid manifest JSON, skipping", plugin.name)
                 continue
 
             # Source must be specified for URL-based marketplaces
             if "source" not in manifest:
-                verbose_proxy_logger.warning(f"Plugin {plugin.name} has no source field, skipping")
+                verbose_proxy_logger.warning("Plugin %s has no source field, skipping", plugin.name)
                 continue
 
-            entry: Dict[str, Any] = {
+            entry: dict[str, Any] = {
                 "name": plugin.name,
                 "source": manifest["source"],
             }
@@ -118,10 +118,10 @@ async def get_marketplace():
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error generating marketplace: {e}")
+        verbose_proxy_logger.exception("Error generating marketplace: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to generate marketplace: {str(e)}"},
+            detail={"error": f"Failed to generate marketplace: {e}"},
         )
 
 
@@ -132,7 +132,7 @@ async def get_marketplace():
 _VALID_GIT_SUBDIR_PATH_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$")
 
 
-def _validate_plugin_source(source: Dict[str, Any]) -> None:
+def _validate_plugin_source(source: dict[str, Any]) -> None:
     """Validate plugin source format, raising HTTPException on invalid input."""
     source_type = source.get("source")
     if source_type == "github":
@@ -231,7 +231,7 @@ async def register_plugin(
         _validate_plugin_source(source)
 
         # Build manifest for storage
-        manifest: Dict[str, Any] = {
+        manifest: dict[str, Any] = {
             "name": request.name,
             "source": request.source,
         }
@@ -283,7 +283,7 @@ async def register_plugin(
             )
             action = "created"
 
-        verbose_proxy_logger.info(f"Plugin {request.name} {action} successfully")
+        verbose_proxy_logger.info("Plugin %s %s successfully", request.name, action)
 
         return {
             "status": "success",
@@ -301,10 +301,10 @@ async def register_plugin(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error registering plugin: {e}")
+        verbose_proxy_logger.exception("Error registering plugin: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Registration failed: {str(e)}"},
+            detail={"error": f"Registration failed: {e}"},
         )
 
 
@@ -368,7 +368,7 @@ async def list_plugins(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error listing plugins: {e}")
+        verbose_proxy_logger.exception("Error listing plugins: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": str(e)},
@@ -425,7 +425,7 @@ async def get_plugin(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting plugin: {e}")
+        verbose_proxy_logger.exception("Error getting plugin: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": str(e)},
@@ -462,13 +462,13 @@ async def enable_plugin(
             data={"enabled": True, "updated_at": datetime.now(timezone.utc)},
         )
 
-        verbose_proxy_logger.info(f"Plugin {plugin_name} enabled")
+        verbose_proxy_logger.info("Plugin %s enabled", plugin_name)
         return {"status": "success", "message": f"Plugin '{plugin_name}' enabled"}
 
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error enabling plugin: {e}")
+        verbose_proxy_logger.exception("Error enabling plugin: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": str(e)},
@@ -505,13 +505,13 @@ async def disable_plugin(
             data={"enabled": False, "updated_at": datetime.now(timezone.utc)},
         )
 
-        verbose_proxy_logger.info(f"Plugin {plugin_name} disabled")
+        verbose_proxy_logger.info("Plugin %s disabled", plugin_name)
         return {"status": "success", "message": f"Plugin '{plugin_name}' disabled"}
 
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error disabling plugin: {e}")
+        verbose_proxy_logger.exception("Error disabling plugin: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": str(e)},
@@ -545,13 +545,13 @@ async def delete_plugin(
 
         await ClaudeCodePluginRepository(prisma_client).table.delete(where={"name": plugin_name})
 
-        verbose_proxy_logger.info(f"Plugin {plugin_name} deleted")
+        verbose_proxy_logger.info("Plugin %s deleted", plugin_name)
         return {"status": "success", "message": f"Plugin '{plugin_name}' deleted"}
 
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error deleting plugin: {e}")
+        verbose_proxy_logger.exception("Error deleting plugin: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": str(e)},

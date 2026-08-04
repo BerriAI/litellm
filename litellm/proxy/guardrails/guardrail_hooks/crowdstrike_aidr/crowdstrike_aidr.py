@@ -4,11 +4,9 @@ from collections.abc import Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Annotated,
-    List,
     Literal,
     NamedTuple,
     Optional,
-    Union,
     cast,
 )
 
@@ -44,8 +42,6 @@ if TYPE_CHECKING:
 class CrowdStrikeAIDRGuardrailMissingSecrets(Exception):
     """Custom exception for missing CrowdStrike AIDR secrets."""
 
-    pass
-
 
 class _TextContentPart(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -65,32 +61,32 @@ class _ImageUrlContentPart(BaseModel):
     image_url: _ImageUrl
 
 
-_ContentPart = Annotated[Union[_TextContentPart, _ImageUrlContentPart], Field(discriminator="type")]
+_ContentPart = Annotated[_TextContentPart | _ImageUrlContentPart, Field(discriminator="type")]
 
 
 class _Message(BaseModel):
     role: str
-    content: Optional[Union[str, list[_ContentPart]]] = None
+    content: str | list[_ContentPart] | None = None
 
 
 class _GuardInput(BaseModel):
     messages: list[_Message]
-    tools: Optional[Sequence[OpenAIChatCompletionToolParam]] = None
+    tools: Sequence[OpenAIChatCompletionToolParam] | None = None
 
 
 class _GuardChatCompletionsResult(BaseModel):
-    guard_output: Optional[_GuardInput] = None
+    guard_output: _GuardInput | None = None
     """Updated structured prompt."""
-    blocked: Optional[bool] = None
+    blocked: bool | None = None
     """Whether or not the prompt triggered a block detection."""
-    transformed: Optional[bool] = None
+    transformed: bool | None = None
     """Whether or not the original input was transformed."""
-    detectors: Optional[dict[str, Any]] = None
+    detectors: dict[str, Any] | None = None
     """Result of the policy analyzing and input prompt."""
 
 
 class _GuardChatCompletionsResponse(BaseModel):
-    result: Optional[_GuardChatCompletionsResult] = None
+    result: _GuardChatCompletionsResult | None = None
 
 
 class _FilteredMessages(NamedTuple):
@@ -239,7 +235,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
     """
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
@@ -279,7 +275,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         # Pass relevant kwargs to the parent class
         super().__init__(guardrail_name=guardrail_name, **kwargs)
         verbose_proxy_logger.debug(
-            f"Initialized CrowdStrike AIDR Guardrail: name={guardrail_name}, api_base={self.api_base}"
+            "Initialized CrowdStrike AIDR Guardrail: name=%s, api_base=%s", guardrail_name, self.api_base
         )
 
     async def _call_crowdstrike_aidr_guard(
@@ -310,7 +306,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         }
 
         verbose_proxy_logger.debug(
-            f"CrowdStrike AIDR Guardrail ({hook_name}): Calling endpoint {endpoint} with payload: {payload}"
+            "CrowdStrike AIDR Guardrail (%s): Calling endpoint %s with payload: %s", hook_name, endpoint, payload
         )
 
         response = await self.async_handler.post(url=endpoint, json=payload, headers=headers)
@@ -321,7 +317,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
 
         if result.blocked:
             verbose_proxy_logger.warning(
-                f"CrowdStrike AIDR Guardrail ({hook_name}): Request blocked. Response: {result}"
+                "CrowdStrike AIDR Guardrail (%s): Request blocked. Response: %s", hook_name, result
             )
             raise HTTPException(
                 status_code=400,  # Bad Request, indicating violation
@@ -331,7 +327,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
                 },
             )
         verbose_proxy_logger.debug(
-            f"CrowdStrike AIDR Guardrail ({hook_name}): Request passed. Response: {result.detectors}"
+            "CrowdStrike AIDR Guardrail (%s): Request passed. Response: %s", hook_name, result.detectors
         )
 
         return result
@@ -400,7 +396,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        verbose_proxy_logger.debug(f"CrowdStrike AIDR Guardrail: Applying guardrail to {input_type}")
+        verbose_proxy_logger.debug("CrowdStrike AIDR Guardrail: Applying guardrail to %s", input_type)
 
         # Extract inputs
         texts = inputs.get("texts", [])

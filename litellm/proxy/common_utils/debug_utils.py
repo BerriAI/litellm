@@ -6,7 +6,7 @@ import os
 import sys
 import tracemalloc
 from collections import Counter
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -29,18 +29,21 @@ def configure_gc_thresholds():
             thresholds = [int(x.strip()) for x in gc_threshold_env.split(",")]
             if len(thresholds) == 3:
                 gc.set_threshold(*thresholds)
-                verbose_proxy_logger.info(f"GC thresholds set to: {thresholds}")
+                verbose_proxy_logger.info("GC thresholds set to: %s", thresholds)
             else:
                 verbose_proxy_logger.warning(
-                    f"GC threshold not set: {gc_threshold_env}. Expected format: 'gen0,gen1,gen2'"
+                    "GC threshold not set: %s. Expected format: 'gen0,gen1,gen2'", gc_threshold_env
                 )
         except ValueError as e:
-            verbose_proxy_logger.warning(f"Failed to parse GC threshold: {gc_threshold_env}. Error: {e}")
+            verbose_proxy_logger.warning("Failed to parse GC threshold: %s. Error: %s", gc_threshold_env, e)
 
     # Log current thresholds
     current_thresholds = gc.get_threshold()
     verbose_proxy_logger.info(
-        f"Current GC thresholds: gen0={current_thresholds[0]}, gen1={current_thresholds[1]}, gen2={current_thresholds[2]}"
+        "Current GC thresholds: gen0=%s, gen1=%s, gen2=%s",
+        current_thresholds[0],
+        current_thresholds[1],
+        current_thresholds[2],
     )
 
 
@@ -194,7 +197,7 @@ async def memory_usage_in_mem_cache_items(
 @router.get("/debug/memory/summary", include_in_schema=False)
 async def get_memory_summary(
     _: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Get simplified memory usage summary for the proxy.
 
@@ -249,7 +252,7 @@ async def get_memory_summary(
         process_memory["error"] = str(e)
 
     # Get cache information
-    caches: Dict[str, Any] = {}
+    caches: dict[str, Any] = {}
     total_cache_items = 0
 
     try:
@@ -310,7 +313,7 @@ async def get_memory_summary(
     }
 
 
-def _get_gc_statistics() -> Dict[str, Any]:
+def _get_gc_statistics() -> dict[str, Any]:
     """Get garbage collector statistics."""
     return {
         "enabled": gc.isenabled(),
@@ -338,7 +341,7 @@ def _get_gc_statistics() -> Dict[str, Any]:
     }
 
 
-def _get_object_type_counts(top_n: int) -> Tuple[int, List[Dict[str, Any]]]:
+def _get_object_type_counts(top_n: int) -> tuple[int, list[dict[str, Any]]]:
     """Count objects by type and return total count and top N types."""
     type_counts: Counter = Counter()
     total_objects = 0
@@ -356,7 +359,7 @@ def _get_object_type_counts(top_n: int) -> Tuple[int, List[Dict[str, Any]]]:
     return total_objects, top_object_types
 
 
-def _get_uncollectable_objects_info() -> Dict[str, Any]:
+def _get_uncollectable_objects_info() -> dict[str, Any]:
     """Get information about uncollectable objects (potential memory leaks)."""
     uncollectable = gc.garbage
     return {
@@ -370,9 +373,9 @@ def _get_uncollectable_objects_info() -> Dict[str, Any]:
     }
 
 
-def _get_cache_memory_stats(user_api_key_cache, llm_router, proxy_logging_obj, redis_usage_cache) -> Dict[str, Any]:
+def _get_cache_memory_stats(user_api_key_cache, llm_router, proxy_logging_obj, redis_usage_cache) -> dict[str, Any]:
     """Calculate memory usage for all caches."""
-    cache_stats: Dict[str, Any] = {}
+    cache_stats: dict[str, Any] = {}
     try:
         # User API key cache
         user_cache_size = sys.getsizeof(user_api_key_cache.in_memory_cache.cache_dict)
@@ -425,20 +428,20 @@ def _get_cache_memory_stats(user_api_key_cache, llm_router, proxy_logging_obj, r
                             ),
                         }
             except Exception as e:
-                verbose_proxy_logger.debug(f"Error getting Redis pool info: {e}")
+                verbose_proxy_logger.debug("Error getting Redis pool info: %s", e)
         else:
             cache_stats["redis_usage_cache"] = {"enabled": False}
 
     except Exception as e:
-        verbose_proxy_logger.debug(f"Error calculating cache stats: {e}")
+        verbose_proxy_logger.debug("Error calculating cache stats: %s", e)
         cache_stats["error"] = str(e)
 
     return cache_stats
 
 
-def _get_router_memory_stats(llm_router) -> Dict[str, Any]:
+def _get_router_memory_stats(llm_router) -> dict[str, Any]:
     """Get memory usage statistics for LiteLLM router."""
-    litellm_router_memory: Dict[str, Any] = {}
+    litellm_router_memory: dict[str, Any] = {}
     try:
         if llm_router is not None:
             # Model list memory size
@@ -496,13 +499,13 @@ def _get_router_memory_stats(llm_router) -> Dict[str, Any]:
         else:
             litellm_router_memory = {"note": "Router not initialized"}
     except Exception as e:
-        verbose_proxy_logger.debug(f"Error getting router memory info: {e}")
+        verbose_proxy_logger.debug("Error getting router memory info: %s", e)
         litellm_router_memory = {"error": str(e)}
 
     return litellm_router_memory
 
 
-def _get_process_memory_info(worker_pid: int, include_process_info: bool) -> Optional[Dict[str, Any]]:
+def _get_process_memory_info(worker_pid: int, include_process_info: bool) -> dict[str, Any] | None:
     """Get process-level memory information using psutil."""
     if not include_process_info:
         return None
@@ -546,7 +549,7 @@ def _get_process_memory_info(worker_pid: int, include_process_info: bool) -> Opt
             "error": "psutil not installed. Install with: pip install psutil",
         }
     except Exception as e:
-        verbose_proxy_logger.debug(f"Error getting process info: {e}")
+        verbose_proxy_logger.debug("Error getting process info: %s", e)
         return {"pid": worker_pid, "error": str(e)}
 
 
@@ -555,7 +558,7 @@ async def get_memory_details(
     _: UserAPIKeyAuth = Depends(user_api_key_auth),
     top_n: int = Query(20, description="Number of top object types to return"),
     include_process_info: bool = Query(True, description="Include process memory info"),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Get detailed memory diagnostics for deep debugging.
 
@@ -580,8 +583,8 @@ async def get_memory_details(
     from litellm.proxy.proxy_server import (
         llm_router,
         proxy_logging_obj,
-        user_api_key_cache,
         redis_usage_cache,
+        user_api_key_cache,
     )
 
     worker_pid = os.getpid()
@@ -615,7 +618,7 @@ async def configure_gc_thresholds_endpoint(
     generation_0: int = Query(700, description="Generation 0 threshold (default: 700)"),
     generation_1: int = Query(10, description="Generation 1 threshold (default: 10)"),
     generation_2: int = Query(10, description="Generation 2 threshold (default: 10)"),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Configure Python garbage collection thresholds.
 
@@ -649,11 +652,11 @@ async def configure_gc_thresholds_endpoint(
     try:
         gc.set_threshold(generation_0, generation_1, generation_2)
         verbose_proxy_logger.info(
-            f"GC thresholds updated from {old_thresholds} to ({generation_0}, {generation_1}, {generation_2})"
+            "GC thresholds updated from %s to (%s, %s, %s)", old_thresholds, generation_0, generation_1, generation_2
         )
     except Exception as e:
-        verbose_proxy_logger.error(f"Failed to set GC thresholds: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to set GC thresholds: {str(e)}")
+        verbose_proxy_logger.error("Failed to set GC thresholds: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to set GC thresholds: {e}")
 
     # Get current object count to show immediate impact
     current_count = gc.get_count()[0]
@@ -783,4 +786,4 @@ def init_verbose_loggers():
     except Exception as e:
         import logging
 
-        logging.warning(f"Failed to init verbose loggers: {str(e)}")
+        logging.warning("Failed to init verbose loggers: %s", e)

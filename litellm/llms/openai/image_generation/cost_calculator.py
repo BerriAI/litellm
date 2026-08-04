@@ -4,8 +4,6 @@ Cost calculator for OpenAI image generation models (gpt-image family)
 These models use token-based pricing instead of pixel-based pricing like DALL-E.
 """
 
-from typing import Optional
-
 from litellm import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_image_response_cost_from_usage,
@@ -17,12 +15,12 @@ from litellm.types.utils import ImageResponse, Usage
 def cost_calculator(
     model: str,
     image_response: ImageResponse,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
 ) -> float:
     """Calculate cost for OpenAI gpt-image models (token-based pricing)."""
     usage = getattr(image_response, "usage", None)
     if usage is None:
-        verbose_logger.debug(f"No usage data available for {model}, cannot calculate token-based cost")
+        verbose_logger.debug("No usage data available for %s, cannot calculate token-based cost", model)
         return 0.0
 
     provider = custom_llm_provider or "openai"

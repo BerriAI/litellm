@@ -5,7 +5,7 @@ Relevant Issue: https://github.com/BerriAI/litellm/issues/13764
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 from typing_extensions import override
@@ -29,20 +29,18 @@ if TYPE_CHECKING:
 
 
 def get_output_content_by_type(
-    response_obj: Union[
-        None,
-        dict,
-        EmbeddingResponse,
-        ModelResponse,
-        TextCompletionResponse,
-        ImageResponse,
-        TranscriptionResponse,
-        RerankResponse,
-        HttpxBinaryResponseContent,
-        ResponsesAPIResponse,
-        list,
-    ],
-    kwargs: Optional[Dict[str, Any]] = None,
+    response_obj: None
+    | dict
+    | EmbeddingResponse
+    | ModelResponse
+    | TextCompletionResponse
+    | ImageResponse
+    | TranscriptionResponse
+    | RerankResponse
+    | HttpxBinaryResponseContent
+    | ResponsesAPIResponse
+    | list,
+    kwargs: dict[str, Any] | None = None,
 ) -> str:
     """
     Extract output content from response objects based on their type.
@@ -83,7 +81,7 @@ def get_output_content_by_type(
 class LangfuseLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
     @staticmethod
     @override
-    def set_messages(span: "Span", kwargs: Dict[str, Any]):
+    def set_messages(span: "Span", kwargs: dict[str, Any]):
         prompt = {"messages": kwargs.get("messages")}
         optional_params = kwargs.get("optional_params", {})
         functions = optional_params.get("functions")

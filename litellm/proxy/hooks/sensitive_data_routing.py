@@ -11,7 +11,7 @@ Works across multiple proxy instances via DualCache (in-memory + Redis).
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -53,7 +53,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         return f"{{{SENSITIVE_ROUTING_CACHE_PREFIX}:{tenant}:{session_id}}}:model"
 
     @staticmethod
-    def _resolve_tenant(user_api_key_dict: Optional[UserAPIKeyAuth]) -> str:
+    def _resolve_tenant(user_api_key_dict: UserAPIKeyAuth | None) -> str:
         """
         Identify the authenticated principal the routing override belongs to.
 
@@ -77,7 +77,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         ]
         return "|".join(principal) if principal else "default"
 
-    async def _get_routed_model(self, session_id: str, user_api_key_dict: Optional[UserAPIKeyAuth]) -> Optional[str]:
+    async def _get_routed_model(self, session_id: str, user_api_key_dict: UserAPIKeyAuth | None) -> str | None:
         """Get the model this session should be routed to, if any."""
         cache_key = self._make_cache_key(session_id, self._resolve_tenant(user_api_key_dict))
 
@@ -114,8 +114,8 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         self,
         session_id: str,
         model: str,
-        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-        guardrail_name: Optional[str] = None,
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+        guardrail_name: str | None = None,
     ) -> None:
         """
         Store a routing override for a session.
@@ -161,7 +161,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         """
         Before each LLM call, check if this session has a routing override.
         If so, modify the request's model field.

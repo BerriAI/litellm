@@ -6,8 +6,7 @@ In the Huggingface TGI format.
 
 import json
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
-
+from typing import TYPE_CHECKING, Any
 
 from httpx._models import Headers, Response
 
@@ -37,19 +36,19 @@ class SagemakerConfig(BaseConfig):
     Reference: https://d-uuwbxj1u4cnu.studio.us-west-2.sagemaker.aws/jupyter/default/lab/workspaces/auto-q/tree/DemoNotebooks/meta-textgeneration-llama-2-7b-SDK_1.ipynb
     """
 
-    max_new_tokens: Optional[int] = None
-    max_completion_tokens: Optional[int] = None
-    top_p: Optional[float] = None
-    temperature: Optional[float] = None
-    return_full_text: Optional[bool] = None
+    max_new_tokens: int | None = None
+    max_completion_tokens: int | None = None
+    top_p: float | None = None
+    temperature: float | None = None
+    return_full_text: bool | None = None
 
     def __init__(
         self,
-        max_new_tokens: Optional[int] = None,
-        max_completion_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        temperature: Optional[float] = None,
-        return_full_text: Optional[bool] = None,
+        max_new_tokens: int | None = None,
+        max_completion_tokens: int | None = None,
+        top_p: float | None = None,
+        temperature: float | None = None,
+        return_full_text: bool | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -60,10 +59,10 @@ class SagemakerConfig(BaseConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return SagemakerError(message=error_message, status_code=status_code, headers=headers)
 
-    def get_supported_openai_params(self, model: str) -> List:
+    def get_supported_openai_params(self, model: str) -> list:
         return [
             "stream",
             "temperature",
@@ -113,9 +112,9 @@ class SagemakerConfig(BaseConfig):
     def _transform_prompt(
         self,
         model: str,
-        messages: List,
+        messages: list,
         custom_prompt_dict: dict,
-        hf_model_name: Optional[str],
+        hf_model_name: str | None,
     ) -> str:
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
@@ -152,14 +151,14 @@ class SagemakerConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
         inference_params = optional_params.copy()
         stream = inference_params.pop("stream", False)
-        data: Dict = {"parameters": inference_params}
+        data: dict = {"parameters": inference_params}
         if stream is True:
             data["stream"] = True
 
@@ -180,7 +179,7 @@ class SagemakerConfig(BaseConfig):
     async def async_transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -194,12 +193,12 @@ class SagemakerConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: str,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         completion_response = raw_response.json()
         ## LOGGING
@@ -256,13 +255,13 @@ class SagemakerConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: Optional[dict],
+        headers: dict | None,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers = {"Content-Type": "application/json"}
 

@@ -1,16 +1,14 @@
 import json
 import os
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
-
-from litellm.integrations.gcs_bucket.gcs_bucket_mock_client import (
-    should_use_gcs_mock,
-    create_mock_gcs_client,
-    mock_vertex_auth_methods,
-)
-
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.gcs_bucket.gcs_bucket_mock_client import (
+    create_mock_gcs_client,
+    mock_vertex_auth_methods,
+    should_use_gcs_mock,
+)
 from litellm.litellm_core_utils.cloud_storage_security import (
     encode_gcs_object_name_for_url,
     split_configured_cloud_bucket_name,
@@ -30,7 +28,7 @@ IAM_AUTH_KEY = "IAM_AUTH"
 
 
 class GCSBucketBase(CustomBatchLogger):
-    def __init__(self, bucket_name: Optional[str] = None, **kwargs) -> None:
+    def __init__(self, bucket_name: str | None = None, **kwargs) -> None:
         self.is_mock_mode = should_use_gcs_mock()
 
         if self.is_mock_mode:
@@ -40,16 +38,16 @@ class GCSBucketBase(CustomBatchLogger):
         self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         _path_service_account = os.getenv("GCS_PATH_SERVICE_ACCOUNT")
         _bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME")
-        self.path_service_account_json: Optional[str] = _path_service_account
-        self.BUCKET_NAME: Optional[str] = _bucket_name
-        self.vertex_instances: Dict[str, VertexBase] = {}
+        self.path_service_account_json: str | None = _path_service_account
+        self.BUCKET_NAME: str | None = _bucket_name
+        self.vertex_instances: dict[str, VertexBase] = {}
         super().__init__(**kwargs)
 
     async def construct_request_headers(
         self,
-        service_account_json: Optional[str],
-        vertex_instance: Optional[VertexBase] = None,
-    ) -> Dict[str, str]:
+        service_account_json: str | None,
+        vertex_instance: VertexBase | None = None,
+    ) -> dict[str, str]:
         from litellm import vertex_chat_completion
 
         if vertex_instance is None:
@@ -80,7 +78,7 @@ class GCSBucketBase(CustomBatchLogger):
 
         return headers
 
-    def sync_construct_request_headers(self) -> Dict[str, str]:
+    def sync_construct_request_headers(self) -> dict[str, str]:
         """
         Construct request headers for GCS API calls
         """
@@ -120,7 +118,7 @@ class GCSBucketBase(CustomBatchLogger):
         self,
         bucket_name: str,
         object_name: str,
-    ) -> Tuple[str, str]:
+    ) -> tuple[str, str]:
         """
         Handles when the user passes a bucket name with a folder postfix
 
@@ -137,7 +135,7 @@ class GCSBucketBase(CustomBatchLogger):
             return bucket_name, object_name
         return bucket_name, object_name
 
-    async def get_gcs_logging_config(self, kwargs: Optional[Dict[str, Any]] = {}) -> GCSLoggingConfig:
+    async def get_gcs_logging_config(self, kwargs: dict[str, Any] | None = {}) -> GCSLoggingConfig:
         """
         This function is used to get the GCS logging config for the GCS Bucket Logger.
         It checks if the dynamic parameters are provided in the kwargs and uses them to get the GCS logging config.
@@ -146,20 +144,18 @@ class GCSBucketBase(CustomBatchLogger):
         if kwargs is None:
             kwargs = {}
 
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = kwargs.get(
+        standard_callback_dynamic_params: StandardCallbackDynamicParams | None = kwargs.get(
             "standard_callback_dynamic_params", None
         )
 
         bucket_name: str
-        path_service_account: Optional[str]
+        path_service_account: str | None
         if standard_callback_dynamic_params is not None:
             verbose_logger.debug("Using dynamic GCS logging")
             verbose_logger.debug("standard_callback_dynamic_params: %s", standard_callback_dynamic_params)
 
-            _bucket_name: Optional[str] = (
-                standard_callback_dynamic_params.get("gcs_bucket_name", None) or self.BUCKET_NAME
-            )
-            _path_service_account: Optional[str] = (
+            _bucket_name: str | None = standard_callback_dynamic_params.get("gcs_bucket_name", None) or self.BUCKET_NAME
+            _path_service_account: str | None = (
                 standard_callback_dynamic_params.get("gcs_path_service_account", None) or self.path_service_account_json
             )
 
@@ -186,7 +182,7 @@ class GCSBucketBase(CustomBatchLogger):
             path_service_account=path_service_account,
         )
 
-    async def get_or_create_vertex_instance(self, credentials: Optional[str]) -> VertexBase:
+    async def get_or_create_vertex_instance(self, credentials: str | None) -> VertexBase:
         """
         This function is used to get the Vertex instance for the GCS Bucket Logger.
         It checks if the Vertex instance is already created and cached, if not it creates a new instance and caches it.
@@ -204,7 +200,7 @@ class GCSBucketBase(CustomBatchLogger):
             self.vertex_instances[_in_memory_key] = vertex_instance
         return self.vertex_instances[_in_memory_key]
 
-    def _get_in_memory_key_for_vertex_instance(self, credentials: Optional[str]) -> str:
+    def _get_in_memory_key_for_vertex_instance(self, credentials: str | None) -> str:
         """
         Returns key to use for caching the Vertex instance in-memory.
 
@@ -297,10 +293,10 @@ class GCSBucketBase(CustomBatchLogger):
 
     async def _log_json_data_on_gcs(
         self,
-        headers: Dict[str, str],
+        headers: dict[str, str],
         bucket_name: str,
         object_name: str,
-        logging_payload: Union[StandardLoggingPayload, str],
+        logging_payload: StandardLoggingPayload | str,
     ):
         """
         Helper function to make POST request to GCS Bucket in the specified bucket.

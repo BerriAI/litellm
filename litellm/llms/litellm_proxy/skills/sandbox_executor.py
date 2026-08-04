@@ -7,7 +7,7 @@ Supports Docker, Podman, and Kubernetes backends.
 
 import base64
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from litellm._logging import verbose_logger
 
@@ -27,7 +27,7 @@ class SkillsSandboxExecutor:
         self,
         timeout: int = 60,
         backend: str = "docker",
-        image: Optional[str] = None,
+        image: str | None = None,
     ):
         """
         Initialize the sandbox executor.
@@ -45,9 +45,9 @@ class SkillsSandboxExecutor:
     def execute(
         self,
         code: str,
-        skill_files: Dict[str, bytes],
-        requirements: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        skill_files: dict[str, bytes],
+        requirements: str | None = None,
+    ) -> dict[str, Any]:
         """
         Execute code with skill files in sandbox.
 
@@ -77,7 +77,7 @@ class SkillsSandboxExecutor:
 
         try:
             # Create sandbox session
-            session_kwargs: Dict[str, Any] = {
+            session_kwargs: dict[str, Any] = {
                 "lang": "python",
                 "verbose": False,
             }
@@ -96,7 +96,7 @@ class SkillsSandboxExecutor:
                         # Create the file in temp directory
                         local_path = os.path.abspath(os.path.join(tmpdir, path))
                         if not local_path.startswith(tmpdir_abs + os.sep):
-                            verbose_logger.warning(f"SkillsSandboxExecutor: Skipping file with invalid path: {path}")
+                            verbose_logger.warning("SkillsSandboxExecutor: Skipping file with invalid path: %s", path)
                             continue
                         os.makedirs(os.path.dirname(local_path), exist_ok=True)
                         with open(local_path, "wb") as f:
@@ -106,13 +106,13 @@ class SkillsSandboxExecutor:
                         sandbox_path = f"/sandbox/{path}"
                         session.copy_to_runtime(local_path, sandbox_path)
 
-                verbose_logger.debug(f"SkillsSandboxExecutor: Copied {len(skill_files)} files to sandbox")
+                verbose_logger.debug("SkillsSandboxExecutor: Copied %s files to sandbox", len(skill_files))
 
                 # 2. Install requirements if present. Let pip parse the
                 # requirements file inside the sandbox so standard syntax like
                 # `-r`, `-e`, VCS URLs, and inline `#egg=` fragments continue to
                 # work.
-                requirements_filename: Optional[str] = None
+                requirements_filename: str | None = None
                 if requirements:
                     with tempfile.NamedTemporaryFile(
                         mode="w",
@@ -171,10 +171,10 @@ sys.path.insert(0, '/sandbox')
                     verbose_logger.debug("SkillsSandboxExecutor: Code execution succeeded")
                 else:
                     verbose_logger.debug(
-                        f"SkillsSandboxExecutor: Code execution failed with exit code {result.exit_code}"
+                        "SkillsSandboxExecutor: Code execution failed with exit code %s", result.exit_code
                     )
-                    verbose_logger.debug(f"SkillsSandboxExecutor: stderr: {error[:500] if error else 'No stderr'}")
-                    verbose_logger.debug(f"SkillsSandboxExecutor: stdout: {output[:500] if output else 'No stdout'}")
+                    verbose_logger.debug("SkillsSandboxExecutor: stderr: %s", error[:500] if error else "No stderr")
+                    verbose_logger.debug("SkillsSandboxExecutor: stdout: %s", output[:500] if output else "No stdout")
 
                 # 4. Collect generated files
                 generated_files = self._collect_generated_files(session, skill_files)
@@ -187,7 +187,7 @@ sys.path.insert(0, '/sandbox')
                 }
 
         except Exception as e:
-            verbose_logger.error(f"SkillsSandboxExecutor: Execution failed: {e}")
+            verbose_logger.error("SkillsSandboxExecutor: Execution failed: %s", e)
             return {
                 "success": False,
                 "output": "",
@@ -198,8 +198,8 @@ sys.path.insert(0, '/sandbox')
     def _collect_generated_files(
         self,
         session: Any,
-        original_files: Dict[str, bytes],
-    ) -> List[Dict[str, Any]]:
+        original_files: dict[str, bytes],
+    ) -> list[dict[str, Any]]:
         """
         Collect files generated during execution.
 
@@ -213,7 +213,7 @@ sys.path.insert(0, '/sandbox')
         Returns:
             List of generated files with base64 content
         """
-        generated_files: List[Dict[str, Any]] = []
+        generated_files: list[dict[str, Any]] = []
 
         try:
             import tempfile
@@ -270,15 +270,15 @@ print(json.dumps(files))
                             }
                         )
 
-                        verbose_logger.debug(f"SkillsSandboxExecutor: Collected generated file: {rel_path}")
+                        verbose_logger.debug("SkillsSandboxExecutor: Collected generated file: %s", rel_path)
                     except Exception as e:
-                        verbose_logger.warning(f"SkillsSandboxExecutor: Error copying file {filepath}: {e}")
+                        verbose_logger.warning("SkillsSandboxExecutor: Error copying file %s: %s", filepath, e)
                     finally:
                         if os.path.exists(tmp_path):
                             os.unlink(tmp_path)
 
         except Exception as e:
-            verbose_logger.warning(f"SkillsSandboxExecutor: Error collecting generated files: {e}")
+            verbose_logger.warning("SkillsSandboxExecutor: Error collecting generated files: %s", e)
 
         return generated_files
 

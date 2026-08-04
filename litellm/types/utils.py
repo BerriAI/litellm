@@ -1,6 +1,7 @@
 import json
 import time
 from enum import Enum
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -10,6 +11,7 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Sequence,
     Union,
     get_args,
 )
@@ -199,7 +201,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost: Optional[float]
     cache_creation_input_token_cost_above_200k_tokens: Optional[float]
+    cache_creation_input_token_cost_above_272k_tokens: Optional[float]
+    cache_creation_input_token_cost_above_272k_tokens_priority: Optional[float]
+    cache_creation_input_token_cost_above_272k_tokens_flex: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
+    cache_creation_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
+    cache_creation_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_read_input_token_cost: Optional[float]
     cache_read_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
@@ -207,6 +214,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_200k_tokens_priority: Optional[float]
     cache_read_input_token_cost_above_272k_tokens: Optional[float]
     cache_read_input_token_cost_above_272k_tokens_priority: Optional[float]
+    cache_read_input_token_cost_above_272k_tokens_flex: Optional[float]
     cache_read_input_token_cost_above_512k_tokens: Optional[float]
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
@@ -218,6 +226,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_above_200k_tokens_priority: Optional[float]
     input_cost_per_token_above_272k_tokens: Optional[float]  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
     input_cost_per_token_above_272k_tokens_priority: Optional[float]
+    input_cost_per_token_above_272k_tokens_flex: Optional[float]
     input_cost_per_token_above_512k_tokens: Optional[float]  # MiniMax-M3: prompts >512K priced at 2x input
     input_cost_per_character_above_128k_tokens: Optional[float]  # only for vertex ai models
     input_cost_per_query: Optional[float]  # only for rerank models
@@ -245,6 +254,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_200k_tokens_priority: Optional[float]
     output_cost_per_token_above_272k_tokens: Optional[float]  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
     output_cost_per_token_above_272k_tokens_priority: Optional[float]
+    output_cost_per_token_above_272k_tokens_flex: Optional[float]
     output_cost_per_token_above_512k_tokens: Optional[float]  # MiniMax-M3: prompts >512K priced at 2x output
     output_cost_per_character_above_128k_tokens: Optional[float]  # only for vertex ai models
     output_cost_per_image: Optional[float]
@@ -1075,6 +1085,43 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
         setattr(self, key, value)
 
 
+class _CustomToolCallAccess(OpenAIObject):
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
+
+class ChatCompletionCustomToolCallPayload(_CustomToolCallAccess):
+    name: str
+    input: str
+
+
+class ChatCompletionDeltaCustomToolCallPayload(_CustomToolCallAccess):
+    name: str | None = None
+    input: str | None = None
+
+
+class ChatCompletionMessageCustomToolCall(_CustomToolCallAccess):
+    id: str
+    type: Literal["custom"] = "custom"
+    custom: ChatCompletionCustomToolCallPayload
+
+
+class ChatCompletionDeltaCustomToolCall(_CustomToolCallAccess):
+    id: str | None = None
+    type: str | None = None
+    custom: ChatCompletionDeltaCustomToolCallPayload
+    index: int
+
+
 class ChatCompletionMessageToolCall(OpenAIObject):
     def __init__(
         self,
@@ -1114,6 +1161,20 @@ class ChatCompletionMessageToolCall(OpenAIObject):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+def is_custom_tool_call_dict(tool_call: Mapping[str, Any]) -> bool:
+    return tool_call.get("type") == "custom" or tool_call.get("custom") is not None
+
+
+def chat_completion_tool_call_from_dict(
+    tool_call: Mapping[str, Any],
+) -> "ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall":
+    if is_custom_tool_call_dict(tool_call):
+        return ChatCompletionMessageCustomToolCall(
+            **MappingProxyType({k: v for k, v in tool_call.items() if not (k in ("function", "type") and v is None)})
+        )
+    return ChatCompletionMessageToolCall(**tool_call)
 
 
 from openai.types.chat.chat_completion_audio import ChatCompletionAudio
@@ -1168,7 +1229,9 @@ def add_provider_specific_fields(object: BaseModel, provider_specific_fields: Op
 class Message(SafeAttributeModel, OpenAIObject):
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
-    tool_calls: Optional[List[ChatCompletionMessageToolCall]]
+    tool_calls: Optional[
+        List[Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]]
+    ]  # mutable-ok: public pydantic response field; only the union member is new
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
     images: Optional[List[ImageURLListItem]] = None
@@ -1199,7 +1262,7 @@ class Message(SafeAttributeModel, OpenAIObject):
             "function_call": (FunctionCall(**function_call) if function_call is not None else None),
             "tool_calls": (
                 [
-                    (ChatCompletionMessageToolCall(**tool_call) if isinstance(tool_call, dict) else tool_call)
+                    (chat_completion_tool_call_from_dict(tool_call) if isinstance(tool_call, dict) else tool_call)
                     for tool_call in tool_calls
                 ]
                 if tool_calls is not None and len(tool_calls) > 0
@@ -1292,7 +1355,9 @@ class Delta(SafeAttributeModel, OpenAIObject):
         content: Optional[str]
         role: Optional[str]
         function_call: Optional[FunctionCall]
-        tool_calls: Optional[List[ChatCompletionDeltaToolCall]]
+        tool_calls: Optional[
+            List[Union[ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall]]
+        ]  # mutable-ok: public pydantic response field; only the union member is new
         audio: Optional[ChatCompletionAudioResponse]
         images: Optional[List[ImageURLListItem]]
         annotations: Optional[List[ChatCompletionAnnotation]]
@@ -1329,18 +1394,29 @@ class Delta(SafeAttributeModel, OpenAIObject):
         if function_call is not None and isinstance(function_call, dict):
             function_call = FunctionCall(**function_call)
 
-        if tool_calls is not None and isinstance(tool_calls, list):
-            coerced_tool_calls: List[ChatCompletionDeltaToolCall] = []
+        if tool_calls is not None and isinstance(tool_calls, (list, tuple)):
+            coerced_tool_calls: List[
+                Union[ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall]
+            ] = []  # mutable-ok: public Delta.tool_calls contract is a list
             current_index = 0
             for tool_call in tool_calls:
                 if isinstance(tool_call, dict):
                     if tool_call.get("index", None) is None:
                         tool_call["index"] = current_index
                         current_index += 1
-                    if tool_call.get("type", None) is None:
-                        tool_call["type"] = "function"
-                    coerced_tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
-                elif isinstance(tool_call, ChatCompletionDeltaToolCall):
+                    if is_custom_tool_call_dict(tool_call):
+                        coerced_tool_calls.append(
+                            ChatCompletionDeltaCustomToolCall(
+                                **MappingProxyType(
+                                    {k: v for k, v in tool_call.items() if not (k == "function" and v is None)}
+                                )
+                            )
+                        )
+                    else:
+                        if tool_call.get("type", None) is None:
+                            tool_call["type"] = "function"
+                        coerced_tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
+                elif isinstance(tool_call, (ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall)):
                     coerced_tool_calls.append(tool_call)
             tool_calls = coerced_tool_calls
 
@@ -1534,14 +1610,27 @@ class PromptTokensDetailsWrapper(
     audio_length_seconds: Optional[float] = None
     """Length of audio sent to the model. Used for multimodal embeddings priced per audio-second."""
 
+    cache_write_tokens: Optional[int] = None
+    """Number of cache write (creation) tokens sent to the model. OpenAI naming (prompt_tokens_details.cache_write_tokens); this is the canonical field."""
+
     cache_creation_tokens: Optional[int] = None
-    """Number of cache creation tokens sent to the model. Used for Anthropic prompt caching."""
+    """Number of cache creation tokens sent to the model. Anthropic/Bedrock naming; kept in sync with cache_write_tokens (assigning either mirrors to the other)."""
 
     cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
     """Details of cache creation tokens sent to the model. Used for tracking 5m/1h cache creation tokens for Anthropic prompt caching."""
 
+    def __setattr__(self, name: str, value: object) -> None:
+        super().__setattr__(name, value)
+        if name == "cache_write_tokens":
+            super().__setattr__("cache_creation_tokens", value)
+        elif name == "cache_creation_tokens":
+            super().__setattr__("cache_write_tokens", value)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.cache_write_tokens = (
+            self.cache_write_tokens if self.cache_write_tokens is not None else self.cache_creation_tokens
+        )
         if self.character_count is None:
             del self.character_count
         if self.image_count is None:
@@ -1554,6 +1643,8 @@ class PromptTokensDetailsWrapper(
             del self.web_search_requests
         if self.tool_use_tokens is None:
             del self.tool_use_tokens
+        if self.cache_write_tokens is None:
+            del self.cache_write_tokens
         if self.cache_creation_tokens is None:
             del self.cache_creation_tokens
         if self.cache_creation_token_details is None:
@@ -1563,6 +1654,7 @@ class PromptTokensDetailsWrapper(
 class ServerToolUse(BaseModel):
     web_search_requests: Optional[int] = None
     tool_search_requests: Optional[int] = None
+    browser_open_requests: Optional[int] = None
 
     def __getitem__(self, key: str) -> Optional[int]:
         if key not in self.__class__.model_fields:
@@ -1662,10 +1754,10 @@ class Usage(SafeAttributeModel, CompletionUsage):
         if "cache_creation_input_tokens" in params and isinstance(params["cache_creation_input_tokens"], int):
             if _prompt_tokens_details is None:
                 _prompt_tokens_details = PromptTokensDetailsWrapper(
-                    cache_creation_tokens=params["cache_creation_input_tokens"]
+                    cache_write_tokens=params["cache_creation_input_tokens"]
                 )
             else:
-                _prompt_tokens_details.cache_creation_tokens = params["cache_creation_input_tokens"]
+                _prompt_tokens_details.cache_write_tokens = params["cache_creation_input_tokens"]
 
         super().__init__(
             prompt_tokens=prompt_tokens or 0,
@@ -2659,6 +2751,82 @@ class StandardLoggingPromptManagementMetadata(TypedDict):
     prompt_integration: str
 
 
+class StandardLoggingRoutingDecisionTierBoundaries(TypedDict):
+    """Snapshot of the complexity scorer's tier boundaries at decision time, so a
+    historical spend log row stays explainable after the router config changes."""
+
+    simple_medium: float
+    medium_complex: float
+    complex_reasoning: float
+
+
+RoutingDecisionCause = Literal[
+    "heuristic_scorer",
+    # The scorer found 2+ reasoning markers and forced REASONING regardless of score.
+    # A distinct cause rather than a marker inside `signals`, because it is the fact
+    # that tells a reader the score did NOT choose the tier; encoding it as free text
+    # meant anything that filtered `signals` silently changed what the row claimed.
+    "reasoning_override",
+    "llm_classifier",
+    "literal_keyword_match",
+    "semantic_keyword_match",
+    "session_affinity_pin",
+    "session_affinity_escalation",
+    "default_fallback",
+    "keyword",
+    "quality_tier",
+    "bandit",
+]
+
+
+InternalCallOrigin = Literal["autorouter_classifier"]
+"""Which internal litellm feature originated a billed sub-call, so a spend log row
+records that it is not traffic the caller sent."""
+
+AUTOROUTER_CLASSIFIER_CALL_ORIGIN: InternalCallOrigin = "autorouter_classifier"
+
+
+class StandardLoggingRoutingDecision(TypedDict, total=False):
+    """Per-request provenance for a pre-routing strategy (auto-router) decision."""
+
+    router_model_name: str
+    router_type: Literal["complexity", "adaptive", "quality"]
+    routed_model: str
+    cause: RoutingDecisionCause
+    tier: str
+    request_type: str
+    score: float
+    signals: Sequence[str]
+    matched_keyword: str
+    escalation_keyword: str
+    classifier_model: str
+    escalated: bool
+    tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
+    conversation_continuing: bool
+
+
+# Fields whose values quote the caller's prompt. Dropped when an operator turns message
+# logging off. Every other field aggregates the prompt without reproducing it and is kept,
+# so a redacted row stays explainable. `test_every_routing_decision_field_is_classified`
+# fails if a field is added to the record without being placed in one set or the other.
+PROMPT_QUOTING_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset({"signals", "matched_keyword", "escalation_keyword"})
+DERIVED_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset(
+    {
+        "router_model_name",
+        "router_type",
+        "routed_model",
+        "cause",
+        "tier",
+        "request_type",
+        "score",
+        "classifier_model",
+        "escalated",
+        "tier_boundaries",
+        "conversation_continuing",
+    }
+)
+
+
 class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     """
     Specific metadata k,v pairs logged to integration for easier cost tracking and prompt management
@@ -2672,6 +2840,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
+    routing_decision: StandardLoggingRoutingDecision | None
     applied_guardrails: Optional[List[str]]
     usage_object: Optional[dict]
     cold_storage_object_key: Optional[str]  # S3/GCS object key for cold storage retrieval
@@ -2890,9 +3059,18 @@ class CachingDetails(TypedDict):
 
 class CostBreakdown(TypedDict, total=False):
     """
-    Detailed cost breakdown for a request
+    Detailed cost breakdown for a request.
+
+    ``service_tier`` and ``data_residency`` record the pricing basis the cost was
+    computed on, not what the caller asked for. A consumer that has to price a
+    counterfactual against this request (what another model would have charged for
+    it) needs the same basis to compare like with like, and re-deriving it from the
+    request is not possible after the fact: the tier the biller used comes from
+    ``optional_params``, which no log record carries.
     """
 
+    service_tier: Optional[str]
+    data_residency: Optional[str]
     input_cost: float  # Cost of raw (non-cached) input tokens only
     cache_read_cost: float  # Cost of cache-read tokens (discounted rate)
     cache_creation_cost: float  # Cost of cache-write tokens (premium rate)
@@ -3074,6 +3252,11 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_creation_input_token_cost: Optional[float] = None
     cache_creation_input_token_cost_above_1hr: Optional[float] = None
     cache_creation_input_token_cost_above_200k_tokens: Optional[float] = None
+    cache_creation_input_token_cost_above_272k_tokens: Optional[float] = None
+    cache_creation_input_token_cost_above_272k_tokens_priority: Optional[float] = None
+    cache_creation_input_token_cost_above_272k_tokens_flex: Optional[float] = None
+    cache_creation_input_token_cost_flex: Optional[float] = None
+    cache_creation_input_token_cost_priority: Optional[float] = None
     cache_creation_input_audio_token_cost: Optional[float] = None
     cache_read_input_token_cost: Optional[float] = None
     cache_read_input_token_cost_flex: Optional[float] = None
@@ -3081,6 +3264,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_read_input_token_cost_above_200k_tokens: Optional[float] = None
     cache_read_input_token_cost_above_200k_tokens_priority: Optional[float] = None
     cache_read_input_token_cost_above_272k_tokens_priority: Optional[float] = None
+    cache_read_input_token_cost_above_272k_tokens_flex: Optional[float] = None
     cache_read_input_audio_token_cost: Optional[float] = None
     input_cost_per_character: Optional[float] = None
     input_cost_per_character_above_128k_tokens: Optional[float] = None
@@ -3090,6 +3274,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     input_cost_per_token_above_200k_tokens: Optional[float] = None
     input_cost_per_token_above_200k_tokens_priority: Optional[float] = None
     input_cost_per_token_above_272k_tokens_priority: Optional[float] = None
+    input_cost_per_token_above_272k_tokens_flex: Optional[float] = None
     input_cost_per_query: Optional[float] = None
     input_cost_per_image: Optional[float] = None
     input_cost_per_image_above_128k_tokens: Optional[float] = None
@@ -3109,6 +3294,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_token_above_200k_tokens: Optional[float] = None
     output_cost_per_token_above_200k_tokens_priority: Optional[float] = None
     output_cost_per_token_above_272k_tokens_priority: Optional[float] = None
+    output_cost_per_token_above_272k_tokens_flex: Optional[float] = None
     output_cost_per_character_above_128k_tokens: Optional[float] = None
     output_cost_per_image: Optional[float] = None
     output_cost_per_image_token: Optional[float] = None
@@ -3179,8 +3365,15 @@ agentic_loop_internal_litellm_params = [
     "_code_interpreter_interception_converted_stream",
 ]
 
+# Proxy-owned callback credentials, stamped from admin-configured team/key callback
+# settings. Listed in all_litellm_params for the same reason as the agentic-loop
+# fields above: an unrecognized top-level key is swept into extra_body and sent to
+# the provider.
+TRUSTED_CALLBACK_VARS_FIELD = "litellm_trusted_callback_vars"
+
 all_litellm_params = (
     agentic_loop_internal_litellm_params
+    + [TRUSTED_CALLBACK_VARS_FIELD]
     + [
         "metadata",
         "litellm_metadata",
@@ -3196,7 +3389,6 @@ all_litellm_params = (
         "mock_response",
         "mock_timeout",
         "disable_add_transform_inline_image_block",
-        "litellm_proxy_rate_limit_response",
         "api_key",
         "api_version",
         "prompt_id",
@@ -3212,6 +3404,7 @@ all_litellm_params = (
         "model_file_id_mapping",
         "litellm_logging_obj",
         "litellm_call_id",
+        "_litellm_strip_stream_usage",
         "use_client",
         "id",
         "fallbacks",
@@ -3290,11 +3483,6 @@ all_litellm_params = (
         "enable_tag_filtering",
         "enable_json_schema_validation",
         "use_xai_oauth",
-        "_litellm_rate_limit_descriptors",
-        "_litellm_tpm_reserved_tokens",
-        "_litellm_tpm_reserved_model",
-        "_litellm_tpm_reserved_scopes",
-        "_litellm_tpm_reservation_released",
         "auto_router_config_path",
         "auto_router_config",
         "auto_router_default_model",
@@ -3745,6 +3933,7 @@ class ServiceTier(Enum):
     AUTO = "auto"
     FLEX = "flex"
     PRIORITY = "priority"
+    FAST = "fast"
 
 
 class DataResidency(Enum):

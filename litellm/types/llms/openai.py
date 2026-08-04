@@ -1145,6 +1145,10 @@ class ContextManagementEntry(TypedDict, total=False):
     """Token threshold at which compaction is triggered for this entry. Minimum 1000."""
 
 
+class ResponsesAPIStreamOptions(TypedDict, total=False):
+    include_obfuscation: bool
+
+
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the responses API."""
 
@@ -1171,7 +1175,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     max_tool_calls: Optional[int]
     prompt_cache_key: Optional[str]
     prompt_cache_retention: Optional[str]
-    stream_options: Optional[dict]
+    stream_options: Optional[ResponsesAPIStreamOptions]
     top_logprobs: Optional[int]
     partial_images: Optional[int]  # Number of partial images to generate (1-3) for streaming image generation
     context_management: Optional[List[ContextManagementEntry]]
@@ -1400,6 +1404,10 @@ class ResponsesAPIStreamEvents(str, Enum):
     # Function call events
     FUNCTION_CALL_ARGUMENTS_DELTA = "response.function_call_arguments.delta"
     FUNCTION_CALL_ARGUMENTS_DONE = "response.function_call_arguments.done"
+
+    # Custom tool call events (grammar/freeform tools, e.g. Cursor agent tools)
+    CUSTOM_TOOL_CALL_INPUT_DELTA = "response.custom_tool_call_input.delta"
+    CUSTOM_TOOL_CALL_INPUT_DONE = "response.custom_tool_call_input.done"
 
     # File search events
     FILE_SEARCH_CALL_IN_PROGRESS = "response.file_search_call.in_progress"

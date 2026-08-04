@@ -1,8 +1,13 @@
 import unittest
 from datetime import datetime, time, timezone
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
+import litellm.litellm_core_utils.duration_parser as duration_parser
+from litellm.litellm_core_utils.duration_parser import (
+    duration_in_seconds,
+    get_next_standardized_reset_time,
+)
 
 
 class TestStandardizedResetTime(unittest.TestCase):
@@ -314,6 +319,70 @@ class TestResetTimeOfDay(unittest.TestCase):
             get_next_standardized_reset_time("1d", now, "UTC"),
             datetime(2023, 5, 16, 0, 0, 0, tzinfo=timezone.utc),
         )
+
+
+class TestWordFormBudgetDurations(unittest.TestCase):
+    """The Admin UI historically persisted word-form budget durations
+    (hourly/daily/weekly/monthly). They must resolve to their real interval
+    instead of silently collapsing to a next-midnight (daily) reset.
+    """
+
+    def test_word_forms_map_to_correct_reset_times(self):
+        base_time = datetime(2023, 5, 17, 15, 20, 30, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            get_next_standardized_reset_time("hourly", base_time, "UTC"),
+            datetime(2023, 5, 17, 16, 0, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            get_next_standardized_reset_time("daily", base_time, "UTC"),
+            datetime(2023, 5, 18, 0, 0, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            get_next_standardized_reset_time("weekly", base_time, "UTC"),
+            datetime(2023, 5, 22, 0, 0, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            get_next_standardized_reset_time("monthly", base_time, "UTC"),
+            datetime(2023, 6, 1, 0, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_word_forms_are_not_all_collapsed_to_daily(self):
+        base_time = datetime(2023, 5, 17, 15, 20, 30, tzinfo=timezone.utc)
+        results = {
+            word: get_next_standardized_reset_time(word, base_time, "UTC")
+            for word in ("hourly", "daily", "weekly", "monthly")
+        }
+        self.assertEqual(len(set(results.values())), len(results))
+
+    def test_word_forms_match_canonical_int_unit_forms(self):
+        base_time = datetime(2023, 5, 17, 15, 20, 30, tzinfo=timezone.utc)
+        for word, canonical in (("hourly", "1h"), ("daily", "24h"), ("weekly", "7d"), ("monthly", "30d")):
+            self.assertEqual(
+                get_next_standardized_reset_time(word, base_time, "UTC"),
+                get_next_standardized_reset_time(canonical, base_time, "UTC"),
+            )
+
+    def test_word_forms_are_case_and_whitespace_insensitive(self):
+        base_time = datetime(2023, 5, 17, 15, 20, 30, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_standardized_reset_time("  Monthly ", base_time, "UTC"),
+            datetime(2023, 6, 1, 0, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_duration_in_seconds_accepts_word_forms(self):
+        self.assertEqual(duration_in_seconds("hourly"), 3600)
+        self.assertEqual(duration_in_seconds("daily"), 86400)
+        self.assertEqual(duration_in_seconds("weekly"), 604800)
+        self.assertEqual(duration_in_seconds("monthly"), 2592000)
+
+    def test_invalid_duration_logs_warning_and_falls_back(self):
+        base_time = datetime(2023, 5, 15, 15, 0, 0, tzinfo=timezone.utc)
+        with patch.object(duration_parser.verbose_logger, "warning") as mock_warning:
+            result = get_next_standardized_reset_time("garbage", base_time, "UTC")
+        self.assertEqual(result, datetime(2023, 5, 16, 0, 0, 0, tzinfo=timezone.utc))
+        mock_warning.assert_called_once()
+        self.assertIn("garbage", mock_warning.call_args.args)
 
 
 if __name__ == "__main__":

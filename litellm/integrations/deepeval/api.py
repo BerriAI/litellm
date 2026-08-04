@@ -1,7 +1,9 @@
 # duplicate -> https://github.com/confident-ai/deepeval/blob/main/deepeval/confident/api.py
 import logging
-import httpx
 from enum import Enum
+
+import httpx
+
 from litellm._logging import verbose_logger
 
 DEEPEVAL_BASE_URL = "https://deepeval.confident-ai.com"
@@ -21,9 +23,9 @@ def log_retry_error(details):
     exception = details.get("exception")
     tries = details.get("tries")
     if exception:
-        logging.error(f"Confident AI Error: {exception}. Retrying: {tries} time(s)...")
+        logging.error("Confident AI Error: %s. Retrying: %s time(s)...", exception, tries)
     else:
-        logging.error(f"Retrying: {tries} time(s)...")
+        logging.error("Retrying: %s time(s)...", tries)
 
 
 class HttpMethods(Enum):

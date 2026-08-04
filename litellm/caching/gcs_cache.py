@@ -2,27 +2,27 @@
 Supports syncing responses to Google Cloud Storage Buckets using HTTP requests.
 """
 
-import json
 import asyncio
-from typing import Optional
+import json
 from urllib.parse import quote
 
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
     _get_httpx_client,
+    get_async_httpx_client,
     httpxSpecialProvider,
 )
+
 from .base_cache import BaseCache
 
 
 class GCSCache(BaseCache):
     def __init__(
         self,
-        bucket_name: Optional[str] = None,
-        path_service_account: Optional[str] = None,
-        gcs_path: Optional[str] = None,
+        bucket_name: str | None = None,
+        path_service_account: str | None = None,
+        gcs_path: str | None = None,
     ) -> None:
         super().__init__()
         self.bucket_name = bucket_name or GCSBucketBase(bucket_name=None).BUCKET_NAME
@@ -71,12 +71,15 @@ class GCSCache(BaseCache):
             if response.status_code == 200:
                 cached_response = json.loads(response.text)
                 verbose_logger.debug(
-                    f"Got GCS Cache: key: {key}, cached_response {cached_response}. Type Response {type(cached_response)}"
+                    "Got GCS Cache: key: %s, cached_response %s. Type Response %s",
+                    key,
+                    cached_response,
+                    type(cached_response),
                 )
                 return cached_response
             return None
         except Exception as e:
-            verbose_logger.error(f"GCS Caching: get_cache() - Got exception from GCS: {e}")
+            verbose_logger.error("GCS Caching: get_cache() - Got exception from GCS: %s", e)
 
     async def async_get_cache(self, key, **kwargs):
         try:
@@ -89,7 +92,7 @@ class GCSCache(BaseCache):
                 return json.loads(response.text)
             return None
         except Exception as e:
-            verbose_logger.error(f"GCS Caching: async_get_cache() - Got exception from GCS: {e}")
+            verbose_logger.error("GCS Caching: async_get_cache() - Got exception from GCS: %s", e)
 
     def flush_cache(self):
         pass

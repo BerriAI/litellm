@@ -10,8 +10,6 @@ PATCH /config/cost_margin_config - Update cost margin configuration
 POST /cost/estimate - Estimate cost for a given model and token counts
 """
 
-from typing import Dict, Optional, Tuple, Union
-
 from fastapi import APIRouter, Depends, HTTPException
 
 import litellm
@@ -29,7 +27,7 @@ from litellm.types.utils import LlmProvidersSet
 router = APIRouter()
 
 
-def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
+def _resolve_model_for_cost_lookup(model: str) -> tuple[str, str | None]:
     """
     Resolve a model name (which may be a router alias/model_group) to the
     underlying litellm model name for cost lookup.
@@ -45,7 +43,7 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
     """
     from litellm.proxy.proxy_server import llm_router
 
-    custom_llm_provider: Optional[str] = None
+    custom_llm_provider: str | None = None
 
     # Try to resolve from router if available
     if llm_router is not None:
@@ -61,7 +59,7 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
                 # Check base_model first (needed for Azure custom deployment names)
                 base_model = model_info.get("base_model") or litellm_params.get("base_model")
                 if base_model:
-                    verbose_proxy_logger.debug(f"Resolved model '{model}' to base_model '{base_model}' from router")
+                    verbose_proxy_logger.debug("Resolved model '%s' to base_model '%s' from router", model, base_model)
                     custom_llm_provider = litellm_params.get("custom_llm_provider")
                     return (
                         str(base_model),
@@ -71,14 +69,14 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
                 resolved_model = litellm_params.get("model")
 
                 if resolved_model:
-                    verbose_proxy_logger.debug(f"Resolved model '{model}' to '{resolved_model}' from router")
+                    verbose_proxy_logger.debug("Resolved model '%s' to '%s' from router", model, resolved_model)
                     custom_llm_provider = litellm_params.get("custom_llm_provider")
                     return (
                         str(resolved_model),
                         (str(custom_llm_provider) if custom_llm_provider is not None else None),
                     )
         except Exception as e:
-            verbose_proxy_logger.debug(f"Could not resolve model '{model}' from router: {e}")
+            verbose_proxy_logger.debug("Could not resolve model '%s' from router: %s", model, e)
 
     # Return original model if not resolved
     return model, custom_llm_provider
@@ -131,7 +129,7 @@ async def get_cost_discount_config(
 
         return {"values": cost_discount_config}
     except Exception as e:
-        verbose_proxy_logger.error(f"Error fetching cost discount config: {str(e)}")
+        verbose_proxy_logger.error("Error fetching cost discount config: %s", e)
         return {"values": {}}
 
 
@@ -141,7 +139,7 @@ async def get_cost_discount_config(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_cost_discount_config(
-    cost_discount_config: Dict[str, float],
+    cost_discount_config: dict[str, float],
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -179,7 +177,7 @@ async def update_cost_discount_config(
 
     # Validate that all providers are valid LiteLLM providers
     invalid_providers = []
-    for provider in cost_discount_config.keys():
+    for provider in cost_discount_config:
         if provider not in LlmProvidersSet:
             invalid_providers.append(provider)
 
@@ -218,7 +216,7 @@ async def update_cost_discount_config(
         # Update in-memory litellm.cost_discount_config
         litellm.cost_discount_config = cost_discount_config
 
-        verbose_proxy_logger.info(f"Updated cost_discount_config: {cost_discount_config}")
+        verbose_proxy_logger.info("Updated cost_discount_config: %s", cost_discount_config)
 
         return {
             "message": "Cost discount configuration updated successfully",
@@ -226,10 +224,10 @@ async def update_cost_discount_config(
             "values": cost_discount_config,
         }
     except Exception as e:
-        verbose_proxy_logger.error(f"Error updating cost discount config: {str(e)}")
+        verbose_proxy_logger.error("Error updating cost discount config: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to update cost discount config: {str(e)}"},
+            detail={"error": f"Failed to update cost discount config: {e}"},
         )
 
 
@@ -264,7 +262,7 @@ async def get_cost_margin_config(
 
         return {"values": cost_margin_config}
     except Exception as e:
-        verbose_proxy_logger.error(f"Error fetching cost margin config: {str(e)}")
+        verbose_proxy_logger.error("Error fetching cost margin config: %s", e)
         return {"values": {}}
 
 
@@ -274,7 +272,7 @@ async def get_cost_margin_config(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_cost_margin_config(
-    cost_margin_config: Dict[str, Union[float, Dict[str, float]]],
+    cost_margin_config: dict[str, float | dict[str, float]],
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -317,7 +315,7 @@ async def update_cost_margin_config(
 
     # Validate that all providers are valid LiteLLM providers (except "global")
     invalid_providers = []
-    for provider in cost_margin_config.keys():
+    for provider in cost_margin_config:
         if provider != "global" and provider not in LlmProvidersSet:
             invalid_providers.append(provider)
 
@@ -392,7 +390,7 @@ async def update_cost_margin_config(
         # Update in-memory litellm.cost_margin_config
         litellm.cost_margin_config = cost_margin_config
 
-        verbose_proxy_logger.info(f"Updated cost_margin_config: {cost_margin_config}")
+        verbose_proxy_logger.info("Updated cost_margin_config: %s", cost_margin_config)
 
         return {
             "message": "Cost margin configuration updated successfully",
@@ -400,10 +398,10 @@ async def update_cost_margin_config(
             "values": cost_margin_config,
         }
     except Exception as e:
-        verbose_proxy_logger.error(f"Error updating cost margin config: {str(e)}")
+        verbose_proxy_logger.error("Error updating cost margin config: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to update cost margin config: {str(e)}"},
+            detail={"error": f"Failed to update cost margin config: {e}"},
         )
 
 
@@ -452,7 +450,7 @@ async def estimate_cost(
     # Resolve model name (handles router aliases like 'e-model-router' -> 'azure_ai/gpt-4')
     resolved_model, resolved_provider = _resolve_model_for_cost_lookup(request.model)
 
-    verbose_proxy_logger.debug(f"Cost estimate: request.model='{request.model}' resolved to '{resolved_model}'")
+    verbose_proxy_logger.debug("Cost estimate: request.model='%s' resolved to '%s'", request.model, resolved_model)
 
     # Create a mock response with usage for completion_cost
     mock_response = ModelResponse(
@@ -486,7 +484,7 @@ async def estimate_cost(
         raise HTTPException(
             status_code=404,
             detail={
-                "error": f"Could not calculate cost for model '{request.model}' (resolved to '{resolved_model}'): {str(e)}"
+                "error": f"Could not calculate cost for model '{request.model}' (resolved to '{resolved_model}'): {e}"
             },
         )
 

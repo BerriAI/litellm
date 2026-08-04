@@ -1,15 +1,15 @@
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _safe_convert_created_field,
 )
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -49,9 +49,9 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         """
         Manus API doesn't support real-time streaming.
@@ -75,7 +75,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # If no slash, assume the model name itself is the agent profile
         return model
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         """
         Validate environment and set up headers for Manus API.
 
@@ -101,7 +101,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -123,11 +123,11 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def transform_responses_api_request(
         self,
         model: str,
-        input: Union[str, ResponseInputParam],
-        response_api_optional_request_params: Dict,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform the request for Manus API.
 
@@ -157,7 +157,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if extra_body:
             base_request.update(extra_body)
 
-        verbose_logger.debug(f"Manus: Using agent_profile={agent_profile}, task_mode=agent")
+        verbose_logger.debug("Manus: Using agent_profile=%s, task_mode=agent", agent_profile)
 
         return base_request
 
@@ -217,9 +217,11 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
             raw_response_json["id"] = f"unknown-{uuid.uuid4().hex[:8]}"
 
         try:
-            response = ResponsesAPIResponse(**raw_response_json)
+            response = ResponsesAPIResponse.model_validate(raw_response_json)
         except Exception:
-            verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
+            verbose_logger.debug(
+                "Error constructing ResponsesAPIResponse: %s, using model_construct", raw_response_json
+            )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         # Store processed headers in additional_headers so they get returned to the client
@@ -237,7 +239,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the get response API request into a URL and data.
 
@@ -248,7 +250,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
         url = f"{api_base}/{encoded_response_id}"
-        data: Dict = {}
+        data: dict = {}
         return url, data
 
     def transform_get_response_api_response(
@@ -305,9 +307,11 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
             raw_response_json["id"] = f"unknown-{uuid.uuid4().hex[:8]}"
 
         try:
-            response = ResponsesAPIResponse(**raw_response_json)
+            response = ResponsesAPIResponse.model_validate(raw_response_json)
         except Exception:
-            verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
+            verbose_logger.debug(
+                "Error constructing ResponsesAPIResponse: %s, using model_construct", raw_response_json
+            )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         # Store processed headers in additional_headers so they get returned to the client

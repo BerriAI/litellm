@@ -6,8 +6,8 @@ import traceback
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.helicone_mock_client import (
-    should_use_helicone_mock,
     create_mock_helicone_client,
+    should_use_helicone_mock,
 )
 
 
@@ -36,8 +36,7 @@ class HeliconeLogger:
         self.provider_url = "https://api.openai.com/v1"
         self.key = os.getenv("HELICONE_API_KEY")
         self.api_base = os.getenv("HELICONE_API_BASE") or "https://api.hconeai.com"
-        if self.api_base.endswith("/"):
-            self.api_base = self.api_base[:-1]
+        self.api_base = self.api_base.removesuffix("/")
 
     def claude_mapping(self, model, messages, response_obj):
         from anthropic import AI_PROMPT, HUMAN_PROMPT
@@ -59,12 +58,19 @@ class HeliconeLogger:
         content = []
         if "tool_calls" in message and message["tool_calls"]:
             for tool_call in message["tool_calls"]:
+                function = tool_call.get("function")
+                custom = tool_call.get("custom")
+                if not function and not custom:
+                    continue
+                name, tool_input = (
+                    (function["name"], function["arguments"]) if function else (custom["name"], custom["input"])
+                )
                 content.append(
                     {
                         "type": "tool_use",
                         "id": tool_call["id"],
-                        "name": tool_call["function"]["name"],
-                        "input": tool_call["function"]["arguments"],
+                        "name": name,
+                        "input": tool_input,
                     }
                 )
         elif "content" in message and message["content"]:
@@ -201,4 +207,3 @@ class HeliconeLogger:
                 print_verbose(f"Helicone Logging - Error {response.text}")
         except Exception:
             print_verbose(f"Helicone Logging Error - {traceback.format_exc()}")
-            pass
