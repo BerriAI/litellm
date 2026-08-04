@@ -19,7 +19,7 @@ import threading
 import time
 import traceback
 from collections import defaultdict
-from collections.abc import AsyncGenerator, Callable, Generator, Mapping
+from collections.abc import AsyncGenerator, Callable, Generator, Mapping, Sequence
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, Union, cast
 
@@ -298,6 +298,26 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
+
+
+def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream]) -> bool:
+    for chunk in chunks:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        if (
+            delta.get("content")
+            or delta.get("tool_calls")
+            or delta.get("function_call")
+            or delta.get("reasoning_content")
+            or delta.get("thinking_blocks")
+            or delta.get("reasoning_items")
+            or delta.get("audio")
+            or delta.get("images")
+            or delta.get("annotations")
+        ):
+            return True
+    return False
 
 
 class RoutingArgs(enum.Enum):
@@ -2087,6 +2107,13 @@ class Router:
                 async for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
+                if not e.is_pre_first_chunk and (
+                    e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
+                ):
+                    if e.original_exception is not None:
+                        raise e.original_exception from e
+                    raise
+
                 from litellm.main import stream_chunk_builder
 
                 complete_response_object: Final = stream_chunk_builder(chunks=model_response.chunks)
@@ -2105,24 +2132,7 @@ class Router:
                         "content_policy_fallbacks", self.content_policy_fallbacks
                     )
                     initial_kwargs["original_function"] = self._acompletion
-                    if e.is_pre_first_chunk or not e.generated_content:
-                        # No content was generated before the error (e.g. a
-                        # rate-limit 429 on the very first chunk).  Retry with
-                        # the original messages — adding a continuation prompt
-                        # would waste tokens and confuse the model.
-                        initial_kwargs["messages"] = messages
-                    else:
-                        initial_kwargs["messages"] = messages + [
-                            {
-                                "role": "system",
-                                "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
-                            },
-                            {
-                                "role": "assistant",
-                                "content": e.generated_content,
-                                "prefix": True,
-                            },
-                        ]
+                    initial_kwargs["messages"] = messages
                     self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
                         e=e,
@@ -2642,6 +2652,13 @@ class Router:
                 for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
+                if not e.is_pre_first_chunk and (
+                    e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
+                ):
+                    if e.original_exception is not None:
+                        raise e.original_exception from e
+                    raise
+
                 from litellm.main import stream_chunk_builder
 
                 complete_response_object: Final = stream_chunk_builder(chunks=model_response.chunks)
@@ -2661,20 +2678,7 @@ class Router:
                         router_self.content_policy_fallbacks,
                     )
                     initial_kwargs["original_function"] = router_self._completion
-                    if e.is_pre_first_chunk or not e.generated_content:
-                        initial_kwargs["messages"] = messages
-                    else:
-                        initial_kwargs["messages"] = messages + [
-                            {
-                                "role": "system",
-                                "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
-                            },
-                            {
-                                "role": "assistant",
-                                "content": e.generated_content,
-                                "prefix": True,
-                            },
-                        ]
+                    initial_kwargs["messages"] = messages
                     router_self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
                     fallback_response = router_self.function_with_fallbacks(
                         **initial_kwargs,
@@ -2871,6 +2875,13 @@ class Router:
                         model=model,
                         llm_provider="",
                     )
+
+            if (
+                isinstance(response, CustomStreamWrapper)
+                and response.completion_stream is None
+                and response.make_call is not None
+            ):
+                await response.fetch_stream()
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.acompletion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -6109,7 +6120,7 @@ class Router:
         """
         Common utilities for async_function_with_fallbacks
         """
-        verbose_router_logger.debug("Traceback%s", traceback.format_exc())
+        verbose_router_logger.debug("Traceback", exc_info=True)
         original_exception: Final = e
         fallback_model_group = None
         original_model_group: Final[str | None] = kwargs.get("model")  # type: ignore
@@ -6325,15 +6336,17 @@ class Router:
         except Exception as new_exception:
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
             fallback_failure_exception_str = redact_string(str(new_exception))
+            cooldown_info = await _async_get_cooldown_deployments_with_debug_info(
+                litellm_router_instance=self,
+                parent_otel_span=parent_otel_span,
+            )
             verbose_router_logger.error(
-                "litellm.router.py::async_function_with_fallbacks() - Error occurred while trying to do fallbacks - {}\n{}\n\nDebug Information:\nCooldown Deployments={}".format(
-                    fallback_failure_exception_str,
-                    redact_string(traceback.format_exc()),
-                    await _async_get_cooldown_deployments_with_debug_info(
-                        litellm_router_instance=self,
-                        parent_otel_span=parent_otel_span,
-                    ),
-                )
+                "litellm.router.py::async_function_with_fallbacks() - "
+                "Error occurred while trying to do fallbacks - %s\n"
+                "Debug Information:\nCooldown Deployments=%s",
+                fallback_failure_exception_str,
+                cooldown_info,
+                exc_info=True,
             )
 
         if hasattr(original_exception, "message") and litellm.expose_router_debug_in_errors:
