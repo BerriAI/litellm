@@ -386,12 +386,16 @@ class LiteLLMRoutes(enum.Enum):
         # responses API
         "/responses",
         "/v1/responses",
+        "/openai/v1/responses",
         "/responses/{response_id}",
         "/v1/responses/{response_id}",
+        "/openai/v1/responses/{response_id}",
         "/responses/{response_id}/input_items",
         "/v1/responses/{response_id}/input_items",
+        "/openai/v1/responses/{response_id}/input_items",
         "/responses/{response_id}/cancel",
         "/v1/responses/{response_id}/cancel",
+        "/openai/v1/responses/{response_id}/cancel",
         # vector stores
         "/vector_stores",
         "/v1/vector_stores",

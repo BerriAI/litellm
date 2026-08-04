@@ -9221,7 +9221,9 @@ def test_realtime_websocket_route_aliases_registered():
             f"{expected!r} missing from LiteLLMRoutes.openai_routes; "
             f"non-admin / team / key-scoped users will get 403 on this path."
         )
-        assert API_ROUTE_TO_CALL_TYPES.get(expected) == [CallTypes.arealtime], (
+        assert tuple(API_ROUTE_TO_CALL_TYPES.get(expected) or ()) == (
+            CallTypes.arealtime,
+        ), (
             f"{expected!r} missing from API_ROUTE_TO_CALL_TYPES; call-type "
             f"resolution will return None and break call-type-aware features."
         )
