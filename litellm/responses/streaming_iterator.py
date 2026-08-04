@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -34,6 +34,16 @@ from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
 
+if TYPE_CHECKING:
+    from litellm.types.llms.openai import (
+        PART_UNION_TYPES,
+        ContentPartDoneEvent,
+        ResponseCreatedEvent,
+        ResponseInProgressEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamingResponse,
+    )
+
 
 @lru_cache(maxsize=1)
 def _get_openai_response_types():
@@ -42,7 +52,7 @@ def _get_openai_response_types():
     return openai_types
 
 
-def _log_background_task_failure(task: asyncio.Task[Any], *, task_name: str) -> None:
+def _log_background_task_failure(task: asyncio.Task[object], *, task_name: str) -> None:
     if task.cancelled():
         return
     exception = task.exception()
@@ -451,7 +461,7 @@ class BaseResponsesAPIStreamingIterator:
             is_pre_first_chunk=not self._yielded_first_chunk,
         )
 
-    def _get_completed_response_object(self) -> Any | None:
+    def _get_completed_response_object(self) -> ResponsesAPIResponse | None:
         openai_types = _get_openai_response_types()
         completed_response = self.completed_response
         if isinstance(completed_response, openai_types.ResponsesAPIResponse):
@@ -880,7 +890,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _set_events_from_response(
         self,
-        transformed: Any,
+        transformed: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
     ) -> None:
         self._events = _build_synthetic_response_events(
@@ -894,7 +904,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> Any:
+    async def __anext__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopAsyncIteration
         evt = self._events[self._idx]
@@ -908,7 +918,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __iter__(self):
         return self
 
-    def __next__(self) -> Any:
+    def __next__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopIteration
         evt = self._events[self._idx]
@@ -923,7 +933,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __init__(
         self,
-        response: Any,
+        response: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict[str, Any] | None = None,
         call_type: str | None = None,
@@ -941,13 +951,13 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         )
         self._completed_response_cache_hit = True
         self._persist_completed_response_before_logging = False
-        self._events: list[Any] = []
+        self._events: list[ResponsesAPIStreamingResponse] = []
         self._idx = 0
         self._set_events_from_response(transformed=response, logging_obj=logging_obj)
 
     def _set_events_from_response(
         self,
-        transformed: Any,
+        transformed: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
     ) -> None:
         self._events = _build_synthetic_response_events(
@@ -961,7 +971,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> Any:
+    async def __anext__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopAsyncIteration
         evt = self._events[self._idx]
@@ -975,7 +985,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __iter__(self):
         return self
 
-    def __next__(self) -> Any:
+    def __next__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopIteration
         evt = self._events[self._idx]
@@ -1000,8 +1010,8 @@ def _build_response_status_event(
         "response.created",
         "response.in_progress",
     ],
-    transformed: Any,
-) -> Any:
+    transformed: ResponsesAPIResponse,
+) -> ResponseCreatedEvent | ResponseInProgressEvent:
     openai_types = _get_openai_response_types()
     in_progress_response = transformed.model_copy(
         deep=True,
@@ -1018,10 +1028,10 @@ def _build_content_part_done_event(
     output_index: int,
     content_index: int,
     part_payload: dict[str, Any],
-) -> Any | None:
+) -> ContentPartDoneEvent | None:
     openai_types = _get_openai_response_types()
     part_type = part_payload.get("type")
-    part: Any
+    part: PART_UNION_TYPES
     if part_type == "output_text":
         annotations = [
             openai_types.BaseLiteLLMOpenAIResponseObject(**annotation)
@@ -1057,7 +1067,7 @@ def _build_content_part_done_event(
 
 def _add_text_like_part_events(
     *,
-    events: list[Any],
+    events: list[ResponsesAPIStreamingResponse],
     item_id: str,
     output_index: int,
     content_index: int,
@@ -1123,13 +1133,13 @@ def _add_text_like_part_events(
 
 def _build_synthetic_response_events(
     *,
-    transformed: Any,
+    transformed: ResponsesAPIResponse,
     logging_obj: LiteLLMLoggingObj,
     chunk_size: int,
-) -> list[Any]:
+) -> list[ResponsesAPIStreamingResponse]:
     openai_types = _get_openai_response_types()
     if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-        usage_obj: Any | None = getattr(transformed, "usage", None)
+        usage_obj = transformed.usage
         if usage_obj is not None:
             try:
                 cost: float | None = logging_obj._response_cost_calculator(result=transformed)
@@ -1138,10 +1148,9 @@ def _build_synthetic_response_events(
             except Exception:
                 pass
 
-    events: list[Any] = [
-        _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),
-        _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, transformed),
-    ]
+    events: list[ResponsesAPIStreamingResponse] = []
+    events.append(_build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed))
+    events.append(_build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, transformed))
 
     sequence_number = 0
     for output_index, output_item in enumerate(getattr(transformed, "output", []) or []):
