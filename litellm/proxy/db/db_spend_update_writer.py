@@ -1583,6 +1583,16 @@ class DBSpendUpdateWriter:
                                         if value is not None
                                     }
 
+                                    # Only tag rows carry a request_id. Resolved to a spreadable
+                                    # value here so both payloads are built in one shot: a dict
+                                    # appended to after construction is one nobody can reason about
+                                    # by reading its literal.
+                                    tag_request_id = (
+                                        {"request_id": transaction["request_id"]}
+                                        if entity_type == "tag" and "request_id" in transaction
+                                        else {}
+                                    )
+
                                     # Common data structure for both create and update
                                     common_data = {
                                         entity_id_field: entity_id,
@@ -1600,12 +1610,9 @@ class DBSpendUpdateWriter:
                                         "successful_requests": transaction["successful_requests"],
                                         "failed_requests": transaction["failed_requests"],
                                         **optional_metrics,
+                                        **tag_request_id,
                                     }
 
-                                    if entity_type == "tag" and "request_id" in transaction:
-                                        common_data["request_id"] = transaction.get("request_id")
-
-                                    # Create update data structure
                                     update_data = {
                                         "prompt_tokens": {"increment": transaction["prompt_tokens"]},
                                         "completion_tokens": {"increment": transaction["completion_tokens"]},
@@ -1614,13 +1621,10 @@ class DBSpendUpdateWriter:
                                         "successful_requests": {"increment": transaction["successful_requests"]},
                                         "failed_requests": {"increment": transaction["failed_requests"]},
                                         **{field: {"increment": value} for field, value in optional_metrics.items()},
+                                        # An existing row predating the endpoint column gets it filled in here
+                                        "endpoint": transaction.get("endpoint") or "",
+                                        **tag_request_id,
                                     }
-
-                                    if entity_type == "tag" and "request_id" in transaction:
-                                        update_data["request_id"] = transaction.get("request_id")
-
-                                    # Add endpoint to update_data so existing rows get their endpoint field updated
-                                    update_data["endpoint"] = transaction.get("endpoint") or ""
 
                                     table.upsert(
                                         where=where_clause,
