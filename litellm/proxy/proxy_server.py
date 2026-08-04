@@ -7583,6 +7583,20 @@ def _keepalive_from_deployment_config(request_data: Mapping[str, Any], response)
 
     hidden = getattr(response, "_hidden_params", None)
     model_id = hidden.get("model_id") if isinstance(hidden, dict) else None
+    if not model_id:
+        # A router-level fallback rewrites kwargs["model"] on the fallback
+        # handler's own local **kwargs copy, not on this request_data dict, so
+        # request_data.get("model") still names the pre-fallback model group.
+        # metadata/litellm_metadata.model_info.id, by contrast, is mutated on
+        # this same dict by Router._update_kwargs_with_deployment on every
+        # attempt (including fallbacks) and reliably names the deployment that
+        # actually served the call; same source ProxyLogging._build_litellm_call_info
+        # uses for logging.
+        for meta_key in ("metadata", "litellm_metadata"):
+            model_info = (request_data.get(meta_key) or _EMPTY_MAPPING).get("model_info") or _EMPTY_MAPPING
+            model_id = model_info.get("id")
+            if model_id:
+                break
     if model_id:
         deployment = llm_router.get_deployment(model_id=model_id)
         # A populated model_id names the specific deployment that served this
