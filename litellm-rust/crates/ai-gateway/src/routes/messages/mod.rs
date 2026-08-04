@@ -14,13 +14,12 @@ use bytes::Bytes;
 use futures_util::StreamExt;
 use futures_util::stream::{self, BoxStream};
 use litellm_core::CoreError;
+use litellm_core::constants::BEDROCK_MESSAGES_PROVIDER;
 use litellm_core::logging::stream::count_forwarded_stream;
 use serde_json::{Map, Value};
 
 use crate::auth::RequireMasterKey;
-use crate::constants::{
-    BEDROCK_MESSAGES_PROVIDER, MESSAGES_HEADERS_NOT_FORWARDED, MESSAGES_ROUTE_PATH,
-};
+use crate::constants::{MESSAGES_HEADERS_NOT_FORWARDED, MESSAGES_ROUTE_PATH};
 use crate::state::AppState;
 
 /// This route's contribution to the app router.
