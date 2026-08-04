@@ -1679,7 +1679,7 @@ ADVISOR_TOOL_DESCRIPTION: Final[str] = (
 
 # Headers that must be stripped from a provider exception before it's forwarded as
 # the proxy's own HTTP response, or they conflict with the framing the proxy sets.
-HTTP_FRAMING_HEADERS: frozenset[str] = frozenset(
+HTTP_FRAMING_HEADERS: Final[frozenset[str]] = frozenset(
     {
         "content-length",
         "transfer-encoding",
@@ -1694,7 +1694,7 @@ HTTP_FRAMING_HEADERS: frozenset[str] = frozenset(
 
 # Browser-facing security headers that a malicious or misconfigured upstream
 # provider must not be able to set on the proxy's own response.
-BROWSER_SECURITY_HEADERS: frozenset[str] = frozenset(
+BROWSER_SECURITY_HEADERS: Final[frozenset[str]] = frozenset(
     {
         "access-control-allow-origin",
         "access-control-allow-credentials",
@@ -1712,4 +1712,4 @@ BROWSER_SECURITY_HEADERS: frozenset[str] = frozenset(
     }
 )
 
-UNSAFE_PROXY_RESPONSE_HEADERS: frozenset[str] = HTTP_FRAMING_HEADERS | BROWSER_SECURITY_HEADERS
+UNSAFE_PROXY_RESPONSE_HEADERS: Final[frozenset[str]] = HTTP_FRAMING_HEADERS | BROWSER_SECURITY_HEADERS
