@@ -1,10 +1,26 @@
 """Contract machinery shared by every `/management/v1` route."""
 
+from typing import TypeVar
 from urllib.parse import urlencode
 
 from fastapi import Request
-from fastapi.dependencies.utils import get_flat_dependant
 from fastapi.responses import JSONResponse
+
+try:
+    # FastAPI versions expose incompatible signatures.
+    from fastapi.dependencies.utils import get_flat_dependant  # pyright: ignore[reportAssignmentType]
+except ImportError:  # pragma: no cover
+    Dependable = TypeVar("Dependable")
+
+    def get_flat_dependant(
+        dependant: Dependable,
+        skip_repeats: bool = False,
+        **kwargs: object,
+    ) -> Dependable:
+        if skip_repeats or kwargs:
+            return dependant
+        return dependant
+
 
 from litellm.types.proxy.management_endpoints.management_v1 import (
     ListLinks,
