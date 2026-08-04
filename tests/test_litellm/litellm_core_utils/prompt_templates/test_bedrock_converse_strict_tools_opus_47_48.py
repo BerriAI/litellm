@@ -63,12 +63,17 @@ _NON_STRICT_TOOL = [
         "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
         "bedrock/eu.anthropic.claude-sonnet-4-20250514-v1:0",
         "bedrock/apac.anthropic.claude-sonnet-4-20250514-v1:0",
+        # Sonnet 5 rejects it too, verified live against Bedrock in us-east-1
+        "anthropic.claude-sonnet-5",
+        "bedrock/us.anthropic.claude-sonnet-5",
+        "bedrock/eu.anthropic.claude-sonnet-5",
+        "bedrock/jp.anthropic.claude-sonnet-5",
     ],
 )
 def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
     model_id: str,
 ) -> None:
-    """Opus 4.7/4.8 and Sonnet 4 reject toolSpec.strict and additionalProperties."""
+    """Opus 4.7/4.8, Sonnet 4 and Sonnet 5 reject toolSpec.strict and additionalProperties."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
     tool_spec = result[0]["toolSpec"]
     assert (
@@ -193,6 +198,15 @@ def test_bedrock_converse_supports_strict_tools_helper() -> None:
         )
         is False
     )
+    assert bedrock_converse_supports_strict_tools("anthropic.claude-sonnet-5") is False
+    assert (
+        bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-sonnet-5")
+        is False
+    )
+    assert (
+        bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0")
+        is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -207,6 +221,12 @@ def test_bedrock_converse_supports_strict_tools_helper() -> None:
         "us.anthropic.claude-sonnet-4-20250514-v1:0",
         "eu.anthropic.claude-sonnet-4-20250514-v1:0",
         "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+        "anthropic.claude-sonnet-5",
+        "global.anthropic.claude-sonnet-5",
+        "us.anthropic.claude-sonnet-5",
+        "eu.anthropic.claude-sonnet-5",
+        "au.anthropic.claude-sonnet-5",
+        "jp.anthropic.claude-sonnet-5",
     ],
 )
 def test_strict_tools_flag_set_in_model_cost_map(cost_map_key: str) -> None:
