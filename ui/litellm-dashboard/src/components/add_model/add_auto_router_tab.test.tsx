@@ -79,6 +79,7 @@ const { FALSY_PRESET } = vi.hoisted(() => ({
       match_threshold: 0,
       keyword_tier_rules: [{ keywords: ["foo"], tier: "SIMPLE" as const }],
       escalation_keywords: [],
+      session_affinity: true,
     },
   },
 }));
@@ -380,6 +381,7 @@ describe("AddAutoRouterTab", () => {
     const payload = mockHandleAddAutoRouterSubmit.mock.calls.at(-1)?.[0];
     expect(payload.complexity_router_config.match_threshold).toBe(0);
     expect(payload.complexity_router_config.escalation_keywords).toEqual([]);
+    expect(payload.complexity_router_config.session_affinity).toBe(true);
   });
 
   it("offers no team selector to a proxy admin, who may create an unscoped router", () => {
@@ -472,6 +474,38 @@ describe("AddAutoRouterTab", () => {
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
       session_affinity: true,
+    });
+  });
+
+  // handlePresetChange fully replaces complexityRouterConfig, so a field missing from the object
+  // it builds isn't "carried forward" from a prior manual edit, it's silently dropped to whatever
+  // the destructuring default resolves to downstream. Turn affinity on via Custom, then apply a
+  // preset whose own value is off, and confirm the preset's off wins in both the UI and the
+  // payload, the same authoritative-replace behavior every other preset field already has.
+  it("applies the preset's own session affinity instead of a previously toggled-on value", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+    renderWithProviders(<Harness />);
+
+    openTemplateDropdown();
+    fireEvent.click(optionByLabel("Custom Configuration")!);
+    await user.click(screen.getByText("Advanced: Session Affinity"));
+    await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
+    expect(screen.getByRole("switch", { name: "Pin a session to its first model" })).toBeChecked();
+
+    openTemplateDropdown();
+    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false));
+    fireEvent.click(optionByLabel("Anthropic Family")!);
+
+    expect(screen.getByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-then-preset-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(mockHandleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(mockHandleAddAutoRouterSubmit.mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      session_affinity: false,
     });
   });
 });
