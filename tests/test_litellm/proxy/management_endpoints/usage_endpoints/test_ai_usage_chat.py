@@ -111,6 +111,62 @@ SAMPLE_TEAM_RESPONSE = {
 }
 
 
+def _make_tool_call_response():
+    """First-turn LLM response that asks for get_usage_data."""
+    tool_call = MagicMock()
+    tool_call.id = "call_router"
+    tool_call.function.name = "get_usage_data"
+    tool_call.function.arguments = json.dumps({"start_date": "2025-01-01", "end_date": "2025-01-31"})
+
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.tool_calls = [tool_call]
+    response.choices[0].message.model_dump.return_value = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_router",
+                "type": "function",
+                "function": {
+                    "name": "get_usage_data",
+                    "arguments": '{"start_date":"2025-01-01","end_date":"2025-01-31"}',
+                },
+            }
+        ],
+    }
+    return response
+
+
+async def _make_stream(content: str):
+    chunk = MagicMock()
+    chunk.choices = [MagicMock()]
+    chunk.choices[0].delta.content = content
+    yield chunk
+
+
+async def _collect_events(**kwargs):
+    return [json.loads(event.removeprefix("data: ").strip()) async for event in stream_usage_ai_chat(**kwargs)]
+
+
+def _patched_usage_tool():
+    """Replace the get_usage_data handler so no DB query is attempted.
+
+    TOOL_HANDLERS captures `_fetch_usage_data` at import time, so patching the
+    module attribute alone leaves the real (DB-backed) fetcher wired up.
+    """
+    return patch.dict(
+        "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.TOOL_HANDLERS",
+        {
+            "get_usage_data": {
+                "fetch": AsyncMock(return_value=SAMPLE_AGGREGATED_RESPONSE),
+                "summarise": _summarise_usage_data,
+                "label": "global usage data",
+            }
+        },
+    )
+
+
 class TestToolSchemas:
     def test_admin_tools_include_all(self):
         assert len(TOOLS_ADMIN) == 3
@@ -409,6 +465,100 @@ class TestStreamUsageAiChat:
                 end_date="2025-01-31",
                 user_id="my-user-id",
             )
+
+
+class TestRouterResolution:
+    """
+    Regression for the Ask AI chat failing on every selectable model: the model
+    dropdown is populated from the proxy's model_list, and bare litellm.acompletion
+    cannot resolve those aliases to a provider ("LLM Provider NOT provided"), which
+    the endpoint reported as a generic internal error.
+    """
+
+    @pytest.mark.asyncio
+    async def test_registered_alias_routes_through_router(self):
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [{"model_name": "my-gpt4"}]
+        mock_router.acompletion = AsyncMock(
+            side_effect=[_make_tool_call_response(), _make_stream("Total spend is $50.25")]
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm") as mock_litellm,
+            _patched_usage_tool(),
+        ):
+            mock_litellm.acompletion = AsyncMock()
+
+            events = await _collect_events(
+                messages=[{"role": "user", "content": "What is my total spend?"}],
+                model="my-gpt4",
+                user_id="user-123",
+                is_admin=True,
+            )
+
+        assert [e for e in events if e["type"] == "error"] == []
+        assert [e["status"] for e in events if e["type"] == "tool_call"] == ["running", "complete"]
+        assert [e["content"] for e in events if e["type"] == "chunk"] == ["Total spend is $50.25"]
+        mock_litellm.acompletion.assert_not_called()
+
+        mock_router.get_model_list.assert_called_with(model_name="my-gpt4")
+        assert mock_router.acompletion.await_count == 2
+
+        first_call, final_call = mock_router.acompletion.await_args_list
+        assert first_call.kwargs["model"] == "my-gpt4"
+        assert first_call.kwargs["tools"] == TOOLS_ADMIN
+        assert first_call.kwargs.get("stream", False) is False
+        assert final_call.kwargs["model"] == "my-gpt4"
+        assert final_call.kwargs["stream"] is True
+
+    @pytest.mark.asyncio
+    async def test_model_unknown_to_router_falls_back_to_litellm(self):
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = []
+        mock_router.acompletion = AsyncMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm") as mock_litellm,
+            _patched_usage_tool(),
+        ):
+            mock_litellm.acompletion = AsyncMock(
+                side_effect=[_make_tool_call_response(), _make_stream("Spend summary")]
+            )
+
+            events = await _collect_events(
+                messages=[{"role": "user", "content": "What is my total spend?"}],
+                model="openai/gpt-4o-mini",
+                user_id="user-123",
+                is_admin=True,
+            )
+
+        assert [e for e in events if e["type"] == "error"] == []
+        mock_router.acompletion.assert_not_called()
+        assert mock_litellm.acompletion.await_count == 2
+        assert mock_litellm.acompletion.await_args_list[0].kwargs["model"] == "openai/gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_no_router_configured_uses_litellm(self):
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", None),
+            patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm") as mock_litellm,
+            _patched_usage_tool(),
+        ):
+            mock_litellm.acompletion = AsyncMock(
+                side_effect=[_make_tool_call_response(), _make_stream("Spend summary")]
+            )
+
+            events = await _collect_events(
+                messages=[{"role": "user", "content": "What is my total spend?"}],
+                model="gpt-4o-mini",
+                user_id="user-123",
+                is_admin=True,
+            )
+
+        assert [e for e in events if e["type"] == "error"] == []
+        assert mock_litellm.acompletion.await_count == 2
 
 
 class TestUsageAiChatServiceAccountGuard:

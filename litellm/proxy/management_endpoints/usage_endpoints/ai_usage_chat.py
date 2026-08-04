@@ -4,7 +4,7 @@ usage/spend data by querying the aggregated daily activity endpoints.
 """
 
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import date
 from typing import Any, Literal, cast
 
@@ -16,6 +16,8 @@ from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
+from litellm.types.utils import ModelResponse
+from litellm.utils import CustomStreamWrapper
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -495,11 +497,30 @@ async def _process_tool_call(
     chat_messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
 
 
+def _resolve_completion_fn(model: str) -> Callable[..., Awaitable[ModelResponse | CustomStreamWrapper]]:
+    """Pick the Router when it knows the model, else a direct litellm call.
+
+    The "Ask AI" dropdown is populated from the proxy's model_list, so `model` is
+    normally a virtual alias (or wildcard / model group alias) that only the Router
+    can resolve to a real provider, model and credentials; bare litellm.acompletion
+    infers the provider from the model string alone and rejects those aliases with
+    "LLM Provider NOT provided". The direct call stays as the fallback for proxies
+    with no Router and for strings the Router does not recognise, such as a genuine
+    provider-prefixed model or an unregistered DEFAULT_COMPETITOR_DISCOVERY_MODEL.
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is not None and llm_router.get_model_list(model_name=model):
+        return llm_router.acompletion  # pyright: ignore[reportUnknownVariableType]  # untyped upstream signature
+    return litellm.acompletion  # pyright: ignore[reportUnknownVariableType]  # untyped upstream signature
+
+
 async def _stream_final_response(model: str, chat_messages: list[dict[str, Any]]) -> AsyncIterator[str]:
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
-    response = await litellm.acompletion(
+    acompletion = _resolve_completion_fn(model)
+    response = await acompletion(
         model=model,
         messages=chat_messages,
         stream=True,
@@ -528,7 +549,8 @@ async def stream_usage_ai_chat(
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
         tools = get_tools_for_role(is_admin)
-        response = await litellm.acompletion(
+        acompletion = _resolve_completion_fn(resolved_model)
+        response = await acompletion(
             model=resolved_model,
             messages=chat_messages,
             tools=tools,
