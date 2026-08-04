@@ -1,17 +1,45 @@
-import { renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
+import { renderWithProviders, screen, waitFor, within, fireEvent, testQueryClient } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import AddAutoRouterTab from "./add_auto_router_tab";
 import NotificationManager from "../molecules/notifications_manager";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { getMissingTiersError } from "./build_complexity_router_config";
+import { ModelGroup } from "@/components/llm_calls/fetch_models";
+
+// Every model referenced by both bundled family presets. A caller holding all of these can select
+// either preset; dropping any one greys out the preset that names it.
+const ALL_FAMILY_MODELS: ModelGroup[] = [
+  { model_group: "claude-haiku-4-5", mode: "chat" },
+  { model_group: "claude-sonnet-4-5", mode: "chat" },
+  { model_group: "claude-opus-5", mode: "chat" },
+  { model_group: "gpt-5-nano", mode: "chat" },
+  { model_group: "gpt-5-mini", mode: "chat" },
+  { model_group: "gpt-5", mode: "chat" },
+  { model_group: "o3", mode: "chat" },
+];
+
+const openTemplateDropdown = (): void => {
+  fireEvent.mouseDown(screen.getByTestId("template-selector").querySelector(".ant-select-selector")!);
+};
+
+// The rendered antd option whose text starts with a preset label. Matching on text (not role +
+// accessible name) sidesteps antd's list re-rendering options in place on every state change.
+const optionByLabel = (label: string): HTMLElement | undefined =>
+  Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option")).find((el) =>
+    el.textContent?.startsWith(label),
+  );
+
+const isOptionDisabled = (option: HTMLElement): boolean => option.classList.contains("ant-select-item-option-disabled");
+
+const { mockFetchAvailableModels } = vi.hoisted(() => ({ mockFetchAvailableModels: vi.fn() }));
 
 vi.mock("../networking", () => ({
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
-  fetchAvailableModels: vi.fn().mockResolvedValue([]),
+  fetchAvailableModels: mockFetchAvailableModels,
 }));
 
 vi.mock("./handle_add_auto_router_submit", () => ({
@@ -50,6 +78,11 @@ const Harness = () => <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" u
 describe("AddAutoRouterTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // testQueryClient is a shared singleton with staleTime: Infinity, so cached model lists would
+    // otherwise bleed across tests (a later test reusing accessToken="token" would read an earlier
+    // test's data instead of its own mock).
+    testQueryClient.clear();
+    mockFetchAvailableModels.mockResolvedValue([]);
   });
 
   // Nothing is filled in, so there is nothing to submit. The button reports that itself instead of
@@ -230,6 +263,140 @@ describe("AddAutoRouterTab", () => {
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
       session_affinity: true,
+    });
+  });
+
+  describe("template presets", () => {
+    // Opens the dropdown once, then waits out the useQuery load: an open antd Select re-renders its
+    // already-mounted options in place as state changes, so polling only re-reads the DOM here.
+    // Re-firing the open/close mousedown on every poll (calling openTemplateDropdown inside the
+    // waitFor callback) fights the dropdown's own open/close animation and hangs the test.
+    const waitForPresetEnabled = async (label: string) => {
+      openTemplateDropdown();
+      await waitFor(() => {
+        expect(isOptionDisabled(optionByLabel(label)!)).toBe(false);
+      });
+    };
+
+    it("disables every preset while the model list is loading", async () => {
+      let resolveModels: (models: ModelGroup[]) => void = () => {};
+      mockFetchAvailableModels.mockImplementation(
+        () =>
+          new Promise<ModelGroup[]>((resolve) => {
+            resolveModels = resolve;
+          }),
+      );
+
+      renderWithProviders(<Harness />);
+      openTemplateDropdown();
+
+      const anthropicOption = optionByLabel("Anthropic Family")!;
+      expect(isOptionDisabled(anthropicOption)).toBe(true);
+      expect(anthropicOption.textContent).toContain("Checking model availability");
+
+      // The dropdown is already open from above; polling re-reads its options in place rather than
+      // reopening (openTemplateDropdown toggles, so a second call here would close it instead).
+      resolveModels(ALL_FAMILY_MODELS);
+      await waitFor(() => {
+        expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
+      });
+    });
+
+    it("disables every preset and offers a retry when the model list fails to load", async () => {
+      mockFetchAvailableModels.mockRejectedValue(new Error("network error"));
+
+      renderWithProviders(<Harness />);
+
+      expect(await screen.findByText("Could not load available models.")).toBeInTheDocument();
+      openTemplateDropdown();
+      const anthropicOption = optionByLabel("Anthropic Family")!;
+      expect(isOptionDisabled(anthropicOption)).toBe(true);
+      expect(anthropicOption.textContent).toContain("Cannot verify these models are available");
+    });
+
+    it("disables a preset missing one of its models, naming the missing model", async () => {
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS.filter((m) => m.model_group !== "claude-opus-5"));
+
+      renderWithProviders(<Harness />);
+      openTemplateDropdown();
+
+      await waitFor(() => {
+        expect(optionByLabel("Anthropic Family")!.textContent).toContain("Missing: claude-opus-5");
+      });
+      expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true);
+    });
+
+    it("enables a preset once every model it needs is available", async () => {
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+      renderWithProviders(<Harness />);
+
+      await waitForPresetEnabled("Anthropic Family");
+      await waitForPresetEnabled("OpenAI Family");
+    });
+
+    it("collapses detailed configuration and shows a tier summary once a preset is applied", async () => {
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+      renderWithProviders(<Harness />);
+      await waitForPresetEnabled("Anthropic Family");
+
+      fireEvent.click(optionByLabel("Anthropic Family")!);
+
+      expect(screen.queryByText("Advanced: Keyword/Semantic Matching")).not.toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Simple: claude-haiku-4-5 · Medium: claude-sonnet-4-5 · Complex: claude-opus-5 · Reasoning: claude-opus-5",
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("expands detailed configuration when Custom Configuration is chosen", () => {
+      renderWithProviders(<Harness />);
+      openTemplateDropdown();
+
+      fireEvent.click(optionByLabel("Custom Configuration")!);
+
+      expect(screen.getByText("Advanced: Keyword/Semantic Matching")).toBeInTheDocument();
+    });
+
+    it("lets a caller manually re-expand a detailed configuration a preset just collapsed", async () => {
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+      renderWithProviders(<Harness />);
+      await waitForPresetEnabled("Anthropic Family");
+      fireEvent.click(optionByLabel("Anthropic Family")!);
+      expect(screen.queryByText("Advanced: Keyword/Semantic Matching")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("detailed-configuration-toggle"));
+
+      expect(screen.getByText("Advanced: Keyword/Semantic Matching")).toBeInTheDocument();
+    });
+
+    // This is the regression test for the whole feature: if handlePresetChange stopped prefilling
+    // complexityRouterConfig, the real (unmocked here) getMissingTiersError would block the submit
+    // and handleAddAutoRouterSubmit would never be called.
+    it("carries a selected preset's tiers through to the create payload", async () => {
+      const user = userEvent.setup();
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+      renderWithProviders(<Harness />);
+      await waitForPresetEnabled("Anthropic Family");
+      fireEvent.click(optionByLabel("Anthropic Family")!);
+
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "anthropic-router");
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
+        auto_router_default_model: "claude-sonnet-4-5",
+        complexity_router_config: {
+          tiers: {
+            SIMPLE: ["claude-haiku-4-5"],
+            MEDIUM: ["claude-sonnet-4-5"],
+            COMPLEX: ["claude-opus-5"],
+            REASONING: ["claude-opus-5"],
+          },
+        },
+      });
     });
   });
 });
