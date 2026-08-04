@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
 import { TextInput } from "@tremor/react";
@@ -74,13 +74,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   createScope = "unscoped-ok",
 }) => {
   const requiresTeamScope = createScope === "team-required";
-  // submitRecommendedRouter awaits a network round trip before creating the router; reading
-  // accessToken through this ref instead of the closure keeps that call on whatever token is
-  // current when it actually fires, not whichever one was live when submit was clicked.
-  const accessTokenRef = useRef(accessToken);
-  useEffect(() => {
-    accessTokenRef.current = accessToken;
-  }, [accessToken]);
   const [form] = Form.useForm();
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
 
@@ -204,16 +197,16 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   // background refetch failure keeps trusting the stale cache by design - see modelsUnverifiable
   // above). The backend does not re-check a router's referenced model names against the caller's
   // access either, so this is the only place that can catch it: force a fresh fetch right before
-  // creating the router, rather than trusting whatever's cached. Fetch directly against
-  // accessTokenRef instead of the query's own refetch, which stays bound to whichever token was
-  // current when this render's useQuery was set up - using it here could verify one caller's
-  // models and create the router under another if the token rotates mid-check.
-  const verifyPresetStillAvailable = async (presetKey: string): Promise<boolean> => {
+  // creating the router, rather than trusting whatever's cached. Takes the token as a parameter,
+  // captured once by the caller, so this check and the create call it gates can never end up
+  // disagreeing about which caller they represent - reading accessToken independently at each
+  // point only chases a moving target and can never fully close that gap.
+  const verifyPresetStillAvailable = async (presetKey: string, token: string): Promise<boolean> => {
     const preset = getPresetByKey(presetKey);
     if (!preset) return false;
     let freshModels: ModelGroup[];
     try {
-      freshModels = await fetchAvailableModels(accessTokenRef.current);
+      freshModels = await fetchAvailableModels(token);
     } catch {
       return false;
     }
@@ -228,7 +221,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
-    if (selectedPreset !== "custom" && !(await verifyPresetStillAvailable(selectedPreset))) {
+    if (selectedPreset !== "custom" && !(await verifyPresetStillAvailable(selectedPreset, accessToken))) {
       setShowValidationErrors(true);
       NotificationManager.fromBackend(
         "This template's models are no longer available. Please reselect a template or switch to Custom.",
@@ -314,7 +307,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         model_access_group: form.getFieldValue("model_access_group"),
       };
 
-      await handleAddAutoRouterSubmit(submitValues, accessTokenRef.current, form, handleOk);
+      await handleAddAutoRouterSubmit(submitValues, accessToken, form, handleOk);
     } catch (error) {
       console.error("Validation failed:", error);
       NotificationManager.fromBackend("Please fill in all required fields");
