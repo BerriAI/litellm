@@ -1213,6 +1213,20 @@ class AmazonConverseConfig(BaseConfig):
         }
         return {**additional_request_params, **merged_entries}
 
+    @staticmethod
+    def _drop_tool_choice_type_conflicting_with_tool_config(additional_request_params: dict) -> None:
+        """Drop ``tool_choice.type`` from the Anthropic passthrough fields.
+
+        Converse rejects a request carrying both ``toolConfig.toolChoice`` and an
+        ``additionalModelRequestFields.tool_choice.type``, so once the caller asked for a
+        tool choice the type has to come from ``toolChoice`` alone. Sibling keys such as
+        ``disable_parallel_tool_use`` have no ``toolConfig`` equivalent and are accepted
+        alongside ``toolChoice``, so they stay.
+        """
+        tool_choice = additional_request_params.get("tool_choice")
+        if isinstance(tool_choice, dict):
+            tool_choice.pop("type", None)
+
     def _prepare_request_params(
         self, optional_params: dict, model: str, drop_params: bool = False
     ) -> tuple[dict, dict, dict, OutputConfigBlock | None]:
@@ -1569,6 +1583,7 @@ class AmazonConverseConfig(BaseConfig):
             )
             if tool_choice_values is not None:
                 bedrock_tool_config["toolChoice"] = tool_choice_values
+                self._drop_tool_choice_type_conflicting_with_tool_config(additional_request_params)
 
         data: Final[CommonRequestObject] = {
             "inferenceConfig": self._transform_inference_params(inference_params=inference_params),
