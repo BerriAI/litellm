@@ -3951,11 +3951,20 @@ class PrismaClient:
             "engine_pid": pid if pid > 0 else "unavailable",
             "engine_port": "unavailable",
             "engine_alive": "unknown",
+            "engine_state": "unavailable",
+            "engine_started_at": "unavailable",
+            "engine_process_error_type": "none",
             "pool_active": "unavailable",
             "pool_wait": "unavailable",
             "pool_busy": "unavailable",
             "pool_idle": "unavailable",
             "pool_open": "unavailable",
+            "pool_opened_total": "unavailable",
+            "pool_closed_total": "unavailable",
+            "pool_wait_histogram_count": "unavailable",
+            "pool_wait_histogram_sum_ms": "unavailable",
+            "pool_wait_histogram_le_1000": "unavailable",
+            "pool_wait_histogram_le_5000": "unavailable",
             "pool_target": os.getenv("DATABASE_CONNECTION_POOL_LIMIT", "unset"),
             "pool_metrics_error_type": "none",
         }
@@ -3970,6 +3979,25 @@ class PrismaClient:
             diagnostics["engine_alive"] = "false"
         except (PermissionError, OSError):
             diagnostics["engine_alive"] = "unknown"
+
+        try:
+            with open(f"/proc/{pid}/stat", "r") as proc_stat:
+                process_fields = proc_stat.read().split()
+            diagnostics["engine_state"] = process_fields[2]
+            process_start_ticks = int(process_fields[21])
+            with open("/proc/stat", "r") as host_stat:
+                boot_time_seconds = next(
+                    int(line.split()[1])
+                    for line in host_stat
+                    if line.startswith("btime ")
+                )
+            clock_ticks = int(os.sysconf("SC_CLK_TCK"))
+            diagnostics["engine_started_at"] = datetime.fromtimestamp(
+                boot_time_seconds + (process_start_ticks / clock_ticks),
+                tz=timezone.utc,
+            ).isoformat()
+        except Exception as process_error:
+            diagnostics["engine_process_error_type"] = type(process_error).__name__
 
         try:
             with open(f"/proc/{pid}/cmdline", "rb") as proc_cmdline:
@@ -3990,6 +4018,12 @@ class PrismaClient:
                 "prisma_pool_connections_busy": "pool_busy",
                 "prisma_pool_connections_idle": "pool_idle",
                 "prisma_pool_connections_open": "pool_open",
+                "prisma_pool_connections_opened_total": "pool_opened_total",
+                "prisma_pool_connections_closed_total": "pool_closed_total",
+                "prisma_client_queries_wait_histogram_ms_count": "pool_wait_histogram_count",
+                "prisma_client_queries_wait_histogram_ms_sum": "pool_wait_histogram_sum_ms",
+                'prisma_client_queries_wait_histogram_ms_bucket{le="1000"}': "pool_wait_histogram_le_1000",
+                'prisma_client_queries_wait_histogram_ms_bucket{le="5000"}': "pool_wait_histogram_le_5000",
             }
             with urllib.request.urlopen(
                 f"http://127.0.0.1:{port}/metrics", timeout=0.2
@@ -4572,8 +4606,13 @@ class PrismaClient:
                         "Prisma DB health watchdog probe failed before reconnect. "
                         "failure_kind=%s exception_type=%s elapsed_ms=%s error=%s "
                         "consecutive_reconnect_failures=%s engine_pid=%s "
-                        "engine_port=%s engine_alive=%s pool_active=%s pool_wait=%s "
-                        "pool_busy=%s pool_idle=%s pool_open=%s pool_target=%s "
+                        "engine_port=%s engine_alive=%s engine_state=%s "
+                        "engine_started_at=%s engine_process_error_type=%s "
+                        "pool_active=%s pool_wait=%s pool_busy=%s pool_idle=%s "
+                        "pool_open=%s pool_opened_total=%s pool_closed_total=%s "
+                        "pool_wait_histogram_count=%s pool_wait_histogram_sum_ms=%s "
+                        "pool_wait_histogram_le_1000=%s pool_wait_histogram_le_5000=%s "
+                        "pool_target=%s "
                         "pool_metrics_error_type=%s",
                         failure_kind,
                         type(e).__name__,
@@ -4583,11 +4622,20 @@ class PrismaClient:
                         diagnostics["engine_pid"],
                         diagnostics["engine_port"],
                         diagnostics["engine_alive"],
+                        diagnostics["engine_state"],
+                        diagnostics["engine_started_at"],
+                        diagnostics["engine_process_error_type"],
                         diagnostics["pool_active"],
                         diagnostics["pool_wait"],
                         diagnostics["pool_busy"],
                         diagnostics["pool_idle"],
                         diagnostics["pool_open"],
+                        diagnostics["pool_opened_total"],
+                        diagnostics["pool_closed_total"],
+                        diagnostics["pool_wait_histogram_count"],
+                        diagnostics["pool_wait_histogram_sum_ms"],
+                        diagnostics["pool_wait_histogram_le_1000"],
+                        diagnostics["pool_wait_histogram_le_5000"],
                         diagnostics["pool_target"],
                         diagnostics["pool_metrics_error_type"],
                     )
