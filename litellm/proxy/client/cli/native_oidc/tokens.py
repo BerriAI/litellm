@@ -13,7 +13,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from litellm.litellm_core_utils.native_oidc_validation import is_valid_scope_token
+from litellm.litellm_core_utils.native_oidc_validation import is_valid_nqchar_string, is_valid_scope_token
 
 from .errors import NativeOIDCError
 
@@ -27,6 +27,9 @@ MAX_EXPIRES_IN_SECONDS = 90 * 24 * 3600
 # tokens are typically an hour or less, and a too-long guess would mean sending
 # a dead token to the proxy.
 FALLBACK_LIFETIME_SECONDS = 3600
+
+# Bounds an otherwise unbounded provider-controlled string before it is printed.
+MAX_OAUTH_ERROR_LENGTH = 128
 
 
 @dataclass(frozen=True)
@@ -150,11 +153,19 @@ def parse_token_response(payload: object, *, now: float | None = None) -> TokenR
 
 
 def extract_oauth_error(payload: Mapping[str, object] | None) -> str | None:
-    """Return the OAuth `error` code from an error response, if present."""
+    """Return the OAuth `error` code from an error response, if present.
+
+    A code that is not a bounded RFC 6749 NQCHAR string is discarded rather than
+    reported, so a hostile provider cannot smuggle ANSI or OSC escape sequences
+    into the terminal through an error response. Callers then fall back to the
+    status-code-only message.
+    """
     if not isinstance(payload, Mapping):
         return None
     error = payload.get("error")
-    return error if isinstance(error, str) and error else None
+    if not isinstance(error, str) or len(error) > MAX_OAUTH_ERROR_LENGTH or not is_valid_nqchar_string(error):
+        return None
+    return error
 
 
 def describe_token_error(status_code: int, payload: Mapping[str, object] | None) -> str:

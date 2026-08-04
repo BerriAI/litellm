@@ -14,6 +14,8 @@ from litellm.litellm_core_utils.native_oidc_validation import (
     has_control_characters,
     is_numeric_loopback_host,
     is_trusted_metadata_origin,
+    is_printable_ascii,
+    is_valid_nqchar_string,
     is_valid_scope_token,
     validate_endpoint_url,
     validate_issuer,
@@ -50,6 +52,47 @@ class TestNumericLoopbackHost:
     )
     def test_names_and_non_loopback_rejected(self, host):
         assert is_numeric_loopback_host(host) is False
+
+
+class TestTerminalSafeText:
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "\x1b[31mred",
+            "\x1b]0;retitled\x07",
+            "carriage\rreturn",
+            "new\nline",
+            "bell\x07",
+            "nul\x00",
+            "c1\x9b[31m",
+            "",
+        ],
+    )
+    def test_escape_sequences_are_not_nqchar(self, value):
+        assert is_valid_nqchar_string(value) is False
+
+    @pytest.mark.parametrize("value", ["invalid_grant", "access_denied", "a!b#c[d]e~"])
+    def test_oauth_error_codes_are_nqchar(self, value):
+        assert is_valid_nqchar_string(value) is True
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "\x1b[31mred",
+            "\x1b]0;retitled\x07",
+            "carriage\rreturn",
+            "bell\x07",
+            "c1\x9b[31m",
+            "unicodé",
+            "",
+        ],
+    )
+    def test_escape_sequences_are_not_printable_ascii(self, value):
+        assert is_printable_ascii(value) is False
+
+    @pytest.mark.parametrize("value", ["WDJB-MJHT", "1234 5678", 'quote"and\\slash'])
+    def test_plain_user_codes_are_printable_ascii(self, value):
+        assert is_printable_ascii(value) is True
 
 
 class TestScopeTokens:

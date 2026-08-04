@@ -14,6 +14,7 @@ import click
 
 from litellm.litellm_core_utils.native_oidc_validation import (
     format_scopes,
+    is_printable_ascii,
     validate_endpoint_url,
 )
 
@@ -34,6 +35,7 @@ SLOW_DOWN_INCREMENT_SECONDS = 5
 
 MAX_POLL_INTERVAL_SECONDS = 60
 MAX_DEVICE_CODE_LIFETIME_SECONDS = 30 * 60
+MAX_USER_CODE_LENGTH = 64
 CONNECTION_BACKOFF_SECONDS = 5
 
 
@@ -53,6 +55,20 @@ def _require_non_empty_string(raw: Mapping[str, object], key: str) -> str:
     value = raw.get(key)
     if not isinstance(value, str) or not value:
         raise NativeOIDCError(f"device authorization response is missing {key}")
+    return value
+
+
+def _require_displayable_user_code(raw: Mapping[str, object]) -> str:
+    """Validate the user code, which is echoed verbatim to the terminal.
+
+    RFC 8628 section 6.1 expects a short, human-transcribable code. Anything
+    carrying a control character could rewrite the surrounding prompt with an
+    ANSI or OSC escape sequence, so the response is rejected outright rather
+    than sanitised: a legitimate provider never sends one.
+    """
+    value = _require_non_empty_string(raw, "user_code")
+    if len(value) > MAX_USER_CODE_LENGTH or not is_printable_ascii(value):
+        raise NativeOIDCError("device authorization response user_code is not printable text")
     return value
 
 
@@ -95,7 +111,7 @@ def parse_device_authorization(payload: object) -> DeviceAuthorization:
 
     return DeviceAuthorization(
         device_code=_require_non_empty_string(payload, "device_code"),
-        user_code=_require_non_empty_string(payload, "user_code"),
+        user_code=_require_displayable_user_code(payload),
         verification_uri=verification_uri,
         verification_uri_complete=_optional_safe_uri(payload, "verification_uri_complete"),
         expires_in=expires_in,

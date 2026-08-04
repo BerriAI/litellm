@@ -29,6 +29,7 @@ from litellm.proxy.client.cli.native_oidc.callback import (
 from litellm.proxy.client.cli.native_oidc.device_flow import (
     DEFAULT_POLL_INTERVAL_SECONDS,
     MAX_POLL_INTERVAL_SECONDS,
+    MAX_USER_CODE_LENGTH,
     DeviceAuthorization,
     parse_device_authorization,
     poll_for_device_token,
@@ -53,6 +54,7 @@ from litellm.proxy.client.cli.native_oidc.pkce import (
 from litellm.proxy.client.cli.native_oidc.tokens import (
     FALLBACK_LIFETIME_SECONDS,
     MAX_EXPIRES_IN_SECONDS,
+    MAX_OAUTH_ERROR_LENGTH,
     compute_expires_at,
     describe_token_error,
     extract_oauth_error,
@@ -528,6 +530,26 @@ class TestTokenErrors:
     def test_describe_token_error_without_a_body(self):
         assert describe_token_error(503, None) == "token endpoint returned HTTP 503"
 
+    @pytest.mark.parametrize(
+        "hostile",
+        [
+            "\x1b[2K\rLogin succeeded",
+            "\x1b]0;pwned\x07",
+            "invalid\x08\x08grant",
+            "invalid grant",
+            "invalid\nGRANTED",
+        ],
+    )
+    def test_a_hostile_error_code_never_reaches_the_terminal(self, hostile):
+        assert extract_oauth_error({"error": hostile}) is None
+        message = describe_token_error(400, {"error": hostile})
+        assert message == "token endpoint returned HTTP 400"
+        assert "\x1b" not in message
+
+    def test_an_oversized_error_code_is_discarded(self):
+        assert extract_oauth_error({"error": "a" * (MAX_OAUTH_ERROR_LENGTH + 1)}) is None
+        assert extract_oauth_error({"error": "a" * MAX_OAUTH_ERROR_LENGTH}) == "a" * MAX_OAUTH_ERROR_LENGTH
+
 
 # --------------------------------------------------------------------------- #
 # Device flow
@@ -552,6 +574,25 @@ class TestParseDeviceAuthorization:
         assert parsed.device_code == "dc"
         assert parsed.user_code == "WXYZ-1234"
         assert parsed.verification_uri_complete == f"{ISSUER}/activate?code=WXYZ"
+
+    @pytest.mark.parametrize(
+        "hostile",
+        [
+            "\x1b[2K\rEnter code: ATTACKER-CODE",
+            "\x1b]0;pwned\x07",
+            "WXYZ\x08\x08\x081234",
+            "WXYZ\r\n1234",
+            "WXYZ\x7f",
+            "A" * (MAX_USER_CODE_LENGTH + 1),
+        ],
+    )
+    def test_a_hostile_user_code_is_rejected(self, hostile):
+        with pytest.raises(NativeOIDCError) as excinfo:
+            parse_device_authorization(device_payload(user_code=hostile))
+        message = str(excinfo.value)
+        assert "user_code is not printable text" in message
+        assert "\x1b" not in message
+        assert hostile not in message
 
     def test_interval_defaults_to_five_seconds(self):
         payload = device_payload()

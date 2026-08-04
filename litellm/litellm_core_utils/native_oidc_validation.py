@@ -11,9 +11,10 @@ import ipaddress
 from collections.abc import Iterable, Sequence
 from urllib.parse import urlsplit
 
-# RFC 6749 section 3.3: scope-token = 1*( %x21 / %x23-5B / %x5D-7E )
+# RFC 6749 appendix A: NQCHAR = %x21 / %x23-5B / %x5D-7E
 # i.e. printable ASCII excluding SPACE (%x20), DQUOTE (%x22) and BACKSLASH (%x5C).
-SCOPE_TOKEN_ALLOWED_CHARACTERS = frozenset(chr(code) for code in range(0x21, 0x7F) if code not in (0x22, 0x5C))
+# Both scope-token (section 3.3) and the `error` code (section 5.2) are 1*NQCHAR.
+NQCHAR_ALLOWED_CHARACTERS = frozenset(chr(code) for code in range(0x21, 0x7F) if code not in (0x22, 0x5C))
 
 PROVIDER_CONFIGURATION_PATH = "/.well-known/openid-configuration"
 
@@ -39,9 +40,29 @@ def is_numeric_loopback_host(hostname: str) -> bool:
         return False
 
 
+def is_valid_nqchar_string(value: str) -> bool:
+    """True when ``value`` is a non-empty RFC 6749 NQCHAR string.
+
+    Control characters, including the ESC that starts an ANSI or OSC escape
+    sequence, fall outside NQCHAR, so a value that passes this check is safe to
+    interpolate into terminal output.
+    """
+    return bool(value) and all(character in NQCHAR_ALLOWED_CHARACTERS for character in value)
+
+
+def is_printable_ascii(value: str) -> bool:
+    """True when ``value`` is non-empty and made only of printable ASCII.
+
+    Wider than :func:`is_valid_nqchar_string` because it admits SPACE, DQUOTE
+    and BACKSLASH, but still excludes every control character, so the result is
+    safe to echo to a terminal.
+    """
+    return bool(value) and all(0x20 <= ord(character) <= 0x7E for character in value)
+
+
 def is_valid_scope_token(value: str) -> bool:
     """True when ``value`` is a well-formed RFC 6749 scope-token."""
-    return bool(value) and all(character in SCOPE_TOKEN_ALLOWED_CHARACTERS for character in value)
+    return is_valid_nqchar_string(value)
 
 
 def validate_scope_tokens(scopes: Iterable[str]) -> tuple[str, ...]:
