@@ -2690,7 +2690,6 @@ class ProxyBaseLLMRequestProcessing:
                 _response_headers: Final = getattr(_response, "headers", None)
                 if _response_headers:
                     headers = get_response_headers(dict(_response_headers))
-        headers = {k: v for k, v in headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
         headers.update(custom_headers)
 
         # Call response headers hook for failure
@@ -2706,16 +2705,15 @@ class ProxyBaseLLMRequestProcessing:
         except Exception:
             pass
 
-        headers = {k: v for k, v in headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
+        safe_headers: Final = {k: v for k, v in headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
 
-        self._apply_router_cooldown_retry_after(headers, e)
+        self._apply_router_cooldown_retry_after(safe_headers, e)
 
         if isinstance(e, ProxyException):
-            merged_headers = {
-                **e.headers,
-                **{k: v if isinstance(v, str) else str(v) for k, v in headers.items()},
+            e.headers = {
+                **{k: v for k, v in e.headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS},
+                **{k: v if isinstance(v, str) else str(v) for k, v in safe_headers.items()},
             }
-            e.headers = {k: v for k, v in merged_headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
             raise e
 
         if isinstance(e, HTTPException):
@@ -2732,7 +2730,7 @@ class ProxyBaseLLMRequestProcessing:
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
                 provider_specific_fields=merged_fields,
-                headers=headers,
+                headers=safe_headers,
             )
         elif isinstance(e, httpx.HTTPStatusError):
             # Handle httpx.HTTPStatusError - extract actual error from response
@@ -2758,7 +2756,7 @@ class ProxyBaseLLMRequestProcessing:
                 type="invalid_request_error",
                 param=None,
                 code=status.HTTP_400_BAD_REQUEST,
-                headers=headers,
+                headers=safe_headers,
             )
         # Extract status_code from the exception if it carries one.
         # Provider exceptions (NotFoundError, BadRequestError, GeminiError,
@@ -2777,7 +2775,7 @@ class ProxyBaseLLMRequestProcessing:
             openai_code=getattr(e, "code", None),
             code=_code,
             provider_specific_fields=getattr(e, "provider_specific_fields", None),
-            headers=headers,
+            headers=safe_headers,
         )
 
     #########################################################
