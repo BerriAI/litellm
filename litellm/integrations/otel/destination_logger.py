@@ -21,11 +21,14 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+from litellm.integrations.otel.model.payloads import is_mcp_list_tools
 from litellm.integrations.otel.plumbing.context import request_destinations
 from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
+from litellm.litellm_core_utils.litellm_logging import otel_v2_owned_backends
 
 if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
+    from litellm.integrations.otel.model.event import LLMCallEvent
     from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
 
 
@@ -70,12 +73,41 @@ class _DestinationOnlyOtel(OpenTelemetryV2):
             None,
         )
 
+    def _tracer_dynamic_params(self, call: "LLMCallEvent") -> "StandardCallbackDynamicParams | None":
+        return None
+
+    def _emit_mcp_list_tools(
+        self,
+        kwargs: "Mapping[str, object]",
+        start_time: "datetime | float | None",
+        end_time: "datetime | float | None",
+    ) -> bool:
+        """Claim the event without emitting.
+
+        A ``tools/list`` span carries no ``gen_ai.operation.name``, so the fan-out span
+        processor already routes the owning logger's span to the request's destinations.
+        Emitting a second one here would deliver the same discovery call twice; returning
+        ``True`` still stops the caller from closing it as an LLM call.
+        """
+        raw_payload = kwargs.get("standard_logging_object")
+        return isinstance(raw_payload, Mapping) and is_mcp_list_tools(raw_payload)
+
     def export_to_destinations(
         self,
         kwargs: "Mapping[str, Any]",
         start_time: "datetime | float | None",
         end_time: "datetime | float | None",
     ) -> None:
+        """Mirrors ``async_log_success_event``'s dispatch order.
+
+        An MCP event is not an LLM call: closing it as one names the span from the LLM
+        vocabulary (``chat MCP: list_tools``, ``execute_tool MCP: <server>-<tool>``),
+        drops every MCP semconv attribute, and stamps fabricated zero-token usage on it.
+        """
+        if self._emit_mcp_tool_call(kwargs, start_time, end_time):
+            return
+        if self._emit_mcp_list_tools(kwargs, start_time, end_time):
+            return
         self._close_llm_call(kwargs, start_time, end_time)
 
 
@@ -100,7 +132,8 @@ class AdminDestinationLogger(CustomLogger):
         start_time: "datetime | float | None",
         end_time: "datetime | float | None",
     ) -> None:
-        for backend in sorted({d.callback_name for d in request_destinations() if d.callback_name}):
+        owned = otel_v2_owned_backends()
+        for backend in sorted({d.callback_name for d in request_destinations() if d.callback_name} - owned):
             try:
                 self._emitter_for(backend).export_to_destinations(kwargs, start_time, end_time)
             except Exception as exc:  # noqa: BLE001  # one destination's failure must not break the request or the others

@@ -59,6 +59,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
+from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.core_helpers import reconstruct_model_name
@@ -4193,6 +4194,20 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> An
     v2_logger = OpenTelemetryV2(config=config, callback_name=callback_name)
     _in_memory_loggers.append(v2_logger)
     return v2_logger
+
+
+def otel_v2_owned_backends() -> frozenset[str]:
+    """Backend names an ``OpenTelemetryV2`` instance already owns.
+
+    An owning logger fans its gen-AI span out to the request's destinations for its own
+    backend, so the destination sink must not emit for these or the destination receives
+    the same call twice as two sibling spans.
+    """
+    return frozenset(
+        name
+        for logger in _in_memory_loggers
+        if isinstance(logger, OpenTelemetryV2) and (name := getattr(logger, "callback_name", None))
+    )
 
 
 def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list) -> None:

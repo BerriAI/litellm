@@ -228,6 +228,15 @@ class OpenTelemetryV2(CustomLogger):
         so each backend's span keeps its own attribute vocabulary."""
         return tuple(d for d in call.otel_destinations if d.callback_name == self.callback_name)
 
+    def _tracer_dynamic_params(self, call: "LLMCallEvent") -> "StandardCallbackDynamicParams | None":
+        """The request's own backend credentials, used to pick a credential-scoped tracer.
+
+        A subclass that exports only to admin destinations returns ``None``: the tenant's
+        own account is the owning logger's to reach, and layering a credential-scoped
+        tracer over the fan-out would export the call to it a second time.
+        """
+        return call.dynamic_params
+
     # ====================================================================== #
     #  LLM-call callbacks — the span is opened at the ``pre_call`` boundary and
     #  closed here. See ``log_pre_api_call``.
@@ -401,7 +410,7 @@ class OpenTelemetryV2(CustomLogger):
             start_time_ns=to_ns(start_time),
             end_time_ns=to_ns(end_time),
             tracers=self._tenant_tracers.genai_tracers_for(
-                self.tracer, self._destinations_for_backend(call), call.dynamic_params
+                self.tracer, self._destinations_for_backend(call), self._tracer_dynamic_params(call)
             ),
             links=links,
         )

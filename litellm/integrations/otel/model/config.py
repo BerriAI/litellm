@@ -46,6 +46,20 @@ class _OTelV2Flag(BaseSettings):
 
     enabled: bool = Field(default=False, validation_alias=AliasChoices(OTEL_V2_ENV))
 
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _blank_reads_as_off(cls, value: object) -> object:
+        """Treat a declared-but-empty env var as off rather than as a parse error.
+
+        ``LITELLM_OTEL_V2=`` is routine in k8s ConfigMaps and ``.env`` files. Left to
+        pydantic it raises at import, and the flag is read from ``instrument_fastapi_app``
+        while ``proxy_server`` is still importing, so the whole proxy fails to bind over a
+        variable the operator meant to leave unset.
+        """
+        if isinstance(value, str) and not value.strip():
+            return False
+        return value
+
 
 @lru_cache(maxsize=1)
 def is_otel_v2_enabled() -> bool:

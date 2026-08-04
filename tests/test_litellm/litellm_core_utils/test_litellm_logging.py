@@ -4469,3 +4469,99 @@ def test_admin_destination_does_not_build_a_backend_logger(monkeypatch):
     emitter = AdminDestinationLogger()._emitter_for("langfuse_otel")
     assert emitter.callback_name == "langfuse_otel"
     assert list(emitter.config.exporters) == [], "the sink must not inherit the preset's own exporter"
+
+
+def test_sink_skips_a_backend_an_otel_v2_logger_already_owns(monkeypatch):
+    """Regression: a destination whose backend is also a configured callback received the
+    gen-AI span twice, as two sibling spans under one parent.
+
+    The owning ``OpenTelemetryV2`` already fans its span out to that backend's
+    destinations, so the sink emitting as well is a pure duplicate; ``_closed_call_ids``
+    is per-instance and cannot dedupe across the two emitters.
+    """
+    from litellm.integrations.otel import destination_logger as sink_module
+    from litellm.integrations.otel.destination_logger import AdminDestinationLogger
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    owned = OpenTelemetryV2(config=OpenTelemetryV2Config(), callback_name="langfuse_otel")
+    monkeypatch.setattr(logging_module, "_in_memory_loggers", [owned])
+
+    class _Dest:
+        def __init__(self, name):
+            self.callback_name = name
+
+    monkeypatch.setattr(
+        sink_module,
+        "request_destinations",
+        lambda: (_Dest("langfuse_otel"), _Dest("generic")),
+    )
+    exported = []
+    sink = AdminDestinationLogger()
+    monkeypatch.setattr(
+        sink,
+        "_emitter_for",
+        lambda backend: type(
+            "_E", (), {"export_to_destinations": lambda _self, *a: exported.append(backend)}
+        )(),
+    )
+
+    sink._export({}, None, None)
+
+    assert exported == ["generic"], "the owned backend is the owning logger's to deliver"
+
+
+def test_sink_does_not_close_an_mcp_event_as_an_llm_call():
+    """Regression: the sink called ``_close_llm_call`` directly, bypassing the MCP
+    dispatch. A ``tools/call`` reached the destination named ``execute_tool MCP:
+    <server>-<tool>`` with the tool smuggled into ``gen_ai.request.model``, fabricated
+    zero-token usage, and none of the MCP semconv attributes; the correct span never
+    arrived at all.
+    """
+    from litellm.integrations.otel.destination_logger import _DestinationOnlyOtel
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+
+    sink = _DestinationOnlyOtel(config=OpenTelemetryV2Config(), callback_name="generic")
+    calls = []
+    sink._emit_mcp_tool_call = lambda *a: calls.append("tool_call") or True  # type: ignore[method-assign]
+    sink._close_llm_call = lambda *a: calls.append("llm_call")  # type: ignore[method-assign]
+
+    sink.export_to_destinations({}, None, None)
+
+    assert calls == ["tool_call"], "an MCP tool call must never be closed as an LLM call"
+
+
+def test_sink_claims_list_tools_without_emitting_a_second_span():
+    """``tools/list`` carries no ``gen_ai.operation.name``, so the fan-out span processor
+    already routes the owning logger's span to the destination. The sink must claim the
+    event (so it is not closed as an LLM call) without emitting its own duplicate."""
+    from litellm.integrations.otel.destination_logger import _DestinationOnlyOtel
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+
+    sink = _DestinationOnlyOtel(config=OpenTelemetryV2Config(), callback_name="generic")
+    emitted = []
+    sink._emitter.emit = lambda *a, **k: emitted.append(a)  # type: ignore[method-assign]
+    payload = {"call_type": "list_mcp_tools", "id": "abc"}
+
+    handled = sink._emit_mcp_list_tools({"standard_logging_object": payload}, None, None)
+
+    assert handled is True
+    assert emitted == [], "the fan-out processor already delivers tools/list"
+
+
+def test_sink_never_layers_a_tenant_credential_tracer_over_the_fan_out():
+    """The tenant's own backend account is the owning logger's to reach. If the sink
+    passed the request's ``dynamic_params`` through, ``genai_tracers_for`` would add a
+    credential-scoped tracer and export the call to that account a second time."""
+    from litellm.integrations.otel.destination_logger import _DestinationOnlyOtel
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+    from litellm.integrations.otel.model.metadata import LLMCallEvent
+
+    call = LLMCallEvent.from_dict({"standard_callback_dynamic_params": {"langfuse_public_key": "pk"}})
+    owning = OpenTelemetryV2(config=OpenTelemetryV2Config(), callback_name="langfuse_otel")
+    sink = _DestinationOnlyOtel(config=OpenTelemetryV2Config(), callback_name="langfuse_otel")
+
+    assert owning._tracer_dynamic_params(call) is call.dynamic_params
+    assert sink._tracer_dynamic_params(call) is None
