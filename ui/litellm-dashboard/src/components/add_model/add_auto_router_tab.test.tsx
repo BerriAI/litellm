@@ -289,6 +289,38 @@ describe("AddAutoRouterTab", () => {
     expect(mockHandleAddAutoRouterSubmit).toHaveBeenCalledTimes(1);
   });
 
+  // submitRecommendedRouter awaits a network round trip (the submit-time re-check) before it ever
+  // reaches the create call. If accessToken rotates while that await is pending, a closure-captured
+  // value would carry the token that was live at click time into a create call that fires after the
+  // replacement token is active. Read it through a ref updated every render instead.
+  it("uses the current access token for creation even if it rotates while the submit-time re-check is in flight", async () => {
+    const user = userEvent.setup();
+    let resolveInitialRecheck: (models: ModelGroup[]) => void = () => undefined;
+    mockFetchAvailableModels
+      .mockResolvedValueOnce(ALL_FAMILY_MODELS)
+      .mockReturnValueOnce(new Promise<ModelGroup[]>((resolve) => (resolveInitialRecheck = resolve)))
+      .mockResolvedValueOnce(ALL_FAMILY_MODELS);
+
+    const { rerender } = renderWithProviders(
+      <AddAutoRouterTab handleOk={vi.fn()} accessToken="stale-token" userRole="Admin" />,
+    );
+    openTemplateDropdown();
+    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false));
+    fireEvent.click(optionByLabel("Anthropic Family")!);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "rotated-token-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+    await waitFor(() => expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2));
+
+    // The token rotates while the re-check above is still in flight.
+    rerender(<AddAutoRouterTab handleOk={vi.fn()} accessToken="fresh-token" userRole="Admin" />);
+
+    resolveInitialRecheck(ALL_FAMILY_MODELS);
+
+    await waitFor(() => expect(mockHandleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(mockHandleAddAutoRouterSubmit.mock.calls.at(-1)?.[1]).toBe("fresh-token");
+  });
+
   // The headline behavior: selecting a preset must pre-fill the tier config so the created
   // router carries the preset's models. Real tier validation runs here (getMissingTiersError is
   // not stubbed), so if selection stopped pre-filling, the empty tiers would either block the

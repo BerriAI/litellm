@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
 import { TextInput } from "@tremor/react";
@@ -74,6 +74,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   createScope = "unscoped-ok",
 }) => {
   const requiresTeamScope = createScope === "team-required";
+  // submitRecommendedRouter awaits a network round trip before creating the router; reading
+  // accessToken through this ref instead of the closure keeps that call on whatever token is
+  // current when it actually fires, not whichever one was live when submit was clicked.
+  const accessTokenRef = useRef(accessToken);
+  useEffect(() => {
+    accessTokenRef.current = accessToken;
+  }, [accessToken]);
   const [form] = Form.useForm();
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
 
@@ -300,7 +307,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         model_access_group: form.getFieldValue("model_access_group"),
       };
 
-      await handleAddAutoRouterSubmit(submitValues, accessToken, form, handleOk);
+      await handleAddAutoRouterSubmit(submitValues, accessTokenRef.current, form, handleOk);
     } catch (error) {
       console.error("Validation failed:", error);
       NotificationManager.fromBackend("Please fill in all required fields");
