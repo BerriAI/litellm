@@ -291,7 +291,7 @@ def validate_url(url: str) -> tuple[str, str]:
                 raise SSRFError(
                     f"URL targets a blocked address ({resolved_ip}). "
                     "If this is a legitimate internal service, add the host "
-                    "to `user_url_allowed_hosts` in general_settings."
+                    "to `user_url_allowed_hosts` in litellm_settings."
                 )
 
     # For HTTPS with SSL verification enabled, TLS certificate validation
