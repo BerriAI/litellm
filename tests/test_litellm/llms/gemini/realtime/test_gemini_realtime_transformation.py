@@ -1868,3 +1868,117 @@ def test_is_setup_message_and_is_content_message():
     assert config.is_content_message({"clientContent": {}}) is True
     assert config.is_content_message({"toolResponse": {}}) is True
     assert config.is_content_message({"setup": {}}) is False
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for native-audio generationComplete crash (Bug 1 + Bug 2)
+# ---------------------------------------------------------------------------
+
+
+def _base_transform_input(**overrides):
+    base = {
+        "session_configuration_request": json.dumps(
+            {
+                "setup": {
+                    "model": "models/gemini-live-2.5-flash-preview-native-audio-09-2025",
+                    "generationConfig": {"responseModalities": ["AUDIO"]},
+                }
+            }
+        ),
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": [],
+        "current_item_chunks": [],
+        "current_delta_type": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_generation_complete_with_null_delta_type_does_not_raise():
+    """generationComplete with delta_type=None must not raise; native-audio sessions
+    can emit generationComplete before any modelTurn has been seen."""
+    from litellm.types.llms.openai import OpenAIRealtimeEventTypes
+
+    config = GeminiRealtimeConfig()
+    frame = {"serverContent": {"generationComplete": True}}
+
+    result = config.transform_realtime_response(
+        json.dumps(frame),
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
+        MagicMock(),
+        realtime_response_transform_input=_base_transform_input(
+            current_output_item_id="item_existing",
+            current_response_id="resp_existing",
+            current_delta_type=None,
+        ),
+    )
+
+    event_types = [e["type"] for e in result["response"]]
+    assert OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DONE.value in event_types
+
+
+def test_generation_complete_in_output_transcription_frame_does_not_raise():
+    """A single serverContent frame combining outputTranscription + generationComplete
+    (no modelTurn) must not raise and must emit both a transcript delta and an audio
+    done event. This is the exact frame shape native-audio models (e.g.
+    gemini-live-2.5-flash-preview-native-audio-09-2025) can produce."""
+    from litellm.types.llms.openai import OpenAIRealtimeEventTypes
+
+    config = GeminiRealtimeConfig()
+    frame = {
+        "serverContent": {
+            "outputTranscription": {"text": "Hello from native audio."},
+            "generationComplete": True,
+        }
+    }
+
+    result = config.transform_realtime_response(
+        json.dumps(frame),
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
+        MagicMock(),
+        realtime_response_transform_input=_base_transform_input(current_delta_type=None),
+    )
+
+    event_types = [e["type"] for e in result["response"]]
+    assert "response.output_audio_transcript.delta" in event_types
+    assert OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DONE.value in event_types
+
+
+def test_output_transcription_sets_delta_type_for_subsequent_generation_complete():
+    """outputTranscription frame must update current_delta_type to 'audio' so a
+    generationComplete arriving in the very next frame resolves correctly without
+    relying solely on the None fallback."""
+    config = GeminiRealtimeConfig()
+    logging_obj = MagicMock()
+
+    transcription_frame = {
+        "serverContent": {
+            "outputTranscription": {"text": "Hello."},
+        }
+    }
+    state_after_transcription = config.transform_realtime_response(
+        json.dumps(transcription_frame),
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
+        logging_obj,
+        realtime_response_transform_input=_base_transform_input(current_delta_type=None),
+    )
+
+    assert state_after_transcription["current_delta_type"] == "audio"
+
+    generation_complete_frame = {"serverContent": {"generationComplete": True}}
+    result = config.transform_realtime_response(
+        json.dumps(generation_complete_frame),
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
+        logging_obj,
+        realtime_response_transform_input={
+            **state_after_transcription,
+            "response": None,
+        },
+    )
+
+    from litellm.types.llms.openai import OpenAIRealtimeEventTypes
+
+    event_types = [e["type"] for e in result["response"]]
+    assert OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DONE.value in event_types

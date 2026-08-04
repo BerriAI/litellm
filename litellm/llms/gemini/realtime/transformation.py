@@ -167,10 +167,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def map_generation_complete_event(self, delta_type: ALL_DELTA_TYPES | None) -> OpenAIRealtimeEventTypes:
         if delta_type == "text":
             return OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE
-        elif delta_type == "audio":
-            return OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE
-        else:
-            raise ValueError(f"Unexpected delta type: {delta_type}")
+        # None occurs on native-audio sessions where generationComplete arrives in a
+        # serverContent frame that has outputTranscription but no modelTurn; those
+        # models produce audio by definition, so default to RESPONSE_AUDIO_DONE.
+        return OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE
 
     def get_audio_mime_type(self, input_audio_format: str = "pcm16"):
         mime_types = {
@@ -1208,6 +1208,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             delta_type="audio",
                         )
                     )
+                # outputTranscription always belongs to audio output; track the type so
+                # that a generationComplete arriving in a later frame (without a preceding
+                # modelTurn) can resolve to RESPONSE_AUDIO_DONE instead of relying solely
+                # on the None-fallback in map_generation_complete_event.
+                current_delta_type = "audio"
                 returned_message.append(
                     cast(
                         OpenAIRealtimeEvents,
