@@ -961,6 +961,38 @@ class TestTranslateResponse:
         assert result["usage"]["input_tokens"] == 200
         assert result["usage"]["output_tokens"] == 75
 
+    def test_openai_cache_tokens_mapped_to_anthropic_usage(self):
+        """OpenAI Responses reports cache reads/writes under input_tokens_details; they must
+        surface as Anthropic cache_read_input_tokens / cache_creation_input_tokens so cache
+        reads are not billed at the full input rate. See issue #35127."""
+        from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage
+
+        response = _make_mock_response(output=[_make_output_message(["OK"])])
+        response.usage = ResponseAPIUsage(
+            input_tokens=172000,
+            output_tokens=40,
+            total_tokens=172040,
+            input_tokens_details=InputTokensDetails(cached_tokens=155000, cache_write_tokens=3000),
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_read_input_tokens"] == 155000
+        assert result["usage"]["cache_creation_input_tokens"] == 3000
+
+    def test_no_cache_tokens_omits_keys(self):
+        """Responses without a cache split must not emit zero-valued cache keys."""
+        from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage
+
+        response = _make_mock_response(output=[_make_output_message(["OK"])])
+        response.usage = ResponseAPIUsage(
+            input_tokens=500,
+            output_tokens=40,
+            total_tokens=540,
+            input_tokens_details=InputTokensDetails(cached_tokens=0),
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert "cache_read_input_tokens" not in result["usage"]
+        assert "cache_creation_input_tokens" not in result["usage"]
+
     def test_model_and_id_preserved(self):
         """Model and response ID from the Responses API are forwarded."""
         response = _make_mock_response(
