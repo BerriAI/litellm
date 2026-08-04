@@ -845,8 +845,15 @@ def publish_global_otel_v2_provider(
     unit-testable without reading or mutating real global OTel state. Returns the
     logger whose provider was published.
     """
+    # Local import: ``destination_logger`` imports this module for its emitter base, so a
+    # module-level import here would close the cycle.
+    from litellm.integrations.otel.destination_logger import (
+        register_admin_destination_logger,
+    )
+
     logger = select_global_otel_v2_logger(in_memory_loggers, registered=registered)
     set_global_provider(logger._tracer_provider)
+    register_admin_destination_logger()
     return logger
 
 

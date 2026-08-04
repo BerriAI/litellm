@@ -5082,21 +5082,13 @@ async def test_apply_admin_logging_exporters_stamps_and_activates(_seeded_loggin
 
     _patch_identity(monkeypatch)
     token = _request_destinations.set(())
-    data: dict = {}
     try:
-        await _apply_admin_logging_exporters(data, _auth())
+        await _apply_admin_logging_exporters(_auth())
 
-        # Destinations are anchored on the server-only ContextVar, never written into
-        # request data: neither a top-level key nor litellm_metadata carries them, so
-        # nothing destination-shaped can reach the provider body (Y6).
-        assert "otel_destinations" not in data
-        assert "otel_destinations" not in (data.get("litellm_metadata") or {})
         context_destinations = request_destinations()
         assert len(context_destinations) == 1
         assert context_destinations[0].callback_name == "langfuse_otel"
         assert context_destinations[0].endpoint == "https://cloud.langfuse.com/api/public/otel"
-        # the backend is activated for the request
-        assert "langfuse_otel" in data["success_callback"]
     finally:
         _request_destinations.reset(token)
 
@@ -5105,7 +5097,7 @@ async def test_apply_admin_logging_exporters_stamps_and_activates(_seeded_loggin
 async def test_apply_admin_logging_exporters_swallows_resolver_failure(monkeypatch):
     """Telemetry setup is best-effort: when the pre-call resolver raises a
     non-``HTTPException``, ``_apply_admin_logging_exporters`` swallows it so the request
-    proceeds with no exception escaping, no backend activated, and request data untouched."""
+    proceeds with no exception escaping and no destinations anchored."""
     import litellm.proxy.litellm_pre_call_utils as pcu
     from litellm.integrations.otel.plumbing.context import (
         _request_destinations,
@@ -5117,10 +5109,8 @@ async def test_apply_admin_logging_exporters_swallows_resolver_failure(monkeypat
 
     monkeypatch.setattr(pcu, "_resolve_logging_exporters", _boom)
     token = _request_destinations.set(())
-    data: dict = {}
     try:
-        await pcu._apply_admin_logging_exporters(data, _auth(), cached_destinations=None)
-        assert data == {}
+        await pcu._apply_admin_logging_exporters(_auth(), cached_destinations=None)
         assert request_destinations() == ()
     finally:
         _request_destinations.reset(token)
@@ -5151,11 +5141,9 @@ async def test_empty_resolution_clears_a_previous_messages_destinations(monkeypa
 
     monkeypatch.setattr(pcu, "_resolve_logging_exporters", _grants_nothing)
     token = _request_destinations.set(stale)
-    data: dict = {}
     try:
-        await pcu._apply_admin_logging_exporters(data, _auth(), cached_destinations=None)
+        await pcu._apply_admin_logging_exporters(_auth(), cached_destinations=None)
         assert request_destinations() == (), "a revoked identity must not inherit the previous message's destinations"
-        assert "success_callback" not in data
     finally:
         _request_destinations.reset(token)
 
@@ -5244,26 +5232,20 @@ async def test_apply_admin_logging_exporters_registers_on_failure(_seeded_loggin
     """An admin-owned destination must capture a FAILED upstream call, not only a
     successful one.
 
-    Each resolved backend is a dynamic logging callback that fires per-request;
-    registering it on ``success_callback`` alone means a 401/timeout never reaches
-    the backend's failure callback, so the destination's trace lands with no
-    error gen-AI span. Both lists must carry every backend, deduped against any
-    pre-existing entry.
+    The destination sink is one process-wide logger, so it has to sit on the failure
+    list as well as the success list; registering it on success alone means a
+    401/timeout never reaches the destination and the trace lands with no error
+    gen-AI span. Registration is idempotent.
     """
-    from litellm.integrations.otel.plumbing.context import _request_destinations
-    from litellm.proxy.litellm_pre_call_utils import _apply_admin_logging_exporters
+    import litellm
+    from litellm.integrations.otel.destination_logger import admin_destination_logger
+    from litellm.integrations.otel.logger import publish_global_otel_v2_provider
 
-    _patch_identity(monkeypatch)
-    token = _request_destinations.set(())
-    data: dict = {"failure_callback": ["arize"]}
-    try:
-        await _apply_admin_logging_exporters(data, _auth(team_id="team-az"))
-        for callback_list in ("success_callback", "failure_callback"):
-            registered = data[callback_list]
-            assert "arize" in registered
-            assert registered.count("arize") == 1
-    finally:
-        _request_destinations.reset(token)
+    sink = admin_destination_logger()
+    publish_global_otel_v2_provider([], lambda provider: None)
+    publish_global_otel_v2_provider([], lambda provider: None)
+    for bucket in (litellm._async_success_callback, litellm._async_failure_callback):
+        assert sum(1 for callback in bucket if callback is sink) == 1
 
 
 @pytest.mark.asyncio

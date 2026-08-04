@@ -4074,14 +4074,15 @@ def test_admin_owned_destination_does_not_activate_v2_without_flag(monkeypatch):
 def test_credential_mandatory_backend_global_misconfig_stays_loud(monkeypatch):
     # Regression: weave/langfuse/levo are credential-mandatory; before V2 a global
     # callback (e.g. ``callbacks: ["weave_otel"]``) with no credentials failed loud at
-    # startup. _maybe_construct_otel_v2 must preserve that: with V2 on but no admin-owned
-    # destination and no creds, the preset raises, _maybe_construct returns None, and the
-    # caller falls through to the legacy path that re-raises. An admin-owned destination,
-    # by contrast, carries its own per-tenant creds, so the same missing-global-creds
-    # state must degrade to a working v2 logger instead of silently producing nothing.
+    # startup. _maybe_construct_otel_v2 preserves that: with no creds the preset raises,
+    # _maybe_construct returns None, and the caller falls through to the legacy path.
+    #
+    # An admin-owned destination does not change that answer. Ownership is the operator's
+    # configuration alone, so registering a destination for one team cannot move any other
+    # tenant off the logger they already had; the destination is delivered to separately by
+    # AdminDestinationLogger.
     from types import SimpleNamespace
 
-    from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
 
@@ -4091,11 +4092,9 @@ def test_credential_mandatory_backend_global_misconfig_stays_loud(monkeypatch):
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     is_otel_v2_enabled.cache_clear()
 
-    # Global callback, no destination, no creds -> None so the caller fails loud.
     monkeypatch.setattr(litellm, "credential_list", [])
     assert _maybe_construct_otel_v2("weave_otel", []) is None
 
-    # Admin-owned weave destination present -> degrade to a working v2 logger.
     monkeypatch.setattr(
         litellm,
         "credential_list",
@@ -4111,10 +4110,8 @@ def test_credential_mandatory_backend_global_misconfig_stays_loud(monkeypatch):
             )
         ],
     )
-    logger = _maybe_construct_otel_v2("weave_otel", [])
+    assert _maybe_construct_otel_v2("weave_otel", []) is None
     is_otel_v2_enabled.cache_clear()
-    assert isinstance(logger, OpenTelemetryV2)
-    assert logger.callback_name == "weave_otel"
 
 
 @pytest.mark.parametrize(
@@ -4362,13 +4359,85 @@ def test_zero_config_v2_warns_instead_of_going_silently_dark(monkeypatch, caplog
     assert any("no exporter is configured" in record.getMessage() for record in caplog.records)
 
 
-def test_destination_backed_backend_does_not_warn_about_missing_exporters(monkeypatch, caplog):
-    """The counterpart: a backend built only because an admin registered a destination is
-    meant to have no global exporter -- it exports per-request. Warning there would fire on
-    every correctly-configured destination deployment."""
-    import logging
+def test_explicit_otel_callback_keeps_the_documented_console_default(monkeypatch):
+    """Regression: ``callbacks: ["otel"]`` with no endpoint must still export.
+
+    The console fold is suppressed for a preset that degraded because it found no
+    credentials, which is the right call; the operator never asked for stdout there. An
+    operator who lists ``otel`` and sets no endpoint did ask for it, and the published docs
+    give ``console`` as the ``OTEL_EXPORTER`` default. Suppressing both left that
+    deployment silently dark with no warning.
+    """
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.presets.generic import generic_preset
+    from litellm.litellm_core_utils.litellm_logging import _init_custom_logger_compatible_class
+
+    for var in ("OTEL_EXPORTER", "OTEL_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_PROTOCOL"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+
+    logger = _init_custom_logger_compatible_class("otel", internal_usage_cache=None, llm_router=None)
+    is_otel_v2_enabled.cache_clear()
+
+    assert logger is not None
+    kinds = [spec.kind for spec in logger.config.exporters]
+    assert kinds == ["console"], "an explicit otel callback with no endpoint must keep the documented console default"
+    assert generic_preset(allow_missing_credentials=True).exporters == [], "preset degrade must stay suppressed"
+
+
+def test_destination_for_one_team_does_not_move_another_tenant_off_its_logger(monkeypatch):
+    """Regression: an admin destination must not change who owns a backend.
+
+    ``_has_admin_owned_logging_destination`` answered "does a granting row exist anywhere"
+    and fed that into the preset's missing-credentials check, which decides whether v2 or
+    the legacy logger owns the backend for the whole process. Registering a destination
+    scoped to one team therefore moved every other tenant onto v2, and their traces lost
+    prompt content because v2 defaults to NO_CONTENT.
+    """
     from types import SimpleNamespace
 
+    from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils.litellm_logging import _init_custom_logger_compatible_class
+
+    for var in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+
+    granted_to_someone_else = SimpleNamespace(
+        credential_name="lf-team-a",
+        credential_values={"langfuse_public_key": "pk", "langfuse_secret_key": "sk"},
+        credential_info={
+            "credential_type": "logging",
+            "description": "langfuse_otel",
+            "access": {"teams": ["team-a"]},
+        },
+    )
+
+    monkeypatch.setattr(litellm, "credential_list", [])
+    baseline = _init_custom_logger_compatible_class("langfuse_otel", internal_usage_cache=None, llm_router=None)
+
+    monkeypatch.setattr(litellm, "credential_list", [granted_to_someone_else])
+    with_destination = _init_custom_logger_compatible_class("langfuse_otel", internal_usage_cache=None, llm_router=None)
+    is_otel_v2_enabled.cache_clear()
+
+    assert isinstance(baseline, LangfuseOtelLogger)
+    assert type(with_destination) is type(baseline), "another team's destination must not change this backend's owner"
+
+
+def test_admin_destination_does_not_build_a_backend_logger(monkeypatch):
+    """A registered destination must not take a backend over.
+
+    Ownership is the operator's configuration alone. A destination is delivered to by
+    ``AdminDestinationLogger``, whose per-backend emitter carries the backend's span
+    vocabulary and no exporter of its own: the preset's own exporter belongs to whichever
+    logger the operator configured, so including it here would export the call twice.
+    """
+    from types import SimpleNamespace
+
+    from litellm.integrations.otel.destination_logger import AdminDestinationLogger
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
 
@@ -4392,9 +4461,11 @@ def test_destination_backed_backend_does_not_warn_about_missing_exporters(monkey
         ],
     )
 
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        logger = _maybe_construct_otel_v2("weave_otel", [])
+    assert _maybe_construct_otel_v2("weave_otel", []) is None
     is_otel_v2_enabled.cache_clear()
 
-    assert logger is not None
-    assert not any("no exporter is configured" in record.getMessage() for record in caplog.records)
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-global")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-global")
+    emitter = AdminDestinationLogger()._emitter_for("langfuse_otel")
+    assert emitter.callback_name == "langfuse_otel"
+    assert list(emitter.config.exporters) == [], "the sink must not inherit the preset's own exporter"

@@ -724,12 +724,10 @@ def _set_request_otel_destinations(destinations: Sequence[object]) -> None:
 
 
 async def _apply_admin_logging_exporters(
-    data: dict,  # mutable-ok: registers the resolved backends on data's success/failure_callback in place
     user_api_key_dict: UserAPIKeyAuth,
     cached_destinations: "Sequence[object] | None" = None,
 ) -> None:
-    """Anchor the resolved fan-out destinations on the request context and activate
-    their backends.
+    """Anchor the resolved fan-out destinations on the request context.
 
     The destinations are set on a server-only ContextVar (never on ``data``), so
     they are neither request-shaped nor reachable by the provider body; the OTEL v2
@@ -749,23 +747,12 @@ async def _apply_admin_logging_exporters(
     """
     if cached_destinations is not None:
         destinations = tuple(cached_destinations)
-        backends = tuple(
-            dict.fromkeys(
-                str(d["callback_name"]) for d in destinations if isinstance(d, dict) and d.get("callback_name")
-            )
-        )
     else:
         try:
-            destinations, backends = await _resolve_logging_exporters(user_api_key_dict)
+            destinations, _backends = await _resolve_logging_exporters(user_api_key_dict)
         except Exception:  # noqa: BLE001  # best-effort telemetry setup must never break the request
             return
     _set_request_otel_destinations(destinations)
-    if not destinations:
-        return
-    existing_success = data.get("success_callback") or []
-    data["success_callback"] = list(dict.fromkeys([*existing_success, *backends]))
-    existing_failure = data.get("failure_callback") or []
-    data["failure_callback"] = list(dict.fromkeys([*existing_failure, *backends]))
 
 
 def _get_dynamic_logging_metadata(
@@ -1948,7 +1935,7 @@ async def add_litellm_data_to_request(
                 data[k] = v
 
     cached = getattr(getattr(request, "state", None), "otel_destinations", None)
-    await _apply_admin_logging_exporters(data, user_api_key_dict, cached_destinations=cached)
+    await _apply_admin_logging_exporters(user_api_key_dict, cached_destinations=cached)
 
     # Add disabled callbacks from key metadata
     if user_api_key_dict.metadata and "litellm_disabled_callbacks" in user_api_key_dict.metadata:
