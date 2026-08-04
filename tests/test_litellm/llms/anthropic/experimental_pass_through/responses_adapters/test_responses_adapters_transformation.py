@@ -990,6 +990,8 @@ class TestTranslateResponse:
         )
         result: Any = _ADAPTER.translate_response(response)
         assert result["usage"]["cache_read_input_tokens"] == 1664
+        assert result["usage"]["cached_tokens"] == 1664
+        assert result["usage"]["cache_write_tokens"] == 0
 
     def test_cache_read_prefers_direct_cache_read_input_tokens(self):
         """Direct Anthropic-style cache_read_input_tokens wins over details.cached_tokens."""
@@ -1000,6 +1002,7 @@ class TestTranslateResponse:
         )
         result: Any = _ADAPTER.translate_response(response)
         assert result["usage"]["cache_read_input_tokens"] == 900
+        assert result["usage"]["cached_tokens"] == 1664
 
     def test_cache_read_from_direct_field_when_details_absent(self):
         """Direct cache_read_input_tokens is used when input_tokens_details is missing."""
@@ -1009,15 +1012,19 @@ class TestTranslateResponse:
         )
         result: Any = _ADAPTER.translate_response(response)
         assert result["usage"]["cache_read_input_tokens"] == 512
+        assert "cached_tokens" not in result["usage"]
+        assert "cache_write_tokens" not in result["usage"]
 
     def test_cache_write_from_input_tokens_details_cache_write_tokens(self):
-        """OpenAI-style input_tokens_details.cache_write_tokens maps to cache_creation_input_tokens."""
+        """OpenAI-style cache_write_tokens maps to Anthropic creation and is kept native."""
         response = _make_mock_response(
             output=[_make_output_message(["OK"])],
             cache_write_tokens=1969,
         )
         result: Any = _ADAPTER.translate_response(response)
         assert result["usage"]["cache_creation_input_tokens"] == 1969
+        assert result["usage"]["cache_write_tokens"] == 1969
+        assert result["usage"]["cached_tokens"] == 0
 
     def test_cache_write_from_input_tokens_details_cache_creation_tokens_alias(self):
         """LiteLLM cache_creation_tokens alias also maps to cache_creation_input_tokens."""
@@ -1027,6 +1034,7 @@ class TestTranslateResponse:
         )
         result: Any = _ADAPTER.translate_response(response)
         assert result["usage"]["cache_creation_input_tokens"] == 800
+        assert result["usage"]["cache_write_tokens"] == 800
 
     def test_cache_write_prefers_direct_cache_creation_input_tokens(self):
         """Direct Anthropic-style cache_creation_input_tokens wins over details writes."""
@@ -1037,12 +1045,15 @@ class TestTranslateResponse:
         )
         result: Any = _ADAPTER.translate_response(response)
         assert result["usage"]["cache_creation_input_tokens"] == 700
+        assert result["usage"]["cache_write_tokens"] == 1969
 
     def test_cache_creation_field_always_populated(self):
         """cache_creation_input_tokens is present even when there was no write."""
         response = _make_mock_response(output=[_make_output_message(["OK"])])
         result: Any = _ADAPTER.translate_response(response)
         assert result["usage"]["cache_creation_input_tokens"] == 0
+        assert "cache_write_tokens" not in result["usage"]
+        assert "cached_tokens" not in result["usage"]
 
     def test_model_and_id_preserved(self):
         """Model and response ID from the Responses API are forwarded."""

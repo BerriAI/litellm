@@ -135,7 +135,8 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
 class TestProcessEventCacheUsage:
     """response.completed usage must map OpenAI cache details onto Anthropic
     cache_read_input_tokens / cache_creation_input_tokens, preferring direct
-    Anthropic-style fields when set.
+    Anthropic-style fields when set, while preserving OpenAI native
+    cached_tokens / cache_write_tokens on the wire.
     """
 
     def test_cache_read_from_input_tokens_details_cached_tokens(self):
@@ -155,6 +156,8 @@ class TestProcessEventCacheUsage:
         deltas = [c for c in chunks if c["type"] == "message_delta"]
         assert len(deltas) == 1
         assert deltas[0]["usage"]["cache_read_input_tokens"] == 1664
+        assert deltas[0]["usage"]["cached_tokens"] == 1664
+        assert deltas[0]["usage"]["cache_write_tokens"] == 0
 
     def test_cache_read_prefers_direct_cache_read_input_tokens(self):
         usage = type(
@@ -172,6 +175,7 @@ class TestProcessEventCacheUsage:
         chunks = _process_all([{"type": "response.completed", "response": response}])
         deltas = [c for c in chunks if c["type"] == "message_delta"]
         assert deltas[0]["usage"]["cache_read_input_tokens"] == 900
+        assert deltas[0]["usage"]["cached_tokens"] == 1664
 
     def test_cache_write_from_input_tokens_details_cache_write_tokens(self):
         usage = type(
@@ -193,6 +197,8 @@ class TestProcessEventCacheUsage:
         chunks = _process_all([{"type": "response.completed", "response": response}])
         deltas = [c for c in chunks if c["type"] == "message_delta"]
         assert deltas[0]["usage"]["cache_creation_input_tokens"] == 1969
+        assert deltas[0]["usage"]["cache_write_tokens"] == 1969
+        assert deltas[0]["usage"]["cached_tokens"] == 0
 
     def test_cache_write_from_input_tokens_details_cache_creation_tokens_alias(self):
         usage = type(
@@ -214,6 +220,7 @@ class TestProcessEventCacheUsage:
         chunks = _process_all([{"type": "response.completed", "response": response}])
         deltas = [c for c in chunks if c["type"] == "message_delta"]
         assert deltas[0]["usage"]["cache_creation_input_tokens"] == 800
+        assert deltas[0]["usage"]["cache_write_tokens"] == 800
 
     def test_cache_write_prefers_direct_cache_creation_input_tokens(self):
         usage = type(
@@ -235,3 +242,22 @@ class TestProcessEventCacheUsage:
         chunks = _process_all([{"type": "response.completed", "response": response}])
         deltas = [c for c in chunks if c["type"] == "message_delta"]
         assert deltas[0]["usage"]["cache_creation_input_tokens"] == 700
+        assert deltas[0]["usage"]["cache_write_tokens"] == 1969
+
+    def test_openai_cache_fields_absent_when_details_missing(self):
+        usage = type(
+            "Usage",
+            (),
+            {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "input_tokens_details": None,
+            },
+        )()
+        response = type("Response", (), {"status": "completed", "usage": usage, "output": []})()
+        chunks = _process_all([{"type": "response.completed", "response": response}])
+        deltas = [c for c in chunks if c["type"] == "message_delta"]
+        assert "cached_tokens" not in deltas[0]["usage"]
+        assert "cache_write_tokens" not in deltas[0]["usage"]

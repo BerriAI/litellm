@@ -71,6 +71,11 @@ class AnthropicUsage(TypedDict, total=False):
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
 
+    # OpenAI-native cache fields preserved on the Messages wire so downstream
+    # proxies can bill cache write/read before returning Anthropic-shaped usage.
+    cached_tokens: int
+    cache_write_tokens: int
+
 
 class AnthropicMessagesResponse(TypedDict, total=False):
     """
