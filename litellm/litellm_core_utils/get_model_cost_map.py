@@ -15,6 +15,7 @@ import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from importlib.resources import files
+from typing import Protocol
 
 import httpx
 
@@ -206,11 +207,22 @@ def _retry_wait_seconds(outcome: _FetchAttemptRetryable, attempt: int, rng: rand
     return min(float(2**attempt) + rng.uniform(0.0, 1.0), MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS)
 
 
+class _AsyncGetClient(Protocol):
+    def get(self, url: str, *, timeout: float | None = None) -> Awaitable[httpx.Response]: ...
+
+
+def _default_reload_client() -> _AsyncGetClient:
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    return get_async_httpx_client(llm_provider=httpxSpecialProvider.ModelCostMap)
+
+
 async def _attempt_fetch(
-    client: httpx.AsyncClient, url: str
+    client: _AsyncGetClient, url: str, timeout: int
 ) -> ModelCostMapReloaded | ModelCostMapReloadUnavailable | _FetchAttemptRetryable:
     try:
-        response = await client.get(url)
+        response = await client.get(url, timeout=timeout)
     except httpx.HTTPError as e:
         return _FetchAttemptRetryable(reason=f"{type(e).__name__} fetching {url}: {e}", retry_after_seconds=None)
     if response.status_code in RETRYABLE_FETCH_STATUS_CODES:
@@ -235,24 +247,23 @@ async def _fetch_remote_model_cost_map_with_retry(
     max_attempts: int,
     sleep: Callable[[float], Awaitable[None]],
     rng: random.Random,
-    transport: httpx.AsyncBaseTransport | None,
+    client: _AsyncGetClient,
 ) -> ModelCostMapReloadResult:
-    async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
-        for attempt in range(1, max_attempts + 1):
-            outcome = await _attempt_fetch(client=client, url=url)
-            if not isinstance(outcome, _FetchAttemptRetryable):
-                return outcome
-            if attempt == max_attempts:
-                return ModelCostMapReloadUnavailable(reason=f"{outcome.reason} (after {max_attempts} attempts)")
-            wait_seconds = _retry_wait_seconds(outcome=outcome, attempt=attempt, rng=rng)
-            verbose_logger.warning(
-                "LiteLLM: model cost map fetch attempt %d/%d failed (%s); retrying in %.1fs",
-                attempt,
-                max_attempts,
-                outcome.reason,
-                wait_seconds,
-            )
-            await sleep(wait_seconds)
+    for attempt in range(1, max_attempts + 1):
+        outcome = await _attempt_fetch(client=client, url=url, timeout=timeout)
+        if not isinstance(outcome, _FetchAttemptRetryable):
+            return outcome
+        if attempt == max_attempts:
+            return ModelCostMapReloadUnavailable(reason=f"{outcome.reason} (after {max_attempts} attempts)")
+        wait_seconds = _retry_wait_seconds(outcome=outcome, attempt=attempt, rng=rng)
+        verbose_logger.warning(
+            "LiteLLM: model cost map fetch attempt %d/%d failed (%s); retrying in %.1fs",
+            attempt,
+            max_attempts,
+            outcome.reason,
+            wait_seconds,
+        )
+        await sleep(wait_seconds)
     return ModelCostMapReloadUnavailable(reason="model cost map fetch failed")
 
 
@@ -262,7 +273,7 @@ async def refetch_model_cost_map(
     max_attempts: int = MODEL_COST_MAP_FETCH_MAX_ATTEMPTS,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     rng: random.Random | None = None,
-    transport: httpx.AsyncBaseTransport | None = None,
+    client: "_AsyncGetClient | None" = None,
 ) -> ModelCostMapReloadResult:
     """
     Re-fetch the model cost map for a runtime reload, retrying transient HTTP
@@ -287,7 +298,7 @@ async def refetch_model_cost_map(
         max_attempts=max_attempts,
         sleep=sleep,
         rng=rng if rng is not None else random.Random(),
-        transport=transport,
+        client=client if client is not None else _default_reload_client(),
     )
     if isinstance(result, ModelCostMapReloadUnavailable):
         verbose_logger.warning(

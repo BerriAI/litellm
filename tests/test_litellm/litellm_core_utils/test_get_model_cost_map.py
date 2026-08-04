@@ -283,8 +283,14 @@ class _SleepRecorder:
         self.waits.append(seconds)
 
 
-def _sequenced_transport(outcomes):
-    """MockTransport serving one outcome per request; an exception instance is raised."""
+@pytest.fixture(autouse=True)
+def _unset_local_cost_map_env(monkeypatch):
+    """CI exports LITELLM_LOCAL_MODEL_COST_MAP=True; clear it so fetch behavior is deterministic."""
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+
+
+def _mock_client(outcomes):
+    """httpx client over a MockTransport serving one outcome per request; an exception instance is raised."""
     calls = {"count": 0}
 
     def handler(request):
@@ -295,13 +301,13 @@ def _sequenced_transport(outcomes):
             raise outcome
         return outcome
 
-    return httpx.MockTransport(handler), calls
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler)), calls
 
 
 @pytest.mark.asyncio
 async def test_refetch_retries_429_honoring_retry_after():
     """Two 429s with Retry-After then success: waits follow the header, not backoff."""
-    transport, calls = _sequenced_transport(
+    client, calls = _mock_client(
         [
             httpx.Response(429, headers={"Retry-After": "7"}),
             httpx.Response(429, headers={"Retry-After": "7"}),
@@ -310,7 +316,7 @@ async def test_refetch_retries_429_honoring_retry_after():
     )
     sleeper = _SleepRecorder()
     result = await refetch_model_cost_map(
-        url=_URL, sleep=sleeper, rng=random.Random(0), transport=transport
+        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
     )
     assert isinstance(result, ModelCostMapReloaded)
     assert len(result.model_cost_map) > 100
@@ -321,10 +327,10 @@ async def test_refetch_retries_429_honoring_retry_after():
 @pytest.mark.asyncio
 async def test_refetch_gives_up_after_max_attempts_with_exponential_backoff():
     """All 429 without Retry-After: exponential backoff waits, then a failure value."""
-    transport, calls = _sequenced_transport([httpx.Response(429)])
+    client, calls = _mock_client([httpx.Response(429)])
     sleeper = _SleepRecorder()
     result = await refetch_model_cost_map(
-        url=_URL, sleep=sleeper, rng=random.Random(0), transport=transport
+        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
     )
     assert isinstance(result, ModelCostMapReloadUnavailable)
     assert "429" in result.reason
@@ -338,7 +344,7 @@ async def test_refetch_gives_up_after_max_attempts_with_exponential_backoff():
 @pytest.mark.asyncio
 async def test_refetch_caps_retry_after_wait():
     """A hostile/huge Retry-After is capped so reloads never sleep unbounded."""
-    transport, _calls = _sequenced_transport(
+    client, _calls = _mock_client(
         [
             httpx.Response(429, headers={"Retry-After": "9999"}),
             httpx.Response(200, content=_real_map_bytes()),
@@ -346,7 +352,7 @@ async def test_refetch_caps_retry_after_wait():
     )
     sleeper = _SleepRecorder()
     result = await refetch_model_cost_map(
-        url=_URL, sleep=sleeper, rng=random.Random(0), transport=transport
+        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
     )
     assert isinstance(result, ModelCostMapReloaded)
     assert sleeper.waits == [30.0]
@@ -355,7 +361,7 @@ async def test_refetch_caps_retry_after_wait():
 @pytest.mark.asyncio
 async def test_refetch_retries_transport_errors():
     """Connection failures are transient: retried like 5xx, succeeding when the network heals."""
-    transport, calls = _sequenced_transport(
+    client, calls = _mock_client(
         [
             httpx.ConnectError("connection refused"),
             httpx.Response(200, content=_real_map_bytes()),
@@ -363,7 +369,7 @@ async def test_refetch_retries_transport_errors():
     )
     sleeper = _SleepRecorder()
     result = await refetch_model_cost_map(
-        url=_URL, sleep=sleeper, rng=random.Random(0), transport=transport
+        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
     )
     assert isinstance(result, ModelCostMapReloaded)
     assert calls["count"] == 2
@@ -373,10 +379,10 @@ async def test_refetch_retries_transport_errors():
 @pytest.mark.asyncio
 async def test_refetch_non_retryable_status_fails_immediately():
     """A 404 is permanent: one attempt, no sleeps, failure value."""
-    transport, calls = _sequenced_transport([httpx.Response(404)])
+    client, calls = _mock_client([httpx.Response(404)])
     sleeper = _SleepRecorder()
     result = await refetch_model_cost_map(
-        url=_URL, sleep=sleeper, rng=random.Random(0), transport=transport
+        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
     )
     assert isinstance(result, ModelCostMapReloadUnavailable)
     assert "404" in result.reason
@@ -386,10 +392,10 @@ async def test_refetch_non_retryable_status_fails_immediately():
 
 @pytest.mark.asyncio
 async def test_refetch_invalid_json_fails_immediately():
-    transport, calls = _sequenced_transport([httpx.Response(200, content=b"not json")])
+    client, calls = _mock_client([httpx.Response(200, content=b"not json")])
     sleeper = _SleepRecorder()
     result = await refetch_model_cost_map(
-        url=_URL, sleep=sleeper, rng=random.Random(0), transport=transport
+        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
     )
     assert isinstance(result, ModelCostMapReloadUnavailable)
     assert "invalid JSON" in result.reason
@@ -401,9 +407,9 @@ async def test_refetch_invalid_json_fails_immediately():
 async def test_refetch_shrunk_map_fails_integrity_not_swapped_in():
     """A drastically shrunk upstream file is rejected instead of being adopted."""
     tiny = json.dumps(_make_models(60)).encode()
-    transport, _calls = _sequenced_transport([httpx.Response(200, content=tiny)])
+    client, _calls = _mock_client([httpx.Response(200, content=tiny)])
     result = await refetch_model_cost_map(
-        url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), transport=transport
+        url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=client
     )
     assert isinstance(result, ModelCostMapReloadUnavailable)
     assert "integrity validation" in result.reason
@@ -421,7 +427,7 @@ async def test_refetch_respects_local_env_override(monkeypatch):
         url=_URL,
         sleep=_SleepRecorder(),
         rng=random.Random(0),
-        transport=httpx.MockTransport(_fail),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(_fail)),
     )
     assert isinstance(result, ModelCostMapReloaded)
     assert len(result.model_cost_map) > 100

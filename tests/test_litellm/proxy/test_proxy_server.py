@@ -3622,14 +3622,18 @@ class TestPriceDataReloadAPI:
         # Save the original model_cost so the endpoint's direct assignment
         # (litellm.model_cost = new_model_cost_map) does not contaminate
         # subsequent tests running in the same worker process.
+        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+
         original_model_cost = litellm.model_cost.copy()
         try:
             with patch(
-                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-            ) as mock_get_map:
-                mock_get_map.return_value = {
-                    "gpt-3.5-turbo": {"input_cost_per_token": 0.001}
-                }
+                "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+                new=AsyncMock(
+                    return_value=ModelCostMapReloaded(
+                        model_cost_map={"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}
+                    )
+                ),
+            ):
                 # Mock the database connection
                 with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
                     mock_prisma.db.litellm_config.find_unique = AsyncMock(
@@ -3684,10 +3688,9 @@ class TestPriceDataReloadAPI:
     def test_reload_model_cost_map_error_handling(self, client_with_auth):
         """Test error handling in the reload endpoint"""
         with patch(
-            "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-        ) as mock_get_map:
-            mock_get_map.side_effect = Exception("Network error")
-
+            "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+            new=AsyncMock(side_effect=Exception("Network error")),
+        ):
             # Mock the database connection
             with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
                 mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
@@ -3697,7 +3700,7 @@ class TestPriceDataReloadAPI:
 
                 assert (
                     response.status_code == 500
-                )  # The new implementation immediately reloads and fails on error
+                )  # An unexpected exception still maps to 500
                 data = response.json()
                 assert "Failed to reload model cost map" in data["detail"]
 
