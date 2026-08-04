@@ -301,6 +301,10 @@ class RedisCache(BaseCache):
             self.service_logger_obj = kwargs.pop("service_logger_obj")
         else:
             self.service_logger_obj = ServiceLogging()
+        # The event loop only keeps weak references to tasks, so a service-log
+        # task whose only reference was the create_task() call can be collected
+        # before it reports. Hold it until it completes.
+        self._service_logging_tasks: set[asyncio.Task] = set()  # mutable-ok: task registry
 
         redis_kwargs.update(kwargs)
         self.redis_client = get_redis_client(**redis_kwargs)
@@ -340,7 +344,9 @@ class RedisCache(BaseCache):
         """Setup async and sync health pings for Redis."""
         # ASYNC HEALTH PING
         try:
-            _ = asyncio.get_running_loop().create_task(self.ping())
+            _health_ping_task = asyncio.get_running_loop().create_task(self.ping())
+            self._service_logging_tasks.add(_health_ping_task)
+            _health_ping_task.add_done_callback(self._service_logging_tasks.discard)
         except Exception as e:
             if "no running event loop" in str(e):
                 verbose_logger.debug("Ignoring async redis ping. No running event loop.")
@@ -365,7 +371,7 @@ class RedisCache(BaseCache):
             loop = asyncio.get_running_loop()
             start_time = time.time()
             end_time = start_time
-            loop.create_task(
+            _service_logging_task = loop.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=end_time - start_time,
@@ -373,6 +379,8 @@ class RedisCache(BaseCache):
                     call_type="redis_async_ping",
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
         except Exception:
             pass
 
@@ -382,7 +390,7 @@ class RedisCache(BaseCache):
             loop = asyncio.get_running_loop()
             start_time = time.time()
             end_time = start_time
-            loop.create_task(
+            _service_logging_task = loop.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=end_time - start_time,
@@ -390,6 +398,8 @@ class RedisCache(BaseCache):
                     call_type="redis_sync_ping",
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
         except Exception:
             pass
 
@@ -562,7 +572,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -571,13 +581,15 @@ class RedisCache(BaseCache):
                     end_time=end_time,
                 )
             )  # DO NOT SLOW DOWN CALL B/C OF THIS
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             return keys
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -587,6 +599,8 @@ class RedisCache(BaseCache):
                     end_time=end_time,
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             raise e
 
     def async_register_script(self, script: str) -> Callable[..., Awaitable[Any]]:
@@ -683,7 +697,7 @@ class RedisCache(BaseCache):
         except Exception as e:
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -694,6 +708,8 @@ class RedisCache(BaseCache):
                     call_type=f"async_set_cache <- {_get_call_stack_info()}",
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             verbose_logger.error(
                 "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, key=%r, value=%r",
                 str(e),
@@ -719,7 +735,7 @@ class RedisCache(BaseCache):
             print_verbose(f"Successfully Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -730,11 +746,13 @@ class RedisCache(BaseCache):
                     event_metadata={"key": key},
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             return result
         except Exception as e:
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -746,6 +764,8 @@ class RedisCache(BaseCache):
                     event_metadata={"key": key},
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             verbose_logger.error(
                 "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, Writing value=%s",
                 str(e),
@@ -804,7 +824,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -814,12 +834,14 @@ class RedisCache(BaseCache):
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             return
         except Exception as e:
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -830,6 +852,8 @@ class RedisCache(BaseCache):
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
 
             verbose_logger.error(
                 "LiteLLM Redis Caching: async set_cache_pipeline() - Got exception from REDIS %s, Writing value=%s",
@@ -865,7 +889,7 @@ class RedisCache(BaseCache):
         except Exception as e:
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -876,6 +900,8 @@ class RedisCache(BaseCache):
                     call_type=f"async_set_cache_sadd <- {_get_call_stack_info()}",
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             # NON blocking - notify users Redis is throwing an exception
             verbose_logger.error(
                 "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, Writing value=%s",
@@ -891,7 +917,7 @@ class RedisCache(BaseCache):
             print_verbose(f"Successfully Set ASYNC Redis Cache SADD: key: {key}\nValue {value}\nttl={ttl}")
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -901,10 +927,12 @@ class RedisCache(BaseCache):
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
         except Exception as e:
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -915,6 +943,8 @@ class RedisCache(BaseCache):
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             # NON blocking - notify users Redis is throwing an exception
             verbose_logger.error(
                 "LiteLLM Redis Caching: async set_cache_sadd() - Got exception from REDIS %s, Writing value=%s",
@@ -962,7 +992,7 @@ class RedisCache(BaseCache):
             end_time = time.time()
             _duration = end_time - start_time
 
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -972,12 +1002,14 @@ class RedisCache(BaseCache):
                     parent_otel_span=parent_otel_span,
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             return result
         except Exception as e:
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -988,6 +1020,8 @@ class RedisCache(BaseCache):
                     parent_otel_span=parent_otel_span,
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             verbose_logger.error(
                 "LiteLLM Redis Caching: async async_increment() - Got exception from REDIS %s, Writing value=%s",
                 str(e),
@@ -1158,7 +1192,7 @@ class RedisCache(BaseCache):
 
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1169,11 +1203,13 @@ class RedisCache(BaseCache):
                     event_metadata={"key": key},
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             return response
         except Exception as e:
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1185,6 +1221,8 @@ class RedisCache(BaseCache):
                     event_metadata={"key": key},
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {e!s}")
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
@@ -1219,7 +1257,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1229,6 +1267,8 @@ class RedisCache(BaseCache):
                     parent_otel_span=parent_otel_span,
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
 
             # Associate the results back with their keys.
             # 'results' is a list of values corresponding to the order of keys in 'key_list'.
@@ -1246,7 +1286,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1257,6 +1297,8 @@ class RedisCache(BaseCache):
                     parent_otel_span=parent_otel_span,
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             verbose_logger.error(f"Error occurred in async batch get cache - {e!s}")
             _record_swallowed_redis_failure(self._circuit_breaker, e)
             return key_value_dict
@@ -1305,20 +1347,22 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_ping <- {_get_call_stack_info()}",
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             return response
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1326,6 +1370,8 @@ class RedisCache(BaseCache):
                     call_type=f"async_ping <- {_get_call_stack_info()}",
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             verbose_logger.error(f"LiteLLM Redis Cache PING: - Got exception from REDIS : {e!s}")
             raise e
 
@@ -1459,7 +1505,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1469,12 +1515,14 @@ class RedisCache(BaseCache):
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             return results
         except Exception as e:
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1485,6 +1533,8 @@ class RedisCache(BaseCache):
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             verbose_logger.error(
                 "LiteLLM Redis Caching: async increment_pipeline() - Got exception from REDIS %s",
                 str(e),
@@ -1544,20 +1594,22 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_rpush <- {_get_call_stack_info()}",
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             return response
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1565,6 +1617,8 @@ class RedisCache(BaseCache):
                     call_type=f"async_rpush <- {_get_call_stack_info()}",
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             verbose_logger.error(f"LiteLLM Redis Cache RPUSH: - Got exception from REDIS : {e!s}")
             raise e
 
@@ -1613,19 +1667,21 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_rpush_pipeline <- {_get_call_stack_info()}",
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             return results
         except Exception as e:
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1633,6 +1689,8 @@ class RedisCache(BaseCache):
                     call_type=f"async_rpush_pipeline <- {_get_call_stack_info()}",
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             verbose_logger.error(
                 "LiteLLM Redis Caching: async_rpush_pipeline() - Got exception from REDIS %s",
                 str(e),
@@ -1678,13 +1736,15 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_lpop <- {_get_call_stack_info()}",
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
 
             # Handle result parsing if needed
             if isinstance(result, bytes):
@@ -1703,7 +1763,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1711,6 +1771,8 @@ class RedisCache(BaseCache):
                     call_type=f"async_lpop <- {_get_call_stack_info()}",
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             verbose_logger.error(f"LiteLLM Redis Cache LPOP: - Got exception from REDIS : {e!s}")
             raise e
 
@@ -1802,19 +1864,21 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_lpop_pipeline <- {_get_call_stack_info()}",
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             return results
         except Exception as e:
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            _service_logging_task = asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
@@ -1822,6 +1886,8 @@ class RedisCache(BaseCache):
                     call_type=f"async_lpop_pipeline <- {_get_call_stack_info()}",
                 )
             )
+            self._service_logging_tasks.add(_service_logging_task)
+            _service_logging_task.add_done_callback(self._service_logging_tasks.discard)
             verbose_logger.error(
                 "LiteLLM Redis Caching: async_lpop_pipeline() - Got exception from REDIS %s",
                 str(e),
