@@ -466,6 +466,25 @@ def test_get_model_from_request_authorizes_all_file_routing_model_sources():
     }
 
 
+def test_get_model_from_request_includes_vector_store_query_and_header_model():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/v1/vector_stores",
+            request_query_params={"model": "restricted-model"},
+        )
+        == "restricted-model"
+    )
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/v1/vector_stores/vs_123",
+            request_headers={"x-litellm-model": "restricted-model"},
+        )
+        == "restricted-model"
+    )
+
+
 def test_get_model_from_request_extracts_simple_encoded_file_id_model():
     from litellm.proxy.openai_files_endpoints.common_utils import (
         encode_file_id_with_model,

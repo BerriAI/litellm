@@ -6,6 +6,7 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
     LiteLLM_ManagedVectorStore,
 )
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import MODEL_ROUTING_HEADER_NAME
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import jsonify_object
@@ -88,6 +89,35 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
     return data
 
 
+_EXPLICIT_ROUTING_KEYS = (
+    "model",
+    "custom_llm_provider",
+    "litellm_credential_name",
+    "api_key",
+    "api_base",
+)
+
+
+def _apply_model_routing_hint(data: Dict, request: Request) -> Dict:
+    """
+    Resolve ``?model=`` / ``x-litellm-model`` into ``data["model"]`` so the router
+    picks the requested deployment.
+
+    Routing already established by the request body or by the managed vector store
+    registry wins, so the hint only applies when nothing else selected a deployment.
+    The hint is authorized against the key/team model allowlists by
+    ``get_model_from_request``, which reads the same query param and header.
+    """
+    if any(data.get(key) for key in _EXPLICIT_ROUTING_KEYS):
+        return data
+
+    model_hint = request.query_params.get("model") or request.headers.get(MODEL_ROUTING_HEADER_NAME)
+    if not model_hint:
+        return data
+
+    return {**data, "model": model_hint}
+
+
 @router.post(
     "/v1/vector_stores/{vector_store_id:path}/search",
     dependencies=[Depends(user_api_key_auth)],
@@ -130,6 +160,7 @@ async def vector_store_search(
     data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
+    data = _apply_model_routing_hint(data=data, request=request)
 
     # The managed_vector_stores pre-call hook will handle:
     # 1. Decoding managed vector store IDs
@@ -244,6 +275,8 @@ async def vector_store_create(
 
         return response
 
+    data = _apply_model_routing_hint(data=data, request=request)
+
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -306,6 +339,7 @@ async def vector_store_retrieve(
     data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
+    data = _apply_model_routing_hint(data=data, request=request)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -376,6 +410,7 @@ async def vector_store_list(
         data["limit"] = limit
     if order is not None:
         data["order"] = order
+    data = _apply_model_routing_hint(data=data, request=request)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -442,6 +477,7 @@ async def vector_store_update(
     data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
+    data = _apply_model_routing_hint(data=data, request=request)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -505,6 +541,7 @@ async def vector_store_delete(
     data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
+    data = _apply_model_routing_hint(data=data, request=request)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
