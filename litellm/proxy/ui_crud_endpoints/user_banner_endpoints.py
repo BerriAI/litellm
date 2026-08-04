@@ -8,11 +8,10 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from litellm._uuid import uuid4
 from litellm.proxy._types import LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.repositories.table_repositories import UISettingsRepository
+from litellm.repositories.user_banner_repository import USER_BANNER_ROW_ID, UserBannerRepository
 
 router = APIRouter()
 
-USER_BANNER_ROW_ID = "user_banner"
 USER_BANNER_MAX_MESSAGE_LENGTH = 4000
 
 UserBannerSeverity = Literal["info", "warning", "error"]
@@ -81,10 +80,8 @@ async def get_user_banner() -> UserBanner:
     if prisma_client is None:
         return UserBanner()
 
-    db_record = await UISettingsRepository(prisma_client).table.find_unique(
-        where={"id": USER_BANNER_ROW_ID}  # mutable-ok: prisma filters are plain dicts
-    )
-    return parse_user_banner(db_record.ui_settings if db_record is not None else None)
+    raw_settings = await UserBannerRepository(prisma_client).get_raw_settings()
+    return parse_user_banner(raw_settings)
 
 
 @router.patch(
@@ -100,11 +97,7 @@ async def update_user_banner(
     Publish, edit, or unpublish the dashboard banner.
     Only proxy admins are allowed to modify it.
     """
-    from litellm.proxy.proxy_server import (
-        create_config_audit_log,
-        prisma_client,
-        store_model_in_db,
-    )
+    from litellm.proxy.proxy_server import create_config_audit_log, prisma_client
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(status_code=403, detail="Only proxy admins can update the user banner.")
@@ -112,16 +105,8 @@ async def update_user_banner(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected. Please connect a database.")
 
-    if store_model_in_db is not True:
-        raise HTTPException(
-            status_code=500,
-            detail="Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature.",
-        )
-
-    db_record = await UISettingsRepository(prisma_client).table.find_unique(
-        where={"id": USER_BANNER_ROW_ID}  # mutable-ok: prisma filters are plain dicts
-    )
-    before = parse_user_banner(db_record.ui_settings if db_record is not None else None)
+    repository = UserBannerRepository(prisma_client)
+    before = parse_user_banner(await repository.get_raw_settings())
     banner = UserBanner(
         enabled=banner_update.enabled,
         message=banner_update.message,
@@ -129,15 +114,7 @@ async def update_user_banner(
         revision=uuid4().hex,
     )
 
-    payload = json.dumps(banner.model_dump())
-    banner_row = {"id": USER_BANNER_ROW_ID, "ui_settings": payload}  # mutable-ok: prisma rows are plain dicts
-    await UISettingsRepository(prisma_client).table.upsert(
-        where={"id": USER_BANNER_ROW_ID},  # mutable-ok: prisma filters are plain dicts
-        data={  # mutable-ok: prisma upsert payloads are plain dicts
-            "create": banner_row,
-            "update": {"ui_settings": payload},  # mutable-ok: prisma upsert payloads are plain dicts
-        },
-    )
+    await repository.upsert_settings(json.dumps(banner.model_dump()))
 
     asyncio.create_task(
         create_config_audit_log(

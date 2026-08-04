@@ -106,15 +106,8 @@ class TestUpdateUserBanner:
         assert response.status_code == 403
         mock_prisma.db.litellm_uisettings.upsert.assert_not_awaited()
 
-    def test_requires_store_model_in_db(self, admin_auth, monkeypatch):
-        _mock_prisma(monkeypatch)
-        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
-        response = client.patch("/update/user_banner", json=PUBLISH_BODY)
-        assert response.status_code == 500
-
     def test_persists_and_round_trips(self, admin_auth, monkeypatch, mock_audit_log):
         mock_prisma = _mock_prisma(monkeypatch, record=None)
-        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
 
         response = client.patch("/update/user_banner", json=PUBLISH_BODY)
         assert response.status_code == 200
@@ -137,7 +130,6 @@ class TestUpdateUserBanner:
 
     def test_republish_same_content_gets_fresh_revision(self, admin_auth, monkeypatch, mock_audit_log):
         _mock_prisma(monkeypatch, record=None)
-        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
 
         first = client.patch("/update/user_banner", json=PUBLISH_BODY).json()["banner"]["revision"]
         second = client.patch("/update/user_banner", json=PUBLISH_BODY).json()["banner"]["revision"]
@@ -147,7 +139,6 @@ class TestUpdateUserBanner:
 
     def test_client_supplied_revision_is_ignored(self, admin_auth, monkeypatch, mock_audit_log):
         _mock_prisma(monkeypatch, record=None)
-        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         response = client.patch("/update/user_banner", json={**PUBLISH_BODY, "revision": "spoofed"})
         assert response.status_code == 200
         saved_revision = response.json()["banner"]["revision"]
@@ -156,7 +147,6 @@ class TestUpdateUserBanner:
 
     def test_unpublish_with_empty_message_is_allowed(self, admin_auth, monkeypatch, mock_audit_log):
         _mock_prisma(monkeypatch, record=SimpleNamespace(ui_settings=json.dumps(PUBLISHED_BANNER)))
-        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         response = client.patch(
             "/update/user_banner",
             json={"enabled": False, "message": "", "severity": "info"},
@@ -180,7 +170,6 @@ class TestUpdateUserBanner:
     )
     def test_rejects_invalid_payloads(self, admin_auth, monkeypatch, payload):
         mock_prisma = _mock_prisma(monkeypatch)
-        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         response = client.patch("/update/user_banner", json=payload)
         assert response.status_code == 422
         mock_prisma.db.litellm_uisettings.upsert.assert_not_awaited()
