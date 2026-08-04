@@ -94,6 +94,27 @@ def _build_db_connection_url_params(
     return params
 
 
+def _read_replica_url_from_env() -> str | None:
+    """Return the read-replica URL Prisma should use, or None when read routing is off.
+
+    An operator-pinned ``DATABASE_URL_READ_REPLICA`` wins; otherwise the reader is
+    assembled from the discrete ``DATABASE_*_READ_REPLICA`` vars (each falling back
+    to its writer equivalent), the same way the componentized entrypoints do via
+    ``DatabaseURLSettings.apply_to_env``. The discrete vars are only loaded once
+    ``DATABASE_HOST_READ_REPLICA`` opts in, so single-database deployments never
+    depend on the rest of the ``DATABASE_*`` environment parsing cleanly.
+    """
+    pinned_url = os.getenv("DATABASE_URL_READ_REPLICA")
+    if pinned_url:
+        return pinned_url
+    if not os.getenv("DATABASE_HOST_READ_REPLICA"):
+        return None
+
+    from litellm.proxy.db.db_url_settings import DatabaseURLSettings
+
+    return DatabaseURLSettings.from_env().build_reader_url()
+
+
 class DatabaseTimeoutSettings(BaseModel):
     """The `general_settings` keys that bound how long a statement may hold locks.
 
@@ -1225,7 +1246,7 @@ def run_server(
                 unsupported_db_scheme_message,
             )
 
-            for _db_env in ("DATABASE_URL", "DIRECT_URL"):
+            for _db_env in ("DATABASE_URL", "DIRECT_URL", "DATABASE_URL_READ_REPLICA"):
                 _candidate_url = os.getenv(_db_env)
                 if _candidate_url is None:
                     continue
@@ -1270,6 +1291,9 @@ def run_server(
                     database_url = os.getenv("DIRECT_URL")
                     modified_url = append_query_params(database_url, connection_url_params)
                     os.environ["DIRECT_URL"] = modified_url
+                reader_url = _read_replica_url_from_env()
+                if reader_url:
+                    os.environ["DATABASE_URL_READ_REPLICA"] = append_query_params(reader_url, connection_url_params)
                 subprocess.run(["prisma"], capture_output=True)
                 is_prisma_runnable = True
             except FileNotFoundError:
