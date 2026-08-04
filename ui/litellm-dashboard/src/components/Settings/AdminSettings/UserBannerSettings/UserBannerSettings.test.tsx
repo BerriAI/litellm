@@ -27,7 +27,7 @@ const publishedBanner: UserBanner = {
   enabled: true,
   message: "**Maintenance** tonight at 10 PM UTC.",
   severity: "warning",
-  revision: 5,
+  revision: "rev-a",
 };
 
 const mockHooks = (banner: UserBanner | undefined, mutate = vi.fn()) => {
@@ -77,7 +77,7 @@ describe("UserBannerSettings", () => {
   });
 
   it("allows unpublishing without a message", () => {
-    const mutate = mockHooks({ enabled: false, message: "", severity: "info", revision: 0 });
+    const mutate = mockHooks({ enabled: false, message: "", severity: "info", revision: "" });
     renderWithProviders(<UserBannerSettings />);
     fireEvent.click(screen.getByRole("button", { name: "Save banner" }));
     expect(mutate).toHaveBeenCalledWith({ enabled: false, message: "", severity: "info" }, expect.anything());

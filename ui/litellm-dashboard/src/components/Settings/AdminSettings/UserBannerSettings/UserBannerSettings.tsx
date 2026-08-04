@@ -22,7 +22,7 @@ const SEVERITY_LABELS: Record<UserBannerSeverity, string> = {
   error: "Error",
 };
 
-const EMPTY_BANNER: UserBanner = { enabled: false, message: "", severity: "info", revision: 0 };
+const EMPTY_BANNER: UserBanner = { enabled: false, message: "", severity: "info", revision: "" };
 
 export default function UserBannerSettings() {
   const { accessToken } = useAuthorized();

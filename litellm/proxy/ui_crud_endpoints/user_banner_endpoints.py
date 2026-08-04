@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from litellm._uuid import uuid4
 from litellm.proxy._types import LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.table_repositories import UISettingsRepository
@@ -42,9 +43,12 @@ class UserBannerUpdate(BaseModel):
 
 
 class UserBanner(UserBannerUpdate):
-    revision: int = Field(
-        default=0,
-        description="Server-stamped publish revision; increments on every update so clients re-surface dismissed banners on republish.",
+    revision: str = Field(
+        default="",
+        description=(
+            "Server-stamped opaque publish identity; a fresh value is generated on every "
+            "update so clients re-surface dismissed banners on republish."
+        ),
     )
 
 
@@ -136,7 +140,7 @@ async def update_user_banner(
         enabled=banner_update.enabled,
         message=banner_update.message,
         severity=banner_update.severity,
-        revision=before.revision + 1,
+        revision=uuid4().hex,
     )
 
     payload = json.dumps(banner.model_dump())

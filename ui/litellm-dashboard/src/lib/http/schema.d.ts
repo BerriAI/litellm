@@ -33719,10 +33719,10 @@ export interface components {
             message: string;
             /**
              * Revision
-             * @description Server-stamped publish revision; increments on every update so clients re-surface dismissed banners on republish.
-             * @default 0
+             * @description Server-stamped opaque publish identity; a fresh value is generated on every update so clients re-surface dismissed banners on republish.
+             * @default
              */
-            revision: number;
+            revision: string;
             /**
              * Severity
              * @description Visual style of the banner.

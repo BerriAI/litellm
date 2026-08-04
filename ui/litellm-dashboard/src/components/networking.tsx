@@ -7115,7 +7115,7 @@ export interface UserBanner {
   enabled: boolean;
   message: string;
   severity: UserBannerSeverity;
-  revision: number;
+  revision: string;
 }
 
 export type UserBannerUpdate = Omit<UserBanner, "revision">;

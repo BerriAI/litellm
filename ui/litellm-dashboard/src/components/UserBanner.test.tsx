@@ -14,7 +14,7 @@ const publishedBanner: UserBannerData = {
   enabled: true,
   message: "**Maintenance** tonight at 10 PM UTC. See [status page](https://status.example.com).",
   severity: "warning",
-  revision: 1,
+  revision: "rev-a",
 };
 
 const mockBanner = (banner: UserBannerData | undefined) => {
@@ -83,7 +83,7 @@ describe("UserBanner", () => {
     fireEvent.click(screen.getByRole("button", { name: "Dismiss banner" }));
     first.unmount();
 
-    mockBanner({ ...publishedBanner, message: "All clear, maintenance is done.", revision: 2 });
+    mockBanner({ ...publishedBanner, message: "All clear, maintenance is done.", revision: "rev-b" });
     renderWithProviders(<UserBanner accessToken="token" />);
     expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(screen.getByText("All clear, maintenance is done.")).toBeInTheDocument();
@@ -95,7 +95,7 @@ describe("UserBanner", () => {
     fireEvent.click(screen.getByRole("button", { name: "Dismiss banner" }));
     first.unmount();
 
-    mockBanner({ ...publishedBanner, revision: 2 });
+    mockBanner({ ...publishedBanner, revision: "rev-b" });
     renderWithProviders(<UserBanner accessToken="token" />);
     expect(screen.getByRole("alert")).toBeInTheDocument();
   });

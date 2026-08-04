@@ -16,10 +16,10 @@ PUBLISHED_BANNER = {
     "enabled": True,
     "message": "**Scheduled maintenance** tonight at 10 PM UTC. See [status](https://status.example.com).",
     "severity": "warning",
-    "revision": 3,
+    "revision": "1f2e3d4c5b6a79881f2e3d4c5b6a7988",
 }
 PUBLISH_BODY = {k: v for k, v in PUBLISHED_BANNER.items() if k != "revision"}
-DISABLED_BANNER = {"enabled": False, "message": "", "severity": "info", "revision": 0}
+DISABLED_BANNER = {"enabled": False, "message": "", "severity": "info", "revision": ""}
 
 
 def _auth_override(role: LitellmUserRoles):
@@ -132,42 +132,40 @@ class TestUpdateUserBanner:
         mock_prisma = _mock_prisma(monkeypatch, record=None)
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
 
-        expected = {**PUBLISH_BODY, "revision": 1}
         response = client.patch("/update/user_banner", json=PUBLISH_BODY)
         assert response.status_code == 200
-        assert response.json()["banner"] == expected
+        saved = response.json()["banner"]
+        assert {k: saved[k] for k in PUBLISH_BODY} == PUBLISH_BODY
+        assert saved["revision"] != ""
 
         upsert_kwargs = mock_prisma.db.litellm_uisettings.upsert.await_args.kwargs
         assert upsert_kwargs["where"] == {"id": "user_banner"}
-        assert json.loads(upsert_kwargs["data"]["create"]["ui_settings"]) == expected
-        assert json.loads(upsert_kwargs["data"]["update"]["ui_settings"]) == expected
+        assert json.loads(upsert_kwargs["data"]["create"]["ui_settings"]) == saved
+        assert json.loads(upsert_kwargs["data"]["update"]["ui_settings"]) == saved
 
         read_back = client.get("/get/user_banner")
         assert read_back.status_code == 200
-        assert read_back.json() == expected
+        assert read_back.json() == saved
         assert mock_prisma.db.litellm_uisettings.find_unique.await_count == 1
 
-    def test_republish_same_content_bumps_revision(self, admin_auth, fresh_cache, monkeypatch, mock_audit_log):
-        mock_prisma = _mock_prisma(monkeypatch)
-        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(
-            side_effect=[
-                None,
-                SimpleNamespace(ui_settings=json.dumps({**PUBLISH_BODY, "revision": 1})),
-            ]
-        )
+    def test_republish_same_content_gets_fresh_revision(self, admin_auth, fresh_cache, monkeypatch, mock_audit_log):
+        _mock_prisma(monkeypatch, record=None)
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
 
-        first = client.patch("/update/user_banner", json=PUBLISH_BODY)
-        second = client.patch("/update/user_banner", json=PUBLISH_BODY)
-        assert first.json()["banner"]["revision"] == 1
-        assert second.json()["banner"]["revision"] == 2
+        first = client.patch("/update/user_banner", json=PUBLISH_BODY).json()["banner"]["revision"]
+        second = client.patch("/update/user_banner", json=PUBLISH_BODY).json()["banner"]["revision"]
+        assert first != ""
+        assert second != ""
+        assert first != second
 
     def test_client_supplied_revision_is_ignored(self, admin_auth, fresh_cache, monkeypatch, mock_audit_log):
         _mock_prisma(monkeypatch, record=None)
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
-        response = client.patch("/update/user_banner", json={**PUBLISH_BODY, "revision": 999})
+        response = client.patch("/update/user_banner", json={**PUBLISH_BODY, "revision": "spoofed"})
         assert response.status_code == 200
-        assert response.json()["banner"]["revision"] == 1
+        saved_revision = response.json()["banner"]["revision"]
+        assert saved_revision != "spoofed"
+        assert saved_revision != ""
 
     def test_unpublish_with_empty_message_is_allowed(self, admin_auth, fresh_cache, monkeypatch, mock_audit_log):
         _mock_prisma(monkeypatch, record=SimpleNamespace(ui_settings=json.dumps(PUBLISHED_BANNER)))
@@ -177,8 +175,13 @@ class TestUpdateUserBanner:
             json={"enabled": False, "message": "", "severity": "info"},
         )
         assert response.status_code == 200
-        read_back = client.get("/get/user_banner")
-        assert read_back.json() == {"enabled": False, "message": "", "severity": "info", "revision": 4}
+        read_back = client.get("/get/user_banner").json()
+        assert {k: read_back[k] for k in ("enabled", "message", "severity")} == {
+            "enabled": False,
+            "message": "",
+            "severity": "info",
+        }
+        assert read_back["revision"] not in ("", PUBLISHED_BANNER["revision"])
 
     @pytest.mark.parametrize(
         "payload",
