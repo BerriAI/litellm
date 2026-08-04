@@ -12,7 +12,7 @@ MCP Spec Reference:
 
 import typing
 from collections.abc import Mapping, Sequence
-from typing import Any, NamedTuple, Optional, Protocol, Union
+from typing import Any, NamedTuple, Optional, Protocol, Union, runtime_checkable
 
 if typing.TYPE_CHECKING:
     from fastapi import Request
@@ -24,6 +24,7 @@ if typing.TYPE_CHECKING:
     from litellm.proxy.utils import ProxyLogging
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 
@@ -295,8 +296,14 @@ def _convert_mcp_content_to_openai(
     return _convert_single_content(content)
 
 
+@runtime_checkable
+class _TextContentLike(Protocol):
+    @property
+    def text(self) -> object: ...
+
+
 def _convert_single_content(
-    content: Any,
+    content: object,
 ) -> "dict[str, object] | list[dict[str, object]]":
     """Convert a single MCP content item to OpenAI format.
 
@@ -308,12 +315,14 @@ def _convert_single_content(
     """
     import json
 
-    content_type = getattr(content, "type", None)
+    content_type: str | None = getattr(content, "type", None)
     if content_type == "text":
+        if not isinstance(content, _TextContentLike):
+            raise AttributeError(f"{type(content).__name__!r} object has no attribute 'text'")
         return {"type": "text", "text": content.text}
     elif content_type == "image":
-        data = getattr(content, "data", "")
-        mime_type = getattr(content, "mimeType", "image/png")
+        data: str = getattr(content, "data", "")
+        mime_type: str = getattr(content, "mimeType", "image/png")
         return {
             "type": "image_url",
             "image_url": {"url": f"data:{mime_type};base64,{data}"},
@@ -339,13 +348,16 @@ def _convert_single_content(
         # The ``_marker_type`` key lets the message-level converter
         # hoist this into the ``tool_calls`` array on the assistant
         # message instead of embedding it inline as a content part.
+        tool_use_id: str = getattr(content, "id", f"call_{id(content)}")
+        tool_name: str = getattr(content, "name", "")
+        tool_input: dict[str, object] = getattr(content, "input", {})
         return {
             "_marker_type": "tool_use",
-            "id": getattr(content, "id", f"call_{id(content)}"),
+            "id": tool_use_id,
             "type": "function",
             "function": {
-                "name": getattr(content, "name", ""),
-                "arguments": json.dumps(getattr(content, "input", {}), default=str),
+                "name": tool_name,
+                "arguments": json.dumps(tool_input, default=str),
             },
         }
     elif content_type == "tool_result":
@@ -581,12 +593,28 @@ def _convert_mcp_tool_choice_to_openai(
     return "auto"
 
 
+class _SamplingToolCallFunction(Protocol):
+    @property
+    def name(self) -> str | None: ...
+
+    @property
+    def arguments(self) -> object: ...
+
+
+class _SamplingToolCall(Protocol):
+    @property
+    def id(self) -> str | None: ...
+
+    @property
+    def function(self) -> _SamplingToolCallFunction: ...
+
+
 class _SamplingResponseMessage(Protocol):
     @property
     def content(self) -> str | None: ...
 
     @property
-    def tool_calls(self) -> Sequence[object] | None: ...
+    def tool_calls(self) -> Sequence[_SamplingToolCall] | None: ...
 
 
 class _SamplingResponseChoice(Protocol):
@@ -603,6 +631,21 @@ class _SamplingCompletionResponse(Protocol):
 
     @property
     def model(self) -> str | None: ...
+
+
+_TOOL_ARGUMENTS_ADAPTER = TypeAdapter(dict[str, object])
+
+
+def _parse_tool_arguments(arguments: object) -> "dict[str, object]":
+    """Decode OpenAI tool-call arguments into the MCP ``input`` mapping."""
+    import json
+
+    if not isinstance(arguments, str):
+        return _TOOL_ARGUMENTS_ADAPTER.validate_python(arguments)
+    try:
+        return _TOOL_ARGUMENTS_ADAPTER.validate_python(json.loads(arguments))
+    except (json.JSONDecodeError, TypeError):
+        return {"raw": arguments}
 
 
 def _convert_openai_response_to_mcp_result(
@@ -641,7 +684,7 @@ def _convert_openai_response_to_mcp_result(
         stop_reason = "endTurn"
     actual_model: str = getattr(response, "model", model_name) or model_name
     # Check if response has tool calls
-    tool_calls = getattr(message, "tool_calls", None)
+    tool_calls = message.tool_calls if hasattr(message, "tool_calls") else None
     if tool_calls:
         # Build ToolUseContent items
         content_parts: list[SamplingMessageContentBlock] = []
@@ -650,20 +693,14 @@ def _convert_openai_response_to_mcp_result(
             content_parts.append(TextContent(type="text", text=message.content))
         # Convert tool calls to MCP ToolUseContent
         for tc in tool_calls:
-            import json
-
-            tool_input = tc.function.arguments
-            if isinstance(tool_input, str):
-                try:
-                    tool_input = json.loads(tool_input)
-                except (json.JSONDecodeError, TypeError):
-                    tool_input = {"raw": tool_input}
             content_parts.append(
-                ToolUseContent(
-                    type="tool_use",
-                    id=tc.id,
-                    name=tc.function.name,
-                    input=tool_input,
+                ToolUseContent.model_validate(
+                    {
+                        "type": "tool_use",
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "input": _parse_tool_arguments(tc.function.arguments),
+                    }
                 )
             )
         return CreateMessageResultWithTools(
@@ -1101,7 +1138,7 @@ async def _build_completion_kwargs(
         messages=params.messages,
         system_prompt=params.systemPrompt,
     )
-    completion_kwargs: dict[str, Any] = {
+    completion_kwargs: dict[str, object] = {
         "model": model,
         "messages": openai_messages,
         "max_tokens": params.maxTokens,
@@ -1116,9 +1153,7 @@ async def _build_completion_kwargs(
     openai_tool_choice = _convert_mcp_tool_choice_to_openai(params.toolChoice)
     if openai_tool_choice is not None:
         completion_kwargs["tool_choice"] = openai_tool_choice
-    completion_kwargs["metadata"] = {}
-    if params.metadata:
-        completion_kwargs["metadata"]["mcp_metadata"] = params.metadata
+    completion_kwargs["metadata"] = {"mcp_metadata": params.metadata} if params.metadata else {}
 
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
     from litellm.proxy.proxy_server import proxy_config
