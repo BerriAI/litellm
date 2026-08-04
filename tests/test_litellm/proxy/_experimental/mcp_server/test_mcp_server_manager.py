@@ -4557,20 +4557,23 @@ class TestMCPServerManager:
         server.mcp_info = {"server_name": "test-server"}
 
         # Mock tools returned from manager (3 tools, but only 2 are allowed)
-        tool1 = MagicMock()
-        tool1.name = "allowed_tool_1"
-        tool1.description = "This tool is allowed"
-        tool1.inputSchema = {}
+        tool1 = MCPTool(
+            name="allowed_tool_1",
+            description="This tool is allowed",
+            inputSchema={},
+        )
 
-        tool2 = MagicMock()
-        tool2.name = "blocked_tool"
-        tool2.description = "This tool is not allowed"
-        tool2.inputSchema = {}
+        tool2 = MCPTool(
+            name="blocked_tool",
+            description="This tool is not allowed",
+            inputSchema={},
+        )
 
-        tool3 = MagicMock()
-        tool3.name = "allowed_tool_2"
-        tool3.description = "This tool is also allowed"
-        tool3.inputSchema = {}
+        tool3 = MCPTool(
+            name="allowed_tool_2",
+            description="This tool is also allowed",
+            inputSchema={},
+        )
 
         # Mock the global_mcp_server_manager._get_tools_from_server
         from litellm.proxy._experimental.mcp_server import rest_endpoints
@@ -4607,20 +4610,23 @@ class TestMCPServerManager:
         server.mcp_info = {"server_name": "test-server"}
 
         # Mock tools returned from manager
-        tool1 = MagicMock()
-        tool1.name = "tool_1"
-        tool1.description = "Tool 1"
-        tool1.inputSchema = {}
+        tool1 = MCPTool(
+            name="tool_1",
+            description="Tool 1",
+            inputSchema={},
+        )
 
-        tool2 = MagicMock()
-        tool2.name = "tool_2"
-        tool2.description = "Tool 2"
-        tool2.inputSchema = {}
+        tool2 = MCPTool(
+            name="tool_2",
+            description="Tool 2",
+            inputSchema={},
+        )
 
-        tool3 = MagicMock()
-        tool3.name = "tool_3"
-        tool3.description = "Tool 3"
-        tool3.inputSchema = {}
+        tool3 = MCPTool(
+            name="tool_3",
+            description="Tool 3",
+            inputSchema={},
+        )
 
         # Mock the global_mcp_server_manager._get_tools_from_server
         from litellm.proxy._experimental.mcp_server import rest_endpoints
@@ -4657,15 +4663,17 @@ class TestMCPServerManager:
         server.mcp_info = {"server_name": "test-server"}
 
         # Mock tools returned from manager
-        tool1 = MagicMock()
-        tool1.name = "tool_1"
-        tool1.description = "Tool 1"
-        tool1.inputSchema = {}
+        tool1 = MCPTool(
+            name="tool_1",
+            description="Tool 1",
+            inputSchema={},
+        )
 
-        tool2 = MagicMock()
-        tool2.name = "tool_2"
-        tool2.description = "Tool 2"
-        tool2.inputSchema = {}
+        tool2 = MCPTool(
+            name="tool_2",
+            description="Tool 2",
+            inputSchema={},
+        )
 
         # Mock the global_mcp_server_manager._get_tools_from_server
         from litellm.proxy._experimental.mcp_server import rest_endpoints

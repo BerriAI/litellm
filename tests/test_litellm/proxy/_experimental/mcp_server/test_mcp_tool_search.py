@@ -14,6 +14,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from mcp.types import Tool as MCPTool
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
@@ -374,10 +375,11 @@ class TestCallToolRestApiVirtualTools:
 
         request = self._make_request({"name": MCP_TOOL_SEARCH_TOOL_NAME, "arguments": {"query": "create issue"}})
 
-        mock_tool = MagicMock()
-        mock_tool.name = "github-create_issue"
-        mock_tool.description = "Create a GitHub issue"
-        mock_tool.inputSchema = {"type": "object", "properties": {}}
+        mock_tool = MCPTool(
+            name="github-create_issue",
+            description="Create a GitHub issue",
+            inputSchema={"type": "object", "properties": {}},
+        )
 
         with patch(
             "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
