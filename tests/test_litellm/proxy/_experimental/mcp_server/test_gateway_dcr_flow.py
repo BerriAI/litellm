@@ -198,7 +198,7 @@ async def test_authorize_without_session_redirects_to_login_with_return_to():
     response = _authorize(client_id, session_user_id=None)
     assert response.status_code == 303
     location = response.headers["location"]
-    assert location.startswith("https://llm.example.com/sso/key/generate?return_to=")
+    assert location.startswith("https://llm.example.com/ui/login/?return_to=")
     assert "return_to=%2Fauthorize" in location
 
 
