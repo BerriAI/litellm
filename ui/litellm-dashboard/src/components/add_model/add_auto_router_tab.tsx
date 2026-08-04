@@ -166,12 +166,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   // have been applied: while loading we withhold selection rather than let a caller pick a preset
   // whose models we cannot yet verify, and a failed fetch leaves every preset unverifiable. This
   // makes the load-race (pick during loading, then discover a missing model) unrepresentable.
-  const presetAvailability = (preset: AutoRouterPreset): PresetAvailability => {
-    if (modelsLoading) return { kind: "loading" };
-    if (modelsUnverifiable) return { kind: "unverifiable" };
-    const missing = getMissingModelsInPreset(preset, availableModelSet);
-    return missing.length > 0 ? { kind: "missing_models", models: missing } : { kind: "available" };
-  };
+  const presetAvailability = React.useCallback(
+    (preset: AutoRouterPreset): PresetAvailability => {
+      if (modelsLoading) return { kind: "loading" };
+      if (modelsUnverifiable) return { kind: "unverifiable" };
+      const missing = getMissingModelsInPreset(preset, availableModelSet);
+      return missing.length > 0 ? { kind: "missing_models", models: missing } : { kind: "available" };
+    },
+    [modelsLoading, modelsUnverifiable, availableModelSet],
+  );
 
   const applyPrefill = (prefill: PresetPrefill) => {
     setComplexityRouterConfig(prefill.complexityRouterConfig);
