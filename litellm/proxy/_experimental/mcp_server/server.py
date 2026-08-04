@@ -29,7 +29,13 @@ from starlette.responses import JSONResponse
 from starlette.types import Message, Receive, Scope, Send
 
 from litellm._logging import verbose_logger
-from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
+from litellm.constants import (
+    MAXIMUM_TRACEBACK_LINES_TO_LOG,
+    MCP_MAX_STATEFUL_SESSIONS_PER_AUTH_IDENTITY,
+    MCP_MAX_STATEFUL_SESSIONS_PER_OWNER,
+    MCP_SESSION_OWNER_HEADER,
+    MCP_SESSION_OWNER_PREFER_IP,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -98,8 +104,12 @@ _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS = 30 * 60
 # without a cap an authenticated client could spam `initialize` and exhaust
 # memory. The caller's own oldest idle sessions are evicted to make room; if
 # the cap is still hit (every session in flight), the new `initialize` is
-# rejected with 429.
-_MAX_STATEFUL_SESSIONS_PER_OWNER = 100
+# rejected with 429. Override via LITELLM_MCP_MAX_STATEFUL_SESSIONS_PER_OWNER.
+_MAX_STATEFUL_SESSIONS_PER_OWNER = MCP_MAX_STATEFUL_SESSIONS_PER_OWNER
+# Hard ceiling across all owner sub-buckets of one authenticated identity
+# (shared API key / user / OAuth bearer). Prevents rotating session-owner
+# headers or client IPs from bypassing the per-owner cap.
+_MAX_STATEFUL_SESSIONS_PER_AUTH_IDENTITY = MCP_MAX_STATEFUL_SESSIONS_PER_AUTH_IDENTITY
 # Maximum bytes to peek when sniffing the JSON-RPC method on a POST.
 # An `initialize` envelope is a few hundred bytes; capping the peek
 # prevents an authenticated client from forcing the proxy to buffer an
@@ -544,6 +554,12 @@ if MCP_AVAILABLE:
     # Without this, a leaked mcp-session-id could be driven (or terminated)
     # by any other authenticated proxy user.
     _stateful_session_owners: dict[str, str] = {}
+    # Maps session_id -> authenticated-identity fingerprint (API key / user /
+    # OAuth bearer only). Used for the hard ceiling that stops header/IP
+    # rotation from creating unbounded sessions under one credential.
+    _stateful_session_auth_identities: dict[
+        str, str
+    ] = {}  # mutable-ok: session registry mutated on initialize/terminate
     # Per-session lock that serializes ``handle_request`` for the same
     # mcp-session-id. The stored ``MCPAuthenticatedUser`` is mutated in place
     # by ``_update_auth_context`` each request; without this lock, two
@@ -557,6 +573,7 @@ if MCP_AVAILABLE:
         _stateful_session_auth_contexts.pop(session_id, None)
         _stateful_session_auth_context_last_seen.pop(session_id, None)
         _stateful_session_owners.pop(session_id, None)
+        _stateful_session_auth_identities.pop(session_id, None)
         _stateful_session_locks.pop(session_id, None)
         _stateful_session_active_request_counts.pop(session_id, None)
 
@@ -650,6 +667,51 @@ if MCP_AVAILABLE:
             _remove_stateful_session_tracking(session_id)
 
         return len(_owned_live_session_ids()) < _MAX_STATEFUL_SESSIONS_PER_OWNER
+
+    async def _enforce_stateful_session_cap_for_auth_identity(auth_identity: str) -> bool:
+        """
+        Hard ceiling across every owner sub-bucket of one authenticated
+        identity (API key / user / OAuth bearer).
+
+        Complements ``_enforce_stateful_session_cap_for_owner``: a client that
+        rotates ``x-litellm-mcp-session-owner`` (or client IP) under one valid
+        credential cannot open unbounded stateful sessions.
+        """
+        if not auth_identity or auth_identity == "anonymous":
+            # Unauthenticated callers have no shared credential to abuse via
+            # header rotation; the per-owner cap still applies to their
+            # owner fingerprint (header/IP/anonymous).
+            return True
+
+        server_instances = getattr(session_manager_stateful, "_server_instances", None)
+        if server_instances is None:
+            server_instances = types.MappingProxyType({})
+
+        def _identity_live_session_ids() -> tuple[str, ...]:
+            return tuple(
+                session_id
+                for session_id, identity in _stateful_session_auth_identities.items()
+                if identity == auth_identity and session_id in server_instances
+            )
+
+        owned = _identity_live_session_ids()
+        if len(owned) < _MAX_STATEFUL_SESSIONS_PER_AUTH_IDENTITY:
+            return True
+
+        for session_id in sorted(
+            owned,
+            key=lambda sid: _stateful_session_auth_context_last_seen.get(sid, 0.0),
+        ):
+            if len(_identity_live_session_ids()) < _MAX_STATEFUL_SESSIONS_PER_AUTH_IDENTITY:
+                break
+            if _stateful_session_active_request_counts.get(session_id, 0) > 0:
+                continue
+            transport = server_instances.pop(session_id, None)
+            if transport is not None:
+                await transport.terminate()
+            _remove_stateful_session_tracking(session_id)
+
+        return len(_identity_live_session_ids()) < _MAX_STATEFUL_SESSIONS_PER_AUTH_IDENTITY
 
     async def _cleanup_expired_stateful_session_auth_contexts() -> None:
         while True:
@@ -3436,10 +3498,62 @@ if MCP_AVAILABLE:
                 return header_value.decode() if isinstance(header_value, bytes) else str(header_value)
         return None
 
+    def _bytes_for_owner_hash(value: Any) -> bytes | None:
+        """Only hash str/bytes secrets; skip mocks and other unexpected types."""
+        if value is None:
+            return None
+        if isinstance(value, (bytes, bytearray)):
+            return bytes(value)
+        if isinstance(value, str):
+            return value.encode("utf-8")
+        return None
+
+    def _auth_identity_material(
+        user_api_key_auth: UserAPIKeyAuth | None,
+        oauth2_headers: Mapping[str, str] | None = None,
+    ) -> tuple[str, bytes] | None:
+        """
+        Return ``(kind, material)`` for the authenticated caller, or ``None``
+        when no authenticated identity is available.
+
+        Kind is one of ``key``, ``user``, or ``oauth``. Material is the raw
+        secret bytes used for hashing — never logged or stored in cleartext.
+        """
+        if user_api_key_auth is not None:
+            key_material = _bytes_for_owner_hash(getattr(user_api_key_auth, "api_key", None))
+            if key_material:
+                return ("key", key_material)
+            uid_material = _bytes_for_owner_hash(getattr(user_api_key_auth, "user_id", None))
+            if uid_material:
+                return ("user", uid_material)
+        if oauth2_headers:
+            authz = oauth2_headers.get("Authorization") or oauth2_headers.get("authorization")
+            authz_bytes = _bytes_for_owner_hash(authz)
+            if authz_bytes:
+                return ("oauth", authz_bytes)
+        return None
+
+    def _auth_identity_fingerprint_for(
+        user_api_key_auth: UserAPIKeyAuth | None,
+        oauth2_headers: Mapping[str, str] | None = None,
+    ) -> str:
+        """
+        Authenticated-identity fingerprint used for the hard session ceiling.
+
+        Intentionally ignores session-owner headers and client IP so rotating
+        those values cannot open a new unlimited bucket under one credential.
+        """
+        identity = _auth_identity_material(user_api_key_auth, oauth2_headers)
+        if identity is None:
+            return "anonymous"
+        kind, material = identity
+        return f"{kind}:{hashlib.sha256(material).hexdigest()}"
+
     def _owner_fingerprint_for(
         user_api_key_auth: UserAPIKeyAuth | None,
-        oauth2_headers: dict[str, str] | None = None,
+        oauth2_headers: Mapping[str, str] | None = None,
         client_ip: str | None = None,
+        request_headers: Mapping[str, str] | None = None,
     ) -> str:
         """
         Stable, non-reversible identifier for the caller used to bind an
@@ -3450,6 +3564,22 @@ if MCP_AVAILABLE:
         the caller's identity is the upstream OAuth bearer; hash it so two
         OAuth callers with different tokens don't both fingerprint to
         ``anonymous`` and end up sharing a session.
+
+        Shared API keys collapse every caller into one owner bucket by default.
+        Deployments that distribute one service-account key to many IDE /
+        plugin users can subdivide that bucket in two ways — both **combine**
+        the sub-identity with the authenticated credential (they never replace
+        it), so a different API key cannot satisfy another caller's owner
+        check by replaying the same header/IP:
+
+        1. Send ``LITELLM_MCP_SESSION_OWNER_HEADER`` (default
+           ``x-litellm-mcp-session-owner``) with a per-user value.
+        2. Set ``LITELLM_MCP_SESSION_OWNER_PREFER_IP=true`` to combine client
+           IP with the authenticated identity.
+
+        A separate per-auth-identity ceiling
+        (``LITELLM_MCP_MAX_STATEFUL_SESSIONS_PER_AUTH_IDENTITY``) still bounds
+        total sessions under one credential when headers/IPs are rotated.
 
         When no caller-identifying credentials are available at all
         (e.g. proxy running without master key, or an unauthenticated
@@ -3463,31 +3593,39 @@ if MCP_AVAILABLE:
         unauthenticated caller who learns the session id — owner-binding
         is best-effort in that mode.
         """
+        identity = _auth_identity_material(user_api_key_auth, oauth2_headers)
 
-        def _bytes_for_hash(value: Any) -> bytes | None:
-            """Only hash str/bytes secrets; skip mocks and other unexpected types."""
-            if value is None:
-                return None
-            if isinstance(value, (bytes, bytearray)):
-                return bytes(value)
-            if isinstance(value, str):
-                return value.encode("utf-8")
-            return None
+        owner_hdr_bytes: bytes | None = None
+        if MCP_SESSION_OWNER_HEADER and request_headers:
+            target = MCP_SESSION_OWNER_HEADER.lower()
+            owner_hdr_value: str | None = None
+            for key, value in request_headers.items():
+                if isinstance(key, str) and key.lower() == target and isinstance(value, str):
+                    owner_hdr_value = value
+                    break
+            owner_hdr_bytes = _bytes_for_owner_hash(owner_hdr_value)
 
-        if user_api_key_auth is not None:
-            key_material = _bytes_for_hash(getattr(user_api_key_auth, "api_key", None))
-            if key_material:
-                api_key_hash = hashlib.sha256(key_material).hexdigest()
-                return f"key:{api_key_hash}"
-            uid_material = _bytes_for_hash(getattr(user_api_key_auth, "user_id", None))
-            if uid_material:
-                user_id_hash = hashlib.sha256(uid_material).hexdigest()
-                return f"user:{user_id_hash}"
-        if oauth2_headers:
-            authz = oauth2_headers.get("Authorization") or oauth2_headers.get("authorization")
-            authz_bytes = _bytes_for_hash(authz)
-            if authz_bytes:
-                return f"oauth:{hashlib.sha256(authz_bytes).hexdigest()}"
+        # Bind optional sub-identity to authenticated material so shared-key
+        # users get independent buckets without enabling cross-key hijacking.
+        # Intentionally ignore the owner header when there is no authenticated
+        # identity: otherwise an unauthenticated client can rotate the header
+        # on every initialize and bypass both session caps (#35383 / Veria).
+        if identity is not None and owner_hdr_bytes is not None:
+            kind, material = identity
+            digest = hashlib.sha256(material + b"\0" + owner_hdr_bytes).hexdigest()
+            return f"{kind}+hdr:{digest}"
+
+        if identity is not None and MCP_SESSION_OWNER_PREFER_IP and client_ip and isinstance(client_ip, str):
+            kind, material = identity
+            digest = hashlib.sha256(material + b"\0" + client_ip.encode("utf-8")).hexdigest()
+            return f"{kind}+ip:{digest}"
+
+        if identity is not None:
+            kind, material = identity
+            return f"{kind}:{hashlib.sha256(material).hexdigest()}"
+
+        # No authenticated identity: fall back to client IP, then anonymous.
+        # Do not honor a client-supplied owner header here.
         if client_ip and isinstance(client_ip, str):
             return f"ip:{hashlib.sha256(client_ip.encode('utf-8')).hexdigest()}"
         return "anonymous"
@@ -4207,7 +4345,7 @@ if MCP_AVAILABLE:
             # response sees a pristine ``receive`` channel.
             if session_id:
                 expected_owner = _stateful_session_owners.get(session_id)
-                request_owner = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip)
+                request_owner = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip, raw_headers)
                 if expected_owner is not None and expected_owner != request_owner:
                     verbose_logger.warning(
                         "Rejecting MCP request: session '%s' owner mismatch.",
@@ -4251,19 +4389,25 @@ if MCP_AVAILABLE:
             # session. Cap how many a single caller can hold so an authenticated
             # client cannot spam `initialize` and exhaust memory.
             if is_initialize and not session_id:
-                request_owner = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip)
-                if not await _enforce_stateful_session_cap_for_owner(request_owner):
-                    verbose_logger.warning(
-                        "Rejecting MCP initialize: caller already holds the maximum number of active stateful sessions."
-                    )
+                request_owner = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip, raw_headers)
+                auth_identity = _auth_identity_fingerprint_for(user_api_key_auth, oauth2_headers)
+
+                async def _reject_too_many_sessions(details: str) -> None:
+                    verbose_logger.warning("Rejecting MCP initialize: %s", details)
                     too_many_response = JSONResponse(
                         status_code=429,
-                        content={
+                        content={  # mutable-ok: JSONResponse requires a JSON object payload
                             "error": "Too Many Requests",
-                            "details": "Too many active MCP sessions for this caller.",
+                            "details": details,
                         },
                     )
                     await too_many_response(scope, receive, send)
+
+                if not await _enforce_stateful_session_cap_for_owner(request_owner):
+                    await _reject_too_many_sessions("Too many active MCP sessions for this caller.")
+                    return
+                if not await _enforce_stateful_session_cap_for_auth_identity(auth_identity):
+                    await _reject_too_many_sessions("Too many active MCP sessions for this authenticated identity.")
                     return
 
             # Replay body messages if we consumed them for peeking
@@ -4370,8 +4514,9 @@ if MCP_AVAILABLE:
                     local_send = _wrap_send_with_stateful_session_auth_context(
                         local_send,
                         auth_user,
-                        _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip),
+                        _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip, raw_headers),
                         _track_initialized_stateful_session,
+                        _auth_identity_fingerprint_for(user_api_key_auth, oauth2_headers),
                     )
 
                 async with _gateway_initialize_instructions_request_scope(
@@ -4681,6 +4826,7 @@ if MCP_AVAILABLE:
         auth_user: MCPAuthenticatedUser,
         owner_fingerprint: str,
         on_session_registered: Callable[[str], None] | None = None,
+        auth_identity_fingerprint: str | None = None,
     ) -> Send:
         async def wrapped_send(message: Message) -> None:
             if message.get("type") == "http.response.start":
@@ -4694,6 +4840,8 @@ if MCP_AVAILABLE:
                         _stateful_session_auth_contexts[session_id] = auth_user
                         _stateful_session_auth_context_last_seen[session_id] = time.monotonic()
                         _stateful_session_owners[session_id] = owner_fingerprint
+                        if auth_identity_fingerprint is not None:
+                            _stateful_session_auth_identities[session_id] = auth_identity_fingerprint
                         break
             await send(message)
 

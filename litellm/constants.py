@@ -121,6 +121,62 @@ MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "
 MCP_METADATA_TIMEOUT = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
 
+
+def _positive_int_env(name: str, default: int) -> int:
+    """Parse a positive int env var; invalid or non-positive values use ``default``."""
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _env_str(name: str, default: str) -> str:
+    """Read a string env var; missing values use ``default``."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Parse a boolean env var (1/true/yes/on); missing values use ``default``."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).lower() in ("1", "true", "yes", "on")
+
+
+# Cap concurrent stateful MCP sessions per caller fingerprint. Shared API keys
+# collapse many users into one bucket unless session ownership is customized
+# via MCP_SESSION_OWNER_HEADER / MCP_SESSION_OWNER_PREFER_IP (see #35383).
+# Non-positive / invalid values fall back to 100 so every initialize is not 429'd.
+MCP_MAX_STATEFUL_SESSIONS_PER_OWNER = _positive_int_env("LITELLM_MCP_MAX_STATEFUL_SESSIONS_PER_OWNER", 100)
+# Hard ceiling across all sub-buckets of one authenticated identity. Stops a
+# client from rotating x-litellm-mcp-session-owner (or client IPs) to bypass
+# the per-owner cap under a single valid API key. Never tighter than the
+# per-owner cap.
+_MCP_AUTH_IDENTITY_CEILING_DEFAULT = max(1000, MCP_MAX_STATEFUL_SESSIONS_PER_OWNER * 10)
+MCP_MAX_STATEFUL_SESSIONS_PER_AUTH_IDENTITY = max(
+    _positive_int_env(
+        "LITELLM_MCP_MAX_STATEFUL_SESSIONS_PER_AUTH_IDENTITY",
+        _MCP_AUTH_IDENTITY_CEILING_DEFAULT,
+    ),
+    MCP_MAX_STATEFUL_SESSIONS_PER_OWNER,
+)
+# When present on a request, this header is combined with the authenticated
+# identity (not a replacement) so IDE / plugin users behind a shared
+# service-account key get independent session caps without enabling
+# cross-key session hijacking. Empty string disables.
+MCP_SESSION_OWNER_HEADER = _env_str("LITELLM_MCP_SESSION_OWNER_HEADER", "x-litellm-mcp-session-owner")
+# When true, combine client IP with the authenticated identity (not a
+# replacement) so callers that share a key but arrive from distinct IPs
+# get separate per-owner caps.
+MCP_SESSION_OWNER_PREFER_IP = _env_bool("LITELLM_MCP_SESSION_OWNER_PREFER_IP", False)
+
 # Allowlist of commands permitted for MCP stdio transport.
 # Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
 # Note: allowlisted runtimes can still execute code via args (e.g. python -c "...").
