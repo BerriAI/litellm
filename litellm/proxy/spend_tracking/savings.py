@@ -8,7 +8,7 @@ are known) and summed into the daily tables; tokens cannot be priced after they
 have been aggregated across models.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, NamedTuple
 
 import litellm
@@ -105,11 +105,81 @@ def _model_info(model: _ModelIdentity) -> ModelInfo | None:
         return None
 
 
-def _cost_of_usage(model: _ModelIdentity, usage: Usage, model_info: ModelInfo | None = None) -> float | None:
+class PricingBasis(NamedTuple):
+    """The tier and region a request was priced on, as the cost calculator resolved them.
+
+    Read back off the request's recorded ``cost_breakdown`` rather than re-derived. The
+    tier the biller used comes from ``optional_params``, which no log record carries, and
+    the served tier that does survive on the usage object is a different fact with the
+    opposite precedence, so a spend-time re-derivation would disagree with the invoice on
+    exactly the requests where the tier changed the price.
+    """
+
+    service_tier: str | None = None
+    data_residency: str | None = None
+
+
+_STANDARD_RATES = PricingBasis()
+
+
+def _pricing_basis(cost_breakdown: Mapping[str, object] | None) -> PricingBasis:
+    """The basis recorded on a request, defaulting to standard rates when absent.
+
+    Rows written before this field shipped carry neither key, and there is no backfill:
+    they price at standard rates, which is what they already did.
+
+    Both values survive a JSON round trip on the way here, so neither is guaranteed to be
+    a string. `generic_cost_per_token` calls `.lower()` on both without a type check, and
+    the resulting `AttributeError` would be swallowed into a silent zero by the caller's
+    `except`, so anything that is not a string is dropped here instead.
+    """
+    if not cost_breakdown:
+        return _STANDARD_RATES
+    service_tier = cost_breakdown.get("service_tier")
+    data_residency = cost_breakdown.get("data_residency")
+    return PricingBasis(
+        service_tier=service_tier if isinstance(service_tier, str) else None,
+        data_residency=data_residency if isinstance(data_residency, str) else None,
+    )
+
+
+def _recorded_token_cost(cost_breakdown: Mapping[str, object] | None) -> float | None:
+    """What the biller charged for this request's tokens, or ``None`` when unrecorded.
+
+    ``input_cost`` already carries the cache buckets, so it and ``output_cost`` sum to
+    exactly what `generic_cost_per_token` returns for the same request; the separate
+    ``cache_read_cost`` and ``cache_creation_cost`` entries decompose that sum rather than
+    adding to it, and including them would charge those tokens twice.
+
+    Built-in tool cost, discount and margin are deliberately left out. They are properties
+    of the request and the operator's contract rather than of the model the router picked,
+    so they land on both sides of the comparison or neither, and only the total the
+    counterfactual can also be priced on belongs here.
+    """
+    if not cost_breakdown:
+        return None
+    input_cost = cost_breakdown.get("input_cost")
+    output_cost = cost_breakdown.get("output_cost")
+    if not isinstance(input_cost, (int, float)) or not isinstance(output_cost, (int, float)):
+        return None
+    return float(input_cost) + float(output_cost)
+
+
+def _cost_of_usage(
+    model: _ModelIdentity,
+    usage: Usage,
+    model_info: ModelInfo | None = None,
+    basis: PricingBasis = _STANDARD_RATES,
+) -> float | None:
     """What ``usage`` costs on ``model``, or ``None`` when the model has no pricing."""
     try:
         prompt_cost, completion_cost = generic_cost_per_token(
-            model=model.model, usage=usage, custom_llm_provider=model.provider, model_info=model_info
+            model=model.model,
+            usage=usage,
+            custom_llm_provider=model.provider,
+            service_tier=basis.service_tier,
+            data_residency=basis.data_residency,
+            model_info=model_info,
         )
     except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; degrade to zero savings
         verbose_proxy_logger.debug(
@@ -228,6 +298,7 @@ def compute_autorouter_savings(
     usage: Usage,
     conversation_continuing: bool = True,
     selected_info: ModelInfo | None = None,
+    cost_breakdown: Mapping[str, object] | None = None,
 ) -> float:
     """Net dollars the router saved, or cost, by serving this request on ``selected_model``.
 
@@ -236,6 +307,20 @@ def compute_autorouter_savings(
     incurred; when that charge outweighs the cheaper rates, routing lost money and the
     dashboard has to be able to say so. Zero when both sides resolve to the same
     deployment, or when either cannot be resolved or priced.
+
+    Only one side of this subtraction is a counterfactual. What the request cost on the
+    model that served it is a number the operator was actually billed, and the cost
+    calculator already wrote it down, so ``cost_breakdown`` is read rather than
+    re-derived. Recomputing it means restating every pricing dimension the biller
+    applied, and each one omitted is a silent disagreement with the ``spend`` column
+    beside it; a request billed at a priority tier recomputed at standard rates reads as
+    half its real cost.
+
+    The baseline has no such record, since it never ran, so it is priced through the same
+    cost engine on the basis the biller used for this request. An operator running that
+    one model instead of the router would have sent this request to the same tier and the
+    same region, because both are properties of the request and the deployment's
+    contract, not of which model the router happened to pick.
 
     ``conversation_continuing`` says whether the baseline would already have had this
     prompt cached. It defaults to True because that is the conservative reading: a
@@ -255,11 +340,16 @@ def compute_autorouter_savings(
     # name alone reports as zero.
     if baseline == selected:
         return 0.0
+    basis = _pricing_basis(cost_breakdown)
     baseline_info = _model_info(baseline)
     baseline_cost = _cost_of_usage(
-        baseline, _baseline_usage(usage, conversation_continuing, baseline_info), baseline_info
+        baseline, _baseline_usage(usage, conversation_continuing, baseline_info), baseline_info, basis
     )
-    selected_cost = _cost_of_usage(selected, usage, selected_info)
+    # Falls back to pricing the request only when the biller recorded nothing, which is
+    # every row written before the breakdown carried its basis.
+    selected_cost = _recorded_token_cost(cost_breakdown)
+    if selected_cost is None:
+        selected_cost = _cost_of_usage(selected, usage, selected_info, basis)
     if baseline_cost is None or selected_cost is None:
         return 0.0
     return baseline_cost - selected_cost
@@ -287,7 +377,8 @@ def compute_savings_spend(
     routing_decision: Mapping[str, object] | None = None,
     usage_object: Mapping[str, object] | None = None,
     model_id: str | None = None,
-    llm_router: "Router | None" = None,
+    llm_router: "Callable[[], Router | None] | None" = None,
+    cost_breakdown: Mapping[str, object] | None = None,
 ) -> SavingsSpend:
     """
     Dollar savings for one request, split by optimization driver.
@@ -299,6 +390,17 @@ def compute_savings_spend(
     baseline the router recorded on its ``routing_decision``, and are zero unless the
     two differ. That record also says whether the conversation was already underway,
     which is what tells a mid-conversation switch from a first turn.
+
+    ``llm_router`` is passed as a provider rather than a router because every spend write
+    calls this and only auto-routed ones need one, so looking it up eagerly at the call
+    site would fetch and discard it on the rest.
+
+    ``cost_breakdown`` is what the cost calculator recorded for this request, and it
+    carries both what the request really cost and the tier and region it was priced on.
+    Only the auto-router driver reads it. Compression and prompt caching price a
+    hypothetical token delta off flat rate keys, so they are blind to tiered pricing in
+    the same way; that is pre-existing behaviour on two shipped drivers rather than
+    something introduced here, and moving those numbers is its own change.
     """
     input_cost, cache_read_cost = _input_and_cache_read_cost(model, custom_llm_provider)
     compression = max(compression_saved_tokens, 0) * input_cost
@@ -311,19 +413,23 @@ def compute_savings_spend(
     # The counterfactual is one model an operator would have run instead of the router,
     # configured once for the proxy rather than derived per request. Unset means the
     # driver is off; a routing decision is what says this request was auto-routed at all.
+    # Both are checked before anything is resolved, because every spend write reaches
+    # here and only auto-routed ones can produce a number.
+    baseline_model = litellm.autorouter_savings_baseline_model
     decision = routing_decision if isinstance(routing_decision, Mapping) else {}
     autorouter = (
         compute_autorouter_savings(
-            baseline_model=litellm.autorouter_savings_baseline_model,
+            baseline_model=baseline_model,
             selected_model=model,
             selected_provider=custom_llm_provider,
             usage=usage,
             # Absent means the router never recorded a shape, which is the conservative
             # reading: charge the cache write rather than claim a first turn's saving.
             conversation_continuing=decision.get("conversation_continuing") is not False,
-            selected_info=_effective_model_info(llm_router, model_id, model or ""),
+            selected_info=_effective_model_info(llm_router() if llm_router else None, model_id, model or ""),
+            cost_breakdown=cost_breakdown,
         )
-        if decision
+        if decision and baseline_model
         else 0.0
     )
     return SavingsSpend(compression=compression, prompt_caching=prompt_caching, autorouter=autorouter)
