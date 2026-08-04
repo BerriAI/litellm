@@ -149,16 +149,19 @@ class BedrockConverseLLM(BaseAWSLLM):
         caller_headers: Mapping[str, str],
         endpoint_url: str,
         api_key: str | None,
-    ) -> _SendResultT:
+    ) -> tuple[_SendResultT, str]:
         """
         Send once, and if Bedrock rejects extra ``toolSpec`` members, drop them and send again.
 
         ``send`` owns the transport and the provider-error contract, so a request that
         fails for any other reason raises exactly what it raised before. The retry is
         single-shot: a second rejection surfaces rather than looping.
+
+        Returns the result together with the body that actually produced it, so callers
+        log and transform against what was sent rather than the payload that was rejected.
         """
         try:
-            return await send(data, headers)
+            return await send(data, headers), data
         except (BedrockError, httpx.HTTPStatusError) as err:
             retry = self._resign_without_rejected_tool_fields(
                 request_data=request_data,
@@ -172,7 +175,8 @@ class BedrockConverseLLM(BaseAWSLLM):
             )
             if retry is None:
                 raise
-            return await send(*retry)
+            retry_data, retry_headers = retry
+            return await send(retry_data, retry_headers), retry_data
 
     def _send_retrying_rejected_tool_fields(
         self,
@@ -186,10 +190,10 @@ class BedrockConverseLLM(BaseAWSLLM):
         caller_headers: Mapping[str, str],
         endpoint_url: str,
         api_key: str | None,
-    ) -> _SendResultT:
+    ) -> tuple[_SendResultT, str]:
         """Synchronous twin of ``_asend_retrying_rejected_tool_fields``."""
         try:
-            return send(data, headers)
+            return send(data, headers), data
         except (BedrockError, httpx.HTTPStatusError) as err:
             retry = self._resign_without_rejected_tool_fields(
                 request_data=request_data,
@@ -203,7 +207,8 @@ class BedrockConverseLLM(BaseAWSLLM):
             )
             if retry is None:
                 raise
-            return send(*retry)
+            retry_data, retry_headers = retry
+            return send(retry_data, retry_headers), retry_data
 
     async def async_streaming(
         self,
@@ -270,7 +275,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 stream_chunk_size=stream_chunk_size,
             )
 
-        completion_stream = await self._asend_retrying_rejected_tool_fields(
+        completion_stream, data = await self._asend_retrying_rejected_tool_fields(
             send=_send,
             request_data=request_data,
             data=data,
@@ -364,7 +369,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             except httpx.TimeoutException:
                 raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        response = await self._asend_retrying_rejected_tool_fields(
+        response, data = await self._asend_retrying_rejected_tool_fields(
             send=_send,
             request_data=request_data,
             data=data,
@@ -606,7 +611,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                     stream_chunk_size=stream_chunk_size,
                 )
 
-            completion_stream = self._send_retrying_rejected_tool_fields(
+            completion_stream, data = self._send_retrying_rejected_tool_fields(
                 send=_send_stream,
                 request_data=_data,
                 data=data,
@@ -643,7 +648,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             except httpx.TimeoutException:
                 raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        response = self._send_retrying_rejected_tool_fields(
+        response, data = self._send_retrying_rejected_tool_fields(
             send=_send,
             request_data=_data,
             data=data,

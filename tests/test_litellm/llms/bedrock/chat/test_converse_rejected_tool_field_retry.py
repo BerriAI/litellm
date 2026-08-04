@@ -125,10 +125,12 @@ def test_sync_retry_resends_without_the_rejected_field_and_resigns(raised: Excep
             raise raised
         return "ok"
 
-    result = BedrockConverseLLM()._send_retrying_rejected_tool_fields(send=send, **_retry_kwargs())
+    result, sent_body = BedrockConverseLLM()._send_retrying_rejected_tool_fields(send=send, **_retry_kwargs())
 
     assert result == "ok"
     assert len(attempts) == 2
+    assert sent_body == attempts[1][0]
+    assert '"strict"' not in sent_body
 
     first_body, first_headers = attempts[0]
     retry_body, retry_headers = attempts[1]
@@ -178,12 +180,25 @@ async def test_async_retry_resends_without_the_rejected_field_and_resigns() -> N
             raise BedrockError(status_code=400, message=_STRICT_REJECTION)
         return "ok"
 
-    result = await BedrockConverseLLM()._asend_retrying_rejected_tool_fields(send=send, **_retry_kwargs())
+    result, sent_body = await BedrockConverseLLM()._asend_retrying_rejected_tool_fields(
+        send=send, **_retry_kwargs()
+    )
 
     assert result == "ok"
     assert len(attempts) == 2
     assert '"strict"' not in attempts[1][0]
     assert attempts[1][1]["Authorization"].startswith("AWS4-HMAC-SHA256")
+    assert sent_body == attempts[1][0]
+
+
+def test_reported_body_is_the_original_when_no_retry_happens() -> None:
+    """A request that succeeds first time reports exactly what it sent."""
+
+    def send(body: str, headers) -> str:
+        return "ok"
+
+    _, sent_body = BedrockConverseLLM()._send_retrying_rejected_tool_fields(send=send, **_retry_kwargs())
+    assert sent_body == "original-body"
 
 
 @pytest.mark.asyncio
