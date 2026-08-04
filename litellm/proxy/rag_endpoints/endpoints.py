@@ -687,7 +687,13 @@ async def rag_query(
         if resolved_provider:
             retrieval_config["custom_llm_provider"] = resolved_provider
         resolved_vector_store.pop("litellm_credential_name", None)
-        request_data.update(resolved_vector_store)
+        # Registry credentials are scoped to the vector store search: merging
+        # them into ``retrieval_config`` (instead of ``request_data``) keeps
+        # them out of the generation-call kwargs entirely. The search call
+        # site forwards only an allowlisted subset (see
+        # ``_VECTOR_STORE_SEARCH_PARAMS`` in ``litellm/rag/main.py``), so
+        # stored metadata / guardrail fields never reach the LLM call.
+        retrieval_config.update(resolved_vector_store)
 
         verbose_proxy_logger.debug("RAG Query - model: %s, retrieval_config: %s", model, retrieval_config)
 

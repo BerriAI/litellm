@@ -11,7 +11,7 @@ aquery carries the completion response with real usage and cost.
 """
 
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -252,6 +252,72 @@ async def test_aquery_streaming_bills_sub_call_costs_into_final_event():
     standard_logging_object = recording_logger.success_events[0]["kwargs"]["standard_logging_object"]
     assert standard_logging_object["call_type"] == "aquery"
     assert standard_logging_object["response_cost"] >= 0.003
+
+
+@pytest.mark.asyncio
+async def test_aquery_scopes_registry_params_to_search_not_completion():
+    """
+    Registry-resolved params carried in retrieval_config (aws_region_name,
+    api_base, ...) must reach the vector store search but never the
+    completion call. Non-allowlisted stored fields (e.g. metadata that could
+    disable guardrails) must not be forwarded anywhere.
+    """
+    from litellm.types.utils import ModelResponse
+
+    async def fake_search(**kwargs):
+        return {"data": [{"id": "chunk-1", "text": "The codename is AZURE-FALCON-42."}]}
+
+    async def fake_completion(**kwargs):
+        return ModelResponse(
+            id="chatcmpl-test",
+            choices=[
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "The codename is AZURE-FALCON-42.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            model="gpt-4o-mini",
+            usage={"prompt_tokens": 35, "completion_tokens": 14, "total_tokens": 49},
+        )
+
+    with (
+        patch.object(
+            litellm.vector_stores,
+            "asearch",
+            new=AsyncMock(side_effect=fake_search),
+        ) as asearch_mock,
+        patch.object(
+            litellm,
+            "acompletion",
+            new=AsyncMock(side_effect=fake_completion),
+        ) as acompletion_mock,
+    ):
+        await litellm.aquery(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "What is the codename?"}],
+            retrieval_config={
+                "vector_store_id": "vs_test_123",
+                "custom_llm_provider": "bedrock",
+                "aws_region_name": "us-east-1",
+                "api_base": "https://bedrock.example.com",
+                "metadata": {"disable_global_guardrails": True},
+            },
+        )
+
+    search_kwargs = asearch_mock.await_args.kwargs
+    assert search_kwargs["aws_region_name"] == "us-east-1"
+    assert search_kwargs["api_base"] == "https://bedrock.example.com"
+    assert search_kwargs["custom_llm_provider"] == "bedrock"
+    assert "metadata" not in search_kwargs
+
+    completion_kwargs = acompletion_mock.await_args.kwargs
+    assert "aws_region_name" not in completion_kwargs
+    assert "api_base" not in completion_kwargs
+    assert "metadata" not in completion_kwargs
 
 
 def test_rag_call_types_are_registered():

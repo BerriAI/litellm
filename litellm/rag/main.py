@@ -202,6 +202,28 @@ def _suppressed_sub_call_billing() -> Iterator[None]:
         is_internal_call.set(previous)
 
 
+# Credential/provider fields that the vector store search may receive from
+# the (registry-resolved) ``retrieval_config``. These are the only fields
+# forwarded to ``litellm.vector_stores.asearch``; everything else that the
+# managed vector store registry attaches (e.g. metadata, guardrail config)
+# stays scoped to the search and is never forwarded to the completion call,
+# which shares the top-level ``kwargs``.
+_VECTOR_STORE_SEARCH_PARAMS = frozenset(
+    {
+        "api_key",
+        "api_base",
+        "api_version",
+        "aws_region_name",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "region_name",
+        "litellm_embedding_config",
+        "litellm_embedding_model",
+    }
+)
+
+
 async def _execute_query_pipeline(
     model: str,
     messages: list[Any],
@@ -224,12 +246,25 @@ async def _execute_query_pipeline(
 
     # 2. Search vector store
     with _suppressed_sub_call_billing():
+        # Forward only allowlisted, search-scoped params from the resolved
+        # registry (``retrieval_config``) to the search. ``kwargs`` alone
+        # would drop them, and merging them into ``kwargs`` would leak them
+        # into the completion call below. Registry values win over user
+        # kwargs for the search.
+        search_kwargs = dict(kwargs)
+        search_kwargs.update(
+            {
+                key: retrieval_config[key]
+                for key in _VECTOR_STORE_SEARCH_PARAMS
+                if key in retrieval_config
+            }
+        )
         search_response: Final = await litellm.vector_stores.asearch(
             vector_store_id=retrieval_config["vector_store_id"],
             query=query_text,
             max_num_results=retrieval_config.get("top_k", 10),
             custom_llm_provider=retrieval_config.get("custom_llm_provider", "openai"),
-            **kwargs,
+            **search_kwargs,
         )
 
     search_provider: Final = retrieval_config.get("custom_llm_provider", "openai")

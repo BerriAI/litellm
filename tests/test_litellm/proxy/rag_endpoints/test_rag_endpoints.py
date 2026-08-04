@@ -299,7 +299,9 @@ async def test_rag_query_resolves_managed_vector_store_registry(client_internal_
     Before the fix, retrieval_config["custom_llm_provider"] stayed whatever the
     client sent and the registry credentials were never forwarded to
     litellm.aquery, so a registered non-OpenAI vector store was always queried
-    via api.openai.com.
+    via api.openai.com. The fix also scopes registry params to
+    retrieval_config (the search-only channel): stored fields such as metadata
+    must never surface as top-level kwargs, which flow to the generation call.
     """
     from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
         LiteLLM_ManagedVectorStore,
@@ -309,7 +311,13 @@ async def test_rag_query_resolves_managed_vector_store_registry(client_internal_
     mock_vector_store: LiteLLM_ManagedVectorStore = {
         "vector_store_id": "vs_registered",
         "custom_llm_provider": "bedrock",
-        "litellm_params": {"aws_region_name": "us-east-1"},
+        "litellm_credential_name": "my_bedrock_creds",
+        "litellm_params": {
+            "aws_region_name": "us-east-1",
+            # Security probe: a stored field that must never reach the
+            # generation-call kwargs / sanitization boundary.
+            "metadata": {"disable_global_guardrails": True},
+        },
     }
 
     mock_registry = MagicMock()
@@ -358,8 +366,19 @@ async def test_rag_query_resolves_managed_vector_store_registry(client_internal_
         )
 
     assert response.status_code == 200, response.text
+    # Registry params land in retrieval_config (the search channel)...
     assert captured["retrieval_config"]["custom_llm_provider"] == "bedrock"
-    assert captured["aws_region_name"] == "us-east-1"
+    assert captured["retrieval_config"]["aws_region_name"] == "us-east-1"
+    assert captured["retrieval_config"]["metadata"] == {"disable_global_guardrails": True}
+    # ...and never surface as top-level kwargs, which flow to the generation
+    # call. The credential name is popped (the search resolves it by id).
+    assert "aws_region_name" not in captured
+    # `metadata` at the top level is the request's own metadata (agent_id,
+    # endpoint, headers...); the registry's guardrail override must not leak
+    # into it, or the generation call would skip global guardrails.
+    assert "disable_global_guardrails" not in captured.get("metadata", {})
+    assert "litellm_credential_name" not in captured
+    assert "litellm_credential_name" not in captured["retrieval_config"]
 
 
 def test_rag_query_stream_returns_event_stream(client_internal_user):
