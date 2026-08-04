@@ -19,7 +19,7 @@ import threading
 import time
 import traceback
 from collections import defaultdict
-from collections.abc import AsyncGenerator, Callable, Generator, Mapping
+from collections.abc import AsyncGenerator, Callable, Generator, Mapping, Sequence
 from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
@@ -308,7 +308,7 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 
 
-def _stream_chunks_have_generated_content(chunks: list[ModelResponseStream]) -> bool:
+def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream]) -> bool:
     for chunk in chunks:
         if not chunk.choices:
             continue
