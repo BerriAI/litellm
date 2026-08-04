@@ -1458,6 +1458,8 @@ async def get_global_spend_report(
 
 _SPEND_REPORT_SCOPE_COLUMNS = frozenset({"api_key", "user", "team_id"})
 
+_SPEND_REPORT_MAX_RANGE_DAYS = 366
+
 
 def _scoped_spend_report_sql(scope_column: str) -> str:
     """Spend grouped by api_key with a per-model breakdown, cut to one scope column.
@@ -1520,7 +1522,13 @@ _ORG_SPEND_REPORT_SQL = """
         WHERE
             sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
             AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
-            AND (sl.organization_id = $3 OR sl.team_id = ANY($4::text[]))
+            AND (
+                sl.organization_id = $3
+                OR (
+                    (sl.organization_id IS NULL OR sl.organization_id = '')
+                    AND sl.team_id = ANY($4::text[])
+                )
+            )
         GROUP BY
             sl.api_key,
             sl.team_id,
@@ -1578,6 +1586,17 @@ def _parse_spend_report_date_range(start_date: str | None, end_date: str | None)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="start_date and end_date must be in YYYY-MM-DD format",
+        )
+    start_date_obj, end_date_obj = parsed
+    if end_date_obj < start_date_obj:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_date must be on or before end_date",
+        )
+    if end_date_obj - start_date_obj > timedelta(days=_SPEND_REPORT_MAX_RANGE_DAYS):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Date range too large; maximum is {_SPEND_REPORT_MAX_RANGE_DAYS} days",
         )
     return parsed
 

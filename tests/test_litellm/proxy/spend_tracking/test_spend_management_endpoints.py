@@ -5096,7 +5096,11 @@ def test_org_spend_report_proxy_admin_override(client, monkeypatch):
         assert response.status_code == 200
         args, _ = mock_prisma.db.query_raw.await_args
         sql, _, _, org_param, team_ids_param = args
-        assert "(sl.organization_id = $3 OR sl.team_id = ANY($4::text[]))" in sql
+        normalized_sql = " ".join(sql.split())
+        assert (
+            "AND ( sl.organization_id = $3 OR ( (sl.organization_id IS NULL OR sl.organization_id = '') "
+            "AND sl.team_id = ANY($4::text[]) ) )"
+        ) in normalized_sql
         assert org_param == "org-x"
         assert team_ids_param == ("team-a", "team-b")
     finally:
@@ -5236,5 +5240,62 @@ def test_scoped_spend_report_invalid_date_format_400(client, monkeypatch):
         )
         assert response.status_code == 400
         mock_prisma.db.query_raw.assert_not_awaited()
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_scoped_spend_report_reversed_range_400(client, monkeypatch):
+    mock_prisma = _spend_report_mock_prisma()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice", api_key="hashed-k"
+    )
+    try:
+        response = client.get(
+            "/key/spend/report",
+            params={"start_date": "2026-08-04", "end_date": "2026-08-01"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 400
+        mock_prisma.db.query_raw.assert_not_awaited()
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_scoped_spend_report_range_over_max_400(client, monkeypatch):
+    mock_prisma = _spend_report_mock_prisma()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice", api_key="hashed-k"
+    )
+    try:
+        response = client.get(
+            "/key/spend/report",
+            params={"start_date": "0001-01-01", "end_date": "9999-12-31"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 400
+        mock_prisma.db.query_raw.assert_not_awaited()
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_scoped_spend_report_range_at_max_allowed(client, monkeypatch):
+    mock_prisma = _spend_report_mock_prisma(query_raw_returns=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice", api_key="hashed-k"
+    )
+    try:
+        response = client.get(
+            "/key/spend/report",
+            params={"start_date": "2025-08-03", "end_date": "2026-08-04"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        mock_prisma.db.query_raw.assert_awaited_once()
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
