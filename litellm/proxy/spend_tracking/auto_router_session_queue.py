@@ -148,6 +148,13 @@ class AutoRouterSessionQueue:
         held rather than on sessions seen, which is the quantity that actually
         bounds the memory. Past the cap a turn is dropped and logged, because
         benchmark rows are not worth an out-of-memory kill.
+
+        That cap is counted here rather than inherited from ``BaseUpdateQueue``,
+        which ``SpendUpdateQueue`` and ``DailySpendUpdateQueue`` both use, on
+        purpose: its bound is an ``asyncio.Queue`` maxsize, and a full queue
+        blocks the producer. Applying that backpressure here would stall spend
+        logging behind a dashboard rollup. An undercounted benchmark is a wrong
+        number on one tab; a stalled spend write is money that went unbilled.
         """
         async with self._lock:
             if self._staged_turns >= self._max_staged_turns:
