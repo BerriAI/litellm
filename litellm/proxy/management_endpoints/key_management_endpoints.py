@@ -2362,6 +2362,43 @@ async def _validate_mcp_servers_for_key_update(
     return normalized_object_permission
 
 
+async def _can_creator_update_personal_key_budget(
+    data: UpdateKeyRequest,
+    caller_is_creator: bool,
+    key_is_team_key: bool,
+    is_max_budget_change: bool,
+    is_budget_limits_change: bool,
+    user_id: str | None,
+    prisma_client: PrismaClient | None,
+) -> bool:
+    if (
+        not caller_is_creator
+        or key_is_team_key
+        or data.spend is not None
+        or not (is_max_budget_change or is_budget_limits_change)
+        or user_id is None
+        or prisma_client is None
+    ):
+        return False
+    user = await UserRepository(prisma_client).find_by_id(user_id)
+    if user is None:
+        raise HTTPException(status_code=403, detail={"error": "Key owner not found."})
+    requested_budgets = tuple(
+        budget
+        for budget in (
+            data.max_budget if is_max_budget_change else None,
+            *(entry.max_budget for entry in data.budget_limits or ()),
+        )
+        if budget is not None
+    )
+    if user.max_budget is not None and any(budget > user.max_budget for budget in requested_budgets):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Key budget cannot exceed the owner's max_budget ({user.max_budget})."},
+        )
+    return True
+
+
 async def _validate_update_key_data(
     data: UpdateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
@@ -2434,21 +2471,16 @@ async def _validate_update_key_data(
     # - Anyone else (non-PROXY_ADMIN, not the owner, not a team member
     #   on a team key): must pass _check_key_admin_access (PROXY_ADMIN
     #   / key-owner / team-admin / org-admin of the key).
-    # - max_budget / spend / budget_limits: always require the admin
-    #   check, even for the key owner or a team member (matches the
-    #   existing admin-only budget semantics).  budget_limits uses
-    #   model_fields_set because an explicit null/[] clears the field
-    #   and must gate the same as setting or changing it.
+    # - Key creators may manage budgets on their own personal keys up to
+    #   their user budget. Team-key budget changes require an admin.
     # - spend gates on presence alone (not a value diff): the DB spend
     #   lags the live cross-pod counter, so letting an "unchanged" spend
     #   through the non-admin path would let a key owner / team member
     #   overwrite the live counter below real usage and silently weaken
     #   enforcement.
-    _is_budget_change = (
-        (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
-        or data.spend is not None
-        or "budget_limits" in data.model_fields_set
-    )
+    _is_max_budget_change = "max_budget" in data.model_fields_set and data.max_budget != existing_key_row.max_budget
+    _is_budget_limits_change = "budget_limits" in data.model_fields_set
+    _is_budget_change = _is_max_budget_change or data.spend is not None or _is_budget_limits_change
 
     _existing_metadata = getattr(existing_key_row, "metadata", None)
     _existing_throttle = (
@@ -2475,7 +2507,18 @@ async def _validate_update_key_data(
     # non-budget change means the caller was authorized — skip the redundant
     # _check_key_admin_access that would otherwise require team/org admin status.
     _key_is_team_key = getattr(existing_key_row, "team_id", None) is not None
-    can_skip_admin_check = (caller_is_creator or _key_is_team_key) and not _is_budget_change
+    creator_budget_change_allowed = await _can_creator_update_personal_key_budget(
+        data=data,
+        caller_is_creator=caller_is_creator,
+        key_is_team_key=_key_is_team_key,
+        is_max_budget_change=_is_max_budget_change,
+        is_budget_limits_change=_is_budget_limits_change,
+        user_id=user_api_key_dict.user_id,
+        prisma_client=prisma_client,
+    )
+    can_skip_admin_check = (
+        (caller_is_creator or _key_is_team_key) and not _is_budget_change
+    ) or creator_budget_change_allowed
     if (not _is_proxy_admin) and prisma_client is not None and not can_skip_admin_check:
         hashed_key = existing_key_row.token
         await _check_key_admin_access(
