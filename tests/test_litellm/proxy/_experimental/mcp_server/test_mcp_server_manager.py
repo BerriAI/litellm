@@ -1916,6 +1916,168 @@ class TestMCPServerManager:
         await manager.preflight_token_exchange(server=server, oauth2_headers=None, user_api_key_auth=None)
         assert resolved == ["good-subject"]
 
+    def _id_jag_server(self, server_id: str) -> "MCPServer":
+        return MCPServer(
+            server_id=server_id,
+            name=f"{server_id}-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_id_jag,
+            client_id="gateway-client",
+            client_secret="gateway-secret",
+            token_exchange_endpoint="https://org-idp.example/oauth2/token",
+            id_jag_resource_token_endpoint="https://resource-as.example/oauth2/token",
+        )
+
+    @pytest.mark.asyncio
+    async def test_preflight_id_jag_surfaces_missing_assertion_as_a_plain_412(self):
+        """ID-JAG's missing/expired-assertion precondition must reach the client as a 412 whose body
+        names the fix, at the transport edge. Without the preflight the session opens and the caller
+        gets a 200 with an empty tool list and then 'tool not found', which is not what happened.
+        412 is a precondition, not an RFC 9728 discovery challenge, so it carries no
+        WWW-Authenticate: there is nothing for the client to discover and retry against."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        summary = (
+            "ID-JAG requires an IdP identity assertion for this user and none is stored. "
+            "Sign in through LiteLLM SSO so the gateway captures one."
+        )
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(CredError.of_precondition_required(summary))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=self._id_jag_server("id-jag-preflight-412"),
+                oauth2_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+            )
+        assert exc_info.value.status_code == 412
+        assert summary in exc_info.value.detail
+        assert not (exc_info.value.headers or {})
+
+    @pytest.mark.asyncio
+    async def test_preflight_id_jag_surfaces_assertion_store_outage_as_503(self):
+        """A store outage is the other failure the session would swallow, and it is a different
+        answer than 412: the user has nothing to fix by signing in again."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(CredError.of_upstream_unavailable("assertion store unreachable"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=self._id_jag_server("id-jag-preflight-503"),
+                oauth2_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+            )
+        assert exc_info.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_preflight_id_jag_only_judges_the_subject_the_listing_will_use(self):
+        """Tool listing resolves ID-JAG from the assertion stored for the user and never from the
+        inbound bearer, so the preflight is faithful only when no bearer was sent. A caller that did
+        send one must reach the session untouched: judging it against the store would 412 a request
+        the tool call would have served off that bearer, and judging it against the bearer would
+        settle a subject the listing then ignores. Either way the preflight would be answering a
+        question the session does not ask. With no bearer both resolve the same stored subject, and
+        that case must still pre-flight; it is the one whose failure the session cannot report."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        subjects = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                subjects.append(
+                    (
+                        subject.subject_id,
+                        subject.inbound_token.get_secret_value() if subject.inbound_token else None,
+                    )
+                )
+                return Ok(StaticHeaderAuth("Bearer minted-id-jag", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        caller = UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1")
+
+        assert (
+            await manager.preflight_token_exchange(
+                server=self._id_jag_server("id-jag-preflight-inbound"),
+                oauth2_headers={"Authorization": "Bearer caller-idp-id-token"},
+                user_api_key_auth=caller,
+            )
+            is None
+        )
+        assert subjects == []
+
+        await manager.preflight_token_exchange(
+            server=self._id_jag_server("id-jag-preflight-stored"),
+            oauth2_headers=None,
+            user_api_key_auth=caller,
+        )
+        assert subjects == [("u-1", None)]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "server_fields",
+        [
+            {"auth_type": MCPAuth.none},
+            {"auth_type": MCPAuth.api_key, "authentication_token": "static-upstream-key"},
+            {"auth_type": MCPAuth.bearer_token, "authentication_token": "static-upstream-key"},
+            {
+                "auth_type": MCPAuth.oauth2,
+                "oauth2_flow": "client_credentials",
+                "client_id": "cid",
+                "client_secret": "csec",
+                "token_url": "https://idp.example.com/token",
+            },
+            {"auth_type": MCPAuth.true_passthrough},
+        ],
+    )
+    async def test_preflight_resolves_nothing_for_a_mode_that_does_not_pre_flight(self, server_fields):
+        """The manager is the only thing deciding which modes pre-flight, so it has to reject every
+        other mode itself. The single-server call site no longer tests the mode before calling, so a
+        mode that falls through here would start resolving its credential a second time, at connect,
+        for flows that never had a connect-time resolution at all."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        calls = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                calls.append(server.server_id)
+                return Error(CredError.of_misconfigured("the preflight must never get here"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = MCPServer(
+            server_id="not-pre-flighted",
+            name="not-pre-flighted-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            **server_fields,
+        )
+
+        assert (
+            await manager.preflight_token_exchange(
+                server=server,
+                oauth2_headers={"Authorization": "Bearer sk-litellm-virtual-key"},
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+            )
+            is None
+        )
+        assert calls == []
+
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_strips_authorization_when_admission_consumed_litellm_key(
         self,

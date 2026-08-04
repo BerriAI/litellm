@@ -3131,27 +3131,44 @@ class MCPServerManager:
         oauth2_headers: dict[str, str] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
     ) -> None:
-        """Run the OBO exchange for a caller-supplied subject at the transport edge.
+        """Mint an exchange-backed server's upstream credential at the transport edge.
 
         Single-server routes call this before the MCP session opens, where an HTTP status and
         ``WWW-Authenticate`` still reach the client. A rejected subject raises the RFC 9728
         challenge and any other ``CredError`` maps onto its public HTTP status, so an exchange
         failure surfaces as a failure instead of the session continuing into an empty tool list.
         A successful exchange is cached by the exchanger, so the session's list/call reuses it.
+
+        Each mode pre-flights only where it would resolve the subject the session goes on to use,
+        which is what keeps the pre-flight from reaching a verdict the session would contradict.
+        ``oauth2_token_exchange`` mints from the caller's inbound bearer, so without one there is
+        nothing to exchange and the missing-subject case stays the preemptive challenge's job.
+        ``oauth2_id_jag`` is the mirror image: tool listing resolves it from the identity assertion
+        captured for this user at SSO login and never from the inbound bearer, so the pre-flight is
+        faithful exactly when no bearer was sent, and a caller that did send one is passed through
+        untouched rather than judged against a subject the listing will not use. That store-sourced
+        case is the one whose missing-assertion 412 and store-outage 503 the session cannot report.
+        Only OBO has a discovery challenge to raise; ID-JAG's failures are plain statuses whose body
+        already names what the user has to do, so they map through ``raise_public`` as at egress.
         """
-        if server.auth_type != MCPAuth.oauth2_token_exchange:
-            return
         subject_token = self._extract_bearer_token(oauth2_headers, None)
-        if not subject_token:
-            return
-        spec = to_server_spec(server)
-        if spec is None or not isinstance(spec.config, TokenExchangeConfig):
+        match server.auth_type:
+            case MCPAuth.oauth2_token_exchange:
+                if not subject_token:
+                    return
+            case MCPAuth.oauth2_id_jag:
+                if subject_token:
+                    return
+            case _:
+                return
+        spec = _to_server_spec_fail_closed(server)
+        if spec is None or not isinstance(spec.config, (TokenExchangeConfig, IdJagConfig)):
             return
         match await self._cred_provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
             case Ok(_):
                 return
             case Error(err):
-                if err.tag == "unauthorized":
+                if err.tag == "unauthorized" and isinstance(spec.config, TokenExchangeConfig):
                     raise_token_exchange_challenge(
                         server,
                         root_path=get_server_root_path(),

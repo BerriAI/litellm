@@ -7952,6 +7952,126 @@ class TestPreemptive401ModeAware:
         await self._run(delegate, self.LITELLM_KEY_HEADERS, has_stored_token=False)
 
 
+class TestSingleServerPreflightReachesIdJag:
+    """The connect-time preflight is what turns a credential failure into an HTTP status the client
+    can read. An oauth2_id_jag server has to reach it: its subject comes from the assertion stored at
+    SSO login, so the failure is decided before any IdP call and there is nothing later in the session
+    that can report it (tools/list degrades to an empty list, tools/call to 'tool not found')."""
+
+    def _id_jag_server(self) -> MCPServer:
+        return MCPServer(
+            server_id="id-idjag",
+            name="idjag",
+            alias="idjag",
+            server_name="idjag",
+            url="https://idjag.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_id_jag,
+            client_id="gateway-client",
+            client_secret="gateway-secret",
+            token_exchange_endpoint="https://org-idp.test/oauth2/token",
+            id_jag_resource_token_endpoint="https://resource-as.test/oauth2/token",
+            mcp_info={"server_name": "idjag"},
+        )
+
+    async def _run(self, server: MCPServer, mcp_servers: list[str], preflight: AsyncMock) -> None:
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        with (
+            patch.object(
+                server_module.global_mcp_server_manager,
+                "get_mcp_server_by_name",
+                return_value=server,
+            ),
+            patch.object(
+                server_module.global_mcp_server_manager,
+                "preflight_token_exchange",
+                preflight,
+            ),
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": "/mcp/idjag", "headers": []},
+                mcp_servers=mcp_servers,
+                oauth2_headers={"Authorization": "Bearer sk-litellm-virtual-key"},
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                client_ip=None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_id_jag_single_server_route_surfaces_the_preflight_status(self):
+        """The 412 the preflight raises must propagate out of connect, not be swallowed."""
+        server = self._id_jag_server()
+        preflight = AsyncMock(side_effect=HTTPException(status_code=412, detail="no stored assertion"))
+
+        with pytest.raises(HTTPException) as exc:
+            await self._run(server, ["idjag"], preflight)
+
+        assert exc.value.status_code == 412
+        assert preflight.await_args.kwargs["server"] is server
+
+    @pytest.mark.asyncio
+    async def test_token_exchange_without_a_bearer_still_challenges_and_never_pre_flights(self):
+        """The already-shipped OBO path must be untouched by the call site dropping its mode test.
+        A token_exchange server with no inbound bearer has nothing to exchange, so it still gets the
+        RFC 9728 discovery challenge from the block above and the preflight is never reached; pushing
+        a subject-less exchange through the resolver would turn that challenge into some other status
+        and strand a client that only had to SSO and retry."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        token_exchange = MCPServer(
+            server_id="id-obo",
+            name="obo",
+            alias="obo",
+            server_name="obo",
+            url="https://obo.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.test/oauth2/token",
+            client_id="cid",
+            client_secret="csec",
+            mcp_info={"server_name": "obo"},
+        )
+        preflight = AsyncMock()
+
+        with (
+            patch.object(
+                server_module.global_mcp_server_manager,
+                "get_mcp_server_by_name",
+                return_value=token_exchange,
+            ),
+            patch.object(
+                server_module.global_mcp_server_manager,
+                "preflight_token_exchange",
+                preflight,
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": "/mcp/obo", "headers": []},
+                mcp_servers=["obo"],
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                client_ip=None,
+            )
+
+        assert exc.value.status_code == 401
+        headers = exc.value.headers or {}
+        assert "resource_metadata" in (headers.get("WWW-Authenticate") or headers.get("www-authenticate") or "")
+        preflight.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_id_jag_multi_server_route_still_absorbs_the_failure(self):
+        """The aggregate contract is unchanged: with more than one target the preflight does not run,
+        so one server with no stored assertion cannot fail the whole connect."""
+        preflight = AsyncMock(side_effect=HTTPException(status_code=412, detail="no stored assertion"))
+
+        await self._run(self._id_jag_server(), ["idjag", "other"], preflight)
+
+        preflight.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_post_mcp_call_guardrails_return_the_rewritten_result():
     """The result a post_mcp_call guardrail rewrote must be what the caller sends back."""
