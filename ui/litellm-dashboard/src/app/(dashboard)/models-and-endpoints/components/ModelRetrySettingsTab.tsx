@@ -30,6 +30,7 @@ const retryPolicyMap: Record<string, string> = {
   "RateLimitError (429)": "RateLimitErrorRetries",
   "ContentPolicyViolationError (400)": "ContentPolicyViolationErrorRetries",
   "InternalServerError (500)": "InternalServerErrorRetries",
+  "ServiceUnavailableError (503)": "ServiceUnavailableErrorRetries",
 };
 
 const ModelRetrySettingsTab = ({
