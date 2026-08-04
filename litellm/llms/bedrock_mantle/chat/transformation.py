@@ -102,7 +102,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
                 if "reasoning_effort" not in base_params:
                     base_params.append("reasoning_effort")
         except Exception as e:
-            verbose_logger.debug(f"BedrockMantleChatConfig: error checking reasoning support: {e}")
+            verbose_logger.debug("BedrockMantleChatConfig: error checking reasoning support: %s", e)
         return base_params
 
     def get_model_response_iterator(

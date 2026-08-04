@@ -23,4 +23,4 @@ def init_prompts(
         if initialized_prompt:
             prompt_list.append(initialized_prompt)
 
-    verbose_proxy_logger.debug(f"\nPrompt List:{prompt_list}\n")
+    verbose_proxy_logger.debug("\nPrompt List:%s\n", prompt_list)

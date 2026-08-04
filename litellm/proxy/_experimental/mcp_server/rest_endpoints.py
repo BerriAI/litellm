@@ -50,7 +50,7 @@ MCP_AVAILABLE: bool = True
 try:
     importlib.import_module("mcp")
 except ImportError as e:
-    verbose_logger.debug(f"MCP module not found: {e}")
+    verbose_logger.debug("MCP module not found: %s", e)
     MCP_AVAILABLE = False
 
 
@@ -328,8 +328,10 @@ if MCP_AVAILABLE:
                 return {"Authorization": f"Bearer {cred['access_token']}"}
         except Exception as e:
             verbose_logger.warning(
-                f"_get_user_oauth_extra_headers: failed to retrieve credential for "
-                f"user={user_id} server={server_id}: {e}"
+                "_get_user_oauth_extra_headers: failed to retrieve credential for user=%s server=%s: %s",
+                user_id,
+                server_id,
+                e,
             )
         return None
 
@@ -356,7 +358,7 @@ if MCP_AVAILABLE:
             creds = await list_user_oauth_credentials(prisma_client, user_id)
             return {c["server_id"]: c for c in creds if "server_id" in c}
         except Exception as e:
-            verbose_logger.warning(f"_prefetch_user_oauth_creds: failed to prefetch for user={user_id}: {e}")
+            verbose_logger.warning("_prefetch_user_oauth_creds: failed to prefetch for user=%s: %s", user_id, e)
             return {}
 
     def _create_tool_response_objects(tools, server: MCPServer):
@@ -641,7 +643,7 @@ if MCP_AVAILABLE:
             raise
         except MCPServerListError as e:
             fault = classify_list_exception(e)
-            verbose_logger.info(f"Listing tools from {server.name} failed with a {fault.tag} fault")
+            verbose_logger.info("Listing tools from %s failed with a %s fault", server.name, fault.tag)
             raise HTTPException(
                 status_code=list_fault_http_status(fault),
                 detail={
@@ -650,7 +652,7 @@ if MCP_AVAILABLE:
                 },
             ) from e
         except Exception as e:
-            verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
+            verbose_logger.exception("Error getting tools from %s: %s", server.name, e)
             return {
                 "tools": [],
                 "error": "server_error",
@@ -862,7 +864,7 @@ if MCP_AVAILABLE:
                         )
                         list_tools_result.extend(tools_result)
                     except Exception as e:
-                        verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
+                        verbose_logger.exception("Error getting tools from %s: %s", server.name, e)
                         errors.append(
                             f"{get_server_prefix(server)}: {classify_list_exception(e).tag}"
                             if isinstance(e, (MCPServerListError, MCPUpstreamAuthError))
@@ -1052,7 +1054,7 @@ if MCP_AVAILABLE:
                 },
             )
         except BlockedPiiEntityError as e:
-            verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {e}")
+            verbose_logger.error("BlockedPiiEntityError in MCP tool call: %s", e)
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -1063,7 +1065,7 @@ if MCP_AVAILABLE:
                 },
             )
         except GuardrailRaisedException as e:
-            verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {e}")
+            verbose_logger.error("GuardrailRaisedException in MCP tool call: %s", e)
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -1076,16 +1078,16 @@ if MCP_AVAILABLE:
             # A client-forwarded pass-through upstream 401 from either the direct or the virtual call
             # branch. Relay it as a 401 + WWW-Authenticate so the MCP client can re-run upstream OAuth,
             # and log at info: an expected caller-must-reauth signal, not an operator-actionable error.
-            verbose_logger.info(f"MCP tool call relaying upstream HTTP {e.status_code}")
+            verbose_logger.info("MCP tool call relaying upstream HTTP %s", e.status_code)
             raise _relay_upstream_auth_http_exception(e, request)
         except HTTPException as e:
             # Locally generated denials (tool/server permission, IP filtering, BYOK) stay at error level
             # so restriction probing keeps full monitoring visibility; the relayed upstream 401 above is
             # the only status demoted to info.
-            verbose_logger.error(f"HTTPException in MCP tool call: {e}")
+            verbose_logger.error("HTTPException in MCP tool call: %s", e)
             raise e
         except Exception as e:
-            verbose_logger.exception(f"Unexpected error in MCP tool call: {e}")
+            verbose_logger.exception("Unexpected error in MCP tool call: %s", e)
             raise HTTPException(
                 status_code=500,
                 detail={

@@ -23,9 +23,9 @@ def log_retry_error(details):
     exception = details.get("exception")
     tries = details.get("tries")
     if exception:
-        logging.error(f"Confident AI Error: {exception}. Retrying: {tries} time(s)...")
+        logging.error("Confident AI Error: %s. Retrying: %s time(s)...", exception, tries)
     else:
-        logging.error(f"Retrying: {tries} time(s)...")
+        logging.error("Retrying: %s time(s)...", tries)
 
 
 class HttpMethods(Enum):

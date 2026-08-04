@@ -124,10 +124,10 @@ async def create_mcp_list_tools_events(
         )
         events.append(output_item_done_event)
 
-        verbose_logger.debug(f"Created {len(events)} MCP discovery events")
+        verbose_logger.debug("Created %s MCP discovery events", len(events))
 
     except Exception as e:
-        verbose_logger.error(f"Error creating MCP list tools events: {e}")
+        verbose_logger.error("Error creating MCP list tools events: %s", e)
         import traceback
 
         traceback.print_exc()
@@ -513,7 +513,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         response_obj = getattr(chunk, "response", None)
                         if response_obj and hasattr(response_obj, "id"):
                             self._cached_response_id = response_obj.id
-                            verbose_logger.debug(f"Cached response ID: {self._cached_response_id}")
+                            verbose_logger.debug("Cached response ID: %s", self._cached_response_id)
 
                     # After emitting response.output_item.added, transition to MCP discovery
                     if not self.initial_events_emitted and hasattr(chunk, "type"):
@@ -576,7 +576,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             response_obj = getattr(chunk, "response", None)
             if response_obj and hasattr(response_obj, "id"):
                 if response_obj.id != self._cached_response_id:
-                    verbose_logger.debug(f"Updating response ID from {response_obj.id} to {self._cached_response_id}")
+                    verbose_logger.debug(
+                        "Updating response ID from %s to %s", response_obj.id, self._cached_response_id
+                    )
                     response_obj.id = self._cached_response_id
 
         # If auto-execution is enabled, check for completed responses
@@ -607,7 +609,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 params_for_llm[key] = value  # Copy all params as-is since tools are already processed
 
             tools_count = len(params_for_llm.get("tools", [])) if params_for_llm.get("tools") else 0
-            verbose_logger.debug(f"Making LLM call with {tools_count} tools")
+            verbose_logger.debug("Making LLM call with %s tools", tools_count)
             response = await aresponses(**params_for_llm)
 
             # Set the base iterator
@@ -617,15 +619,15 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self.model = getattr(response, "model", self.model)
                 self.litellm_metadata = getattr(response, "litellm_metadata", {})
                 self.custom_llm_provider = getattr(response, "custom_llm_provider", self.custom_llm_provider)
-                verbose_logger.debug(f"Created base iterator: {type(self.base_iterator)}")
+                verbose_logger.debug("Created base iterator: %s", type(self.base_iterator))
             else:
                 # Non-streaming response - this shouldn't happen but handle it
-                verbose_logger.warning(f"Got non-streaming response: {type(response)}")
+                verbose_logger.warning("Got non-streaming response: %s", type(response))
                 self.base_iterator = None
                 self.phase = "finished"
 
         except Exception as e:
-            verbose_logger.error(f"Error creating initial response iterator: {e}")
+            verbose_logger.error("Error creating initial response iterator: %s", e)
             import traceback
 
             traceback.print_exc()
@@ -742,7 +744,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             self._tool_results_for_response = self.collected_response
 
         except Exception as e:
-            verbose_logger.error(f"Error in tool execution: {e}")
+            verbose_logger.error("Error in tool execution: %s", e)
             import traceback
 
             traceback.print_exc()
@@ -807,7 +809,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self._cached_response_id = None
 
         except Exception as e:
-            verbose_logger.error(f"Error creating follow-up iterator: {e}")
+            verbose_logger.error("Error creating follow-up iterator: %s", e)
             import traceback
 
             traceback.print_exc()

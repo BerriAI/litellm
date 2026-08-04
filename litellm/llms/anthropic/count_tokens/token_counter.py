@@ -81,7 +81,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         except AnthropicError as e:
-            verbose_logger.warning(f"Anthropic CountTokens API error: status={e.status_code}, message={e.message}")
+            verbose_logger.warning("Anthropic CountTokens API error: status=%s, message=%s", e.status_code, e.message)
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,
@@ -92,7 +92,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 status_code=e.status_code,
             )
         except Exception as e:
-            verbose_logger.warning(f"Error calling Anthropic CountTokens API: {e}")
+            verbose_logger.warning("Error calling Anthropic CountTokens API: %s", e)
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,

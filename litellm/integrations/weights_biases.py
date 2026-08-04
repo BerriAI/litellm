@@ -42,9 +42,9 @@ try:
                 elif response["object"] == "chat.completion":
                     return self._resolve_chat_completion(request, response, time_elapsed)
                 else:
-                    logger.debug(f"Unknown OpenAI response object: {response['object']}")
+                    logger.debug("Unknown OpenAI response object: %s", response["object"])
             except Exception as e:
-                logger.warning(f"Failed to resolve request/response: {e}")
+                logger.warning("Failed to resolve request/response: %s", e)
             return None
 
         @staticmethod

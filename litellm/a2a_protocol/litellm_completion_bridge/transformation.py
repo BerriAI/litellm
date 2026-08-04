@@ -109,7 +109,7 @@ class A2ACompletionBridgeTransformation:
         extra_body = {**extra_body, "metadata": merged_metadata}
         completion_params["extra_body"] = extra_body
 
-        verbose_logger.debug(f"A2A -> completion forward metadata keys={list(forward_metadata.keys())}")
+        verbose_logger.debug("A2A -> completion forward metadata keys=%s", list(forward_metadata.keys()))
 
     @staticmethod
     def a2a_message_to_openai_messages(
@@ -145,7 +145,9 @@ class A2ACompletionBridgeTransformation:
         # once at run level via extra_body.metadata (LangGraph POST /runs/wait shape).
         openai_message: dict[str, Any] = {"role": openai_role, "content": content}
 
-        verbose_logger.debug(f"A2A -> OpenAI transform: role={role} -> {openai_role}, content_length={len(content)}")
+        verbose_logger.debug(
+            "A2A -> OpenAI transform: role=%s -> %s, content_length=%s", role, openai_role, len(content)
+        )
 
         return [openai_message]
 
@@ -186,7 +188,7 @@ class A2ACompletionBridgeTransformation:
             "result": a2a_message,
         }
 
-        verbose_logger.debug(f"OpenAI -> A2A transform: content_length={len(content)}")
+        verbose_logger.debug("OpenAI -> A2A transform: content_length=%s", len(content))
 
         return a2a_response
 

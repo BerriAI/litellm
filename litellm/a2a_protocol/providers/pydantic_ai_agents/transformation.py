@@ -118,7 +118,7 @@ class PydanticAITransformation:
             status = result.get("status", {})
             state = status.get("state", "")
 
-            verbose_logger.debug(f"Pydantic AI: Poll attempt {attempt + 1}/{max_attempts}, state={state}")
+            verbose_logger.debug("Pydantic AI: Poll attempt %s/%s, state=%s", attempt + 1, max_attempts, state)
 
             if state == "completed":
                 return poll_data
@@ -173,7 +173,7 @@ class PydanticAITransformation:
         # FastA2A uses root endpoint (/) not /messages
         endpoint = api_base.rstrip("/")
 
-        verbose_logger.info(f"Pydantic AI: Sending non-streaming request to {endpoint}")
+        verbose_logger.info("Pydantic AI: Sending non-streaming request to %s", endpoint)
 
         # Send request to Pydantic AI agent using shared async HTTP client
         client = get_async_httpx_client(
@@ -200,7 +200,7 @@ class PydanticAITransformation:
             # Need to poll for completion
             task_id = result.get("id")
             if task_id:
-                verbose_logger.info(f"Pydantic AI: Task {task_id} submitted, polling for completion...")
+                verbose_logger.info("Pydantic AI: Task %s submitted, polling for completion...", task_id)
                 response_data = await PydanticAITransformation._poll_for_completion(
                     client=client,
                     endpoint=endpoint,
@@ -209,7 +209,7 @@ class PydanticAITransformation:
                     agent_extra_headers=agent_extra_headers,
                 )
 
-        verbose_logger.info(f"Pydantic AI: Received completed response for request_id={request_id}")
+        verbose_logger.info("Pydantic AI: Received completed response for request_id=%s", request_id)
 
         return response_data
 
@@ -518,4 +518,4 @@ class PydanticAITransformation:
         }
         yield completed_event
 
-        verbose_logger.info(f"Pydantic AI: Fake streaming completed for request_id={request_id}")
+        verbose_logger.info("Pydantic AI: Fake streaming completed for request_id=%s", request_id)

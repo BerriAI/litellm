@@ -195,7 +195,9 @@ class _ProxyDBLogger(CustomLogger):
         verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
         try:
             verbose_proxy_logger.debug(
-                f"kwargs stream: {kwargs.get('stream', None)} + complete streaming response: {kwargs.get('complete_streaming_response', None)}"
+                "kwargs stream: %s + complete streaming response: %s",
+                kwargs.get("stream", None),
+                kwargs.get("complete_streaming_response", None),
             )
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs=kwargs)
             litellm_params = kwargs.get("litellm_params", {}) or {}
@@ -225,10 +227,14 @@ class _ProxyDBLogger(CustomLogger):
                 user_api_key = metadata.get("user_api_key", None)
                 if kwargs.get("cache_hit", False) is True:
                     response_cost = 0.0
-                    verbose_proxy_logger.debug(f"Cache Hit: response_cost {response_cost}, for user_id {user_id}")
+                    verbose_proxy_logger.debug("Cache Hit: response_cost %s, for user_id %s", response_cost, user_id)
 
                 verbose_proxy_logger.debug(
-                    f"user_api_key {user_api_key}, user_id {user_id}, team_id {team_id}, end_user_id {end_user_id}"
+                    "user_api_key %s, user_id %s, team_id %s, end_user_id %s",
+                    user_api_key,
+                    user_id,
+                    team_id,
+                    end_user_id,
                 )
                 call_type: str | None = kwargs.get("call_type")
                 if _should_track_cost_callback(

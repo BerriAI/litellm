@@ -335,7 +335,10 @@ def get_secret(
                 )
             except Exception as e:  # check if it's in os.environ
                 verbose_logger.error(
-                    f"Defaulting to os.environ value for key={secret_name}. An exception occurred - {e}.\n\n{traceback.format_exc()}"
+                    "Defaulting to os.environ value for key=%s. An exception occurred - %s.\n\n%s",
+                    secret_name,
+                    e,
+                    traceback.format_exc(),
                 )
                 secret = os.getenv(secret_name)
             try:

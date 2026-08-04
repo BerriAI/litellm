@@ -144,7 +144,7 @@ def create_mock_client_factory(config: MockClientConfig):
     ):
         """Monkey-patched AsyncHTTPHandler.post that intercepts API calls."""
         if isinstance(url, str) and _is_mock_url(url):
-            verbose_logger.info(f"[{config.name} MOCK] POST to {url}")
+            verbose_logger.info("[%s MOCK] POST to %s", config.name, url)
             await asyncio.sleep(_MOCK_LATENCY_SECONDS)
             return MockResponse(
                 status_code=config.default_status_code,
@@ -172,7 +172,7 @@ def create_mock_client_factory(config: MockClientConfig):
     def _mock_sync_client_post(self, url, **kwargs):
         """Monkey-patched httpx.Client.post that intercepts API calls."""
         if _is_mock_url(url):
-            verbose_logger.info(f"[{config.name} MOCK] POST to {url} (sync)")
+            verbose_logger.info("[%s MOCK] POST to %s (sync)", config.name, url)
             return MockResponse(
                 status_code=config.default_status_code,
                 json_data=config.default_json_data,
@@ -198,7 +198,7 @@ def create_mock_client_factory(config: MockClientConfig):
     ):
         """Monkey-patched HTTPHandler.post that intercepts API calls."""
         if isinstance(url, str) and _is_mock_url(url):
-            verbose_logger.info(f"[{config.name} MOCK] POST to {url}")
+            verbose_logger.info("[%s MOCK] POST to %s", config.name, url)
             import time
 
             time.sleep(_MOCK_LATENCY_SECONDS)
@@ -236,29 +236,29 @@ def create_mock_client_factory(config: MockClientConfig):
         if _mocks_initialized:
             return
 
-        verbose_logger.debug(f"[{config.name} MOCK] Initializing {config.name} mock client...")
+        verbose_logger.debug("[%s MOCK] Initializing %s mock client...", config.name, config.name)
 
         if config.patch_async_handler and _original_async_handler_post is None:
             from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
             _original_async_handler_post = AsyncHTTPHandler.post
             AsyncHTTPHandler.post = _mock_async_handler_post  # type: ignore
-            verbose_logger.debug(f"[{config.name} MOCK] Patched AsyncHTTPHandler.post")
+            verbose_logger.debug("[%s MOCK] Patched AsyncHTTPHandler.post", config.name)
 
         if config.patch_sync_client and _original_sync_client_post is None:
             _original_sync_client_post = httpx.Client.post
             httpx.Client.post = _mock_sync_client_post  # type: ignore
-            verbose_logger.debug(f"[{config.name} MOCK] Patched httpx.Client.post")
+            verbose_logger.debug("[%s MOCK] Patched httpx.Client.post", config.name)
 
         if config.patch_http_handler and _original_http_handler_post is None:
             from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
             _original_http_handler_post = HTTPHandler.post
             HTTPHandler.post = _mock_http_handler_post  # type: ignore
-            verbose_logger.debug(f"[{config.name} MOCK] Patched HTTPHandler.post")
+            verbose_logger.debug("[%s MOCK] Patched HTTPHandler.post", config.name)
 
         verbose_logger.debug(f"[{config.name} MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS * 1000:.0f}ms")
-        verbose_logger.debug(f"[{config.name} MOCK] {config.name} mock client initialization complete")
+        verbose_logger.debug("[%s MOCK] %s mock client initialization complete", config.name, config.name)
 
         _mocks_initialized = True
 
@@ -274,7 +274,7 @@ def create_mock_client_factory(config: MockClientConfig):
         result = bool(result) if result is not None else False
 
         if result:
-            verbose_logger.info(f"{config.name} Mock Mode: ENABLED - API calls will be mocked")
+            verbose_logger.info("%s Mock Mode: ENABLED - API calls will be mocked", config.name)
 
         return result
 

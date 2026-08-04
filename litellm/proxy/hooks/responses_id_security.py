@@ -83,7 +83,9 @@ class ResponsesIDSecurity(CustomLogger):
         if response_id_user_id and response_id_user_id != user_api_key_dict.user_id:
             if general_settings.get("disable_responses_id_security", False):
                 verbose_proxy_logger.debug(
-                    f"Responses ID Security is disabled. User {user_api_key_dict.user_id} is accessing response id {response_id_user_id} which is not associated with them."
+                    "Responses ID Security is disabled. User %s is accessing response id %s which is not associated with them.",
+                    user_api_key_dict.user_id,
+                    response_id_user_id,
                 )
                 return True
             raise HTTPException(
@@ -94,7 +96,10 @@ class ResponsesIDSecurity(CustomLogger):
         if response_id_team_id and response_id_team_id != user_api_key_dict.team_id:
             if general_settings.get("disable_responses_id_security", False):
                 verbose_proxy_logger.debug(
-                    f"Responses ID Security is disabled. Response belongs to team {response_id_team_id} but user {user_api_key_dict.user_id} is accessing it with team id {user_api_key_dict.team_id}."
+                    "Responses ID Security is disabled. Response belongs to team %s but user %s is accessing it with team id %s.",
+                    response_id_team_id,
+                    user_api_key_dict.user_id,
+                    user_api_key_dict.team_id,
                 )
                 return True
             raise HTTPException(

@@ -289,7 +289,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                     if self._owns_session:
                         self._close_recycled_session(old_session)
                 except Exception as e:
-                    verbose_logger.debug(f"Error closing old session: {e}")
+                    verbose_logger.debug("Error closing old session: %s", e)
 
                 # Create a new session in the current event loop
                 self.client = self._rebuild_session()
@@ -302,9 +302,9 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 try:
                     self._close_recycled_session(old_session)
                 except (RuntimeError, AttributeError, OSError) as close_error:
-                    verbose_logger.debug(f"Error closing old session: {close_error}")
+                    verbose_logger.debug("Error closing old session: %s", close_error)
             self.client = self._rebuild_session()
-            verbose_logger.debug(f"Error checking session loop, created new session: {e}")
+            verbose_logger.debug("Error checking session loop, created new session: %s", e)
 
         return self.client
 
@@ -397,7 +397,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         except RuntimeError as e:
             # Handle the case where session was closed between our check and actual use
             if "Session is closed" in str(e):
-                verbose_logger.debug(f"Session closed during request, retrying with new session: {e}")
+                verbose_logger.debug("Session closed during request, retrying with new session: %s", e)
                 # Dispose of the session that actually faulted. Do NOT read
                 # self.client here: a concurrent task may already have
                 # replaced it with a healthy session that must stay open.
@@ -436,7 +436,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             try:
                 proxy = self._proxy_from_env(request.url)
             except Exception as e:  # pragma: no cover - best effort
-                verbose_logger.debug(f"Error reading proxy env: {e}")
+                verbose_logger.debug("Error reading proxy env: %s", e)
 
         return proxy
 

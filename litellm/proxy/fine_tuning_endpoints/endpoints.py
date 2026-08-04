@@ -112,7 +112,8 @@ async def create_fine_tuning_job(
         # Convert Pydantic model to dict
 
         verbose_proxy_logger.debug(
-            f"Request received by LiteLLM:\n{json.dumps(data, indent=4)}",
+            "Request received by LiteLLM:\n%s",
+            json.dumps(data, indent=4),
         )
 
         # Include original request and headers in the data
@@ -199,7 +200,9 @@ async def create_fine_tuning_job(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.create_fine_tuning_job(): Exception occurred - {e}")
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.create_fine_tuning_job(): Exception occurred - %s", e
+        )
         raise handle_exception_on_proxy(e)
 
 
@@ -338,7 +341,7 @@ async def retrieve_fine_tuning_job(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception(
-            f"litellm.proxy.proxy_server.retrieve_fine_tuning_job(): Exception occurred - {e}"
+            "litellm.proxy.proxy_server.retrieve_fine_tuning_job(): Exception occurred - %s", e
         )
         raise handle_exception_on_proxy(e)
 
@@ -466,7 +469,7 @@ async def list_fine_tuning_jobs(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.list_fine_tuning_jobs(): Exception occurred - {e}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.list_fine_tuning_jobs(): Exception occurred - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -604,5 +607,7 @@ async def cancel_fine_tuning_job(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.cancel_fine_tuning_job(): Exception occurred - {e}")
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.cancel_fine_tuning_job(): Exception occurred - %s", e
+        )
         raise handle_exception_on_proxy(e)

@@ -51,7 +51,7 @@ class KeyManagementEventHooks:
             try:
                 await KeyManagementEventHooks._send_key_created_email(response.model_dump(exclude_none=True))
             except Exception as e:
-                verbose_proxy_logger.warning(f"Failed to send key created email: {e}")
+                verbose_proxy_logger.warning("Failed to send key created email: %s", e)
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
@@ -84,7 +84,7 @@ class KeyManagementEventHooks:
                 team_id=data.team_id,
             )
         except Exception as e:
-            verbose_proxy_logger.warning(f"Failed to store virtual key in secret manager: {e}")
+            verbose_proxy_logger.warning("Failed to store virtual key in secret manager: %s", e)
 
     @staticmethod
     async def async_key_updated_hook(
@@ -168,7 +168,7 @@ class KeyManagementEventHooks:
                     new_secret_name,
                 )
             except Exception as e:
-                verbose_proxy_logger.warning(f"Failed to rotate virtual key in secret manager: {e}")
+                verbose_proxy_logger.warning("Failed to rotate virtual key in secret manager: %s", e)
 
         # Send key rotated email if configured - non-blocking, independent operation
         try:
@@ -177,7 +177,7 @@ class KeyManagementEventHooks:
                 existing_key_alias=existing_key_row.key_alias,
             )
         except Exception as e:
-            verbose_proxy_logger.warning(f"Failed to send key rotated email: {e}")
+            verbose_proxy_logger.warning("Failed to send key rotated email: %s", e)
 
         # store the audit log
         if litellm.store_audit_logs is True and existing_key_row.token is not None:
@@ -273,7 +273,7 @@ class KeyManagementEventHooks:
                     description = getattr(litellm._key_management_settings, "description", None)
                     optional_params = await KeyManagementEventHooks._get_secret_manager_optional_params(team_id)
                     verbose_proxy_logger.debug(
-                        f"Creating secret with {secret_name} and tags={tags} and description={description}"
+                        "Creating secret with %s and tags=%s and description=%s", secret_name, tags, description
                     )
 
                     await litellm.secret_manager_client.async_write_secret(
@@ -355,7 +355,8 @@ class KeyManagementEventHooks:
                             )
                         else:
                             verbose_proxy_logger.warning(
-                                f"KeyManagementEventHooks._delete_virtual_key_from_secret_manager: Key alias not found for key {key.token}. Skipping deletion from secret manager."
+                                "KeyManagementEventHooks._delete_virtual_key_from_secret_manager: Key alias not found for key %s. Skipping deletion from secret manager.",
+                                key.token,
                             )
 
     @staticmethod
@@ -385,7 +386,7 @@ class KeyManagementEventHooks:
                 user_api_key_cache=user_api_key_cache,
             )
         except Exception as exc:  # pragma: no cover - defensive logging
-            verbose_proxy_logger.debug(f"Unable to load team metadata for team_id={team_id}: {exc}")
+            verbose_proxy_logger.debug("Unable to load team metadata for team_id=%s: %s", team_id, exc)
             return None
 
         metadata = getattr(team_obj, "metadata", None)

@@ -920,7 +920,7 @@ class AnthropicPassthroughLoggingHandler:
                 }
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in batch_creation_handler: {e}")
+            verbose_proxy_logger.error("Error in batch_creation_handler: %s", e)
             # Return basic response on error
             litellm_model_response = ModelResponse()
             litellm_model_response.id = str(uuid.uuid4())
@@ -1017,7 +1017,9 @@ class AnthropicPassthroughLoggingHandler:
                 )
 
                 verbose_proxy_logger.info(
-                    f"Stored Anthropic batch managed object with unified_object_id={unified_object_id}, batch_id={model_object_id}"
+                    "Stored Anthropic batch managed object with unified_object_id=%s, batch_id=%s",
+                    unified_object_id,
+                    model_object_id,
                 )
             else:
                 verbose_proxy_logger.warning(
@@ -1025,7 +1027,7 @@ class AnthropicPassthroughLoggingHandler:
                 )
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error storing Anthropic batch managed object: {e}")
+            verbose_proxy_logger.error("Error storing Anthropic batch managed object: %s", e)
 
     @staticmethod
     def get_actual_model_id_from_router(model_name: str) -> str:
@@ -1038,14 +1040,14 @@ class AnthropicPassthroughLoggingHandler:
             if model_ids and len(model_ids) > 0:
                 # Use the first model ID found
                 actual_model_id = model_ids[0]
-                verbose_proxy_logger.info(f"Found model ID in router: {actual_model_id}")
+                verbose_proxy_logger.info("Found model ID in router: %s", actual_model_id)
                 return actual_model_id
             else:
                 # Fallback to model name
                 actual_model_id = model_name
-                verbose_proxy_logger.warning(f"Model not found in router, using model name: {actual_model_id}")
+                verbose_proxy_logger.warning("Model not found in router, using model name: %s", actual_model_id)
                 return actual_model_id
         else:
             # Fallback if router is not available
-            verbose_proxy_logger.warning(f"Router not available, using model name: {model_name}")
+            verbose_proxy_logger.warning("Router not available, using model name: %s", model_name)
             return model_name

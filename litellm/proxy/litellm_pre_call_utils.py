@@ -905,7 +905,7 @@ class LiteLLMProxyRequestSetup:
 
         user = LiteLLMProxyRequestSetup._get_case_insensitive_header(headers, header_name)
         if user is not None:
-            verbose_logger.info(f'found user "{user}" in header "{header_name}"')
+            verbose_logger.info('found user "%s" in header "%s"', user, header_name)
 
         return user
 
@@ -918,7 +918,7 @@ class LiteLLMProxyRequestSetup:
             return None
         for header, value in headers.items():
             if header.lower() == "openai-organization":
-                verbose_logger.info(f"found openai org id: {value}, sending to llm")
+                verbose_logger.info("found openai org id: %s, sending to llm", value)
                 return value
         return None
 
@@ -1059,14 +1059,14 @@ class LiteLLMProxyRequestSetup:
 
         if agent_id_from_header:
             metadata_from_headers["agent_id"] = agent_id_from_header
-            verbose_proxy_logger.debug(f"Extracted agent_id from header: {agent_id_from_header}")
+            verbose_proxy_logger.debug("Extracted agent_id from header: %s", agent_id_from_header)
 
         if chain_id:
             metadata_from_headers["trace_id"] = chain_id
             metadata_from_headers["session_id"] = chain_id
             data["litellm_session_id"] = chain_id
             data["litellm_trace_id"] = chain_id
-            verbose_proxy_logger.debug(f"Extracted chain_id from header (trace-id/session-id): {chain_id}")
+            verbose_proxy_logger.debug("Extracted chain_id from header (trace-id/session-id): %s", chain_id)
         else:
             body_metadata = data.get("metadata")
             session_id = _get_anthropic_session_id_from_metadata(body_metadata)
@@ -1475,8 +1475,8 @@ async def add_litellm_data_to_request(
         allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
     )
     _logging_safe_headers = redact_credential_headers(_headers)
-    verbose_proxy_logger.debug(f"Request Headers: {_logging_safe_headers}")
-    verbose_proxy_logger.debug(f"Raw Headers: {_raw_headers}")
+    verbose_proxy_logger.debug("Request Headers: %s", _logging_safe_headers)
+    verbose_proxy_logger.debug("Raw Headers: %s", _raw_headers)
 
     if forward_llm_auth and "x-api-key" in _headers:
         data["api_key"] = _headers["x-api-key"]
@@ -1579,7 +1579,7 @@ async def add_litellm_data_to_request(
             data["metadata"] = safe_json_loads(data["metadata"])
             if not isinstance(data["metadata"], dict):
                 verbose_proxy_logger.warning(
-                    f"Failed to parse 'metadata' as JSON dict. Received value: {data['metadata']}"
+                    "Failed to parse 'metadata' as JSON dict. Received value: %s", data["metadata"]
                 )
         # requester_metadata is snapshotted AFTER the strip below so
         # downstream consumers (e.g. PANW guardrail reading user_ip /
@@ -1592,7 +1592,7 @@ async def add_litellm_data_to_request(
             parsed_litellm_metadata = safe_json_loads(data["litellm_metadata"])
             if not isinstance(parsed_litellm_metadata, dict):
                 verbose_proxy_logger.warning(
-                    f"Failed to parse 'litellm_metadata' as JSON dict. Received value: {data['litellm_metadata']}"
+                    "Failed to parse 'litellm_metadata' as JSON dict. Received value: %s", data["litellm_metadata"]
                 )
             else:
                 data["litellm_metadata"] = parsed_litellm_metadata
@@ -2409,7 +2409,7 @@ def _add_guardrails_from_policies_in_metadata(
     if not policy_names:
         return
 
-    verbose_proxy_logger.debug(f"Policy engine: resolving guardrails from key/team policies: {policy_names}")
+    verbose_proxy_logger.debug("Policy engine: resolving guardrails from key/team policies: %s", policy_names)
 
     # Check if policy registry is initialized
     registry = get_policy_registry()
@@ -2434,10 +2434,10 @@ def _add_guardrails_from_policies_in_metadata(
             )
             resolved_guardrails.update(resolved_policy.guardrails)
             verbose_proxy_logger.debug(
-                f"Policy engine: resolved guardrails from policy '{policy_name}': {resolved_policy.guardrails}"
+                "Policy engine: resolved guardrails from policy '%s': %s", policy_name, resolved_policy.guardrails
             )
         else:
-            verbose_proxy_logger.warning(f"Policy engine: policy '{policy_name}' not found in registry")
+            verbose_proxy_logger.warning("Policy engine: policy '%s' not found in registry", policy_name)
 
     if not resolved_guardrails:
         return
@@ -2461,7 +2461,7 @@ def _add_guardrails_from_policies_in_metadata(
     data[metadata_variable_name]["applied_policies"].extend(list(policy_names))
 
     verbose_proxy_logger.debug(
-        f"Policy engine: added guardrails from key/team policies to request metadata: {list(resolved_guardrails)}"
+        "Policy engine: added guardrails from key/team policies to request metadata: %s", list(resolved_guardrails)
     )
 
 
@@ -2592,13 +2592,13 @@ def _match_and_track_policies(
     matching_policy_names = [m["policy_name"] for m in matches_with_reasons]
     policy_reasons = {m["policy_name"]: m["matched_via"] for m in matches_with_reasons}
 
-    verbose_proxy_logger.debug(f"Policy engine: matched policies via attachments: {matching_policy_names}")
+    verbose_proxy_logger.debug("Policy engine: matched policies via attachments: %s", matching_policy_names)
 
     # Combine attachment-based policies with dynamic request body policies
     all_policy_names = set(matching_policy_names)
     if request_body_policies and isinstance(request_body_policies, list):
         all_policy_names.update(request_body_policies)
-        verbose_proxy_logger.debug(f"Policy engine: added dynamic policies from request body: {request_body_policies}")
+        verbose_proxy_logger.debug("Policy engine: added dynamic policies from request body: %s", request_body_policies)
 
     if not all_policy_names:
         return [], {}
@@ -2610,7 +2610,7 @@ def _match_and_track_policies(
         policies=policies_override,
     )
 
-    verbose_proxy_logger.debug(f"Policy engine: applied policies (conditions matched): {applied_policy_names}")
+    verbose_proxy_logger.debug("Policy engine: applied policies (conditions matched): %s", applied_policy_names)
 
     # Track applied policies in metadata for response headers
     for policy_name in applied_policy_names:
@@ -2641,7 +2641,7 @@ def _apply_resolved_guardrails_to_metadata(
         policy_names=policy_names,
     )
 
-    verbose_proxy_logger.debug(f"Policy engine: resolved guardrails: {resolved_guardrails}")
+    verbose_proxy_logger.debug("Policy engine: resolved guardrails: %s", resolved_guardrails)
 
     # Resolve pipelines from matching policies
     pipelines = PolicyResolver.resolve_pipelines_for_context(
@@ -2661,7 +2661,9 @@ def _apply_resolved_guardrails_to_metadata(
         data[metadata_variable_name]["_guardrail_pipelines"] = pipelines
         data[metadata_variable_name]["_pipeline_managed_guardrails"] = pipeline_managed_guardrails
         verbose_proxy_logger.debug(
-            f"Policy engine: resolved {len(pipelines)} pipeline(s), managed guardrails: {pipeline_managed_guardrails}"
+            "Policy engine: resolved %s pipeline(s), managed guardrails: %s",
+            len(pipelines),
+            pipeline_managed_guardrails,
         )
 
     if not resolved_guardrails and not pipelines:
@@ -2678,7 +2680,7 @@ def _apply_resolved_guardrails_to_metadata(
     combined -= pipeline_managed_guardrails
     data[metadata_variable_name]["guardrails"] = list(combined)
 
-    verbose_proxy_logger.debug(f"Policy engine: added guardrails to request metadata: {list(combined)}")
+    verbose_proxy_logger.debug("Policy engine: added guardrails to request metadata: %s", list(combined))
 
 
 async def add_guardrails_from_policy_engine(
@@ -2714,8 +2716,9 @@ async def add_guardrails_from_policy_engine(
 
     registry = get_policy_registry()
     verbose_proxy_logger.debug(
-        f"Policy engine: registry initialized={registry.is_initialized()}, "
-        f"policy_count={len(registry.get_all_policies())}"
+        "Policy engine: registry initialized=%s, policy_count=%s",
+        registry.is_initialized(),
+        len(registry.get_all_policies()),
     )
     if not registry.is_initialized():
         verbose_proxy_logger.debug("Policy engine not initialized, skipping policy matching")
@@ -2733,8 +2736,11 @@ async def add_guardrails_from_policy_engine(
     )
 
     verbose_proxy_logger.debug(
-        f"Policy engine: matching policies for context team_alias={context.team_alias}, "
-        f"key_alias={context.key_alias}, model={context.model}, tags={context.tags}"
+        "Policy engine: matching policies for context team_alias=%s, key_alias=%s, model=%s, tags=%s",
+        context.team_alias,
+        context.key_alias,
+        context.model,
+        context.tags,
     )
 
     # Separate policy names from policy version IDs (policy_<uuid>)
@@ -2760,9 +2766,9 @@ async def add_guardrails_from_policy_engine(
             pname, policy = result
             merged_policies[pname] = policy
             fetched_policy_names.append(pname)
-            verbose_proxy_logger.debug(f"Policy engine: loaded version by ID policy_{policy_id} -> {pname}")
+            verbose_proxy_logger.debug("Policy engine: loaded version by ID policy_%s -> %s", policy_id, pname)
         else:
-            verbose_proxy_logger.debug(f"Policy engine: policy version {policy_id} not found in cache, skipping")
+            verbose_proxy_logger.debug("Policy engine: policy version %s not found in cache, skipping", policy_id)
 
     # Build request body list: names + policy names from fetched versions
     request_body_policies = request_body_names + fetched_policy_names

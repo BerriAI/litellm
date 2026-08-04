@@ -264,7 +264,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         elif action_type == "anonymize_action":
             return self._anonymize_request(res, data)
         else:
-            verbose_proxy_logger.error(f"Cato: {action_type} action")
+            verbose_proxy_logger.error("Cato: %s action", action_type)
         return data
 
     def _handle_block_action(self, analysis_result: Any, required_action: Any) -> None:
@@ -555,7 +555,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                         return
                     if blocking_message := result.get("blocking_message"):
                         raise StreamingCallbackError(blocking_message)
-                    verbose_proxy_logger.error(f"Unknown message received from Cato: {result}")
+                    verbose_proxy_logger.error("Unknown message received from Cato: %s", result)
                     return
             finally:
                 await self._cancel_background_task(sender)

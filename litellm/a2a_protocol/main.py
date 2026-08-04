@@ -204,7 +204,7 @@ async def _send_message_via_completion_bridge(
 
     Requires request; api_base is optional for providers that derive endpoint from model.
     """
-    verbose_logger.info(f"A2A using completion bridge: provider={custom_llm_provider}, api_base={api_base}")
+    verbose_logger.info("A2A using completion bridge: provider=%s, api_base=%s", custom_llm_provider, api_base)
 
     from litellm.a2a_protocol.litellm_completion_bridge.handler import (
         A2ACompletionBridgeHandler,
@@ -463,7 +463,7 @@ async def asend_message(
 
     agent_name = _get_a2a_model_info(a2a_client, kwargs)
 
-    verbose_logger.info(f"A2A send_message request_id={request.id}, agent={agent_name}")
+    verbose_logger.info("A2A send_message request_id=%s, agent=%s", request.id, agent_name)
 
     # Get agent card URL for localhost retry logic
     agent_card = _get_a2a_client_agent_card(a2a_client)
@@ -478,7 +478,7 @@ async def asend_message(
         agent_name=agent_name,
     )
 
-    verbose_logger.info(f"A2A send_message completed, request_id={request.id}")
+    verbose_logger.info("A2A send_message completed, request_id=%s", request.id)
 
     # Wrap in LiteLLM response type for _hidden_params support
     response = LiteLLMSendMessageResponse.from_a2a_response(a2a_response, request_id=str(request.id))
@@ -640,7 +640,7 @@ async def asend_message_streaming(
             raise ValueError("request is required for completion bridge")
         # api_base is optional for providers that derive endpoint from model (e.g., bedrock/agentcore)
 
-        verbose_logger.info(f"A2A streaming using completion bridge: provider={custom_llm_provider}")
+        verbose_logger.info("A2A streaming using completion bridge: provider=%s", custom_llm_provider)
 
         from litellm.a2a_protocol.litellm_completion_bridge.handler import (
             A2ACompletionBridgeHandler,
@@ -697,7 +697,7 @@ async def asend_message_streaming(
             proxy_server_request=proxy_server_request,
         )
 
-    verbose_logger.info(f"A2A send_message_streaming request_id={request.id}, agent={agent_name}")
+    verbose_logger.info("A2A send_message_streaming request_id=%s, agent=%s", request.id, agent_name)
 
     agent_card = _get_a2a_client_agent_card(a2a_client)
     card_url = get_agent_card_url(agent_card) if agent_card else None
@@ -759,7 +759,7 @@ async def create_a2a_client(
             "The 'a2a' package is required for A2A agent invocation. Install it with: pip install a2a-sdk"
         )
 
-    verbose_logger.info(f"Creating A2A client for {base_url}")
+    verbose_logger.info("Creating A2A client for %s", base_url)
 
     # Use get_async_httpx_client with per-agent params so that different agents
     # (with different extra_headers) get separate cached clients.  The params
@@ -781,7 +781,7 @@ async def create_a2a_client(
     httpx_client = _async_handler.client
     if extra_headers:
         httpx_client.headers.update(extra_headers)
-        verbose_proxy_logger.debug(f"A2A client created with extra_headers={list(extra_headers.keys())}")
+        verbose_proxy_logger.debug("A2A client created with extra_headers=%s", list(extra_headers.keys()))
 
     a2a_client = await create_client(  # pyright: ignore[reportOptionalCall]
         base_url,
@@ -798,7 +798,7 @@ async def create_a2a_client(
     if agent_card is not None:
         a2a_client._litellm_agent_card = agent_card  # type: ignore[attr-defined]
 
-    verbose_logger.info(f"A2A client created for {base_url}")
+    verbose_logger.info("A2A client created for %s", base_url)
 
     return a2a_client
 
@@ -824,7 +824,7 @@ async def aget_agent_card(
             "The 'a2a' package is required for A2A agent invocation. Install it with: pip install a2a-sdk"
         )
 
-    verbose_logger.info(f"Fetching agent card from {base_url}")
+    verbose_logger.info("Fetching agent card from %s", base_url)
 
     # Use LiteLLM's cached httpx client
     http_handler = get_async_httpx_client(
@@ -839,5 +839,5 @@ async def aget_agent_card(
     )
     agent_card = await resolver.get_agent_card()
 
-    verbose_logger.info(f"Fetched agent card: {agent_card.name if hasattr(agent_card, 'name') else 'unknown'}")
+    verbose_logger.info("Fetched agent card: %s", agent_card.name if hasattr(agent_card, "name") else "unknown")
     return agent_card

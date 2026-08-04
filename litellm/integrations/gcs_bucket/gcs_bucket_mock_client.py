@@ -45,7 +45,7 @@ async def _mock_async_handler_get(self, url, params=None, headers=None, follow_r
     """Monkey-patched AsyncHTTPHandler.get that intercepts GCS calls."""
     # Only mock GCS API calls
     if isinstance(url, str) and "storage.googleapis.com" in url:
-        verbose_logger.info(f"[GCS MOCK] GET to {url}")
+        verbose_logger.info("[GCS MOCK] GET to %s", url)
         await asyncio.sleep(_MOCK_LATENCY_SECONDS)
         # Return a minimal but valid StandardLoggingPayload JSON string as bytes
         # This matches what GCS returns when downloading with ?alt=media
@@ -117,7 +117,7 @@ async def _mock_async_handler_delete(
     """Monkey-patched AsyncHTTPHandler.delete that intercepts GCS calls."""
     # Only mock GCS API calls
     if isinstance(url, str) and "storage.googleapis.com" in url:
-        verbose_logger.info(f"[GCS MOCK] DELETE to {url}")
+        verbose_logger.info("[GCS MOCK] DELETE to %s", url)
         await asyncio.sleep(_MOCK_LATENCY_SECONDS)
         # DELETE returns 204 No Content with empty body (not JSON)
         return MockResponse(
