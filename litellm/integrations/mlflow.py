@@ -62,7 +62,10 @@ class MlflowLogger(CustomLogger):
 
         inputs = self._construct_input(kwargs)
         input_messages = inputs.get("messages", [])
-        output_messages = [c.message.model_dump(exclude_none=True) for c in getattr(response_obj, "choices", [])]
+        output_messages = [
+            c.message.model_dump(exclude_none=True)
+            for c in getattr(response_obj, "choices", [])
+        ]
         if messages := [*input_messages, *output_messages]:
             set_span_chat_messages(span, messages)
         if tools := inputs.get("tools"):
@@ -129,7 +132,9 @@ class MlflowLogger(CustomLogger):
 
         # If this is the final chunk, end the span. The final chunk
         # has the assembled streaming response (key differs between sync/async paths).
-        final_response = kwargs.get("complete_streaming_response") or kwargs.get("async_complete_streaming_response")
+        final_response = kwargs.get("complete_streaming_response") or kwargs.get(
+            "async_complete_streaming_response"
+        )
         if final_response:
             end_time_ns = int(end_time.timestamp() * 1e9)
 
@@ -153,7 +158,9 @@ class MlflowLogger(CustomLogger):
                 span.add_event(
                     SpanEvent(
                         name="streaming_chunk",
-                        attributes={"delta": json.dumps(choice.delta.model_dump, default=str)},
+                        attributes={
+                            "delta": json.dumps(choice.delta.model_dump, default=str)
+                        },
                     )
                 )
         except Exception:
@@ -187,17 +194,21 @@ class MlflowLogger(CustomLogger):
             "call_type": kwargs.get("call_type"),
             "model": kwargs.get("model"),
         }
-        standard_obj: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
+        standard_obj: StandardLoggingPayload | None = kwargs.get(
+            "standard_logging_object"
+        )
         if standard_obj:
+            token_usage = {
+                "input_tokens": standard_obj.get("prompt_tokens"),
+                "output_tokens": standard_obj.get("completion_tokens"),
+                "total_tokens": standard_obj.get("total_tokens"),
+            }
+            token_usage.update(self._extract_cache_token_usage(standard_obj))
             attributes.update(
                 {
                     "api_base": standard_obj.get("api_base"),
                     "cache_hit": standard_obj.get("cache_hit"),
-                    "mlflow.chat.tokenUsage": {
-                        "input_tokens": standard_obj.get("prompt_tokens"),
-                        "output_tokens": standard_obj.get("completion_tokens"),
-                        "total_tokens": standard_obj.get("total_tokens"),
-                    },
+                    "mlflow.chat.tokenUsage": token_usage,
                     "raw_llm_response": standard_obj.get("response"),
                     "response_cost": standard_obj.get("response_cost"),
                     "saved_cache_cost": standard_obj.get("saved_cache_cost"),
@@ -216,6 +227,40 @@ class MlflowLogger(CustomLogger):
                 }
             )
         return attributes
+
+    def _extract_cache_token_usage(self, standard_obj) -> dict:
+        """
+        Extract cache token counts from the raw response usage.
+
+        The flattened logging payload does not carry cache token fields, but MLflow
+        needs them to price cached tokens at their discounted rates. Anthropic-style
+        usage reports top-level cache fields while OpenAI-style usage nests them
+        under prompt_tokens_details.
+        """
+        response = standard_obj.get("response")
+        usage = response.get("usage") if isinstance(response, dict) else None
+        if not isinstance(usage, dict):
+            return {}
+
+        details = usage.get("prompt_tokens_details")
+        details = details if isinstance(details, dict) else {}
+
+        cache_read = usage.get("cache_read_input_tokens")
+        if cache_read is None:
+            cache_read = details.get("cached_tokens")
+
+        cache_creation = usage.get("cache_creation_input_tokens")
+        if cache_creation is None:
+            cache_creation = details.get("cache_creation_tokens")
+        if cache_creation is None:
+            cache_creation = details.get("cache_write_tokens")
+
+        cache_token_usage = {}
+        if cache_read is not None:
+            cache_token_usage["cache_read_input_tokens"] = cache_read
+        if cache_creation is not None:
+            cache_token_usage["cache_creation_input_tokens"] = cache_creation
+        return cache_token_usage
 
     def _get_span_type(self, call_type: str | None) -> str:
         from mlflow.entities import SpanType
@@ -260,7 +305,9 @@ class MlflowLogger(CustomLogger):
                 span_type=span_type,
                 inputs=inputs,
                 attributes=attributes,
-                tags=self._transform_tag_list_to_dict(attributes.get("request_tags", [])),
+                tags=self._transform_tag_list_to_dict(
+                    attributes.get("request_tags", [])
+                ),
                 start_time_ns=start_time_ns,
             )
 

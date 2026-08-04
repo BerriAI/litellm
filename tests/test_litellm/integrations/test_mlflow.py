@@ -141,6 +141,105 @@ def test_mlflow_token_usage_attribute_structure():
         }
 
 
+def test_mlflow_token_usage_includes_anthropic_style_cache_fields():
+    """Cache token counts from the raw response usage are lifted into tokenUsage."""
+
+    mock_mlflow_tracking = MagicMock()
+    mock_mlflow_tracking.MlflowClient = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "mlflow": MagicMock(),
+            "mlflow.tracking": mock_mlflow_tracking,
+            "mlflow.tracing.utils": MagicMock(),
+        },
+    ):
+        from litellm.integrations.mlflow import MlflowLogger
+
+        mlflow_logger = MlflowLogger()
+
+        attrs = mlflow_logger._extract_attributes(  # type: ignore
+            {
+                "litellm_call_id": "123",
+                "call_type": "completion",
+                "model": "claude-haiku-4-5",
+                "standard_logging_object": {
+                    "prompt_tokens": 10500,
+                    "completion_tokens": 200,
+                    "total_tokens": 10700,
+                    "response": {
+                        "usage": {
+                            "prompt_tokens": 10500,
+                            "completion_tokens": 200,
+                            "total_tokens": 10700,
+                            "cache_read_input_tokens": 10000,
+                            "cache_creation_input_tokens": 300,
+                        }
+                    },
+                },
+            }
+        )
+
+        assert attrs["mlflow.chat.tokenUsage"] == {
+            "input_tokens": 10500,
+            "output_tokens": 200,
+            "total_tokens": 10700,
+            "cache_read_input_tokens": 10000,
+            "cache_creation_input_tokens": 300,
+        }
+
+
+def test_mlflow_token_usage_includes_openai_style_cached_tokens():
+    """OpenAI-style responses nest cache counts under prompt_tokens_details."""
+
+    mock_mlflow_tracking = MagicMock()
+    mock_mlflow_tracking.MlflowClient = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "mlflow": MagicMock(),
+            "mlflow.tracking": mock_mlflow_tracking,
+            "mlflow.tracing.utils": MagicMock(),
+        },
+    ):
+        from litellm.integrations.mlflow import MlflowLogger
+
+        mlflow_logger = MlflowLogger()
+
+        attrs = mlflow_logger._extract_attributes(  # type: ignore
+            {
+                "litellm_call_id": "123",
+                "call_type": "completion",
+                "model": "gpt-4o",
+                "standard_logging_object": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 10,
+                    "total_tokens": 110,
+                    "response": {
+                        "usage": {
+                            "prompt_tokens": 100,
+                            "completion_tokens": 10,
+                            "total_tokens": 110,
+                            "prompt_tokens_details": {
+                                "cached_tokens": 80,
+                                "audio_tokens": None,
+                            },
+                        }
+                    },
+                },
+            }
+        )
+
+        assert attrs["mlflow.chat.tokenUsage"] == {
+            "input_tokens": 100,
+            "output_tokens": 10,
+            "total_tokens": 110,
+            "cache_read_input_tokens": 80,
+        }
+
+
 def _mock_mlflow_modules():
     mock_tracking = MagicMock()
     mock_tracking.MlflowClient = MagicMock()
