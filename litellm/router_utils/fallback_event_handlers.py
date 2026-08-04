@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -63,7 +64,9 @@ def _trigger_cooldown_for_failed_deployment(
 
         deployment_dict = litellm_router.get_model_info(id=deployment_id)
         deployment_cooldown = (
-            (deployment_dict.get("litellm_params") or {}).get("cooldown_time") if deployment_dict is not None else None
+            (deployment_dict.get("litellm_params") or MappingProxyType({})).get("cooldown_time")
+            if deployment_dict is not None
+            else None
         )
         exception_headers = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
             original_exception=exception
