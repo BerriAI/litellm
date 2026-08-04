@@ -1326,6 +1326,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "FLEXAI",
+    "provider_display_name": "FlexAI",
+    "litellm_provider": "flexai",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": "Your FlexAI API key from platform.flex.ai",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.flex.ai/v1",
+        "tooltip": "Defaults to https://api.flex.ai/v1",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "flexai/gpt-oss-120b"
+  },
+  {
     "provider": "FRIENDLIAI",
     "provider_display_name": "Friendliai",
     "litellm_provider": "friendliai",

@@ -200,5 +200,12 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "flexai": {
+    "base_url": "https://api.flex.ai/v1",
+    "api_key_env": "FLEXAI_API_KEY",
+    "api_base_env": "FLEXAI_API_BASE",
+    "base_class": "openai_gpt",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   }
 }
