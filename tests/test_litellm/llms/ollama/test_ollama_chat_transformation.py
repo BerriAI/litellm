@@ -478,6 +478,55 @@ class TestOllamaToolCalling:
         assert result.choices[0].finish_reason == "stop"
         assert result.choices[0].message.tool_calls is None
 
+    def test_finish_reason_tool_calls_streaming_tool_calls_in_earlier_chunk(self):
+        """Streaming: tool_calls streamed before the final done chunk must produce finish_reason='tool_calls'.
+
+        Ollama emits tool_calls in a chunk with done=False, then a separate final
+        chunk with done=True, an empty message, and done_reason='stop'. The final
+        chunk must still report finish_reason='tool_calls' per the OpenAI spec.
+        Regression test for https://github.com/BerriAI/litellm/issues/35663
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        tool_call_chunk = {
+            "model": "qwen3:14b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"location": "San Francisco"},
+                        }
+                    }
+                ],
+            },
+            "done": False,
+        }
+
+        done_chunk = {
+            "model": "qwen3:14b",
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 100,
+            "eval_count": 50,
+        }
+
+        tool_call_result = iterator.chunk_parser(tool_call_chunk)
+        assert tool_call_result.choices[0].delta.tool_calls is not None
+        assert tool_call_result.choices[0].finish_reason is None
+
+        result = iterator.chunk_parser(done_chunk)
+
+        assert (
+            result.choices[0].finish_reason == "tool_calls"
+        ), f"Expected 'tool_calls' when tool calls were streamed in an earlier chunk, got '{result.choices[0].finish_reason}'"
+
 
 class TestOllamaFinishReasonLength:
     """Tests for done_reason 'length' → finish_reason 'length' mapping.
