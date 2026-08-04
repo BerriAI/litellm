@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from itertools import chain
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Union, cast, overload
 
 from litellm import _custom_logger_compatible_callbacks_literal
@@ -165,6 +166,7 @@ if TYPE_CHECKING:
     from prisma.client import TransactionManager
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
 
     Span = Union[_Span, Any]
@@ -6378,11 +6380,12 @@ async def get_available_models_for_user(
 
     # Get team models
     team_models: list[str] = user_api_key_dict.team_models
+    team_object: LiteLLM_TeamTableCachedObj | None = None
 
     # If specific team_id is provided, validate and get team models
     if team_id and prisma_client and proxy_logging_obj and user_api_key_cache:
         key_models = []
-        team_object: Final = await get_team_object(
+        team_object = await get_team_object(
             team_id=team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -6415,7 +6418,106 @@ async def get_available_models_for_user(
         team_id=effective_team_id,
     )
 
-    return all_models
+    if only_model_access_groups:
+        return all_models
+
+    access_group_models: Final = await _get_models_from_unified_access_groups(
+        user_api_key_dict=user_api_key_dict,
+        team_object=team_object,
+        effective_team_id=effective_team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if not access_group_models:
+        return all_models
+
+    # mutable-ok: the documented return contract is list[str]; built in one shot, never mutated
+    return list(dict.fromkeys(chain(all_models, access_group_models)))
+
+
+async def _get_team_access_group_ids(
+    team_object: Optional["LiteLLM_TeamTableCachedObj"],
+    effective_team_id: str | None,
+    prisma_client: Optional["PrismaClient"],
+    user_api_key_cache: Optional["UserApiKeyCache"],
+    proxy_logging_obj: Optional["ProxyLogging"],
+) -> tuple[str, ...]:
+    """
+    Access group ids assigned to the caller's team, using the already resolved
+    team object when available and otherwise looking the team up (cache backed).
+    """
+    from litellm.proxy.auth.auth_checks import get_team_object
+
+    if team_object is not None:
+        return tuple(team_object.access_group_ids or ())
+
+    if not effective_team_id or prisma_client is None or user_api_key_cache is None:
+        return ()
+
+    try:
+        fetched_team: Final = await get_team_object(
+            team_id=effective_team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception:
+        verbose_proxy_logger.debug(
+            "Could not resolve team %s while listing access group models",
+            effective_team_id,
+        )
+        return ()
+
+    return tuple(fetched_team.access_group_ids or ())
+
+
+async def _get_models_from_unified_access_groups(
+    user_api_key_dict: "UserAPIKeyAuth",
+    team_object: Optional["LiteLLM_TeamTableCachedObj"],
+    effective_team_id: str | None,
+    prisma_client: Optional["PrismaClient"],
+    user_api_key_cache: Optional["UserApiKeyCache"],
+    proxy_logging_obj: Optional["ProxyLogging"],
+) -> tuple[str, ...]:
+    """
+    Model names granted through unified access groups (LiteLLM_AccessGroupTable)
+    assigned to the caller's team or key.
+
+    Mirrors the auth-time resolution in can_team_access_model and
+    _key_access_group_grants_model, so a model the caller can successfully call
+    is not missing from the listing.
+    """
+    from litellm.proxy.auth.auth_checks import (
+        _get_models_from_access_groups,
+        get_authorized_resources_from_key_access_groups,
+    )
+
+    team_access_group_ids: Final = await _get_team_access_group_ids(
+        team_object=team_object,
+        effective_team_id=effective_team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    team_group_models: Final = (
+        await _get_models_from_access_groups(
+            access_group_ids=team_access_group_ids,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if team_access_group_ids
+        else ()
+    )
+    key_group_models: Final = await get_authorized_resources_from_key_access_groups(
+        valid_token=user_api_key_dict,
+        team_object=team_object,
+        resource_field="access_model_names",
+    )
+
+    return tuple(dict.fromkeys(chain(team_group_models, key_group_models)))
 
 
 def create_model_info_response(

@@ -404,3 +404,171 @@ async def test_get_available_models_for_user_error_path_complete_list_raises(
             general_settings={},
             user_model=None,
         )
+
+
+def _access_group_key(team_id="team-1", team_models=None, key_access_group_ids=None):
+    return UserAPIKeyAuth(
+        api_key="sk-test-key",
+        user_id="user-1",
+        team_id=team_id,
+        models=[],
+        team_models=team_models if team_models is not None else ["model-a"],
+        access_group_ids=key_access_group_ids,
+    )
+
+
+def _patch_team_access_groups(monkeypatch, access_group_ids, group_models):
+    """Stub the unified access group DB boundary used by the listing."""
+    team_lookups = []
+    resolved_for = []
+
+    async def _fake_get_team_object(**kwargs):
+        team_lookups.append(kwargs["team_id"])
+        team = MagicMock()
+        team.access_group_ids = access_group_ids
+        return team
+
+    async def _fake_models_from_access_groups(**kwargs):
+        resolved_for.append(list(kwargs["access_group_ids"]))
+        return list(group_models)
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_team_object", _fake_get_team_object
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        _fake_models_from_access_groups,
+    )
+    return team_lookups, resolved_for
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_includes_team_access_group_models(
+    monkeypatch,
+):
+    """
+    Regression: a team restricted to `model-a` that is assigned an access group
+    granting `model-b` must see `model-b` in /v1/models. Before the fix the
+    listing only consulted team.models, so `model-b` was missing even though the
+    team key could call it.
+    """
+    _team_lookups, resolved_for = _patch_team_access_groups(
+        monkeypatch, access_group_ids=["ag-1"], group_models=["model-b"]
+    )
+
+    result = await get_available_models_for_user(
+        user_api_key_dict=_access_group_key(),
+        llm_router=_router_with_models(["model-a", "model-b"]),
+        general_settings={},
+        user_model=None,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=MagicMock(),
+        include_model_access_groups=True,
+    )
+
+    assert {
+        "result": sorted(result),
+        "resolved_access_group_ids": resolved_for,
+    } == {
+        "result": ["model-a", "model-b"],
+        "resolved_access_group_ids": [["ag-1"]],
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_access_group_models_are_deduped(
+    monkeypatch,
+):
+    """A model granted both directly and via an access group is listed once."""
+    _patch_team_access_groups(
+        monkeypatch, access_group_ids=["ag-1"], group_models=["model-a", "model-b"]
+    )
+
+    result = await get_available_models_for_user(
+        user_api_key_dict=_access_group_key(),
+        llm_router=_router_with_models(["model-a", "model-b"]),
+        general_settings={},
+        user_model=None,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=MagicMock(),
+    )
+
+    assert result == ["model-a", "model-b"]
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_includes_key_access_group_models(
+    monkeypatch,
+):
+    """Models from an access group that authorizes the key are also listed."""
+    _patch_team_access_groups(
+        monkeypatch, access_group_ids=[], group_models=[]
+    )
+
+    async def _fake_key_resources(**kwargs):
+        assert kwargs["resource_field"] == "access_model_names"
+        return ["model-b"]
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_authorized_resources_from_key_access_groups",
+        _fake_key_resources,
+    )
+
+    result = await get_available_models_for_user(
+        user_api_key_dict=_access_group_key(key_access_group_ids=["ag-key"]),
+        llm_router=_router_with_models(["model-a", "model-b"]),
+        general_settings={},
+        user_model=None,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=MagicMock(),
+    )
+
+    assert sorted(result) == ["model-a", "model-b"]
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_without_access_groups_is_unchanged(
+    monkeypatch,
+):
+    """A team with no access groups still lists exactly its own models."""
+    _patch_team_access_groups(
+        monkeypatch, access_group_ids=[], group_models=["should-not-appear"]
+    )
+
+    result = await get_available_models_for_user(
+        user_api_key_dict=_access_group_key(),
+        llm_router=_router_with_models(["model-a", "model-b"]),
+        general_settings={},
+        user_model=None,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=MagicMock(),
+    )
+
+    assert result == ["model-a"]
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_only_model_access_groups_skips_expansion(
+    monkeypatch,
+):
+    """only_model_access_groups returns router access group names, not access group members."""
+    _patch_team_access_groups(
+        monkeypatch, access_group_ids=["ag-1"], group_models=["model-b"]
+    )
+
+    result = await get_available_models_for_user(
+        user_api_key_dict=_access_group_key(),
+        llm_router=_router_with_models(["model-a", "model-b"]),
+        general_settings={},
+        user_model=None,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=MagicMock(),
+        only_model_access_groups=True,
+    )
+
+    assert "model-b" not in result
