@@ -160,7 +160,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                f"litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {e!s}"
+                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
             )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
@@ -217,7 +217,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 return
         except Exception as e:
             verbose_logger.exception(
-                f"litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {e!s}"
+                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
             )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -350,7 +350,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                f"litellm.router_strategy.lowest_latency.py::async_log_success_event(): Exception occured - {e!s}"
+                "litellm.router_strategy.lowest_latency.py::async_log_success_event(): Exception occured - %s", e
             )
 
     def _get_available_deployments(

@@ -51,7 +51,7 @@ async def background_streaming_task(
     """
 
     try:
-        verbose_proxy_logger.info(f"Starting background streaming for {polling_id}")
+        verbose_proxy_logger.info("Starting background streaming for %s", polling_id)
 
         # Update status to in_progress (OpenAI format)
         await polling_handler.update_state(
@@ -146,8 +146,8 @@ async def background_streaming_task(
         # Handle StreamingResponse
         if not hasattr(response, "body_iterator"):
             verbose_proxy_logger.warning(
-                f"background_streaming_task: response for {polling_id} has no "
-                "body_iterator; this may indicate a misconfiguration or provider error"
+                "background_streaming_task: response for %s has no body_iterator; this may indicate a misconfiguration or provider error",
+                polling_id,
             )
 
         if hasattr(response, "body_iterator"):
@@ -293,7 +293,7 @@ async def background_streaming_task(
                         await flush_state_if_needed()
 
                     except json.JSONDecodeError as e:
-                        verbose_proxy_logger.warning(f"Failed to parse streaming chunk: {e}")
+                        verbose_proxy_logger.warning("Failed to parse streaming chunk: %s", e)
 
             # Final flush to ensure all accumulated state is saved
             await flush_state_if_needed(force=True)
@@ -324,11 +324,16 @@ async def background_streaming_task(
         )
 
         verbose_proxy_logger.info(
-            f"Finished background streaming for {polling_id}, status={final_status}, error={terminal_error}, incomplete_details={incomplete_details_data}, output_items={len(output_items)}"
+            "Finished background streaming for %s, status=%s, error=%s, incomplete_details=%s, output_items=%s",
+            polling_id,
+            final_status,
+            terminal_error,
+            incomplete_details_data,
+            len(output_items),
         )
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error in background streaming task for {polling_id}: {e!s}")
+        verbose_proxy_logger.error("Error in background streaming task for %s: %s", polling_id, e)
         import traceback
 
         verbose_proxy_logger.error(traceback.format_exc())

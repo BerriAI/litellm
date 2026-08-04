@@ -379,7 +379,7 @@ class GitLabPromptManager(CustomPromptManagement):
         except Exception as e:
             import litellm
 
-            litellm._logging.verbose_proxy_logger.error(f"Error in GitLab prompt pre_call_hook: {e}")
+            litellm._logging.verbose_proxy_logger.error("Error in GitLab prompt pre_call_hook: %s", e)
             return messages, litellm_params
 
     def _parse_prompt_to_messages(self, prompt_content: str) -> list[AllMessageValues]:

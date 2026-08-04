@@ -68,7 +68,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         **kwargs,
     ) -> None:
         try:
-            verbose_logger.debug(f"in init sqs logger - sqs_callback_params {litellm.aws_sqs_callback_params}")
+            verbose_logger.debug("in init sqs logger - sqs_callback_params %s", litellm.aws_sqs_callback_params)
 
             self.async_httpx_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback,
@@ -100,7 +100,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
 
-            verbose_logger.debug(f"sqs flush interval: {sqs_flush_interval}, sqs batch size: {sqs_batch_size}")
+            verbose_logger.debug("sqs flush interval: %s, sqs batch size: %s", sqs_flush_interval, sqs_batch_size)
 
             CustomBatchLogger.__init__(
                 self,
@@ -113,7 +113,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             BaseAWSLLM.__init__(self)
 
         except Exception as e:
-            print_verbose(f"Got exception on init sqs client {e!s}")
+            print_verbose(f"Got exception on init sqs client {e}")
             raise e
 
     def _init_sqs_params(
@@ -215,7 +215,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                 self.batch_size,
             )
         except Exception as e:
-            verbose_logger.exception(f"sqs Layer Error - {e!s}")
+            verbose_logger.exception("sqs Layer Error - %s", e)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -233,10 +233,10 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             )
 
         except Exception as e:
-            verbose_logger.exception(f"Datadog Layer Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception("Datadog Layer Error - %s\n%s", e, traceback.format_exc())
 
     async def async_send_batch(self) -> None:
-        verbose_logger.debug(f"sqs logger - sending batch of {len(self.log_queue)}")
+        verbose_logger.debug("sqs logger - sending batch of %s", len(self.log_queue))
         if not self.log_queue:
             return
 
@@ -305,7 +305,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             )
             response.raise_for_status()
         except Exception as e:
-            verbose_logger.exception(f"Error sending to SQS: {e!s}")
+            verbose_logger.exception("Error sending to SQS: %s", e)
 
     async def async_health_check(self) -> IntegrationHealthCheckStatus:
         """

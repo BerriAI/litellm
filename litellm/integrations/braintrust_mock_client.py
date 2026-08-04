@@ -89,7 +89,7 @@ def _mock_http_handler_post(
     """Monkey-patched HTTPHandler.post that intercepts Braintrust calls with endpoint-specific responses."""
     # Only mock Braintrust API calls
     if isinstance(url, str) and _is_braintrust_url(url):
-        verbose_logger.info(f"[BRAINTRUST MOCK] POST to {url}")
+        verbose_logger.info("[BRAINTRUST MOCK] POST to %s", url)
         time.sleep(_MOCK_LATENCY_SECONDS)
         # Return appropriate mock response based on endpoint
         if "/project" in url:

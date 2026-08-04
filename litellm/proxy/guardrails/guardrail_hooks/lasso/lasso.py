@@ -116,8 +116,10 @@ class LassoGuardrail(CustomGuardrail):
         self.api_base = api_base or os.getenv("LASSO_API_BASE") or "https://server.lasso.security/gateway/v3"
 
         verbose_proxy_logger.debug(
-            f"Lasso guardrail initialized: {kwargs.get('guardrail_name', 'unknown')}, "
-            f"event_hook: {kwargs.get('event_hook', 'unknown')}, mask: {self.mask}"
+            "Lasso guardrail initialized: %s, event_hook: %s, mask: %s",
+            kwargs.get("guardrail_name", "unknown"),
+            kwargs.get("event_hook", "unknown"),
+            self.mask,
         )
 
         super().__init__(**kwargs)
@@ -299,8 +301,8 @@ class LassoGuardrail(CustomGuardrail):
                     except Exception as e:
                         if isinstance(e, HTTPException):
                             raise e
-                        verbose_proxy_logger.error(f"Error in post-call Lasso masking: {e!s}")
-                        raise LassoGuardrailAPIError(f"Failed to apply post-call masking: {e!s}")
+                        verbose_proxy_logger.error("Error in post-call Lasso masking: %s", e)
+                        raise LassoGuardrailAPIError(f"Failed to apply post-call masking: {e}")
                 else:
                     # Use the same data for conversation_id consistency (no cache access needed)
                     await self._run_lasso_guardrail(response_data, cache=global_cache, message_type="COMPLETION")
@@ -308,7 +310,7 @@ class LassoGuardrail(CustomGuardrail):
             else:
                 verbose_proxy_logger.warning("No response messages found to validate")
         else:
-            verbose_proxy_logger.warning(f"Unexpected response type for post-call hook: {type(response)}")
+            verbose_proxy_logger.warning("Unexpected response type for post-call hook: %s", type(response))
 
         return response
 
@@ -353,7 +355,7 @@ class LassoGuardrail(CustomGuardrail):
             if cached_conversation_id:
                 return cached_conversation_id
         except Exception as e:
-            verbose_proxy_logger.warning(f"Cache retrieval failed: {e}")
+            verbose_proxy_logger.warning("Cache retrieval failed: %s", e)
 
         # Generate new conversation_id and store in cache
         generated_id = self._generate_ulid()
@@ -361,7 +363,7 @@ class LassoGuardrail(CustomGuardrail):
         try:
             cache.set_cache(cache_key, generated_id, ttl=3600)  # Cache for 1 hour
         except Exception as e:
-            verbose_proxy_logger.warning(f"Cache storage failed: {e}")
+            verbose_proxy_logger.warning("Cache storage failed: %s", e)
 
         return generated_id
 
@@ -599,7 +601,8 @@ class LassoGuardrail(CustomGuardrail):
 
         # Log error with context
         verbose_proxy_logger.error(
-            f"Error calling Lasso API: {error!s}",
+            "Error calling Lasso API: %s",
+            error,
             extra={
                 "guardrail_name": getattr(self, "guardrail_name", "unknown"),
                 "message_type": message_type,
@@ -620,7 +623,7 @@ class LassoGuardrail(CustomGuardrail):
                     raise LassoGuardrailAPIError(f"API error: {error.response.status_code}")
 
         # Generic error handling
-        raise LassoGuardrailAPIError(f"Failed to verify request safety with Lasso API: {error!s}")
+        raise LassoGuardrailAPIError(f"Failed to verify request safety with Lasso API: {error}")
 
     def _log_masking_applied(
         self,
@@ -810,7 +813,7 @@ class LassoGuardrail(CustomGuardrail):
     ) -> LassoResponse:
         """Call the Lasso API and return the response."""
         url = api_url or f"{self.api_base}/classify"
-        verbose_proxy_logger.debug(f"Calling Lasso API with messageType: {payload.get('messageType')}")
+        verbose_proxy_logger.debug("Calling Lasso API with messageType: %s", payload.get("messageType"))
         response = await self.async_handler.post(
             url=url,
             headers=headers,
@@ -848,7 +851,7 @@ class LassoGuardrail(CustomGuardrail):
         """
         if response and response.get("violations_detected") is True:
             violated_deputies = self._parse_violated_deputies(response)
-            verbose_proxy_logger.warning(f"Lasso guardrail detected violations: {violated_deputies}")
+            verbose_proxy_logger.warning("Lasso guardrail detected violations: %s", violated_deputies)
 
             # Check if any findings have "BLOCK" action
             blocking_violations = self._check_for_blocking_actions(response)
@@ -866,7 +869,7 @@ class LassoGuardrail(CustomGuardrail):
             else:
                 # Continue with warning for non-blocking violations (e.g., AUTO_MASKING)
                 verbose_proxy_logger.info(
-                    f"Non-blocking Lasso violations detected, continuing with warning: {violated_deputies}"
+                    "Non-blocking Lasso violations detected, continuing with warning: %s", violated_deputies
                 )
 
     def _check_for_blocking_actions(self, response: LassoResponse) -> list[str]:
@@ -955,7 +958,7 @@ class LassoGuardrail(CustomGuardrail):
             if msg.content and apply_text and text_cursor < len(masked_text):
                 msg.content = masked_text[text_cursor]
                 text_cursor += 1
-                verbose_proxy_logger.debug(f"Applied masked text content to choice {text_cursor}")
+                verbose_proxy_logger.debug("Applied masked text content to choice %s", text_cursor)
 
             for call in getattr(msg, "tool_calls", None) or []:
                 call_id = self._get_field(call, "id")
@@ -970,7 +973,7 @@ class LassoGuardrail(CustomGuardrail):
                             func = getattr(call, "function", None)
                             if func:
                                 func.arguments = json.dumps(masked_input)
-                        verbose_proxy_logger.debug(f"Applied masked tool_call arguments for call_id={call_id}")
+                        verbose_proxy_logger.debug("Applied masked tool_call arguments for call_id=%s", call_id)
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:

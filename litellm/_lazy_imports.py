@@ -23,6 +23,7 @@ from typing import Any, cast
 # Import all the data structures that define what can be lazy-loaded
 # These are just lists of names and maps of where to find them
 from ._lazy_imports_registry import (
+    # Import maps
     _BEDROCK_TYPES_IMPORT_MAP,
     _CACHING_IMPORT_MAP,
     _COST_CALCULATOR_IMPORT_MAP,
@@ -33,12 +34,11 @@ from ._lazy_imports_registry import (
     _TOKEN_COUNTER_IMPORT_MAP,
     _TYPES_IMPORT_MAP,
     _TYPES_UTILS_IMPORT_MAP,
-    # Import maps
     _UTILS_IMPORT_MAP,
     _UTILS_MODULE_IMPORT_MAP,
+    # Name tuples
     BEDROCK_TYPES_NAMES,
     CACHING_NAMES,
-    # Name tuples
     COST_CALCULATOR_NAMES,
     DOTPROMPT_NAMES,
     HTTP_HANDLER_NAMES,

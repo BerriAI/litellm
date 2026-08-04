@@ -744,7 +744,7 @@ class VertexPassthroughLoggingHandler:
                 }
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in batch_prediction_jobs_handler: {e}")
+            verbose_proxy_logger.error("Error in batch_prediction_jobs_handler: %s", e)
             # Return basic response on error
             litellm_model_response = ModelResponse()
             litellm_model_response.id = str(uuid.uuid4())
@@ -759,7 +759,7 @@ class VertexPassthroughLoggingHandler:
                     index=0,
                     message={
                         "role": "assistant",
-                        "content": f"Error creating batch prediction job: {e!s}",
+                        "content": f"Error creating batch prediction job: {e}",
                         "tool_calls": None,
                         "function_call": None,
                         "provider_specific_fields": {
@@ -841,7 +841,9 @@ class VertexPassthroughLoggingHandler:
                 )
 
                 verbose_proxy_logger.info(
-                    f"Stored batch managed object with unified_object_id={unified_object_id}, batch_id={model_object_id}"
+                    "Stored batch managed object with unified_object_id=%s, batch_id=%s",
+                    unified_object_id,
+                    model_object_id,
                 )
             else:
                 verbose_proxy_logger.warning(
@@ -849,7 +851,7 @@ class VertexPassthroughLoggingHandler:
                 )
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error storing batch managed object: {e}")
+            verbose_proxy_logger.error("Error storing batch managed object: %s", e)
 
     @staticmethod
     def get_actual_model_id_from_router(model_name: str) -> str:
@@ -864,15 +866,15 @@ class VertexPassthroughLoggingHandler:
             if model_ids and len(model_ids) > 0:
                 # Use the first model ID found
                 actual_model_id = model_ids[0]
-                verbose_proxy_logger.info(f"Found model ID in router: {actual_model_id}")
+                verbose_proxy_logger.info("Found model ID in router: %s", actual_model_id)
                 return actual_model_id
             else:
                 # Fallback to constructed model name
                 actual_model_id = extracted_model_name
-                verbose_proxy_logger.warning(f"Model not found in router, using constructed name: {actual_model_id}")
+                verbose_proxy_logger.warning("Model not found in router, using constructed name: %s", actual_model_id)
                 return actual_model_id
         else:
             # Fallback if router is not available
             extracted_model_name = VertexPassthroughLoggingHandler.extract_model_name_from_vertex_path(model_name)
-            verbose_proxy_logger.warning(f"Router not available, using constructed model name: {extracted_model_name}")
+            verbose_proxy_logger.warning("Router not available, using constructed model name: %s", extracted_model_name)
             return extracted_model_name

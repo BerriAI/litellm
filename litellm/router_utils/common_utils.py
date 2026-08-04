@@ -22,6 +22,27 @@ def _is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool
     return getattr(user_api_key_auth, "user_role", None) == "proxy_admin"
 
 
+def resolve_model_group_alias(model_group_alias: object, model: str) -> str | None:
+    """
+    Resolve ``model`` through a ``model_group_alias`` map.
+
+    Handles both supported entry shapes, the plain string form
+    ``{"alias": "target"}`` and the item form
+    ``{"alias": {"model": "target", "hidden": true}}``, and tolerates malformed
+    entries: the map can come from a key or team row rather than from validated
+    config, so a bad value must not raise mid-request.
+
+    Returns the target model group, or None when the map does not rewrite ``model``.
+    """
+    if not isinstance(model_group_alias, Mapping):
+        return None
+    entry = model_group_alias.get(model)
+    target = entry.get("model") if isinstance(entry, Mapping) else entry
+    if not isinstance(target, str) or not target:
+        return None
+    return target
+
+
 def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
     """
     Hash of the credential params, used for mapping the file id to the right model

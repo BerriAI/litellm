@@ -755,7 +755,7 @@ async def create_prompt(
         return initialized_prompt
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error creating prompt: {e}")
+        verbose_proxy_logger.exception("Error creating prompt: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -871,7 +871,7 @@ async def update_prompt(
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating prompt: {e}")
+        verbose_proxy_logger.exception("Error updating prompt: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -970,7 +970,7 @@ async def delete_prompt(
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error deleting prompt: {e}")
+        verbose_proxy_logger.exception("Error deleting prompt: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1111,7 +1111,7 @@ async def patch_prompt(
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error patching prompt: {e}")
+        verbose_proxy_logger.exception("Error patching prompt: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1252,7 +1252,7 @@ async def test_prompt(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error testing prompt: {e}")
+        verbose_proxy_logger.exception("Error testing prompt: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1304,7 +1304,7 @@ async def convert_prompt_file_to_json(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error converting prompt file: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Error converting prompt file: {e}")
 
     finally:
         # Clean up temp file

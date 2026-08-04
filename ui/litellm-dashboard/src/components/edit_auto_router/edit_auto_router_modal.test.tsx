@@ -118,6 +118,80 @@ describe("EditAutoRouterModal keyword matching", () => {
     await waitFor(() => expect(NotificationsManager.fromBackend).toHaveBeenCalled());
     expect(modelPatchUpdateCall).not.toHaveBeenCalled();
   });
+
+  // LIT-5133, edit side. Semantic matching is off here on purpose: it used to be the only thing
+  // that checked a rule for keywords, so with it on this save was already blocked and the test
+  // would pass without the fix. Off, the unfilled row was dropped and the save reported success.
+  it("blocks a save that adds a keyword rule and leaves it empty", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: {
+              ...STORED_CONFIG,
+              semantic_keyword_matching: false,
+              embedding_model: undefined,
+            },
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+    await screen.findByText(/Escalation Keywords/i);
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+    await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
+
+    // The modal renders the same controls as the create form, so it owes the same treatment:
+    // the row says what is missing and the save is not offered while it is.
+    expect(await screen.findByText("At least one keyword is required")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
+  });
+
+  it("gives the save back once the added keyword rule is filled", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: {
+              ...STORED_CONFIG,
+              semantic_keyword_matching: false,
+              embedding_model: undefined,
+            },
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+    await screen.findByText(/Escalation Keywords/i);
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+    await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
+    expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
+
+    await user.type(
+      within(screen.getByText("Keywords 2").closest("div") as HTMLElement).getByRole("combobox"),
+      "chargeback{enter}",
+    );
+
+    expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled();
+    expect(screen.queryByText("At least one keyword is required")).not.toBeInTheDocument();
+  });
 });
 
 describe("EditAutoRouterModal classifier context window", () => {
@@ -241,5 +315,78 @@ describe("EditAutoRouterModal assistant turns", () => {
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig().classifier_context_include_assistant_turns).toBe(false);
+  });
+});
+
+describe("EditAutoRouterModal session affinity", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const renderWithStoredConfig = (complexity_router_config: Record<string, unknown>) =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{ ...MODEL_DATA, litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config } }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  // A stored config with no session_affinity key now runs with affinity OFF, because the backend
+  // field defaults to False. The toggle has to render what the router actually does, and an
+  // untouched save must not flip it.
+  it("shows a stored config with no session_affinity key as off", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity).toBe(false);
+  });
+
+  it("shows a stored session_affinity=true as on and preserves it through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: true });
+
+    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity).toBe(true);
+  });
+
+  it("persists turning session affinity on", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity).toBe(true);
+  });
+
+  it("persists turning session affinity back off", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: true });
+
+    await user.click(await screen.findByText("Advanced: Session Affinity"));
+    await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity).toBe(false);
   });
 });

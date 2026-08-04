@@ -188,6 +188,13 @@ class TestDynamicRateLimitPriority:
 
         assert spent > DEV_RESERVED_TOKENS
 
+    @pytest.mark.skip(
+        reason=(
+            "LIT-5118: the stage proxy does not run the dynamic_rate_limiter_v3 callbacks + "
+            "priority_reservation config this module's docstring requires (zero limiter log lines "
+            "on any pod during the 2026-08-02 run), so strict enforcement can never engage there"
+        )
+    )
     @pytest.mark.covers(
         "quota_management.ratelimit.priority_strict.picks_under_tpm",
         exercised_on=["chat_completions"],

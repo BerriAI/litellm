@@ -1654,6 +1654,7 @@ class PromptTokensDetailsWrapper(
 class ServerToolUse(BaseModel):
     web_search_requests: Optional[int] = None
     tool_search_requests: Optional[int] = None
+    browser_open_requests: Optional[int] = None
 
     def __getitem__(self, key: str) -> Optional[int]:
         if key not in self.__class__.model_fields:
@@ -2801,6 +2802,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_model: str
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
+    conversation_continuing: bool
 
 
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
@@ -2820,6 +2822,7 @@ DERIVED_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset(
         "classifier_model",
         "escalated",
         "tier_boundaries",
+        "conversation_continuing",
     }
 )
 
@@ -3056,9 +3059,18 @@ class CachingDetails(TypedDict):
 
 class CostBreakdown(TypedDict, total=False):
     """
-    Detailed cost breakdown for a request
+    Detailed cost breakdown for a request.
+
+    ``service_tier`` and ``data_residency`` record the pricing basis the cost was
+    computed on, not what the caller asked for. A consumer that has to price a
+    counterfactual against this request (what another model would have charged for
+    it) needs the same basis to compare like with like, and re-deriving it from the
+    request is not possible after the fact: the tier the biller used comes from
+    ``optional_params``, which no log record carries.
     """
 
+    service_tier: Optional[str]
+    data_residency: Optional[str]
     input_cost: float  # Cost of raw (non-cached) input tokens only
     cache_read_cost: float  # Cost of cache-read tokens (discounted rate)
     cache_creation_cost: float  # Cost of cache-write tokens (premium rate)
@@ -3353,8 +3365,15 @@ agentic_loop_internal_litellm_params = [
     "_code_interpreter_interception_converted_stream",
 ]
 
+# Proxy-owned callback credentials, stamped from admin-configured team/key callback
+# settings. Listed in all_litellm_params for the same reason as the agentic-loop
+# fields above: an unrecognized top-level key is swept into extra_body and sent to
+# the provider.
+TRUSTED_CALLBACK_VARS_FIELD = "litellm_trusted_callback_vars"
+
 all_litellm_params = (
     agentic_loop_internal_litellm_params
+    + [TRUSTED_CALLBACK_VARS_FIELD]
     + [
         "metadata",
         "litellm_metadata",

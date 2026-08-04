@@ -55,6 +55,12 @@ def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", mo
         from .xai.cost_calculator import cost_per_web_search_request
 
         return cost_per_web_search_request(usage=usage, model_info=model_info)
+    elif custom_llm_provider == "groq":
+        from .groq.cost_calculator import (
+            cost_per_web_search_request as groq_cost_per_web_search_request,
+        )
+
+        return groq_cost_per_web_search_request(usage=usage, model_info=model_info)
     else:
         return None
 
@@ -92,7 +98,7 @@ def discover_guardrail_translation_mappings() -> dict[CallTypes, type["BaseTrans
 
                 try:
                     # Import the module
-                    verbose_logger.debug(f"Discovering guardrail translations in: {module_path}")
+                    verbose_logger.debug("Discovering guardrail translations in: %s", module_path)
 
                     module = importlib.import_module(module_path)
 
@@ -102,14 +108,14 @@ def discover_guardrail_translation_mappings() -> dict[CallTypes, type["BaseTrans
                         if isinstance(mappings, dict):
                             discovered_mappings.update(mappings)
                             verbose_logger.debug(
-                                f"Found guardrail_translation_mappings in {module_path}: {list(mappings.keys())}"
+                                "Found guardrail_translation_mappings in %s: %s", module_path, list(mappings.keys())
                             )
 
                 except ImportError as e:
-                    verbose_logger.error(f"Could not import {module_path}: {e}")
+                    verbose_logger.error("Could not import %s: %s", module_path, e)
                     continue
                 except Exception as e:
-                    verbose_logger.error(f"Error processing {module_path}: {e}")
+                    verbose_logger.error("Error processing %s: %s", module_path, e)
                     continue
 
         try:
@@ -126,11 +132,13 @@ def discover_guardrail_translation_mappings() -> dict[CallTypes, type["BaseTrans
             verbose_logger.debug("MCP guardrail translation mappings not available; skipping")
 
         verbose_logger.debug(
-            f"Discovered {len(discovered_mappings)} guardrail translation mappings: {list(discovered_mappings.keys())}"
+            "Discovered %s guardrail translation mappings: %s",
+            len(discovered_mappings),
+            list(discovered_mappings.keys()),
         )
 
     except Exception as e:
-        verbose_logger.error(f"Error discovering guardrail translation mappings: {e}")
+        verbose_logger.error("Error discovering guardrail translation mappings: %s", e)
 
     return discovered_mappings
 

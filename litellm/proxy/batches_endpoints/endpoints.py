@@ -120,7 +120,8 @@ async def create_batch(
     try:
         data = await _read_request_body(request=request)
         verbose_proxy_logger.debug(
-            f"Request received by LiteLLM:\n{json.dumps(data, indent=4)}",
+            "Request received by LiteLLM:\n%s",
+            json.dumps(data, indent=4),
         )
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
         (
@@ -225,8 +226,10 @@ async def create_batch(
                     )
 
                 verbose_proxy_logger.debug(
-                    f"Created batch using model: {model_from_file_id}, "
-                    f"original_batch_id: {original_batch_id}, encoded: {encoded_batch_id}"
+                    "Created batch using model: %s, original_batch_id: %s, encoded: %s",
+                    model_from_file_id,
+                    original_batch_id,
+                    encoded_batch_id,
                 )
 
             response.input_file_id = input_file_id
@@ -293,7 +296,7 @@ async def create_batch(
 
                 encode_batch_response_ids(response, model=model_param)
 
-                verbose_proxy_logger.debug(f"Created batch using model: {model_param}")
+                verbose_proxy_logger.debug("Created batch using model: %s", model_param)
             else:
                 # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
                 apply_team_provider_credentials(
@@ -340,7 +343,7 @@ async def create_batch(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.create_batch(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.create_batch(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -471,7 +474,7 @@ async def retrieve_batch(
         # If batch is still processing, sync with provider to get latest state
         if response is not None:
             verbose_proxy_logger.debug(
-                f"Batch {batch_id} is in non-terminal state {response.status}, syncing with provider"
+                "Batch %s is in non-terminal state %s, syncing with provider", batch_id, response.status
             )
 
         # Retrieve from provider (for non-terminal states or if DB lookup failed)
@@ -505,7 +508,7 @@ async def retrieve_batch(
             encode_batch_response_ids(response, model=model_from_id)
 
             verbose_proxy_logger.debug(
-                f"Retrieved batch using model: {model_from_id}, original_id: {original_batch_id}"
+                "Retrieved batch using model: %s, original_id: %s", model_from_id, original_batch_id
             )
 
         elif litellm.enable_loadbalancing_on_batch_endpoints is True or unified_batch_id:
@@ -592,7 +595,7 @@ async def retrieve_batch(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.retrieve_batch(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.retrieve_batch(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -641,7 +644,7 @@ async def list_batches(
         version,
     )
 
-    verbose_proxy_logger.debug(f"GET /v1/batches after={after} limit={limit}")
+    verbose_proxy_logger.debug("GET /v1/batches after=%s limit=%s", after, limit)
     try:
         if llm_router is None:
             raise HTTPException(
@@ -703,7 +706,7 @@ async def list_batches(
                 for batch in response_data:
                     encode_batch_response_ids(batch, model=model_param)
 
-            verbose_proxy_logger.debug(f"Listed batches using model: {model_param}")
+            verbose_proxy_logger.debug("Listed batches using model: %s", model_param)
 
         # SCENARIO 2 (alternative): target_model_names based routing
         elif target_model_names or data.get("target_model_names", None):
@@ -773,7 +776,7 @@ async def list_batches(
             original_exception=e,
             request_data={"after": after, "limit": limit},
         )
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.retrieve_batch(): Exception occured - {e!s}")
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.retrieve_batch(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -886,7 +889,7 @@ async def cancel_batch(
             encode_batch_response_ids(response, model=model_from_id)
 
             verbose_proxy_logger.debug(
-                f"Cancelled batch using model: {model_from_id}, original_id: {original_batch_id}"
+                "Cancelled batch using model: %s, original_id: %s", model_from_id, original_batch_id
             )
 
         # SCENARIO 2: target_model_names based routing
@@ -982,7 +985,7 @@ async def cancel_batch(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.create_batch(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.create_batch(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 

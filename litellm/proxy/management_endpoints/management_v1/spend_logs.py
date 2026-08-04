@@ -187,8 +187,8 @@ async def list_spend_log_end_users(
         raise
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.management_v1.spend_logs.list_spend_log_end_users(): "
-            f"Exception occured - {e!s}"
+            "litellm.proxy.management_endpoints.management_v1.spend_logs.list_spend_log_end_users(): Exception occured - %s",
+            e,
         )
         raise ManagementProblem(
             ProblemDetail(

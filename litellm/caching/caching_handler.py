@@ -271,7 +271,7 @@ class LLMCachingHandler:
                         embedding_all_elements_cache_hit=embedding_all_elements_cache_hit,
                     )
 
-            verbose_logger.debug(f"CACHE RESULT: {cached_result}")
+            verbose_logger.debug("CACHE RESULT: %s", cached_result)
             return CachingHandlerResponse(
                 cached_result=cached_result,
                 final_embedding_cached_response=final_embedding_cached_response,

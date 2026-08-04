@@ -4303,6 +4303,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/user_banner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get User Banner
+         * @description Get the admin-published dashboard banner.
+         *     Readable by any authenticated user; rendered on every dashboard page.
+         */
+        get: operations["get_user_banner_get_user_banner_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get_favicon": {
         parameters: {
             query?: never;
@@ -13702,6 +13723,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/metadata_schema": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Metadata Schema
+         * @description Get the team metadata fields declared in ``general_settings.team_metadata_schema``.
+         *
+         *     The UI uses this to prepopulate the team metadata form with the declared
+         *     keys. Returns an empty ``fields`` list when no schema is configured. This
+         *     schema is advisory; server-side enforcement stays with
+         *     ``custom_team_metadata_validate``.
+         */
+        get: operations["get_team_metadata_schema_team_metadata_schema_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/model/add": {
         parameters: {
             query?: never;
@@ -14081,6 +14127,12 @@ export interface paths {
          *
          *     This will return the callback settings for the team with id dbe2f686-a686-4896-864a-4c3924458709
          *
+         *     Covers callbacks registered through POST /team/{team_id}/callback and the Admin UI as well as
+         *     teams still on the deprecated callback_settings shape, resolved from the team's stored metadata
+         *     with the same precedence used at request time. A key-level logging config overrides the team's
+         *     at request time and is not reflected here. Credential-bearing callback_vars are returned masked
+         *     as `***REDACTED***`
+         *
          *     Returns {
          *             "status": "success",
          *             "data": {
@@ -14147,6 +14199,9 @@ export interface paths {
         /**
          * Disable Team Logging
          * @description Disable all logging callbacks for a team
+         *
+         *     Callbacks registered through POST /team/{team_id}/callback and the Admin UI are cleared, so
+         *     re-enabling logging means registering them again with their callback_vars
          *
          *     Parameters:
          *     - team_id (str, required): The unique identifier for the team
@@ -14518,6 +14573,27 @@ export interface paths {
          *     Updates logo settings for the admin UI.
          */
         patch: operations["update_ui_theme_settings_update_ui_theme_settings_patch"];
+        trace?: never;
+    };
+    "/update/user_banner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update User Banner
+         * @description Publish, edit, or unpublish the dashboard banner.
+         *     Only proxy admins are allowed to modify it.
+         */
+        patch: operations["update_user_banner_update_user_banner_patch"];
         trace?: never;
     };
     "/upload/logo": {
@@ -23573,6 +23649,11 @@ export interface components {
              */
             total_api_requests: number;
             /**
+             * Total Autorouter Savings Spend
+             * @default 0
+             */
+            total_autorouter_savings_spend: number;
+            /**
              * Total Cache Creation Input Tokens
              * @default 0
              */
@@ -23686,6 +23767,11 @@ export interface components {
              * @default []
              */
             models: string[];
+            /**
+             * Organization Id
+             * @description Default organization for new teams created without an explicit organization
+             */
+            organization_id?: string | null;
             /**
              * Rpm Limit
              * @description Default rpm limit for new automatically created teams
@@ -31474,6 +31560,11 @@ export interface components {
              */
             api_requests: number;
             /**
+             * Autorouter Savings Spend
+             * @default 0
+             */
+            autorouter_savings_spend: number;
+            /**
              * Cache Creation Input Tokens
              * @default 0
              */
@@ -32094,6 +32185,27 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * TeamMetadataFieldSchema
+         * @description One declared team metadata field from ``general_settings.team_metadata_schema``.
+         *
+         *     Advisory only: the UI uses it to prepopulate the team metadata form.
+         *     Enforcement stays with ``custom_team_metadata_validate``.
+         */
+        TeamMetadataFieldSchema: {
+            /** Key */
+            key: string;
+            /** Label */
+            label?: string | null;
+        };
+        /**
+         * TeamMetadataSchemaResponse
+         * @description Response for GET /team/metadata_schema; ``fields`` is empty when no schema is configured.
+         */
+        TeamMetadataSchemaResponse: {
+            /** Fields */
+            fields: components["schemas"]["TeamMetadataFieldSchema"][];
         };
         /**
          * TeamModelAddRequest
@@ -33119,6 +33231,12 @@ export interface components {
                 };
             };
         };
+        /** UpdateUserBannerResponse */
+        UpdateUserBannerResponse: {
+            banner: components["schemas"]["UserBanner"];
+            /** Message */
+            message: string;
+        };
         /** UpdateUserRequest */
         UpdateUserRequest: {
             /** Agent Id */
@@ -33725,6 +33843,56 @@ export interface components {
             user_spend?: number | null;
             /** User Tpm Limit */
             user_tpm_limit?: number | null;
+        };
+        /** UserBanner */
+        UserBanner: {
+            /**
+             * Enabled
+             * @description If true, the banner is shown to all authenticated dashboard users.
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Message
+             * @description Banner text shown to dashboard users. Markdown is supported.
+             * @default
+             */
+            message: string;
+            /**
+             * Revision
+             * @description Server-stamped opaque publish identity; a fresh value is generated on every update so clients re-surface dismissed banners on republish.
+             * @default
+             */
+            revision: string;
+            /**
+             * Severity
+             * @description Visual style of the banner.
+             * @default info
+             * @enum {string}
+             */
+            severity: "info" | "warning" | "error";
+        };
+        /** UserBannerUpdate */
+        UserBannerUpdate: {
+            /**
+             * Enabled
+             * @description If true, the banner is shown to all authenticated dashboard users.
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Message
+             * @description Banner text shown to dashboard users. Markdown is supported.
+             * @default
+             */
+            message: string;
+            /**
+             * Severity
+             * @description Visual style of the banner.
+             * @default info
+             * @enum {string}
+             */
+            severity: "info" | "warning" | "error";
         };
         /**
          * UserHeaderMapping
@@ -40832,6 +41000,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UIThemeSettingsResponse"];
+                };
+            };
+        };
+    };
+    get_user_banner_get_user_banner_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserBanner"];
                 };
             };
         };
@@ -51180,6 +51368,26 @@ export interface operations {
             };
         };
     };
+    get_team_metadata_schema_team_metadata_schema_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamMetadataSchemaResponse"];
+                };
+            };
+        };
+    };
     team_model_add_team_model_add_post: {
         parameters: {
             query?: never;
@@ -52189,6 +52397,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_user_banner_update_user_banner_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserBannerUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateUserBannerResponse"];
                 };
             };
             /** @description Validation Error */

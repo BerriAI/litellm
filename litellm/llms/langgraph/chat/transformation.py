@@ -223,7 +223,7 @@ class LangGraphConfig(BaseConfig):
         if "thread_id" in optional_params:
             payload["thread_id"] = optional_params["thread_id"]
 
-        verbose_logger.debug(f"LangGraph request payload: {payload}")
+        verbose_logger.debug("LangGraph request payload: %s", payload)
         return payload
 
     def _extract_content_from_response(self, response_json: dict) -> str:
@@ -297,7 +297,7 @@ class LangGraphConfig(BaseConfig):
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client(params={})
 
-        verbose_logger.debug(f"Making sync streaming request to: {api_base}")
+        verbose_logger.debug("Making sync streaming request to: %s", api_base)
 
         # Make streaming request
         response = client.post(
@@ -356,7 +356,7 @@ class LangGraphConfig(BaseConfig):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             client = get_async_httpx_client(llm_provider=cast(Any, "langgraph"), params={})
 
-        verbose_logger.debug(f"Making async streaming request to: {api_base}")
+        verbose_logger.debug("Making async streaming request to: %s", api_base)
 
         # Make async streaming request
         response = await client.post(
@@ -422,7 +422,7 @@ class LangGraphConfig(BaseConfig):
         """
         try:
             response_json = raw_response.json()
-            verbose_logger.debug(f"LangGraph response: {response_json}")
+            verbose_logger.debug("LangGraph response: %s", response_json)
 
             content = self._extract_content_from_response(response_json)
 
@@ -451,14 +451,14 @@ class LangGraphConfig(BaseConfig):
                 )
                 setattr(model_response, "usage", usage)
             except Exception as e:
-                verbose_logger.warning(f"Failed to calculate token usage: {e!s}")
+                verbose_logger.warning("Failed to calculate token usage: %s", e)
 
             return model_response
 
         except Exception as e:
-            verbose_logger.error(f"Error processing LangGraph response: {e!s}")
+            verbose_logger.error("Error processing LangGraph response: %s", e)
             raise LangGraphError(
-                message=f"Error processing response: {e!s}",
+                message=f"Error processing response: {e}",
                 status_code=raw_response.status_code,
             )
 

@@ -196,7 +196,7 @@ def print_verbose(print_statement):
     """
     import traceback
 
-    verbose_proxy_logger.debug(f"{print_statement}\n{traceback.format_exc()}")
+    verbose_proxy_logger.debug("%s\n%s", print_statement, traceback.format_exc())
     if litellm.set_verbose:
         print(f"LiteLLM Proxy: {_redact_string(str(print_statement))}")  # noqa: T201
 
@@ -722,11 +722,11 @@ class ProxyLogging:
                             else:
                                 # Could not parse modified arguments, allow original call but warn
                                 verbose_proxy_logger.warning(
-                                    f"Could not parse modified arguments from guardrail response: {new_content}"
+                                    "Could not parse modified arguments from guardrail response: %s", new_content
                                 )
                                 return None
                         except Exception as e:
-                            verbose_proxy_logger.error(f"Error parsing modified arguments: {e}")
+                            verbose_proxy_logger.error("Error parsing modified arguments: %s", e)
                             # Fallback: allow original call
                             return None
 
@@ -742,7 +742,7 @@ class ProxyLogging:
         """
         import json
 
-        verbose_proxy_logger.debug(f"Extracting modified args from content: {masked_content}")
+        verbose_proxy_logger.debug("Extracting modified args from content: %s", masked_content)
 
         try:
             # The format should be: "Tool: <tool_name>\nArguments: <json_arguments>"
@@ -753,16 +753,16 @@ class ProxyLogging:
                     # Get the arguments part - everything after "Arguments: "
                     args_text = line[len("Arguments:") :].strip()
 
-                    verbose_proxy_logger.debug(f"Found arguments text: {args_text}")
+                    verbose_proxy_logger.debug("Found arguments text: %s", args_text)
 
                     # Try to parse as JSON first
                     try:
                         modified_args = json.loads(args_text)
-                        verbose_proxy_logger.debug(f"Successfully parsed JSON args: {modified_args}")
+                        verbose_proxy_logger.debug("Successfully parsed JSON args: %s", modified_args)
                         return modified_args
                     except json.JSONDecodeError as e:
                         # If JSON parsing fails, try to extract key-value pairs manually
-                        verbose_proxy_logger.debug(f"Failed to parse JSON arguments: {args_text}, error: {e}")
+                        verbose_proxy_logger.debug("Failed to parse JSON arguments: %s, error: %s", args_text, e)
                         return self._parse_arguments_manually(args_text, request_obj.arguments)
 
             # If we can't find the Arguments: line, return None
@@ -770,7 +770,7 @@ class ProxyLogging:
             return None
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error extracting modified arguments: {e}")
+            verbose_proxy_logger.error("Error extracting modified arguments: %s", e)
             return None
 
     def _parse_arguments_manually(self, args_text: str, original_args: dict) -> dict | None:
@@ -799,7 +799,7 @@ class ProxyLogging:
             return modified_args
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in manual argument parsing: {e}")
+            verbose_proxy_logger.error("Error in manual argument parsing: %s", e)
             return None
 
     def _convert_llm_result_to_mcp_during_response(self, llm_result, request_obj) -> Any | None:
@@ -2174,10 +2174,10 @@ class ProxyLogging:
                     except Exception as e:
                         # Log non-HTTPException errors from callbacks but don't break the flow
                         verbose_proxy_logger.exception(
-                            f"[Non-Blocking] Error in async_post_call_failure_hook callback: {e}"
+                            "[Non-Blocking] Error in async_post_call_failure_hook callback: %s", e
                         )
             except Exception as e:
-                verbose_proxy_logger.exception(f"[Non-Blocking] Error setting up post_call_failure_hook callback: {e}")
+                verbose_proxy_logger.exception("[Non-Blocking] Error setting up post_call_failure_hook callback: %s", e)
 
         return transformed_exception
 
@@ -3019,7 +3019,7 @@ class PrismaClient:
         try:
             from prisma import Prisma  # type: ignore
         except Exception as e:
-            verbose_proxy_logger.error(f"Failed to import Prisma client: {e}")
+            verbose_proxy_logger.error("Failed to import Prisma client: %s", e)
             verbose_proxy_logger.error("This usually means 'prisma generate' hasn't been run yet.")
             verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
             raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
@@ -3283,7 +3283,8 @@ class PrismaClient:
                         missing_views = expected_views_set - ret_view_names_set
 
                         verbose_proxy_logger.warning(
-                            f"\n\n\033[93mNot all views exist in db, needed for UI 'Usage' tab. Missing={missing_views}.\nRun 'create_views.py' from https://github.com/BerriAI/litellm/tree/main/db_scripts to create missing views.\033[0m\n"
+                            "\n\n\x1b[93mNot all views exist in db, needed for UI 'Usage' tab. Missing=%s.\nRun 'create_views.py' from https://github.com/BerriAI/litellm/tree/main/db_scripts to create missing views.\x1b[0m\n",
+                            missing_views,
                         )
 
         except Exception:
@@ -3341,7 +3342,7 @@ class PrismaClient:
                 reason=f"prisma_get_generic_data_{table_name}_lookup_failure",
             )
         except Exception as e:
-            error_msg = f"LiteLLM Prisma Client Exception get_generic_data: {e!s}"
+            error_msg = f"LiteLLM Prisma Client Exception get_generic_data: {e}"
             verbose_proxy_logger.error(error_msg)
             error_msg = error_msg + f"\nException Type: {type(e)}"
             error_traceback = error_msg + "\n" + traceback.format_exc()
@@ -3444,7 +3445,7 @@ class PrismaClient:
                 if token is not None:
                     if isinstance(token, str):
                         hashed_token = _hash_token_if_needed(token=token)
-                        verbose_proxy_logger.debug(f"PrismaClient: find_unique for token: {hashed_token}")
+                        verbose_proxy_logger.debug("PrismaClient: find_unique for token: %s", hashed_token)
                 if query_type == "find_unique" and hashed_token is not None:
                     if token is None:
                         raise HTTPException(
@@ -3687,7 +3688,7 @@ class PrismaClient:
                 if token is not None:
                     if isinstance(token, str):
                         hashed_token = _hash_token_if_needed(token=token)
-                        verbose_proxy_logger.debug(f"PrismaClient: find_unique for token: {hashed_token}")
+                        verbose_proxy_logger.debug("PrismaClient: find_unique for token: %s", hashed_token)
                 if query_type == "find_unique":
                     if token is None:
                         raise HTTPException(
@@ -3956,7 +3957,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception in insert_data: {e!s}"
+            error_msg = f"LiteLLM Prisma Client Exception in insert_data: {e}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
@@ -3994,7 +3995,7 @@ class PrismaClient:
         """
         Update existing data
         """
-        verbose_proxy_logger.debug(f"PrismaClient: update_data, table_name: {table_name}")
+        verbose_proxy_logger.debug("PrismaClient: update_data, table_name: %s", table_name)
         start_time = time.time()
         try:
             db_data = self.jsonify_object(data=data)
@@ -4205,7 +4206,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception - update_data: {e!s}"
+            error_msg = f"LiteLLM Prisma Client Exception - update_data: {e}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
@@ -4271,7 +4272,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception - delete_data: {e!s}"
+            error_msg = f"LiteLLM Prisma Client Exception - delete_data: {e}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
@@ -4304,7 +4305,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception connect(): {e!s}"
+            error_msg = f"LiteLLM Prisma Client Exception connect(): {e}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
@@ -4334,7 +4335,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception disconnect(): {e!s}"
+            error_msg = f"LiteLLM Prisma Client Exception disconnect(): {e}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
@@ -5023,7 +5024,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception disconnect(): {e!s}"
+            error_msg = f"LiteLLM Prisma Client Exception disconnect(): {e}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
@@ -5062,7 +5063,7 @@ class PrismaClient:
         try:
             return await _fetch_row_count()
         except Exception as e:
-            verbose_proxy_logger.error(f"Error getting LiteLLM_SpendLogs row count: {e}")
+            verbose_proxy_logger.error("Error getting LiteLLM_SpendLogs row count: %s", e)
             return 0
 
     @backoff.on_exception(
@@ -5095,7 +5096,7 @@ class PrismaClient:
             value = float(response_time_ms)
             return value if value == value and value not in (float("inf"), float("-inf")) else None
         except (ValueError, TypeError):
-            verbose_proxy_logger.warning(f"Invalid response_time_ms value: {response_time_ms}")
+            verbose_proxy_logger.warning("Invalid response_time_ms value: %s", response_time_ms)
             return None
 
     def _clean_details(self, details: dict | None) -> dict | None:
@@ -5105,7 +5106,7 @@ class PrismaClient:
         try:
             return safe_json_loads(safe_dumps(details))
         except Exception as e:
-            verbose_proxy_logger.warning(f"Failed to clean details JSON: {e}")
+            verbose_proxy_logger.warning("Failed to clean details JSON: %s", e)
             return None
 
     async def save_health_check_result(
@@ -5142,11 +5143,11 @@ class PrismaClient:
             # Add only non-None optional fields
             health_check_data.update({k: v for k, v in optional_fields.items() if v is not None})
 
-            verbose_proxy_logger.debug(f"Saving health check data: {health_check_data}")
+            verbose_proxy_logger.debug("Saving health check data: %s", health_check_data)
             return await HealthCheckRepository(self).table.create(data=health_check_data)
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error saving health check result for model {model_name}: {e}")
+            verbose_proxy_logger.error("Error saving health check result for model %s: %s", model_name, e)
             return None
 
     async def get_health_check_history(
@@ -5174,7 +5175,7 @@ class PrismaClient:
             )
             return results
         except Exception as e:
-            verbose_proxy_logger.error(f"Error getting health check history: {e}")
+            verbose_proxy_logger.error("Error getting health check history: %s", e)
             return []
 
     async def get_all_latest_health_checks(self):
@@ -5194,7 +5195,7 @@ class PrismaClient:
                 ],
             )
         except Exception as e:
-            verbose_proxy_logger.error(f"Error getting all latest health checks: {e}")
+            verbose_proxy_logger.error("Error getting all latest health checks: %s", e)
             return []
 
 
@@ -5451,7 +5452,7 @@ class ProxyUpdateSpend:
                     if len(logs_to_process) > 0 and base_url is not None and db_writer_client is not None:
                         if not base_url.endswith("/"):
                             base_url += "/"
-                        verbose_proxy_logger.debug(f"base_url: {base_url}")
+                        verbose_proxy_logger.debug("base_url: %s", base_url)
                         json_data = json.dumps(logs_to_process)
                         response = await db_writer_client.post(
                             url=base_url + "spend/update",
@@ -5475,7 +5476,7 @@ class ProxyUpdateSpend:
                                     statement_rows,
                                     isolation_budget,
                                 )
-                            verbose_proxy_logger.debug(f"Flushed {len(batch)} logs to the DB.")
+                            verbose_proxy_logger.debug("Flushed %s logs to the DB.", len(batch))
                             # Explicitly clear batch memory
                             del batch, batch_with_dates
 
@@ -5483,7 +5484,7 @@ class ProxyUpdateSpend:
                         async with prisma_client._spend_log_transactions_lock:
                             remaining_count = len(prisma_client.spend_log_transactions)
                         verbose_proxy_logger.debug(
-                            f"{len(logs_to_process)} logs processed. Remaining in queue: {remaining_count}"
+                            "%s logs processed. Remaining in queue: %s", len(logs_to_process), remaining_count
                         )
                     break
                 except DB_CONNECTION_ERROR_TYPES as e:
@@ -5551,7 +5552,7 @@ async def update_spend(
     # Check queue size with lock protection
     async with prisma_client._spend_log_transactions_lock:
         queue_size = len(prisma_client.spend_log_transactions)
-    verbose_proxy_logger.debug(f"Spend Logs transactions: {queue_size}")
+    verbose_proxy_logger.debug("Spend Logs transactions: %s", queue_size)
 
     async with prisma_client._tool_usage_transactions_lock:
         tool_usage_queue_size = len(prisma_client.tool_usage_transactions)
@@ -5611,7 +5612,7 @@ async def update_daily_tag_spend(
         # the active exception's traceback whenever the suppression env var
         # is unset, which would be a regression for operators who never saw
         # one here before.
-        verbose_proxy_logger.error(f"Error updating daily tag spend: {e}")
+        verbose_proxy_logger.error("Error updating daily tag spend: %s", e)
 
 
 async def update_spend_logs_job(
@@ -5713,7 +5714,7 @@ async def _monitor_spend_logs_queue(
     current_interval = base_interval
 
     verbose_proxy_logger.info(
-        f"Starting spend logs queue monitor (threshold: {threshold}, poll_interval: {base_interval}s)"
+        "Starting spend logs queue monitor (threshold: %s, poll_interval: %ss)", threshold, base_interval
     )
 
     while True:
@@ -5729,13 +5730,17 @@ async def _monitor_spend_logs_queue(
             if queue_size > 0:
                 if queue_size >= threshold:
                     verbose_proxy_logger.debug(
-                        f"Spend logs queue size ({queue_size}) reached threshold ({threshold}), triggering processing"
+                        "Spend logs queue size (%s) reached threshold (%s), triggering processing",
+                        queue_size,
+                        threshold,
                     )
                     # Reset to base interval when threshold is reached
                     current_interval = base_interval
                 else:
                     verbose_proxy_logger.debug(
-                        f"Spend logs queue size ({queue_size}) below threshold ({threshold}), processing with backoff"
+                        "Spend logs queue size (%s) below threshold (%s), processing with backoff",
+                        queue_size,
+                        threshold,
                     )
                     # Exponential backoff when below threshold but still processing
                     current_interval = min(current_interval * backoff_multiplier, max_backoff)
@@ -5833,7 +5838,7 @@ def _raise_failed_update_spend_exception(e: Exception, start_time: float, proxy_
     """
     import traceback
 
-    error_msg = f"[Non-Blocking]LiteLLM Prisma Client Exception - update spend logs: {e!s}"
+    error_msg = f"[Non-Blocking]LiteLLM Prisma Client Exception - update spend logs: {e}"
     error_traceback = error_msg + "\n" + traceback.format_exc()
     end_time = time.time()
     _duration = end_time - start_time
@@ -6121,11 +6126,11 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
     """
     from fastapi import status
 
-    verbose_proxy_logger.exception(f"Exception: {e}")
+    verbose_proxy_logger.exception("Exception: %s", e)
 
     if isinstance(e, HTTPException):
         return ProxyException(
-            message=getattr(e, "detail", f"error({e!s})"),
+            message=getattr(e, "detail", f"error({e})"),
             type=ProxyErrorTypes.internal_server_error,
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),

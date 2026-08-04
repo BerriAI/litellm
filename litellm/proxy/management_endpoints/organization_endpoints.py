@@ -498,7 +498,7 @@ async def new_organization(
     new_organization_row = _STR_OBJECT_DICT_ADAPTER.validate_python(
         prisma_client.jsonify_object(organization_row.json(exclude_none=True))
     )
-    verbose_proxy_logger.info(f"new_organization_row: {json.dumps(new_organization_row, indent=2)}")
+    verbose_proxy_logger.info("new_organization_row: %s", json.dumps(new_organization_row, indent=2))
     response = await _table(OrganizationRepository(prisma_client)).create(
         data={
             **new_organization_row,
@@ -1258,10 +1258,10 @@ async def organization_member_add(
             updated_organization_memberships=updated_organization_memberships,
         )
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error adding member to organization: {e}")
+        verbose_proxy_logger.exception("Error adding member to organization: %s", e)
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -1444,7 +1444,7 @@ async def organization_member_update(
         )
         return final_organization_membership_pydantic
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating member in organization: {e}")
+        verbose_proxy_logger.exception("Error updating member in organization: %s", e)
         raise e
 
 
@@ -1493,7 +1493,7 @@ async def organization_member_delete(
         return member_to_delete
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error deleting member from organization: {e}")
+        verbose_proxy_logger.exception("Error deleting member from organization: %s", e)
         raise e
 
 

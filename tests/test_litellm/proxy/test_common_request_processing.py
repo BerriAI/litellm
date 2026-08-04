@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import datetime
+from types import SimpleNamespace
 from typing import AsyncGenerator, Callable, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -28,11 +29,14 @@ from litellm.proxy.common_request_processing import (
     _is_azure_model_router_request,
     _override_openai_response_model,
     _parse_event_data_for_error,
+    _resolve_per_request_model_group_alias,
     _should_return_raw_model_name,
     _UpstreamClosingStreamingResponse,
     create_response,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
+from litellm.proxy._types import ProxyException
+from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 
 
@@ -5354,3 +5358,228 @@ class TestModelDeploymentsSupportStreamOptions:
 
     def test_non_string_model_is_not_injected(self):
         assert self._support(None, None) is False
+
+
+class TestPerRequestModelGroupAlias:
+    """``router_settings.model_group_alias`` on a key or team has to be resolved
+    by the proxy: the Router resolves aliases from its own shared instance
+    attribute, which only ever holds the global config map."""
+
+    @staticmethod
+    def _router() -> litellm.Router:
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "group-a",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                },
+                {
+                    "model_name": "group-b",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"},
+                },
+            ]
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "alias_map, expected",
+        [
+            ({"group-a": "group-b"}, "group-b"),
+            ({"group-a": {"model": "group-b", "hidden": True}}, "group-b"),
+            ({"group-b": "group-a"}, None),
+            ({"group-a": "group-a"}, None),
+            ({"group-a": {"hidden": True}}, None),
+            ({}, None),
+            (None, None),
+        ],
+    )
+    async def test_resolves_alias_for_the_requested_model_group(self, alias_map, expected):
+        resolved = await _resolve_per_request_model_group_alias(
+            requested_model="group-a",
+            router_settings={"model_group_alias": alias_map},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            llm_router=self._router(),
+        )
+
+        assert resolved == expected
+
+    @pytest.mark.asyncio
+    async def test_alias_target_outside_the_key_allowlist_is_rejected(self):
+        """Access was authorized against the requested group, so a rewrite that
+        the key could not have requested directly must not be served."""
+        with pytest.raises(ProxyException) as exc_info:
+            await _resolve_per_request_model_group_alias(
+                requested_model="group-a",
+                router_settings={"model_group_alias": {"group-a": "group-b"}},
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=["group-a"]),
+                llm_router=self._router(),
+            )
+
+        assert exc_info.value.code == "403"
+        assert "group-b" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_alias_target_inside_the_key_allowlist_resolves(self):
+        resolved = await _resolve_per_request_model_group_alias(
+            requested_model="group-a",
+            router_settings={"model_group_alias": {"group-a": "group-b"}},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=["group-a", "group-b"]),
+            llm_router=self._router(),
+        )
+
+        assert resolved == "group-b"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("requested_model", [None, ["group-a", "group-b"]])
+    async def test_non_string_requested_model_is_left_alone(self, requested_model):
+        """The routed model is not always a string (a batch request carries a
+        list), and an unhashable one must not blow up the alias lookup."""
+        resolved = await _resolve_per_request_model_group_alias(
+            requested_model=requested_model,
+            router_settings={"model_group_alias": {"group-a": "group-b"}},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            llm_router=self._router(),
+        )
+
+        assert resolved is None
+
+    @pytest.mark.asyncio
+    async def test_pre_call_logic_rewrites_the_requested_model(self, monkeypatch):
+        """End to end through the request path: a key carrying the alias must
+        leave pre-call processing pointing at the alias target, not at the
+        group the caller asked for."""
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"model": "group-a"})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+            return copy.deepcopy(data)
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(
+            return_value={"model_group_alias": {"group-a": "group-b"}}
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router(),
+        )
+
+        assert returned_data["model"] == "group-b"
+        assert returned_data["router_settings_override"] == {"model_group_alias": {"group-a": "group-b"}}
+        # The rewrite has to land before the pre-call hooks: they are where
+        # per-model budgets and rate limits are enforced, so resolving later
+        # applies the requested group's limits to a call the target serves.
+        assert mock_proxy_logging_obj.pre_call_hook.call_args.kwargs["data"]["model"] == "group-b"
+
+    @pytest.mark.asyncio
+    async def test_team_level_alias_rewrites_the_requested_model(self, monkeypatch):
+        """The team path is separate resolution, not a variant of the key path:
+        settings are looked up on the team only when the key carries none. Runs
+        the real hierarchical lookup rather than mocking it, so this covers the
+        team half of the fix end to end."""
+        from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"model": "group-a"})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+            return copy.deepcopy(data)
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.get_team_object",
+            AsyncMock(return_value=SimpleNamespace(router_settings={"model_group_alias": {"group-a": "group-b"}})),
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[], team_id="team-1"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=RealProxyConfig(),
+            route_type="acompletion",
+            llm_router=self._router(),
+        )
+
+        assert returned_data["model"] == "group-b"
+
+    @pytest.mark.asyncio
+    async def test_model_level_guardrails_resolve_against_the_alias_target(self, monkeypatch):
+        """Model-level guardrails are merged by model group name, so the merge
+        must see the target rather than the group the caller named."""
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"model": "group-a"})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+            return copy.deepcopy(data)
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+
+        merged_for: list = []
+
+        def recording_merge(data, llm_router, trust_client_model_info=True):
+            merged_for.append(data.get("model"))
+            return data
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "_check_and_merge_model_level_guardrails",
+            recording_merge,
+        )
+
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(
+            return_value={"model_group_alias": {"group-a": "group-b"}}
+        )
+
+        await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router(),
+        )
+
+        assert merged_for == ["group-b"]

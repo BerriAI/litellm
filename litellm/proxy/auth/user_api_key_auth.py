@@ -102,7 +102,7 @@ try:
 
     enterprise_custom_auth: Callable | None = _enterprise_custom_auth
 except ImportError as e:
-    verbose_proxy_logger.debug(f"Error in enterprise custom auth: {e}")
+    verbose_proxy_logger.debug("Error in enterprise custom auth: %s", e)
     enterprise_custom_auth = None
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
@@ -406,7 +406,7 @@ def _apply_budget_limits_to_end_user_params(
     if budget_info.model_max_budget is not None:
         end_user_params["end_user_model_max_budget"] = budget_info.model_max_budget
 
-    verbose_proxy_logger.debug(f"Applied budget limits to end user {end_user_id}")
+    verbose_proxy_logger.debug("Applied budget limits to end user %s", end_user_id)
 
 
 async def user_api_key_auth_websocket(websocket: WebSocket):
@@ -865,7 +865,9 @@ async def _resolve_jwt_to_virtual_key(
     )
 
     if claim_value is None:
-        verbose_proxy_logger.debug(f"JWT Key Mapping: Claim field '{virtual_key_claim_field}' not found in JWT claims.")
+        verbose_proxy_logger.debug(
+            "JWT Key Mapping: Claim field '%s' not found in JWT claims.", virtual_key_claim_field
+        )
         # A missing claim is an unmapped client — apply the no-match policy
         # rather than returning early. Otherwise a caller can bypass REJECT
         # simply by presenting a JWT that omits the configured field. For
@@ -1232,6 +1234,26 @@ async def _user_api_key_auth_builder(
                         valid_token.jwt_claims = jwt_claims
                         do_standard_jwt_auth = False
                         # Fall through to virtual key checks
+                        if valid_token.user_id is not None and valid_token.user_email is None:
+                            mapped_claims = jwt_claims or {}  # mutable-ok: empty-dict fallback for the None-claims case
+                            mapped_user_email = jwt_handler.get_user_email(token=mapped_claims, default_value=None)
+                            mapped_jwt_user_id = jwt_handler.get_user_id(token=mapped_claims, default_value=None)
+                            if mapped_user_email is not None and mapped_jwt_user_id == valid_token.user_id:
+                                try:
+                                    mapped_user_obj = await get_user_object(
+                                        user_id=valid_token.user_id,
+                                        prisma_client=prisma_client,
+                                        user_api_key_cache=user_api_key_cache,
+                                        user_id_upsert=False,
+                                        parent_otel_span=parent_otel_span,
+                                        proxy_logging_obj=proxy_logging_obj,
+                                        user_email=mapped_user_email,
+                                    )
+                                except Exception as e:
+                                    verbose_proxy_logger.debug("JWT mapped-key user_email backfill skipped: %s", e)
+                                else:
+                                    if mapped_user_obj is not None:
+                                        valid_token.user_email = mapped_user_obj.user_email
                     elif isinstance(resolve_result, _PendingAutoRegister):
                         # Run full JWT policy (RBAC, scope, custom_validate,
                         # email-domain) via auth_builder, then create the key
@@ -1370,7 +1392,7 @@ async def _user_api_key_auth_builder(
 
                         skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
                         if skip_budget_checks:
-                            verbose_proxy_logger.info(f"Skipping all budget checks for zero-cost model: {model}")
+                            verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
 
                     # Fetch project object for JWT path if project_id is set
                     _jwt_project_obj = None
@@ -1481,7 +1503,7 @@ async def _user_api_key_auth_builder(
             except Exception as e:
                 if isinstance(e, litellm.BudgetExceededError):
                     raise e
-                verbose_proxy_logger.debug(f"Unable to find user in db. Error - {e!s}")
+                verbose_proxy_logger.debug("Unable to find user in db. Error - %s", e)
 
         ### CHECK IF ADMIN ###
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
@@ -1729,7 +1751,8 @@ async def _user_api_key_auth_builder(
                         )
                 except Exception as e:
                     verbose_logger.debug(
-                        f"litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to get user from db/cache. Setting user_obj to None. Exception received - {e!s}"
+                        "litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to get user from db/cache. Setting user_obj to None. Exception received - %s",
+                        e,
                     )
                     user_obj = None
 
@@ -1755,7 +1778,7 @@ async def _user_api_key_auth_builder(
 
                 skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
                 if skip_budget_checks:
-                    verbose_proxy_logger.info(f"Skipping all budget checks for zero-cost model: {model}")
+                    verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
 
             # Check 3. Check if user is in their team budget
             if not skip_budget_checks and valid_token.team_member_spend is not None:
@@ -1819,7 +1842,7 @@ async def _user_api_key_auth_builder(
                 if expiry_time.tzinfo is None or expiry_time.tzinfo.utcoffset(expiry_time) is None:
                     expiry_time = expiry_time.replace(tzinfo=timezone.utc)
                 verbose_proxy_logger.debug(
-                    f"Checking if token expired, expiry time {expiry_time} and current time {current_time}"
+                    "Checking if token expired, expiry time %s and current time %s", expiry_time, current_time
                 )
                 if expiry_time < current_time:
                     # Token exists but is expired.
@@ -2669,11 +2692,13 @@ def get_api_key_from_custom_header(request: Request, custom_litellm_key_header_n
     if custom_api_key:
         api_key = _get_bearer_token(api_key=custom_api_key)
         verbose_proxy_logger.debug(
-            f"Found custom API key using header: {custom_litellm_key_header_name}, setting api_key={abbreviate_api_key(api_key)}"
+            "Found custom API key using header: %s, setting api_key=%s",
+            custom_litellm_key_header_name,
+            abbreviate_api_key(api_key),
         )
     else:
         verbose_proxy_logger.exception(
-            f"No LiteLLM Virtual Key pass. Please set header={custom_litellm_key_header_name}: Bearer <api_key>"
+            "No LiteLLM Virtual Key pass. Please set header=%s: Bearer <api_key>", custom_litellm_key_header_name
         )
     return api_key
 
@@ -2754,7 +2779,7 @@ async def _lookup_end_user_and_apply_budget(
     except Exception as e:
         if isinstance(e, litellm.BudgetExceededError):
             raise e
-        verbose_proxy_logger.debug(f"Unable to find user in db. Error - {e!s}")
+        verbose_proxy_logger.debug("Unable to find user in db. Error - %s", e)
     return valid_token, end_user_object
 
 
@@ -2776,7 +2801,7 @@ async def _enforce_key_and_fallback_model_access(
     if config != {}:
         model_list = config.get("model_list", [])
         new_model_list = model_list
-        verbose_proxy_logger.debug(f"\n new llm router model list {new_model_list}")
+        verbose_proxy_logger.debug("\n new llm router model list %s", new_model_list)
     elif isinstance(valid_token.models, list) and "all-team-models" in valid_token.models:
         pass
     else:

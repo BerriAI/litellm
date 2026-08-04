@@ -298,7 +298,7 @@ async def resolve_policies_for_context(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error resolving policies: {e}")
+        verbose_proxy_logger.exception("Error resolving policies: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -408,5 +408,5 @@ async def estimate_attachment_impact(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error estimating attachment impact: {e}")
+        verbose_proxy_logger.exception("Error estimating attachment impact: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

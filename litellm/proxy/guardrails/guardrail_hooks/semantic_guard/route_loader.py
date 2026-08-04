@@ -112,7 +112,7 @@ class SemanticGuardRouteLoader:
                     )
                 )
 
-        verbose_logger.info(f"SemanticGuard: built {len(routes)} routes")
+        verbose_logger.info("SemanticGuard: built %s routes", len(routes))
         return routes
 
     @classmethod

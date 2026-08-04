@@ -94,7 +94,7 @@ def regex_match(text: str, pattern: str, flags: int = 0) -> bool:
     try:
         return bool(re.search(pattern, text, flags))
     except re.error as e:
-        verbose_proxy_logger.warning(f"Starlark regex_match error: {e}")
+        verbose_proxy_logger.warning("Starlark regex_match error: %s", e)
         return False
 
 
@@ -113,7 +113,7 @@ def regex_match_all(text: str, pattern: str, flags: int = 0) -> bool:
     try:
         return bool(re.fullmatch(pattern, text, flags))
     except re.error as e:
-        verbose_proxy_logger.warning(f"Starlark regex_match_all error: {e}")
+        verbose_proxy_logger.warning("Starlark regex_match_all error: %s", e)
         return False
 
 
@@ -133,7 +133,7 @@ def regex_replace(text: str, pattern: str, replacement: str, flags: int = 0) -> 
     try:
         return re.sub(pattern, replacement, text, flags=flags)
     except re.error as e:
-        verbose_proxy_logger.warning(f"Starlark regex_replace error: {e}")
+        verbose_proxy_logger.warning("Starlark regex_replace error: %s", e)
         return text
 
 
@@ -152,7 +152,7 @@ def regex_find_all(text: str, pattern: str, flags: int = 0) -> list[str]:
     try:
         return re.findall(pattern, text, flags)
     except re.error as e:
-        verbose_proxy_logger.warning(f"Starlark regex_find_all error: {e}")
+        verbose_proxy_logger.warning("Starlark regex_find_all error: %s", e)
         return []
 
 
@@ -174,7 +174,7 @@ def json_parse(text: str) -> Any | None:
     try:
         return json.loads(text)
     except (json.JSONDecodeError, TypeError) as e:
-        verbose_proxy_logger.debug(f"Starlark json_parse error: {e}")
+        verbose_proxy_logger.debug("Starlark json_parse error: %s", e)
         return None
 
 
@@ -191,7 +191,7 @@ def json_stringify(obj: Any) -> str:
     try:
         return json.dumps(obj)
     except (TypeError, ValueError) as e:
-        verbose_proxy_logger.warning(f"Starlark json_stringify error: {e}")
+        verbose_proxy_logger.warning("Starlark json_stringify error: %s", e)
         return ""
 
 
@@ -222,7 +222,7 @@ def json_schema_valid(obj: Any, schema: dict[str, Any]) -> bool:
                 return False
             raise
     except Exception as e:
-        verbose_proxy_logger.warning(f"Custom code json_schema_valid error: {e}")
+        verbose_proxy_logger.warning("Custom code json_schema_valid error: %s", e)
         return False
 
 
@@ -473,17 +473,17 @@ async def http_request(
         return _http_success_response(response)
 
     except httpx.TimeoutException as e:
-        verbose_proxy_logger.warning(f"Custom code http_request timeout: {e}")
+        verbose_proxy_logger.warning("Custom code http_request timeout: %s", e)
         return _http_error_response(f"Request timeout after {timeout}s")
     except httpx.HTTPStatusError as e:
         # Return the response even for non-2xx status codes
         return _http_success_response(e.response)
     except httpx.RequestError as e:
-        verbose_proxy_logger.warning(f"Custom code http_request error: {e}")
-        return _http_error_response(f"Request failed: {e!s}")
+        verbose_proxy_logger.warning("Custom code http_request error: %s", e)
+        return _http_error_response(f"Request failed: {e}")
     except Exception as e:
-        verbose_proxy_logger.warning(f"Custom code http_request unexpected error: {e}")
-        return _http_error_response(f"Unexpected error: {e!s}")
+        verbose_proxy_logger.warning("Custom code http_request unexpected error: %s", e)
+        return _http_error_response(f"Unexpected error: {e}")
 
 
 async def _execute_http_request(

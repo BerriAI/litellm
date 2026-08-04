@@ -313,7 +313,7 @@ async def list_guardrails_v2(
 
         return ListGuardrailsResponse(guardrails=guardrail_configs)
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting guardrails from db: {e}")
+        verbose_proxy_logger.exception("Error getting guardrails from db: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -397,7 +397,7 @@ async def create_guardrail(
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(guardrail=cast(Guardrail, result), source="db")
             verbose_proxy_logger.info(
-                f"Immediate sync: Successfully initialized guardrail '{guardrail_name}' (ID: {guardrail_id})"
+                "Immediate sync: Successfully initialized guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
         except (ValueError, TypeError) as init_error:
             # Configuration error — roll back the DB write so the guardrail isn't orphaned
@@ -405,19 +405,22 @@ async def create_guardrail(
                 try:
                     await _delete_guardrail_row(prisma_client, where={"guardrail_id": guardrail_id})
                 except Exception as rollback_err:
-                    verbose_proxy_logger.warning(f"Rollback failed for guardrail '{guardrail_id}': {rollback_err}")
+                    verbose_proxy_logger.warning("Rollback failed for guardrail '%s': %s", guardrail_id, rollback_err)
             raise HTTPException(
                 status_code=400,
                 detail=f"Guardrail configuration error: {init_error}",
             )
         except Exception as init_error:
             verbose_proxy_logger.warning(
-                f"Immediate sync: Failed to initialize guardrail '{guardrail_name}' (ID: {guardrail_id}) in memory: {init_error}"
+                "Immediate sync: Failed to initialize guardrail '%s' (ID: %s) in memory: %s",
+                guardrail_name,
+                guardrail_id,
+                init_error,
             )
 
         return result
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error adding guardrail to db: {e}")
+        verbose_proxy_logger.exception("Error adding guardrail to db: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -515,11 +518,14 @@ async def update_guardrail(
                 guardrail_id=guardrail_id, guardrail=cast(Guardrail, result)
             )
             verbose_proxy_logger.info(
-                f"Immediate sync: Successfully updated guardrail '{guardrail_name}' (ID: {guardrail_id})"
+                "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
         except Exception as update_error:
             verbose_proxy_logger.warning(
-                f"Immediate sync: Failed to update '{guardrail_name}' (ID: {guardrail_id}) in memory: {update_error}"
+                "Immediate sync: Failed to update '%s' (ID: %s) in memory: %s",
+                guardrail_name,
+                guardrail_id,
+                update_error,
             )
 
         return result
@@ -587,11 +593,14 @@ async def delete_guardrail(
                 guardrail_id=guardrail_id,
             )
             verbose_proxy_logger.info(
-                f"Immediate sync: Successfully removed guardrail '{guardrail_name}' (ID: {guardrail_id}) from memory"
+                "Immediate sync: Successfully removed guardrail '%s' (ID: %s) from memory", guardrail_name, guardrail_id
             )
         except Exception as delete_error:
             verbose_proxy_logger.warning(
-                f"Immediate sync: Failed to remove guardrail '{guardrail_name}' (ID: {guardrail_id}) from memory: {delete_error}"
+                "Immediate sync: Failed to remove guardrail '%s' (ID: %s) from memory: %s",
+                guardrail_name,
+                guardrail_id,
+                delete_error,
             )
 
         return result
@@ -1203,18 +1212,21 @@ async def patch_guardrail(
                 guardrail=guardrail,
             )
             verbose_proxy_logger.info(
-                f"Immediate sync: Successfully updated guardrail '{guardrail_name}' (ID: {guardrail_id})"
+                "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
         except Exception as update_error:
             verbose_proxy_logger.warning(
-                f"Immediate sync: Failed to update '{guardrail_name}' (ID: {guardrail_id}) in memory: {update_error}"
+                "Immediate sync: Failed to update '%s' (ID: %s) in memory: %s",
+                guardrail_name,
+                guardrail_id,
+                update_error,
             )
 
         return result
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating guardrail: {e}")
+        verbose_proxy_logger.exception("Error updating guardrail: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1420,7 +1432,7 @@ async def get_category_yaml(category_name: str):
             "file_type": file_type,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading category file: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Error reading category file: {e}")
 
 
 @router.get(
@@ -1452,7 +1464,7 @@ async def get_major_airlines():
             airlines = json.load(f)
         return {"airlines": airlines}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading major_airlines.json: {e!s}") from e
+        raise HTTPException(status_code=500, detail=f"Error reading major_airlines.json: {e}") from e
 
 
 @router.post(
@@ -1540,10 +1552,10 @@ async def validate_blocked_words_file(request: dict[str, str]):
             "message": f"Valid YAML file with {len(blocked_words_list)} blocked word(s)",
         }
     except yaml.YAMLError as e:
-        return {"valid": False, "error": f"Invalid YAML syntax: {e!s}"}
+        return {"valid": False, "error": f"Invalid YAML syntax: {e}"}
     except Exception as e:
         verbose_proxy_logger.exception("Error validating blocked words file")
-        return {"valid": False, "error": f"Validation error: {e!s}"}
+        return {"valid": False, "error": f"Validation error: {e}"}
 
 
 def _get_field_type_from_annotation(field_annotation: Any) -> str:
@@ -2126,7 +2138,7 @@ async def test_custom_code_guardrail(
         )
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error testing custom code guardrail: {e}")
+        verbose_proxy_logger.exception("Error testing custom code guardrail: %s", e)
         return TestCustomCodeGuardrailResponse(
             success=False,
             error=f"Unexpected error: {e}",

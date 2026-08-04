@@ -62,7 +62,7 @@ class LangGraphSSEStreamIterator:
                 data = json.loads(json_str)
                 return self._process_data(data)
             except json.JSONDecodeError:
-                verbose_logger.debug(f"Skipping non-JSON SSE line: {line[:100]}")
+                verbose_logger.debug("Skipping non-JSON SSE line: %s", line[:100])
                 return None
 
         return None
@@ -196,7 +196,7 @@ class LangGraphSSEStreamIterator:
         except httpx.StreamClosed:
             raise StopIteration
         except Exception as e:
-            verbose_logger.error(f"Error in LangGraph SSE stream: {e!s}")
+            verbose_logger.error("Error in LangGraph SSE stream: %s", e)
             raise StopIteration
 
     async def __anext__(self) -> ModelResponseStream:
@@ -224,5 +224,5 @@ class LangGraphSSEStreamIterator:
         except httpx.StreamClosed:
             raise StopAsyncIteration
         except Exception as e:
-            verbose_logger.error(f"Error in LangGraph SSE stream: {e!s}")
+            verbose_logger.error("Error in LangGraph SSE stream: %s", e)
             raise StopAsyncIteration
