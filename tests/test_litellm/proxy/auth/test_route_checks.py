@@ -86,6 +86,59 @@ def test_compliance_routes_open_to_non_admin_roles(role, route):
     )
 
 
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+def test_user_banner_read_open_to_non_admin_roles(role):
+    """The dashboard banner renders for every authenticated user, so the read
+    route must be reachable by non-admin roles."""
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=role,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=role)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=role,
+        route="/get/user_banner",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+def test_user_banner_update_rejected_for_non_admin():
+    """Publishing the banner stays admin-only at the route layer."""
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/update/user_banner",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+    assert "Route=/update/user_banner" in str(exc_info.value)
+
+
 def test_proxy_admin_viewer_config_update_route_rejected():
     """Test that proxy admin viewer users are rejected when trying to call /config/update"""
 

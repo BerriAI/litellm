@@ -970,6 +970,23 @@ def mock_completion(
         raise Exception(f"Mock completion response failed - {e}")
 
 
+_OPENAI_DEFAULT_API_BASE = "https://api.openai.com/v1"
+
+
+def _resolve_openai_api_base(api_base: str | None) -> str:
+    """Effective OpenAI base a chat request will hit: arg > global > env > default. The bridge gate
+    and the ``_complete_custom_openai`` chat handler MUST resolve this identically, or a custom base
+    set via ``litellm.api_base`` or ``OPENAI_BASE_URL``/``OPENAI_API_BASE`` is invisible to the gate,
+    which then misreads it as the default OpenAI endpoint and bridges a request the backend can't serve."""
+    return (
+        api_base
+        or litellm.api_base
+        or get_secret_str("OPENAI_BASE_URL")
+        or get_secret_str("OPENAI_API_BASE")
+        or _OPENAI_DEFAULT_API_BASE
+    )
+
+
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
@@ -977,6 +994,7 @@ def responses_api_bridge_check(
     tools: list[Any] | None = None,
     reasoning_effort: Any | None = None,
     reasoning_summary: Any | None = None,
+    api_base: str | None = None,
 ) -> tuple[dict, str]:
     model_info: dict[str, Any] = {}
 
@@ -1013,16 +1031,53 @@ def responses_api_bridge_check(
     # ``reasoningSummary`` in ``extra_body``) must be bridged; Chat Completions rejects
     # those keys.
     #
-    # - gpt-5.4+: tools + reasoning_effort (original) or any reasoning-summary alias.
+    # - gpt-5.4+: FUNCTION tools with reasoning active must be bridged. OpenAI enables
+    #   reasoning by default for these models (unset reasoning_effort means medium
+    #   server-side), and Chat Completions rejects function tools whenever reasoning is
+    #   on ("Function tools with reasoning_effort are not supported ... use
+    #   /v1/responses or set reasoning_effort to 'none'"), so only an explicit
+    #   ``"none"`` keeps the request chat-servable. Custom (grammar) tools are served
+    #   natively by Chat Completions with reasoning on, so custom-only requests stay on
+    #   chat and keep their native custom tool_call response shape.
+    # - The UNSET-effort arm only fires against endpoints known to enforce that
+    #   constraint (the default OpenAI endpoint, or Azure OpenAI where api_base is
+    #   always set): chat-only OpenAI-compatible backends registered under the openai
+    #   provider with a custom api_base and gpt-5.4+ model names serve tools without
+    #   reasoning fine and have no /responses route, so they keep pre-existing
+    #   behavior (bridge only on an explicit reasoning_effort).
     # - Older GPT-5 names (e.g. ``gpt-5``, ``gpt-5.1``): bridge only when a reasoning
     #   summary alias is present with ``reasoning_effort`` (tools alone stay on chat).
+    has_function_tool = any(
+        (tool.get("type") == "function" if isinstance(tool, dict) else getattr(tool, "type", None) == "function")
+        for tool in (tools or ())
+    )
+    if isinstance(reasoning_effort, dict):
+        reasoning_active = reasoning_effort.get("effort") != "none" or reasoning_effort.get("summary") is not None
+    else:
+        reasoning_active = reasoning_effort != "none"
+    # The reasoning+tools constraint is enforced only by the real OpenAI endpoint (and Azure OpenAI).
+    # Resolve the effective base arg>global>env>default exactly as the chat handler does, so a custom
+    # base set via litellm.api_base or OPENAI_BASE_URL/OPENAI_API_BASE isn't misread as the default and
+    # bridged to a /responses route it lacks. A whitespace-only base collapses to the default too.
+    resolved_api_base = _resolve_openai_api_base(api_base)
+    on_constraint_enforcing_endpoint = custom_llm_provider == "azure" or resolved_api_base.strip() in (
+        "",
+        _OPENAI_DEFAULT_API_BASE,
+    )
     if (
         custom_llm_provider in ("openai", "azure")
         and model_info.get("mode") != "responses"
         and OpenAIGPT5Config.is_model_gpt_5_model(model)
         and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
-        and reasoning_effort is not None
-        and (reasoning_summary is not None or (OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model) and tools))
+        and (
+            (reasoning_effort is not None and reasoning_summary is not None)
+            or (
+                OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
+                and has_function_tool
+                and reasoning_active
+                and (reasoning_effort is not None or on_constraint_enforcing_endpoint)
+            )
+        )
     ):
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
@@ -2354,13 +2409,8 @@ def _complete_custom_openai(
     stream = ctx.stream
     timeout = ctx.timeout
 
-    api_base = (
-        api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
-        or litellm.api_base
-        or get_secret("OPENAI_BASE_URL")
-        or get_secret("OPENAI_API_BASE")
-        or "https://api.openai.com/v1"
-    )
+    # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
+    api_base = _resolve_openai_api_base(api_base)
     organization = (
         organization
         or litellm.organization
@@ -5139,6 +5189,7 @@ def completion(  # type: ignore
             model=model,
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
+            api_base=api_base,
         )
 
         if not _should_allow_input_examples(custom_llm_provider=custom_llm_provider, model=model):
@@ -5378,6 +5429,7 @@ def completion(  # type: ignore
                 tools=tools,
                 reasoning_effort=reasoning_effort,
                 reasoning_summary=_reasoning_summary_for_bridge,
+                api_base=api_base,
             )
 
         # Use base_model (the true underlying model) for Azure model-type
