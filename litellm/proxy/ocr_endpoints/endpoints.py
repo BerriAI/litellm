@@ -96,9 +96,10 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
             data[field_name] = field_value
 
     verbose_proxy_logger.debug(
-        f"OCR multipart form request parsed - model: {data.get('model')}, "
-        f"document_type: {document['type']}, "
-        f"filename: {uploaded_file.filename}"
+        "OCR multipart form request parsed - model: %s, document_type: %s, filename: %s",
+        data.get("model"),
+        document["type"],
+        uploaded_file.filename,
     )
 
     return data

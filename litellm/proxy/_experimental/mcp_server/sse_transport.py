@@ -46,7 +46,7 @@ class SseServerTransport:
         super().__init__()
         self._endpoint = endpoint
         self._read_stream_writers = {}
-        verbose_logger.debug(f"SseServerTransport initialized with endpoint: {endpoint}")
+        verbose_logger.debug("SseServerTransport initialized with endpoint: %s", endpoint)
 
     @asynccontextmanager
     async def connect_sse(self, request: Request):
@@ -67,7 +67,7 @@ class SseServerTransport:
         session_id = uuid4()
         session_uri = f"{quote(self._endpoint)}?session_id={session_id.hex}"
         self._read_stream_writers[session_id] = read_stream_writer
-        verbose_logger.debug(f"Created new session with ID: {session_id}")
+        verbose_logger.debug("Created new session with ID: %s", session_id)
 
         sse_stream_writer: MemoryObjectSendStream[dict[str, Any]]
         sse_stream_reader: MemoryObjectReceiveStream[dict[str, Any]]
@@ -77,10 +77,10 @@ class SseServerTransport:
             verbose_logger.debug("Starting SSE writer")
             async with sse_stream_writer, write_stream_reader:
                 await sse_stream_writer.send({"event": "endpoint", "data": session_uri})
-                verbose_logger.debug(f"Sent endpoint event: {session_uri}")
+                verbose_logger.debug("Sent endpoint event: %s", session_uri)
 
                 async for message in write_stream_reader:
-                    verbose_logger.debug(f"Sending message via SSE: {message}")
+                    verbose_logger.debug("Sending message via SSE: %s", message)
                     await sse_stream_writer.send(
                         {
                             "event": "message",
@@ -108,31 +108,31 @@ class SseServerTransport:
 
         try:
             session_id = UUID(hex=session_id_param)
-            verbose_logger.debug(f"Parsed session ID: {session_id}")
+            verbose_logger.debug("Parsed session ID: %s", session_id)
         except ValueError:
-            verbose_logger.warning(f"Received invalid session ID: {session_id_param}")
+            verbose_logger.warning("Received invalid session ID: %s", session_id_param)
             response = Response("Invalid session ID", status_code=400)
             return response
 
         writer = self._read_stream_writers.get(session_id)
         if not writer:
-            verbose_logger.warning(f"Could not find session for ID: {session_id}")
+            verbose_logger.warning("Could not find session for ID: %s", session_id)
             response = Response("Could not find session", status_code=404)
             return response
 
         json = await request.json()
-        verbose_logger.debug(f"Received JSON: {json}")
+        verbose_logger.debug("Received JSON: %s", json)
 
         try:
             message = types.JSONRPCMessage.model_validate(json)
-            verbose_logger.debug(f"Validated client message: {message}")
+            verbose_logger.debug("Validated client message: %s", message)
         except ValidationError as err:
-            verbose_logger.error(f"Failed to parse message: {err}")
+            verbose_logger.error("Failed to parse message: %s", err)
             response = Response("Could not parse message", status_code=400)
             await writer.send(err)
             return response
 
-        verbose_logger.debug(f"Sending message to writer: {message}")
+        verbose_logger.debug("Sending message to writer: %s", message)
         response = Response("Accepted", status_code=202)
         await writer.send(message)
         return response

@@ -138,13 +138,15 @@ class A2AStreamingIterator:
             )
 
             verbose_logger.info(
-                f"A2A streaming completed: prompt_tokens={prompt_tokens}, "
-                f"completion_tokens={completion_tokens}, total_tokens={total_tokens}, "
-                f"response_cost={response_cost}"
+                "A2A streaming completed: prompt_tokens=%s, completion_tokens=%s, total_tokens=%s, response_cost=%s",
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                response_cost,
             )
 
         except Exception as e:
-            verbose_logger.debug(f"Error in A2A streaming completion handler: {e}")
+            verbose_logger.debug("Error in A2A streaming completion handler: %s", e)
 
     def _build_logging_result(self, usage: litellm.Usage) -> dict[str, Any]:
         """Build a result dict for logging."""

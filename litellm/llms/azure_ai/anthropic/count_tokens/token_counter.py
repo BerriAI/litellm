@@ -95,7 +95,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 )
         except AnthropicError as e:
             verbose_logger.warning(
-                f"Azure AI Anthropic CountTokens API error: status={e.status_code}, message={e.message}"
+                "Azure AI Anthropic CountTokens API error: status=%s, message=%s", e.status_code, e.message
             )
             return TokenCountResponse(
                 total_tokens=0,
@@ -107,7 +107,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 status_code=e.status_code,
             )
         except Exception as e:
-            verbose_logger.warning(f"Error calling Azure AI Anthropic CountTokens API: {e}")
+            verbose_logger.warning("Error calling Azure AI Anthropic CountTokens API: %s", e)
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,

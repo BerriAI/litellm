@@ -115,6 +115,7 @@ from litellm.router_utils.common_utils import (
     _is_proxy_admin_request,
     filter_team_based_models,
     filter_web_search_deployments,
+    resolve_model_group_alias,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
@@ -720,7 +721,8 @@ class Router:
                 self.retry_policy = retry_policy
             if self.retry_policy is not None:
                 verbose_router_logger.info(
-                    f"\033[32mRouter Custom Retry Policy Set:\n{self.retry_policy.model_dump(exclude_none=True)}\033[0m"
+                    "\x1b[32mRouter Custom Retry Policy Set:\n%s\x1b[0m",
+                    self.retry_policy.model_dump(exclude_none=True),
                 )
 
         self.model_group_retry_policy: dict[str, RetryPolicy] | None = model_group_retry_policy
@@ -735,7 +737,8 @@ class Router:
 
             if self.allowed_fails_policy is not None:
                 verbose_router_logger.info(
-                    f"\033[32mRouter Custom Allowed Fails Policy Set:\n{self.allowed_fails_policy.model_dump(exclude_none=True)}\033[0m"
+                    "\x1b[32mRouter Custom Allowed Fails Policy Set:\n%s\x1b[0m",
+                    self.allowed_fails_policy.model_dump(exclude_none=True),
                 )
 
         self.alerting_config: AlertingConfig | None = alerting_config
@@ -940,7 +943,7 @@ class Router:
             litellm.input_callback = [c for c in litellm.input_callback if id(c) not in selector_ids]
 
     def routing_strategy_init(self, routing_strategy: RoutingStrategy | str, routing_strategy_args: dict):
-        verbose_router_logger.info(f"Routing strategy: {routing_strategy}")
+        verbose_router_logger.info("Routing strategy: %s", routing_strategy)
         self._validate_routing_strategy(routing_strategy)
         self._reset_custom_routing_strategy()
 
@@ -1720,7 +1723,7 @@ class Router:
 
             return _deployment_copy
         except Exception as e:
-            verbose_router_logger.debug(f"Error occurred while printing deployment - {e}")
+            verbose_router_logger.debug("Error occurred while printing deployment - %s", e)
             raise e
 
     ### COMPLETION, EMBEDDING, IMG GENERATION FUNCTIONS
@@ -1731,7 +1734,7 @@ class Router:
         response = router.completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey, how's it going?"}]
         """
         try:
-            verbose_router_logger.debug(f"router.completion(model={model},..)")
+            verbose_router_logger.debug("router.completion(model=%s,..)", model)
             kwargs["model"] = model
             kwargs["messages"] = messages
             kwargs["original_function"] = self._completion
@@ -1805,7 +1808,7 @@ class Router:
                 **kwargs,
             }
             response = litellm.completion(**input_kwargs)
-            verbose_router_logger.info(f"litellm.completion(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("litellm.completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
             ## CHECK CONTENT FILTER ERROR ##
             if isinstance(response, ModelResponse):
@@ -1828,7 +1831,7 @@ class Router:
 
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.completion(model={model_name})\033[31m Exception {e}\033[0m")
+            verbose_router_logger.info("litellm.completion(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
@@ -1891,7 +1894,7 @@ class Router:
 
             messages = copy.deepcopy(messages)
 
-            verbose_router_logger.info(f"Starting silent experiment for model {silent_model}")
+            verbose_router_logger.info("Starting silent experiment for model %s", silent_model)
 
             silent_kwargs = self._get_silent_experiment_kwargs(**kwargs)
 
@@ -1923,7 +1926,7 @@ class Router:
             finally:
                 loop.close()
         except Exception as e:
-            verbose_router_logger.error(f"Silent experiment failed for model {silent_model}: {e}")
+            verbose_router_logger.error("Silent experiment failed for model %s: %s", silent_model, e)
 
     # fmt: off
 
@@ -2159,7 +2162,7 @@ class Router:
 
                 except Exception as fallback_error:
                     # If fallback also fails, log and re-raise original error
-                    verbose_router_logger.error(f"Fallback also failed: {fallback_error}")
+                    verbose_router_logger.error("Fallback also failed: %s", fallback_error)
                     # No fallback handled the mid-stream error, so surface the
                     # real provider exception (e.g. RateLimitError) instead of
                     # leaking the internal MidStreamFallbackError to the client
@@ -2578,7 +2581,7 @@ class Router:
                     else:
                         yield fallback_response
                 except Exception as fallback_error:
-                    verbose_router_logger.error(f"Responses streaming fallback also failed: {fallback_error}")
+                    verbose_router_logger.error("Responses streaming fallback also failed: %s", fallback_error)
                     if (
                         isinstance(fallback_error, MidStreamFallbackError)
                         and fallback_error.original_exception is not None
@@ -2703,7 +2706,7 @@ class Router:
                         yield None
 
                 except Exception as fallback_error:
-                    verbose_router_logger.error(f"Fallback also failed: {fallback_error}")
+                    verbose_router_logger.error("Fallback also failed: %s", fallback_error)
                     if (
                         isinstance(fallback_error, MidStreamFallbackError)
                         and fallback_error.original_exception is not None
@@ -2741,7 +2744,7 @@ class Router:
 
             messages = copy.deepcopy(messages)
 
-            verbose_router_logger.info(f"Starting silent experiment for model {silent_model}")
+            verbose_router_logger.info("Starting silent experiment for model %s", silent_model)
 
             silent_kwargs = self._get_silent_experiment_kwargs(**kwargs)
             # Override model_group to correctly attribute metrics to the silent model
@@ -2754,7 +2757,7 @@ class Router:
                 **silent_kwargs,
             )
         except Exception as e:
-            verbose_router_logger.error(f"Silent experiment failed for model {silent_model}: {e}")
+            verbose_router_logger.error("Silent experiment failed for model %s: %s", silent_model, e)
 
     async def _acompletion(
         self, model: str, messages: list[dict[str, str]], **kwargs
@@ -2878,7 +2881,7 @@ class Router:
                     )
 
             self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"litellm.acompletion(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("litellm.acompletion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
             # debug how often this deployment picked
             self._track_deployment_metrics(
                 deployment=deployment,
@@ -2907,7 +2910,7 @@ class Router:
                 self._set_failed_deployment_id_on_exception(e, deployment)
             raise e
         except Exception as e:
-            verbose_router_logger.info(f"litellm.acompletion(model={model_name})\033[31m Exception {e}\033[0m")
+            verbose_router_logger.info("litellm.acompletion(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             # Set per-deployment num_retries on exception for retry logic
@@ -3362,7 +3365,7 @@ class Router:
                 result = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)  # type: ignore
                 return result
             except asyncio.CancelledError:
-                verbose_router_logger.debug(f"Received 'task.cancel'. Cancelling call w/ model={model}.")
+                verbose_router_logger.debug("Received 'task.cancel'. Cancelling call w/ model=%s.", model)
                 raise
             except Exception as e:
                 return e
@@ -3664,7 +3667,7 @@ class Router:
     def _image_generation(self, prompt: str, model: str, **kwargs):
         model_name = ""
         try:
-            verbose_router_logger.debug(f"Inside _image_generation()- model: {model}; kwargs: {kwargs}")
+            verbose_router_logger.debug("Inside _image_generation()- model: %s; kwargs: %s", model, kwargs)
             deployment = self.get_available_deployment(
                 model=model,
                 messages=[{"role": "user", "content": "prompt"}],
@@ -3693,10 +3696,10 @@ class Router:
                 }
             )
             self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"litellm.image_generation(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("litellm.image_generation(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.image_generation(model={model_name})\033[31m Exception {e}\033[0m")
+            verbose_router_logger.info("litellm.image_generation(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -3724,7 +3727,7 @@ class Router:
     async def _aimage_generation(self, prompt: str, model: str, **kwargs):
         model_name = model
         try:
-            verbose_router_logger.debug(f"Inside _image_generation()- model: {model}; kwargs: {kwargs}")
+            verbose_router_logger.debug("Inside _image_generation()- model: %s; kwargs: %s", model, kwargs)
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
@@ -3777,10 +3780,10 @@ class Router:
                 response = await response
 
             self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"litellm.aimage_generation(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("litellm.aimage_generation(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.aimage_generation(model={model_name})\033[31m Exception {e}\033[0m")
+            verbose_router_logger.info("litellm.aimage_generation(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -3830,7 +3833,7 @@ class Router:
     async def _atranscription(self, file: FileTypes, model: str, **kwargs):
         model_name = model
         try:
-            verbose_router_logger.debug(f"Inside _atranscription()- model: {model}; kwargs: {kwargs}")
+            verbose_router_logger.debug("Inside _atranscription()- model: %s; kwargs: %s", model, kwargs)
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
@@ -3881,10 +3884,10 @@ class Router:
                 response = await response
 
             self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"litellm.atranscription(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("litellm.atranscription(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.atranscription(model={model_name})\033[31m Exception {e}\033[0m")
+            verbose_router_logger.info("litellm.atranscription(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -3944,7 +3947,7 @@ class Router:
     async def _aspeech(self, model: str, input: str, voice: str, **kwargs):
         model_name = model
         try:
-            verbose_router_logger.debug(f"Inside _aspeech()- model: {model}; kwargs: {kwargs}")
+            verbose_router_logger.debug("Inside _aspeech()- model: %s; kwargs: %s", model, kwargs)
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
@@ -3995,10 +3998,10 @@ class Router:
                 response = await response
 
             self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"litellm.aspeech(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("litellm.aspeech(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.aspeech(model={model_name})\033[31m Exception {e}\033[0m")
+            verbose_router_logger.info("litellm.aspeech(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -4027,7 +4030,7 @@ class Router:
     async def _arerank(self, model: str, **kwargs):
         model_name = None
         try:
-            verbose_router_logger.debug(f"Inside _rerank()- model: {model}; kwargs: {kwargs}")
+            verbose_router_logger.debug("Inside _rerank()- model: %s; kwargs: %s", model, kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
                 specific_deployment=kwargs.pop("specific_deployment", None),
@@ -4053,10 +4056,10 @@ class Router:
             )
 
             self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"litellm.arerank(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("litellm.arerank(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.arerank(model={model_name})\033[31m Exception {e}\033[0m")
+            verbose_router_logger.info("litellm.arerank(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -4135,7 +4138,7 @@ class Router:
 
     async def _atext_completion(self, model: str, prompt: str, **kwargs):
         try:
-            verbose_router_logger.debug(f"Inside _atext_completion()- model: {model}; kwargs: {kwargs}")
+            verbose_router_logger.debug("Inside _atext_completion()- model: %s; kwargs: %s", model, kwargs)
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
@@ -4187,10 +4190,10 @@ class Router:
                 response = await response
 
             self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"litellm.atext_completion(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("litellm.atext_completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.atext_completion(model={model})\033[31m Exception {e}\033[0m")
+            verbose_router_logger.info("litellm.atext_completion(model=%s)\x1b[31m Exception %s\x1b[0m", model, e)
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
@@ -4225,7 +4228,7 @@ class Router:
 
     async def _aadapter_completion(self, adapter_id: str, model: str, **kwargs):
         try:
-            verbose_router_logger.debug(f"Inside _aadapter_completion()- model: {model}; kwargs: {kwargs}")
+            verbose_router_logger.debug("Inside _aadapter_completion()- model: %s; kwargs: %s", model, kwargs)
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
@@ -4277,10 +4280,10 @@ class Router:
                 response = await response  # type: ignore
 
             self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"litellm.aadapter_completion(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("litellm.aadapter_completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.aadapter_completion(model={model})\033[31m Exception {e}\033[0m")
+            verbose_router_logger.info("litellm.aadapter_completion(model=%s)\x1b[31m Exception %s\x1b[0m", model, e)
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
@@ -4337,7 +4340,7 @@ class Router:
             kwargs=kwargs,
             metadata_variable_name="litellm_metadata",
         )
-        verbose_router_logger.debug(f"Inside aguardrail() - guardrail_name: {guardrail_name}; kwargs: {kwargs}")
+        verbose_router_logger.debug("Inside aguardrail() - guardrail_name: %s; kwargs: %s", guardrail_name, kwargs)
         response = await self.async_function_with_fallbacks(**kwargs)
         return response
 
@@ -4362,7 +4365,7 @@ class Router:
         )
 
         verbose_router_logger.debug(
-            f"Selected guardrail deployment: {selected_guardrail.get('litellm_params', {}).get('guardrail')}"
+            "Selected guardrail deployment: %s", selected_guardrail.get("litellm_params", {}).get("guardrail")
         )
 
         # Pass the selected guardrail config to the original function
@@ -4412,7 +4415,9 @@ class Router:
             kwargs["original_generic_function"] = original_function
             kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_helper
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs, metadata_variable_name="litellm_metadata")
-            verbose_router_logger.debug(f"Inside ageneric_api_call_with_fallbacks() - model: {model}; kwargs: {kwargs}")
+            verbose_router_logger.debug(
+                "Inside ageneric_api_call_with_fallbacks() - model: %s; kwargs: %s", model, kwargs
+            )
             response = await self.async_function_with_fallbacks(**kwargs)
             return response
 
@@ -4535,11 +4540,13 @@ class Router:
                 response = await response  # type: ignore
 
             self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"ageneric_api_call_with_fallbacks(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("ageneric_api_call_with_fallbacks(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
             return response
         except Exception as e:
-            verbose_router_logger.info(f"ageneric_api_call_with_fallbacks(model={model})\033[31m Exception {e}\033[0m")
+            verbose_router_logger.info(
+                "ageneric_api_call_with_fallbacks(model=%s)\x1b[31m Exception %s\x1b[0m", model, e
+            )
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
@@ -4606,7 +4613,7 @@ class Router:
         metadata_variable_name = _get_router_metadata_variable_name(function_name="generic_api_call")
         try:
             verbose_router_logger.debug(
-                f"Inside _generic_api_call() - handler: {handler_name}, model: {model}; kwargs: {kwargs}"
+                "Inside _generic_api_call() - handler: %s, model: %s; kwargs: %s", handler_name, model, kwargs
             )
             self._update_kwargs_before_fallbacks(
                 model=model,
@@ -4656,10 +4663,10 @@ class Router:
             )
 
             self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"{handler_name}(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("%s(model=%s)\x1b[32m 200 OK\x1b[0m", handler_name, model_name)
             return response
         except Exception as e:
-            verbose_router_logger.info(f"{handler_name}(model={model})\033[31m Exception {e}\033[0m")
+            verbose_router_logger.info("%s(model=%s)\x1b[31m Exception %s\x1b[0m", handler_name, model, e)
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
@@ -4684,7 +4691,7 @@ class Router:
     def _embedding(self, input: str | list, model: str, **kwargs):
         model_name = None
         try:
-            verbose_router_logger.debug(f"Inside embedding()- model: {model}; kwargs: {kwargs}")
+            verbose_router_logger.debug("Inside embedding()- model: %s; kwargs: %s", model, kwargs)
             deployment = self.get_available_deployment(
                 model=model,
                 input=input,
@@ -4721,10 +4728,10 @@ class Router:
                 }
             )
             self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"litellm.embedding(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("litellm.embedding(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.embedding(model={model_name})\033[31m Exception {e}\033[0m")
+            verbose_router_logger.info("litellm.embedding(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -4757,7 +4764,7 @@ class Router:
     async def _aembedding(self, input: str | list, model: str, **kwargs):
         model_name = None
         try:
-            verbose_router_logger.debug(f"Inside _aembedding()- model: {model}; kwargs: {kwargs}")
+            verbose_router_logger.debug("Inside _aembedding()- model: %s; kwargs: %s", model, kwargs)
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
@@ -4808,10 +4815,10 @@ class Router:
                 response = await response
 
             self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"litellm.aembedding(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("litellm.aembedding(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
             return response
         except Exception as e:
-            verbose_router_logger.info(f"litellm.aembedding(model={model_name})\033[31m Exception {e}\033[0m")
+            verbose_router_logger.info("litellm.aembedding(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -4848,7 +4855,7 @@ class Router:
         try:
             from litellm.router_utils.common_utils import add_model_file_id_mappings
 
-            verbose_router_logger.debug(f"Inside _atext_completion()- model: {model}; kwargs: {kwargs}")
+            verbose_router_logger.debug("Inside _atext_completion()- model: %s; kwargs: %s", model, kwargs)
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             healthy_deployments = await self.async_get_healthy_deployments(
                 model=model,
@@ -4939,7 +4946,7 @@ class Router:
                     response = await response  # type: ignore
 
                 self.success_calls[model_name] += 1
-                verbose_router_logger.info(f"litellm.acreate_file(model={model_name})\033[32m 200 OK\033[0m")
+                verbose_router_logger.info("litellm.acreate_file(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
                 return response
 
@@ -4964,7 +4971,7 @@ class Router:
             return returned_response
         except Exception as e:
             verbose_router_logger.exception(
-                f"litellm.acreate_file(model={model}, {kwargs})\033[31m Exception {e}\033[0m"
+                "litellm.acreate_file(model=%s, %s)\x1b[31m Exception %s\x1b[0m", model, kwargs, e
             )
             if model is not None:
                 self.fail_calls[model] += 1
@@ -5055,11 +5062,13 @@ class Router:
                 response = await response
 
             self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"litellm.avector_store_create(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("litellm.avector_store_create(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
             return response
         except Exception as e:
-            verbose_router_logger.exception(f"litellm.avector_store_create(model={model})\033[31m Exception {e}\033[0m")
+            verbose_router_logger.exception(
+                "litellm.avector_store_create(model=%s)\x1b[31m Exception %s\x1b[0m", model, e
+            )
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
@@ -5109,7 +5118,7 @@ class Router:
         **kwargs,
     ) -> LiteLLMBatch:
         try:
-            verbose_router_logger.debug(f"Inside _acreate_batch()- model: {model}; kwargs: {kwargs}")
+            verbose_router_logger.debug("Inside _acreate_batch()- model: %s; kwargs: %s", model, kwargs)
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
@@ -5169,12 +5178,12 @@ class Router:
                 response = await response  # type: ignore
 
             self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"litellm.acreate_batch(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("litellm.acreate_batch(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
             return response  # type: ignore
         except Exception as e:
             verbose_router_logger.exception(
-                f"litellm._acreate_batch(model={model}, {kwargs})\033[31m Exception {e}\033[0m"
+                "litellm._acreate_batch(model=%s, %s)\x1b[31m Exception %s\x1b[0m", model, kwargs, e
             )
             if model is not None:
                 self.fail_calls[model] += 1
@@ -5324,7 +5333,7 @@ class Router:
         **kwargs,
     ) -> LiteLLMBatch:
         try:
-            verbose_router_logger.debug(f"Inside _acancel_batch()- model: {model}; kwargs: {kwargs}")
+            verbose_router_logger.debug("Inside _acancel_batch()- model: %s; kwargs: %s", model, kwargs)
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
@@ -5391,12 +5400,12 @@ class Router:
                 response = await response  # type: ignore
 
             self.success_calls[model_name] += 1
-            verbose_router_logger.info(f"litellm.acancel_batch(model={model_name})\033[32m 200 OK\033[0m")
+            verbose_router_logger.info("litellm.acancel_batch(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
             return response  # type: ignore
         except Exception as e:
             verbose_router_logger.exception(
-                f"litellm._acancel_batch(model={model}, {kwargs})\033[31m Exception {e}\033[0m"
+                "litellm._acancel_batch(model=%s, %s)\x1b[31m Exception %s\x1b[0m", model, kwargs, e
             )
             if model is not None:
                 self.fail_calls[model] += 1
@@ -6060,8 +6069,10 @@ class Router:
             return None
 
         verbose_router_logger.debug(
-            f"Weighted failover: exclude={excluded!r}, remaining={len(remaining)} "
-            f"for model_group={original_model_group!r}"
+            "Weighted failover: exclude=%r, remaining=%s for model_group=%r",
+            excluded,
+            len(remaining),
+            original_model_group,
         )
 
         meta["_failover_excluded_ids"] = list(excluded)
@@ -6106,7 +6117,7 @@ class Router:
         """
         Common utilities for async_function_with_fallbacks
         """
-        verbose_router_logger.debug(f"Traceback{traceback.format_exc()}")
+        verbose_router_logger.debug("Traceback%s", traceback.format_exc())
         original_exception = e
         fallback_model_group = None
         original_model_group: str | None = kwargs.get("model")  # type: ignore
@@ -6283,7 +6294,7 @@ class Router:
                     if litellm.expose_router_debug_in_errors:
                         e.message += f"\n{error_message}"
             if fallbacks is not None and model_group is not None:
-                verbose_router_logger.debug(f"inside model fallbacks: {mask_sensitive_structure(fallbacks)}")
+                verbose_router_logger.debug("inside model fallbacks: %s", mask_sensitive_structure(fallbacks))
                 (
                     fallback_model_group,
                     generic_fallback_idx,
@@ -6298,7 +6309,9 @@ class Router:
                 if fallback_model_group is None:
                     masked_fallbacks = mask_sensitive_structure(fallbacks)
                     verbose_router_logger.info(
-                        f"No fallback model group found for original model_group={model_group}. Fallbacks={masked_fallbacks}"
+                        "No fallback model group found for original model_group=%s. Fallbacks=%s",
+                        model_group,
+                        masked_fallbacks,
                     )
                     if hasattr(original_exception, "message") and litellm.expose_router_debug_in_errors:
                         original_exception.message += f"No fallback model group found for original model_group={model_group}. Fallbacks={masked_fallbacks}"  # type: ignore
@@ -6373,7 +6386,7 @@ class Router:
             else:
                 response = await self.async_function_with_retries(*args, **kwargs)
             if verbose_router_logger.isEnabledFor(logging.DEBUG):
-                verbose_router_logger.debug(f"Async Response: {response}")
+                verbose_router_logger.debug("Async Response: %s", response)
             response = add_fallback_headers_to_response(
                 response=response,
                 attempted_fallbacks=0,
@@ -6465,7 +6478,7 @@ class Router:
                 _metadata.update({"model_group_size": len(model_list)})
 
         verbose_router_logger.debug(
-            f"async function w/ retries: original_function - {original_function}, num_retries - {num_retries}"
+            "async function w/ retries: original_function - %s, num_retries - %s", original_function, num_retries
         )
         ## ADD RETRY TRACKING TO METADATA - used for spend logs retry tracking
         _metadata["attempted_retries"] = 0
@@ -6537,7 +6550,7 @@ class Router:
             else:
                 raise
 
-            verbose_router_logger.debug(f"Retrying request with num_retries: {num_retries}")
+            verbose_router_logger.debug("Retrying request with num_retries: %s", num_retries)
             # decides how long to sleep before retry
             retry_after = self._time_to_sleep_before_retry(
                 e=original_exception,
@@ -6654,7 +6667,7 @@ class Router:
 
         if mock_testing_rate_limit_error is not None and mock_testing_rate_limit_error is True:
             verbose_router_logger.info(
-                f"litellm.router.py::_mock_rate_limit_error() - Raising mock RateLimitError for model={model_group}"
+                "litellm.router.py::_mock_rate_limit_error() - Raising mock RateLimitError for model=%s", model_group
             )
             raise litellm.RateLimitError(
                 model=model_group,
@@ -6944,7 +6957,7 @@ class Router:
 
         except Exception as e:
             verbose_router_logger.debug(
-                f"litellm.router.Router::deployment_callback_on_success(): Exception occured - {e}"
+                "litellm.router.Router::deployment_callback_on_success(): Exception occured - %s", e
             )
 
     def sync_deployment_callback_on_success(
@@ -7197,7 +7210,9 @@ class Router:
             return True
 
         verbose_router_logger.debug(
-            f"Content Policy Error occurred. No available fallbacks. Returning original response. model={model}, content_policy_fallbacks={content_policy_fallbacks}"
+            "Content Policy Error occurred. No available fallbacks. Returning original response. model=%s, content_policy_fallbacks=%s",
+            model,
+            content_policy_fallbacks,
         )
         return False
 
@@ -7536,7 +7551,9 @@ class Router:
             ## Check if LLM Deployment is allowed for this deployment
             if self.deployment_is_active_for_environment(deployment=deployment) is not True:
                 verbose_router_logger.warning(
-                    f"Ignoring deployment {deployment.model_name} as it is not active for environment {deployment.model_info['supported_environments']}"
+                    "Ignoring deployment %s as it is not active for environment %s",
+                    deployment.model_name,
+                    deployment.model_info["supported_environments"],
                 )
                 return None
 
@@ -7560,7 +7577,7 @@ class Router:
         except Exception as e:
             if self.ignore_invalid_deployments:
                 verbose_router_logger.exception(
-                    f"Error creating deployment: {e}, ignoring and continuing with other deployments."
+                    "Error creating deployment: %s, ignoring and continuing with other deployments.", e
                 )
                 return None
             else:
@@ -8013,7 +8030,7 @@ class Router:
                     _model_info=_model_info,
                 )
 
-        verbose_router_logger.debug(f"\nInitialized Model List {self.get_model_names()}")
+        verbose_router_logger.debug("\nInitialized Model List %s", self.get_model_names())
         self.model_names = {m["model_name"] for m in model_list}
 
         # Note: model_name_to_deployment_indices is already built incrementally
@@ -8435,8 +8452,10 @@ class Router:
         except Exception as e:
             if self.ignore_invalid_deployments:
                 verbose_router_logger.warning(
-                    f"Error upserting deployment {deployment.model_name} (id={deployment.model_info.id}): {e}. "
-                    "Dropping it and continuing with other deployments."
+                    "Error upserting deployment %s (id=%s): %s. Dropping it and continuing with other deployments.",
+                    deployment.model_name,
+                    deployment.model_info.id,
+                    e,
                 )
                 return None
             else:
@@ -8709,7 +8728,7 @@ class Router:
             )
             if not credential_values:
                 verbose_router_logger.warning(
-                    f"Credential '{deployment.litellm_params.litellm_credential_name}' not found in credential_list"
+                    "Credential '%s' not found in credential_list", deployment.litellm_params.litellm_credential_name
                 )
             credentials.update(credential_values)
             # Remove the credential name since we've resolved it
@@ -8794,7 +8813,8 @@ class Router:
         ## SET MODEL TO 'model=' - if base_model is None + not azure
         if custom_llm_provider == "azure" and base_model is None:
             verbose_router_logger.error(
-                f"Could not identify azure model '{_model}'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models"
+                "Could not identify azure model '%s'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models",
+                _model,
             )
         elif custom_llm_provider != "azure":
             model = _model
@@ -9010,7 +9030,7 @@ class Router:
                     custom_llm_provider=litellm_params.custom_llm_provider,
                 )
             except litellm.exceptions.BadRequestError as e:
-                verbose_router_logger.error(f"litellm.router.py::get_model_group_info() - {e}")
+                verbose_router_logger.error("litellm.router.py::get_model_group_info() - %s", e)
 
             if model_info is None:
                 supported_openai_params = litellm.get_supported_openai_params(
@@ -10072,7 +10092,7 @@ class Router:
                         relink_lar1_from_args = True
                     setattr(self, var, value)
             else:
-                verbose_router_logger.debug(f"Setting {var} is not allowed")
+                verbose_router_logger.debug("Setting %s is not allowed", var)
 
         if relink_lar1_from_args and self._normalize_strategy(self.routing_strategy) == "lar1":
             from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
@@ -10081,7 +10101,7 @@ class Router:
 
         if rebuild_routing_groups:
             self._init_routing_groups(self._routing_groups_input)
-        verbose_router_logger.debug(f"Updated Router settings: {self.get_settings()}")
+        verbose_router_logger.debug("Updated Router settings: %s", self.get_settings())
 
     def _get_client(self, deployment, kwargs, client_type=None):
         """
@@ -10172,7 +10192,7 @@ class Router:
         - [TODO] function call and model doesn't support function calling
         """
 
-        verbose_router_logger.debug(f"Starting Pre-call checks for deployments in model={model}")
+        verbose_router_logger.debug("Starting Pre-call checks for deployments in model=%s", model)
 
         # Optimized: Use list() shallow copy instead of deepcopy
         # We only pop from the list, not modify deployment dicts - 100x+ faster on hot path (every request)
@@ -10224,7 +10244,8 @@ class Router:
                             )
                         except Exception as e:
                             verbose_router_logger.error(
-                                f"litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - {e}"
+                                "litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - %s",
+                                e,
                             )
                             return _returned_deployments
                     if input_tokens > max_input_tokens:
@@ -10235,7 +10256,7 @@ class Router:
                         )
                         continue
             except Exception as e:
-                verbose_router_logger.exception(f"An error occurs - {e}")
+                verbose_router_logger.exception("An error occurs - %s", e)
 
             model_id = _model_info.get("id", "")
             ## RPM CHECK ##
@@ -10296,7 +10317,7 @@ class Router:
                     for k, v in non_default_params.items():
                         if k not in supported_openai_params and k in special_params:
                             # if not -> invalid model
-                            verbose_router_logger.debug(f"INVALID MODEL INDEX @ REQUEST KWARG FILTERING, k={k}")
+                            verbose_router_logger.debug("INVALID MODEL INDEX @ REQUEST KWARG FILTERING, k=%s", k)
                             invalid_model_indices.add(idx)
 
         if len(invalid_model_indices) == len(_returned_deployments):
@@ -10331,16 +10352,7 @@ class Router:
         - str, the litellm model name
         - None, if model is not in model group alias
         """
-        if model not in self.model_group_alias:
-            return None
-
-        _item = self.model_group_alias[model]
-        if isinstance(_item, str):
-            model = _item
-        else:
-            model = _item["model"]
-
-        return model
+        return resolve_model_group_alias(self.model_group_alias, model)
 
     def _get_deployment_by_litellm_model(self, model: str) -> list:
         """
@@ -10498,7 +10510,7 @@ class Router:
                     _access_group_filter_emptied_candidates = True
 
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
-            verbose_router_logger.debug(f"initial list of deployments: {healthy_deployments}")
+            verbose_router_logger.debug("initial list of deployments: %s", healthy_deployments)
 
         if len(healthy_deployments) == 0:
             # Check for default fallbacks if no deployments are found for the requested model
@@ -10509,7 +10521,7 @@ class Router:
                 fallback_model = self._get_first_default_fallback()
                 if fallback_model:
                     verbose_router_logger.info(
-                        f"Model '{model}' not found. Attempting to use default fallback model '{fallback_model}'."
+                        "Model '%s' not found. Attempting to use default fallback model '%s'.", model, fallback_model
                     )
                     # Re-assign model to the fallback and try to get deployments again
                     model = fallback_model
@@ -10626,7 +10638,7 @@ class Router:
         )
 
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
-            verbose_router_logger.debug(f"healthy_deployments after team filter: {healthy_deployments}")
+            verbose_router_logger.debug("healthy_deployments after team filter: %s", healthy_deployments)
 
         healthy_deployments = filter_web_search_deployments(
             healthy_deployments=healthy_deployments,
@@ -10634,7 +10646,7 @@ class Router:
         )
 
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
-            verbose_router_logger.debug(f"healthy_deployments after web search filter: {healthy_deployments}")
+            verbose_router_logger.debug("healthy_deployments after web search filter: %s", healthy_deployments)
 
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
@@ -10655,7 +10667,7 @@ class Router:
             litellm_router_instance=self, parent_otel_span=parent_otel_span
         )
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
-            verbose_router_logger.debug(f"cooldown deployments: {cooldown_deployments}")
+            verbose_router_logger.debug("cooldown deployments: %s", cooldown_deployments)
         _pre_cooldown_deployments = healthy_deployments
         healthy_deployments = self._filter_cooldown_deployments(
             healthy_deployments=healthy_deployments,
@@ -10818,7 +10830,10 @@ class Router:
                 )
                 raise exception
             verbose_router_logger.info(
-                f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
+                "get_available_deployment for model: %s, Selected deployment: %s for model: %s",
+                model,
+                self.print_deployment(deployment),
+                model,
             )
 
             end_time = time.time()
@@ -10947,7 +10962,9 @@ class Router:
                 raise exception
 
             verbose_router_logger.info(
-                f"async_get_available_deployment_for_pass_through model: {model}, selected deployment: {self.print_deployment(deployment)}"
+                "async_get_available_deployment_for_pass_through model: %s, selected deployment: %s",
+                model,
+                self.print_deployment(deployment),
             )
 
             end_time = time.perf_counter()
@@ -11320,7 +11337,7 @@ class Router:
         )
 
         if deployment is None:
-            verbose_router_logger.info(f"get_available_deployment for model: {model}, No deployment available")
+            verbose_router_logger.info("get_available_deployment for model: %s, No deployment available", model)
             model_ids = self.get_model_ids(model_name=model)
             _cooldown_time = self.cooldown_cache.get_min_cooldown(
                 model_ids=model_ids, parent_otel_span=parent_otel_span
@@ -11333,7 +11350,10 @@ class Router:
                 cooldown_list=_cooldown_list,
             )
         verbose_router_logger.info(
-            f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
+            "get_available_deployment for model: %s, Selected deployment: %s for model: %s",
+            model,
+            self.print_deployment(deployment),
+            model,
         )
         return deployment
 
@@ -11460,7 +11480,7 @@ class Router:
 
         if deployment is None:
             verbose_router_logger.info(
-                f"get_available_deployment_for_pass_through model: {model}, no available deployments"
+                "get_available_deployment_for_pass_through model: %s, no available deployments", model
             )
             model_ids = self.get_model_ids(model_name=model)
             _cooldown_time = self.cooldown_cache.get_min_cooldown(
@@ -11475,7 +11495,9 @@ class Router:
             )
 
         verbose_router_logger.info(
-            f"get_available_deployment_for_pass_through model: {model}, selected deployment: {self.print_deployment(deployment)}"
+            "get_available_deployment_for_pass_through model: %s, selected deployment: %s",
+            model,
+            self.print_deployment(deployment),
         )
         return deployment
 
@@ -11493,7 +11515,7 @@ class Router:
             List of healthy deployments
         """
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
-            verbose_router_logger.debug(f"cooldown deployments: {cooldown_deployments}")
+            verbose_router_logger.debug("cooldown deployments: %s", cooldown_deployments)
         # Convert to set for O(1) lookup and use list comprehension for O(n) filtering
         cooldown_set = set(cooldown_deployments)
         return [deployment for deployment in healthy_deployments if deployment["model_info"]["id"] not in cooldown_set]
@@ -11595,7 +11617,7 @@ class Router:
             List[Dict]: Only includes a list of deployments that support pass-through
         """
         verbose_router_logger.debug(
-            f"Filter pass-through deployments from {len(healthy_deployments)} healthy deployments"
+            "Filter pass-through deployments from %s healthy deployments", len(healthy_deployments)
         )
 
         pass_through_deployments = [
@@ -11604,7 +11626,7 @@ class Router:
             if deployment.get("litellm_params", {}).get("use_in_pass_through", False)
         ]
 
-        verbose_router_logger.debug(f"Found {len(pass_through_deployments)} deployments with pass-through enabled")
+        verbose_router_logger.debug("Found %s deployments with pass-through enabled", len(pass_through_deployments))
 
         return pass_through_deployments
 
@@ -11619,7 +11641,7 @@ class Router:
                 if model_id is not None:
                     self._update_usage(model_id, parent_otel_span)  # update in-memory cache for tracking
         except Exception as e:
-            verbose_router_logger.error(f"Error in _track_deployment_metrics: {e}")
+            verbose_router_logger.error("Error in _track_deployment_metrics: %s", e)
 
     def get_num_retries_from_retry_policy(self, exception: Exception, model_group: str | None = None):
         return _get_num_retries_from_retry_policy(

@@ -47,7 +47,7 @@ class PydanticAIHandler:
         """
         if api_base is None:
             raise ValueError("api_base is required for Pydantic AI agents")
-        verbose_logger.info(f"Pydantic AI: Routing to Pydantic AI agent at {api_base}")
+        verbose_logger.info("Pydantic AI: Routing to Pydantic AI agent at %s", api_base)
 
         # Send request directly to Pydantic AI agent
         response_data = await PydanticAITransformation.send_non_streaming_request(
@@ -92,7 +92,7 @@ class PydanticAIHandler:
         """
         if api_base is None:
             raise ValueError("api_base is required for Pydantic AI agents")
-        verbose_logger.info(f"Pydantic AI: Faking streaming for Pydantic AI agent at {api_base}")
+        verbose_logger.info("Pydantic AI: Faking streaming for Pydantic AI agent at %s", api_base)
 
         # Get raw task response first (not the transformed A2A format)
         raw_response = await PydanticAITransformation.send_and_get_raw_response(

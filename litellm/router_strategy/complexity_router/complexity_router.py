@@ -224,6 +224,40 @@ def _iter_human_asks_newest_first(messages: Sequence[Mapping[str, object]]) -> I
     )
 
 
+def _conversation_is_continuing(messages: Sequence[Mapping[str, object]] | None) -> bool:
+    """Whether this request continues a conversation that was already underway.
+
+    The counterfactual the savings driver prices against is one model serving every
+    turn, so whether that model had this prompt cached is just whether an earlier turn
+    exists. An assistant turn in the history is the direct evidence of one: something
+    answered before, so a single-model deployment wrote the prompt then and would only
+    read it now, and the write this request paid is what switching models cost. A
+    conversation's first turn has no assistant turn, nothing was cached for any model,
+    and the baseline would have paid the same write.
+
+    Assistant turns rather than human asks, because an agent loop can run twenty turns
+    on one human ask: its tool traffic rides `tool_result` blocks on user turns that
+    flatten to empty text, and on `tool` roles, so counting asks reads a long
+    conversation as its own first turn and hands it the untouched-write arithmetic. That
+    is the one direction this must never fail in, since it inflates.
+
+    Reading the conversation rather than remembering it keeps this free of a cache, a
+    session id and their failure modes, and it works for callers that send no session
+    header at all. A few-shot prompt's synthetic assistant turns read as prior
+    conversation, which charges the write and under-claims; that is the safe side.
+
+    So is an unreadable request. No messages says nothing about whether a turn was
+    served, and a surface that carries its turns somewhere this cannot see, or a
+    genuinely single-turn call arriving with none, is treated as continuing: it pays the
+    cache write and under-claims rather than being handed a first turn's larger saving
+    on no evidence. That direction is deliberate in both cases and is the only one that
+    cannot inflate.
+    """
+    if not messages:
+        return True
+    return any(message.get("role") == "assistant" for message in messages)
+
+
 def _newest_turn_ask(messages: Sequence[Mapping[str, object]]) -> str | None:
     """The human ask on the newest user turn, or None when that turn carries only plumbing.
 
@@ -422,7 +456,7 @@ class ComplexityRouter(CustomLogger):
         self._model_tiers: dict[str, tuple[ComplexityTier, ...]] = {}
         self._adaptive_init_attempted = False
 
-        verbose_router_logger.debug(f"ComplexityRouter initialized for {model_name} with tiers: {self.config.tiers}")
+        verbose_router_logger.debug("ComplexityRouter initialized for %s with tiers: %s", model_name, self.config.tiers)
 
     def _estimate_tokens(self, text: str) -> int:
         """
@@ -647,6 +681,7 @@ class ComplexityRouter(CustomLogger):
         escalation_keyword: str | None = None,
         escalated: bool = False,
         classifier_model: str | None = None,
+        conversation_continuing: bool = True,
     ) -> StandardLoggingRoutingDecision:
         """Assemble the per-request provenance record for this router's decision.
 
@@ -660,6 +695,7 @@ class ComplexityRouter(CustomLogger):
             router_type="complexity",
             routed_model=routed_model,
             cause=cause,
+            conversation_continuing=conversation_continuing,
         )
         if tier is not None:
             decision["tier"] = tier.value
@@ -710,7 +746,7 @@ class ComplexityRouter(CustomLogger):
             )
         except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the heuristic scorer
             verbose_router_logger.warning(
-                f"ComplexityRouter: LLM classifier failed ({e}), falling back to heuristic scoring"
+                "ComplexityRouter: LLM classifier failed (%s), falling back to heuristic scoring", e
             )
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
@@ -1288,7 +1324,7 @@ class ComplexityRouter(CustomLogger):
             semantic_tier = await self._semantic_tier_override(user_message, request_kwargs)
         except Exception as e:  # noqa: BLE001 -- embedding call can fail many ways (timeout, provider/network/parse error); any failure must fall back to scoring, never fail the request
             verbose_router_logger.warning(
-                f"ComplexityRouter: semantic keyword matching failed ({e}), falling back to complexity scoring"
+                "ComplexityRouter: semantic keyword matching failed (%s), falling back to complexity scoring", e
             )
             return None
         if semantic_tier is None:
@@ -1392,6 +1428,12 @@ class ComplexityRouter(CustomLogger):
             if isinstance(metadata, dict):
                 metadata[RETURN_RAW_MODEL_NAME_METADATA_KEY] = True
 
+        # Resolved once for the whole hook. Resolution converts Responses API input into
+        # chat-completions messages, so it is real work on every non-chat surface, and
+        # both the conversation shape and the classifier read the same list.
+        resolved_messages = self._resolve_messages(messages, request_kwargs)
+        conversation_continuing = _conversation_is_continuing(resolved_messages)
+
         use_session_affinity = self.config.session_affinity and not self.config.plugins
         session_id = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
@@ -1402,7 +1444,6 @@ class ComplexityRouter(CustomLogger):
                 routed_model: str | None = pinned_model
                 pin_escalation_keyword: str | None = None
                 if self.escalation_keywords:
-                    resolved_messages = self._resolve_messages(messages, request_kwargs)
                     user_message = _newest_turn_ask(resolved_messages) if resolved_messages else None
                     if user_message is not None:
                         pin_escalation_keyword = self._matched_escalation_keyword(user_message)
@@ -1427,7 +1468,7 @@ class ComplexityRouter(CustomLogger):
                     escalated = routed_model != pinned_model
                     cause: RoutingDecisionCause = "session_affinity_escalation" if escalated else "session_affinity_pin"
                     verbose_router_logger.info(
-                        f"ComplexityRouter: routing decision cause={cause}, routed_model={routed_model}"
+                        "ComplexityRouter: routing decision cause=%s, routed_model=%s", cause, routed_model
                     )
                     has_original_messages = messages is not None and len(messages) > 0
                     return PreRoutingHookResponse(
@@ -1438,6 +1479,7 @@ class ComplexityRouter(CustomLogger):
                             cause=cause,
                             escalation_keyword=pin_escalation_keyword,
                             escalated=escalated,
+                            conversation_continuing=conversation_continuing,
                         ),
                     )
 
@@ -1447,6 +1489,8 @@ class ComplexityRouter(CustomLogger):
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
+            conversation_continuing=conversation_continuing,
+            resolved_messages=resolved_messages,
         )
         if cache_key is not None and response is not None:
             await self.litellm_router_instance.cache.async_set_cache(
@@ -1463,6 +1507,8 @@ class ComplexityRouter(CustomLogger):
         messages: list[dict[str, Any]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
+        conversation_continuing: bool = True,
+        resolved_messages: Sequence[Mapping[str, object]] | None = None,
     ) -> PreRoutingHookResponse | None:
         """
         Classifies the request by complexity and returns the appropriate model.
@@ -1475,13 +1521,17 @@ class ComplexityRouter(CustomLogger):
             messages: The messages in the request.
             input: Optional input for Responses API or embeddings.
             specific_deployment: Whether a specific deployment was requested.
+            resolved_messages: Messages the caller already resolved, to avoid converting
+                the request format a second time. Resolved here when absent, so a direct
+                caller does not have to.
 
         Returns:
             PreRoutingHookResponse with the routed model, or None if no routing needed.
         """
         from litellm.types.router import PreRoutingHookResponse
 
-        resolved_messages = self._resolve_messages(messages, request_kwargs)
+        if resolved_messages is None:
+            resolved_messages = self._resolve_messages(messages, request_kwargs)
 
         if not resolved_messages:
             verbose_router_logger.debug("ComplexityRouter: No messages could be resolved, skipping routing")
@@ -1509,7 +1559,11 @@ class ComplexityRouter(CustomLogger):
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
-                routing_decision=self._build_routing_decision(routed_model=routed_model, cause="default_fallback"),
+                routing_decision=self._build_routing_decision(
+                    routed_model=routed_model,
+                    cause="default_fallback",
+                    conversation_continuing=conversation_continuing,
+                ),
             )
 
         newest_ask = _newest_turn_ask(resolved_messages)
@@ -1524,14 +1578,18 @@ class ComplexityRouter(CustomLogger):
                 "semantic_keyword_match" if self.config.semantic_keyword_matching else "literal_keyword_match"
             )
             verbose_router_logger.info(
-                f"ComplexityRouter: routing decision cause={keyword_cause}, escalated={keyword_escalated}, "
-                f"tier={routed_tier.value}, routed_model={routed_model}"
+                "ComplexityRouter: routing decision cause=%s, escalated=%s, tier=%s, routed_model=%s",
+                keyword_cause,
+                keyword_escalated,
+                routed_tier.value,
+                routed_model,
             )
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
                 routing_decision=self._build_routing_decision(
                     routed_model=routed_model,
+                    conversation_continuing=conversation_continuing,
                     cause=keyword_cause,
                     tier=routed_tier,
                     matched_keyword=override.matched_keyword,
@@ -1558,15 +1616,22 @@ class ComplexityRouter(CustomLogger):
                     chosen_key = getattr(self, "_adaptive_chosen_model_key", "adaptive_router_chosen_model")
                     kwargs_metadata[chosen_key] = routed_model
             verbose_router_logger.info(
-                f"ComplexityRouter[adaptive]: routing decision cause={outcome.cause}, "
-                f"tier={tier.value}, score={score_repr}, "
-                f"signals={signals}, routed_model={routed_model}"
+                "ComplexityRouter[adaptive]: routing decision cause=%s, tier=%s, score=%s, signals=%s, routed_model=%s",
+                outcome.cause,
+                tier.value,
+                score_repr,
+                signals,
+                routed_model,
             )
         else:
             routed_model = await self._pick_model_for_tier(tier, messages, resolved_messages, request_kwargs)
             verbose_router_logger.info(
-                f"ComplexityRouter: routing decision cause={outcome.cause}, tier={tier.value}, "
-                f"score={score_repr}, signals={signals}, routed_model={routed_model}"
+                "ComplexityRouter: routing decision cause=%s, tier=%s, score=%s, signals=%s, routed_model=%s",
+                outcome.cause,
+                tier.value,
+                score_repr,
+                signals,
+                routed_model,
             )
 
         classifier_model = (
@@ -1579,6 +1644,7 @@ class ComplexityRouter(CustomLogger):
             messages=messages if has_original_messages else None,
             routing_decision=self._build_routing_decision(
                 routed_model=routed_model,
+                conversation_continuing=conversation_continuing,
                 cause=outcome.cause,
                 tier=tier,
                 score=score,

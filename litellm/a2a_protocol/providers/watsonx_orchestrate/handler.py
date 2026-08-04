@@ -135,7 +135,7 @@ class WatsonxOrchestrateHandler:
             response.raise_for_status()
             result: dict[str, Any] = response.json()
             status = result.get("status", "")
-            verbose_logger.debug(f"WXO: Poll {attempt + 1}/{max_attempts} run='{run_id}' status='{status}'")
+            verbose_logger.debug("WXO: Poll %s/%s run='%s' status='%s'", attempt + 1, max_attempts, run_id, status)
             if status in WatsonxOrchestrateTransformation.TERMINAL_STATES:
                 return result
 
@@ -297,8 +297,8 @@ class WatsonxOrchestrateHandler:
             response.raise_for_status()
         except httpx.TransportError as exc:
             verbose_logger.warning(
-                f"WXO: Streaming request failed before a run was submitted "
-                f"({exc!r}), falling back to non-streaming + fake streaming",
+                "WXO: Streaming request failed before a run was submitted (%r), falling back to non-streaming + fake streaming",
+                exc,
                 exc_info=True,
             )
             result = await WatsonxOrchestrateHandler.handle_non_streaming(

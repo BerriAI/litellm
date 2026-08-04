@@ -825,10 +825,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                         if delta.get("type") == "text_delta":
                             text += delta.get("text", "")
                     except json.JSONDecodeError:
-                        verbose_proxy_logger.warning(f"Failed to parse JSON from SSE data: {data_line}")
+                        verbose_proxy_logger.warning("Failed to parse JSON from SSE data: %s", data_line)
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error extracting text from SSE: {e}")
+            verbose_proxy_logger.error("Error extracting text from SSE: %s", e)
 
         return text
 
@@ -889,10 +889,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                                 if stop_reason is not None:
                                     return True
                             except json.JSONDecodeError:
-                                verbose_proxy_logger.warning(f"Failed to parse JSON from SSE data: {data_line}")
+                                verbose_proxy_logger.warning("Failed to parse JSON from SSE data: %s", data_line)
 
                 except Exception as e:
-                    verbose_proxy_logger.error(f"Error checking streaming end in SSE: {e}")
+                    verbose_proxy_logger.error("Error checking streaming end in SSE: %s", e)
 
             # Handle already-parsed dict format
             elif isinstance(response, dict):

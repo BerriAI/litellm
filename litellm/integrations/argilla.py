@@ -185,9 +185,9 @@ class ArgillaLogger(CustomBatchLogger):
             )
 
             if response.status_code >= 300:
-                verbose_logger.error(f"Argilla Error: {response.status_code} - {response.text}")
+                verbose_logger.error("Argilla Error: %s - %s", response.status_code, response.text)
             else:
-                verbose_logger.debug(f"Batch of {len(self.log_queue)} runs successfully created")
+                verbose_logger.debug("Batch of %s runs successfully created", len(self.log_queue))
 
             self.log_queue.clear()
         except Exception:
@@ -204,7 +204,7 @@ class ArgillaLogger(CustomBatchLogger):
             random_sample = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
-                    f"Skipping Langsmith logging. Sampling rate={sampling_rate}, random_sample={random_sample}"
+                    "Skipping Langsmith logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
                 )
                 return  # Skip logging
             verbose_logger.debug(
@@ -217,7 +217,7 @@ class ArgillaLogger(CustomBatchLogger):
                 return
 
             self.log_queue.append(data)
-            verbose_logger.debug(f"Langsmith, event added to queue. Will flush in {self.flush_interval} seconds...")
+            verbose_logger.debug("Langsmith, event added to queue. Will flush in %s seconds...", self.flush_interval)
 
             if len(self.log_queue) >= self.batch_size:
                 self._send_batch()
@@ -231,7 +231,7 @@ class ArgillaLogger(CustomBatchLogger):
             random_sample = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
-                    f"Skipping Langsmith logging. Sampling rate={sampling_rate}, random_sample={random_sample}"
+                    "Skipping Langsmith logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
                 )
                 return  # Skip logging
             verbose_logger.debug(
@@ -272,7 +272,7 @@ class ArgillaLogger(CustomBatchLogger):
         random_sample = random.random()
         if random_sample > sampling_rate:
             verbose_logger.info(
-                f"Skipping Langsmith logging. Sampling rate={sampling_rate}, random_sample={random_sample}"
+                "Skipping Langsmith logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
             )
             return  # Skip logging
         verbose_logger.info("Langsmith Failure Event Logging!")
@@ -325,7 +325,7 @@ class ArgillaLogger(CustomBatchLogger):
             response.raise_for_status()
 
             if response.status_code >= 300:
-                verbose_logger.error(f"Argilla Error: {response.status_code} - {response.text}")
+                verbose_logger.error("Argilla Error: %s - %s", response.status_code, response.text)
             else:
                 verbose_logger.debug("Batch of %s runs successfully created", len(self.log_queue))
         except httpx.HTTPStatusError:

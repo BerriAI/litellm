@@ -447,8 +447,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 transformed_config["environment"] = env_value
             else:
                 verbose_logger.info(
-                    f"Invalid environment value for computer_use: {env_value}. "
-                    f"Supported: 'browser', 'unspecified', 'ENVIRONMENT_BROWSER', 'ENVIRONMENT_UNSPECIFIED'"
+                    "Invalid environment value for computer_use: %s. Supported: 'browser', 'unspecified', 'ENVIRONMENT_BROWSER', 'ENVIRONMENT_UNSPECIFIED'",
+                    env_value,
                 )
 
         # Transform excluded_predefined_functions to camelCase
@@ -626,7 +626,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "web_search",
                 "web_search_preview",
             ):
-                verbose_logger.info(f"Gemini: Transforming OpenAI-style '{tool['type']}' tool to googleSearch")
+                verbose_logger.info("Gemini: Transforming OpenAI-style '%s' tool to googleSearch", tool["type"])
                 tool = {VertexToolName.GOOGLE_SEARCH.value: {}}
             # Handle tools with 'type' field (OpenAI spec compliance) Ignore this field -> https://github.com/BerriAI/litellm/issues/14644#issuecomment-3342061838
             elif "type" in tool:
@@ -1087,36 +1087,29 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if VertexGeminiConfig._is_gemini_3_or_newer(model):
                     if value is not None and value < 1.0:
                         verbose_logger.info(
-                            f"Warning: Setting temperature < 1.0 for Gemini 3 models ({model}) "
-                            "can cause infinite loops, degraded reasoning performance, and failure on complex tasks. "
-                            "Strongly recommended to use temperature = 1.0 (default)."
+                            "Warning: Setting temperature < 1.0 for Gemini 3 models (%s) can cause infinite loops, degraded reasoning performance, and failure on complex tasks. Strongly recommended to use temperature = 1.0 (default).",
+                            model,
                         )
                     if not gemini_sampling_params_warned:
                         verbose_logger.warning(
-                            "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to "
-                            f"function for Gemini 3+ ({model}) but are planned for removal in a "
-                            "future release. Move sampling guidance into the `system` "
-                            "instructions instead."
+                            "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
+                            model,
                         )
                         gemini_sampling_params_warned = True
                 optional_params["temperature"] = value
             elif param == "top_p":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
                     verbose_logger.warning(
-                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to "
-                        f"function for Gemini 3+ ({model}) but are planned for removal in a "
-                        "future release. Move sampling guidance into the `system` "
-                        "instructions instead."
+                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
+                        model,
                     )
                     gemini_sampling_params_warned = True
                 optional_params["top_p"] = value
             elif param == "top_k":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
                     verbose_logger.warning(
-                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to "
-                        f"function for Gemini 3+ ({model}) but are planned for removal in a "
-                        "future release. Move sampling guidance into the `system` "
-                        "instructions instead."
+                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
+                        model,
                     )
                     gemini_sampling_params_warned = True
                 optional_params["top_k"] = value
@@ -1977,7 +1970,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         prompt_feedback = processed_chunk.get("promptFeedback")
         if prompt_feedback and "blockReason" in prompt_feedback:
             verbose_logger.debug(
-                f"Prompt blocked due to: {prompt_feedback.get('blockReason')} - {prompt_feedback.get('blockReasonMessage')}"
+                "Prompt blocked due to: %s - %s",
+                prompt_feedback.get("blockReason"),
+                prompt_feedback.get("blockReasonMessage"),
             )
 
             # Create a content_filter response (consistent with non-streaming _handle_blocked_response)
@@ -3248,7 +3243,7 @@ class ModelResponseIterator:
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
-            verbose_logger.debug(f"RAW GEMINI CHUNK: {chunk}")
+            verbose_logger.debug("RAW GEMINI CHUNK: %s", chunk)
 
             # Detect mid-stream error chunks (e.g. 429 RESOURCE_EXHAUSTED).
             # Vertex AI can return errors as HTTP 200 but with an "error" field in the SSE body.

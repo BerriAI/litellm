@@ -339,7 +339,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
             # Log error but don't fail the call
             import litellm
 
-            litellm._logging.verbose_proxy_logger.error(f"Error in Arize Phoenix prompt pre_call_hook: {e}")
+            litellm._logging.verbose_proxy_logger.error("Error in Arize Phoenix prompt pre_call_hook: %s", e)
             return messages, litellm_params
 
     def get_available_prompts(self) -> list[str]:

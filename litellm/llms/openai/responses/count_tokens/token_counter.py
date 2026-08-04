@@ -89,7 +89,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         except OpenAIError as e:
-            verbose_logger.warning(f"OpenAI CountTokens API error: status={e.status_code}, message={e.message}")
+            verbose_logger.warning("OpenAI CountTokens API error: status=%s, message=%s", e.status_code, e.message)
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,
@@ -100,7 +100,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                 status_code=e.status_code,
             )
         except Exception as e:
-            verbose_logger.warning(f"Error calling OpenAI CountTokens API: {e}")
+            verbose_logger.warning("Error calling OpenAI CountTokens API: %s", e)
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,

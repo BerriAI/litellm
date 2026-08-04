@@ -45,7 +45,7 @@ def _get_nested(d: dict[str, Any] | str, path: Sequence[str]) -> Any:
     for k in path:
         if not isinstance(cur, dict):
             verbose_logger.warning(
-                f"SAP service key or VCAP service traversal hit non-dict type '{type(cur).__name__}' at key '{k}'."
+                "SAP service key or VCAP service traversal hit non-dict type '%s' at key '%s'.", type(cur).__name__, k
             )
             return None
         if k not in cur:
@@ -173,7 +173,7 @@ def resolve_credentials(sources: list[Source]) -> dict[str, str]:
     for source in sources:
         credentials = extract_credentials(source)
         if credentials:
-            verbose_logger.debug(f"Resolved SAP credentials from source {source.name}")
+            verbose_logger.debug("Resolved SAP credentials from source %s", source.name)
             return credentials
     raise ValueError("No credentials found in any source")
 
@@ -184,7 +184,7 @@ def resolve_resource_group(sources: list[Source]) -> str | None:
     for source in sources:
         value = source.get(rg_cred)
         if value is not None:
-            verbose_logger.debug(f"Resolved GEN AI Hub resource_group from source {source.name}")
+            verbose_logger.debug("Resolved GEN AI Hub resource_group from source %s", source.name)
             return value
     return rg_cred.default
 
@@ -208,7 +208,7 @@ def _parse_service_key_once(
             verbose_logger.warning("SAP service key is a string but not valid JSON. Skipping this source.")
             return None
     verbose_logger.warning(
-        f"SAP service key has unexpected type '{type(service_key).__name__}'. Expected str or dict. Ignoring."
+        "SAP service key has unexpected type '%s'. Expected str or dict. Ignoring.", type(service_key).__name__
     )
     return None
 

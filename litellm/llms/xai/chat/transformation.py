@@ -144,7 +144,7 @@ class XAIChatConfig(OpenAIGPTConfig):
             if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
                 base_openai_params.append("reasoning_effort")
         except Exception as e:
-            verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
+            verbose_logger.debug("Error checking if model supports reasoning: %s", e)
 
         return base_openai_params
 
@@ -277,7 +277,7 @@ class XAIChatConfig(OpenAIGPTConfig):
             raw_response_json = raw_response.json()
             self._enhance_usage_with_xai_web_search_fields(response, raw_response_json)
         except Exception as e:
-            verbose_logger.debug(f"Error extracting X.AI web search usage: {e}")
+            verbose_logger.debug("Error extracting X.AI web search usage: %s", e)
 
         self._fold_reasoning_tokens_into_completion(response)
         self._normalize_openai_compatible_usage_totals(getattr(response, "usage", None))
@@ -369,7 +369,7 @@ class XAIChatConfig(OpenAIGPTConfig):
 
             usage.prompt_tokens_details.web_search_requests = int(num_sources_used)
             setattr(usage, "num_sources_used", int(num_sources_used))
-            verbose_logger.debug(f"X.AI web search sources used: {num_sources_used}")
+            verbose_logger.debug("X.AI web search sources used: %s", num_sources_used)
 
     @staticmethod
     def _normalize_openai_compatible_usage_totals(

@@ -100,7 +100,7 @@ class LiteLLMSkillsHandler:
         if data.file_type is not None:
             skill_data["file_type"] = data.file_type
 
-        verbose_logger.debug(f"LiteLLMSkillsHandler: Creating skill {skill_id} with title={data.display_title}")
+        verbose_logger.debug("LiteLLMSkillsHandler: Creating skill %s with title=%s", skill_id, data.display_title)
 
         new_skill = await SkillsRepository(prisma_client).table.create(data=skill_data)
         return _prisma_skill_to_litellm(new_skill)
@@ -113,7 +113,7 @@ class LiteLLMSkillsHandler:
     ) -> list[LiteLLM_SkillsTable]:
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
 
-        verbose_logger.debug(f"LiteLLMSkillsHandler: Listing skills with limit={limit}, offset={offset}")
+        verbose_logger.debug("LiteLLMSkillsHandler: Listing skills with limit=%s, offset=%s", limit, offset)
 
         find_many_kwargs: dict[str, Any] = {
             "take": limit,
@@ -150,7 +150,7 @@ class LiteLLMSkillsHandler:
         skill_id: str,
         user_api_key_dict: UserAPIKeyAuth | None = None,
     ) -> LiteLLM_SkillsTable:
-        verbose_logger.debug(f"LiteLLMSkillsHandler: Getting skill {skill_id}")
+        verbose_logger.debug("LiteLLMSkillsHandler: Getting skill %s", skill_id)
 
         skill = await LiteLLMSkillsHandler._load_skill(skill_id)
         # Same "not found" message for both "missing" and "cross-tenant"
@@ -166,7 +166,7 @@ class LiteLLMSkillsHandler:
         user_api_key_dict: UserAPIKeyAuth | None = None,
     ) -> dict[str, str]:
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
-        verbose_logger.debug(f"LiteLLMSkillsHandler: Deleting skill {skill_id}")
+        verbose_logger.debug("LiteLLMSkillsHandler: Deleting skill %s", skill_id)
 
         skill = await LiteLLMSkillsHandler._load_skill(skill_id)
         if skill is None or not user_can_access_resource_owner(getattr(skill, "created_by", None), user_api_key_dict):
@@ -189,5 +189,5 @@ class LiteLLMSkillsHandler:
         except ValueError:
             return None
         except Exception as e:
-            verbose_logger.warning(f"LiteLLMSkillsHandler: Error fetching skill {skill_id}: {e}")
+            verbose_logger.warning("LiteLLMSkillsHandler: Error fetching skill %s: %s", skill_id, e)
             return None

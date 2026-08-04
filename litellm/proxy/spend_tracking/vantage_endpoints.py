@@ -166,7 +166,7 @@ async def get_vantage_settings(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error retrieving Vantage settings: {e}")
+        verbose_proxy_logger.error("Error retrieving Vantage settings: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": f"Failed to retrieve Vantage settings: {e}"},
@@ -235,7 +235,7 @@ async def update_vantage_settings(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error updating Vantage settings: {e}")
+        verbose_proxy_logger.error("Error updating Vantage settings: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": f"Failed to update Vantage settings: {e}"},
@@ -257,7 +257,7 @@ async def is_vantage_setup_in_db() -> bool:
         return vantage_config is not None and vantage_config.param_value is not None
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error checking Vantage status: {e}")
+        verbose_proxy_logger.error("Error checking Vantage status: %s", e)
         return False
 
 
@@ -280,7 +280,7 @@ async def is_vantage_setup() -> bool:
             return True
         return False
     except Exception as e:
-        verbose_proxy_logger.error(f"Error checking Vantage setup: {e}")
+        verbose_proxy_logger.error("Error checking Vantage setup: %s", e)
         return False
 
 
@@ -324,7 +324,7 @@ async def init_vantage_settings(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error initializing Vantage settings: {e}")
+        verbose_proxy_logger.error("Error initializing Vantage settings: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": f"Failed to initialize Vantage settings: {e}"},
@@ -415,7 +415,7 @@ async def vantage_dry_run_export(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error performing Vantage dry run export: {e}")
+        verbose_proxy_logger.error("Error performing Vantage dry run export: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": f"Failed to perform Vantage dry run export: {e}"},
@@ -488,7 +488,7 @@ async def vantage_export(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error performing Vantage export: {e}")
+        verbose_proxy_logger.error("Error performing Vantage export: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": f"Failed to perform Vantage export: {e}"},
@@ -548,7 +548,7 @@ async def delete_vantage_settings(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error deleting Vantage settings: {e}")
+        verbose_proxy_logger.error("Error deleting Vantage settings: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": f"Failed to delete Vantage settings: {e}"},

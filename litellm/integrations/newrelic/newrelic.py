@@ -116,11 +116,12 @@ class NewRelicLogger(CustomLogger):
 
                 self.enabled = True
                 verbose_logger.info(
-                    f"New Relic AI Monitoring initialized for app: {self.app_name}, "
-                    f"content recording: {self.record_content}"
+                    "New Relic AI Monitoring initialized for app: %s, content recording: %s",
+                    self.app_name,
+                    self.record_content,
                 )
             except Exception as e:
-                verbose_logger.error(f"Failed to initialize New Relic agent: {e}. Integration will be disabled.")
+                verbose_logger.error("Failed to initialize New Relic agent: %s. Integration will be disabled.", e)
                 self.enabled = False
 
     def _get_newrelic_params(self) -> dict:
@@ -170,9 +171,10 @@ class NewRelicLogger(CustomLogger):
         if value in ("0", "false", "no", "off"):
             return False
         verbose_logger.warning(
-            f"{var_name}={raw!r} is not a recognised boolean "
-            f"(accepts true/false, 1/0, yes/no, on/off). "
-            f"Falling back to default ({default})."
+            "%s=%r is not a recognised boolean (accepts true/false, 1/0, yes/no, on/off). Falling back to default (%s).",
+            var_name,
+            raw,
+            default,
         )
         return default
 
@@ -188,7 +190,7 @@ class NewRelicLogger(CustomLogger):
 
             return version("litellm")
         except Exception as e:
-            verbose_logger.warning(f"Unable to determine litellm version: {e}")
+            verbose_logger.warning("Unable to determine litellm version: %s", e)
             return "unknown"
 
     def _emit_supportability_metric(self):
@@ -216,12 +218,12 @@ class NewRelicLogger(CustomLogger):
 
             if app and app.enabled:
                 app.record_custom_metric(metric_name, 1)
-                verbose_logger.info(f"Emitted New Relic supportability metric: {metric_name}")
+                verbose_logger.info("Emitted New Relic supportability metric: %s", metric_name)
             else:
                 verbose_logger.info("New Relic application is not enabled; skipping metric recording.")
 
         except Exception as e:
-            verbose_logger.warning(f"Failed to emit supportability metric: {e}")
+            verbose_logger.warning("Failed to emit supportability metric: %s", e)
 
     def _check_and_emit_periodic_metric(self):
         """
@@ -294,14 +296,13 @@ class NewRelicLogger(CustomLogger):
                     trace_id = slo_trace_id
 
         except Exception as e:
-            verbose_logger.warning(f"Unable to parse New Relic trace context from upstream sources: {e}")
+            verbose_logger.warning("Unable to parse New Relic trace context from upstream sources: %s", e)
 
         if not trace_id:
             trace_id = uuid.uuid4().hex
             verbose_logger.debug(
-                f"New Relic trace_id not available from distributed tracing headers or "
-                f"StandardLoggingPayload. Generated trace_id={trace_id} for AI monitoring "
-                f"event grouping."
+                "New Relic trace_id not available from distributed tracing headers or StandardLoggingPayload. Generated trace_id=%s for AI monitoring event grouping.",
+                trace_id,
             )
 
         return trace_id
@@ -638,7 +639,7 @@ class NewRelicLogger(CustomLogger):
                 verbose_logger.warning("New Relic application is not enabled; skipping summary event recording.")
 
         except Exception as e:
-            verbose_logger.warning(f"Failed to record New Relic summary event: {e}")
+            verbose_logger.warning("Failed to record New Relic summary event: %s", e)
             self.handle_callback_failure("newrelic")
 
     def _record_message_events(
@@ -699,7 +700,7 @@ class NewRelicLogger(CustomLogger):
                 app.record_custom_event("LlmChatCompletionMessage", event_data)
 
         except Exception as e:
-            verbose_logger.warning(f"Failed to record New Relic message events: {e}")
+            verbose_logger.warning("Failed to record New Relic message events: %s", e)
             self.handle_callback_failure("newrelic")
 
     def _record_error_metric(self):
@@ -714,7 +715,7 @@ class NewRelicLogger(CustomLogger):
             if app and app.enabled:
                 app.record_custom_metric("LLM/LiteLLM/Error", 1)
         except Exception as e:
-            verbose_logger.warning(f"Failed to record New Relic error metric: {e}")
+            verbose_logger.warning("Failed to record New Relic error metric: %s", e)
             self.handle_callback_failure("newrelic")
 
     def _process_success(
@@ -846,7 +847,7 @@ class NewRelicLogger(CustomLogger):
         try:
             self._process_success(kwargs, response_obj, start_time, end_time)
         except Exception as e:
-            verbose_logger.warning(f"Error in New Relic log_success_event: {e}")
+            verbose_logger.warning("Error in New Relic log_success_event: %s", e)
             self.handle_callback_failure("newrelic")
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -859,7 +860,7 @@ class NewRelicLogger(CustomLogger):
         try:
             self._process_success(kwargs, response_obj, start_time, end_time)
         except Exception as e:
-            verbose_logger.warning(f"Error in New Relic async_log_success_event: {e}")
+            verbose_logger.warning("Error in New Relic async_log_success_event: %s", e)
             self.handle_callback_failure("newrelic")
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
@@ -872,7 +873,7 @@ class NewRelicLogger(CustomLogger):
             self._record_error_metric()
 
         except Exception as e:
-            verbose_logger.warning(f"Error in New Relic log_failure_event: {e}")
+            verbose_logger.warning("Error in New Relic log_failure_event: %s", e)
             self.handle_callback_failure("newrelic")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
@@ -885,5 +886,5 @@ class NewRelicLogger(CustomLogger):
             self._record_error_metric()
 
         except Exception as e:
-            verbose_logger.warning(f"Error in New Relic async_log_failure_event: {e}")
+            verbose_logger.warning("Error in New Relic async_log_failure_event: %s", e)
             self.handle_callback_failure("newrelic")
