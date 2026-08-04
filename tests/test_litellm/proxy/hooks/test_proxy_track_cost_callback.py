@@ -141,9 +141,9 @@ async def test_async_post_call_failure_hook_releases_budget_reservation_before_r
 
     with (
         patch(
-            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+            "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
             new_callable=AsyncMock,
-        ) as mock_release_budget_reservation,
+        ) as mock_reconcile_budget_reservation,
         patch(
             "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
             new_callable=AsyncMock,
@@ -155,11 +155,12 @@ async def test_async_post_call_failure_hook_releases_budget_reservation_before_r
             user_api_key_dict=user_api_key_dict,
         )
 
-        assert mock_release_budget_reservation.await_count == 1
+        assert mock_reconcile_budget_reservation.await_count == 1
         assert (
-            mock_release_budget_reservation.await_args.kwargs["budget_reservation"]
+            mock_reconcile_budget_reservation.await_args.kwargs["budget_reservation"]
             is user_api_key_dict.budget_reservation
         )
+        assert mock_reconcile_budget_reservation.await_args.kwargs["actual_cost"] == 0.0
         mock_update_database.assert_not_called()
 
 
@@ -177,10 +178,10 @@ async def test_should_continue_failure_tracking_when_budget_release_fails():
 
     with (
         patch(
-            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+            "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
             new_callable=AsyncMock,
             side_effect=RuntimeError("redis unavailable"),
-        ) as mock_release_budget_reservation,
+        ) as mock_reconcile_budget_reservation,
         patch(
             "litellm.proxy.hooks.proxy_track_cost_callback._invalidate_budget_reservation_counters",
             new_callable=AsyncMock,
@@ -202,9 +203,9 @@ async def test_should_continue_failure_tracking_when_budget_release_fails():
             user_api_key_dict=user_api_key_dict,
         )
 
-        assert mock_release_budget_reservation.await_count == 1
+        assert mock_reconcile_budget_reservation.await_count == 1
         assert (
-            mock_release_budget_reservation.await_args.kwargs["budget_reservation"]
+            mock_reconcile_budget_reservation.await_args.kwargs["budget_reservation"]
             is user_api_key_dict.budget_reservation
         )
         assert mock_invalidate_budget_reservation_counters.await_count == 1
@@ -1105,6 +1106,57 @@ async def test_async_post_call_failure_hook_records_recovered_partial_spend():
 
         mock_update_database.assert_called_once()
         assert mock_update_database.call_args[1]["response_cost"] == 3.5e-05
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_reconciles_reservation_to_recovered_cost():
+    """Recovered partial cost must land on the live budget counters, not be refunded.
+
+    The pre-call reservation holds a worst-case amount on the shared spend
+    counters. Refunding it to zero on failure drops cost LiteLLM already
+    calculated out of live enforcement until the async DB writes flush, so a key
+    can keep serving past its max_budget. Reconcile to the recovered cost.
+    """
+    from litellm.types.utils import Usage
+
+    logger = _ProxyDBLogger()
+    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="u",
+        team_id="t",
+        request_route="/chat/completions",
+        budget_reservation=budget_reservation,
+    )
+
+    request_data = {
+        "model": "anthropic/claude-haiku-4-5",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "response_cost": 3.5e-05,
+        "combined_usage_object": Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31),
+    }
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+            new_callable=AsyncMock,
+        ) as mock_reconcile_budget_reservation,
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
+    ):
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("MidStreamFallbackError: read timeout"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    mock_reconcile_budget_reservation.assert_awaited_once()
+    reconcile_kwargs = mock_reconcile_budget_reservation.await_args.kwargs
+    assert reconcile_kwargs["budget_reservation"] is user_api_key_dict.budget_reservation
+    assert reconcile_kwargs["actual_cost"] == 3.5e-05
+    assert mock_update_database.call_args[1]["response_cost"] == 3.5e-05
 
 
 @pytest.mark.asyncio
