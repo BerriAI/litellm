@@ -20,16 +20,22 @@ describe("AdDirectoryUserSearch", () => {
     mockDirectoryUsersSearchCall.mockResolvedValue([]);
   });
 
-  it("should render the search combobox", () => {
-    render(<AdDirectoryUserSearch accessToken="token" resetSignal={0} onSelectUser={vi.fn()} />);
-    expect(screen.getByRole("combobox", { name: /user email/i })).toBeInTheDocument();
+  it("should render a single search combobox", () => {
+    render(<AdDirectoryUserSearch accessToken="token" />);
+    expect(screen.getByRole("combobox")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/search by name or email/i)).toBeInTheDocument();
+  });
+
+  it("should forward the id prop to the underlying input so a Form label can target it", () => {
+    render(<AdDirectoryUserSearch accessToken="token" id="user_email" />);
+    expect(screen.getByRole("combobox")).toHaveAttribute("id", "user_email");
   });
 
   it("should not call directoryUsersSearchCall for a single-character query", async () => {
     const user = userEvent.setup();
-    render(<AdDirectoryUserSearch accessToken="token" resetSignal={0} onSelectUser={vi.fn()} />);
+    render(<AdDirectoryUserSearch accessToken="token" />);
 
-    await user.type(screen.getByRole("combobox", { name: /user email/i }), "a");
+    await user.type(screen.getByRole("combobox"), "a");
 
     await waitFor(() => {
       expect(screen.getByText(/no users found/i)).toBeInTheDocument();
@@ -39,9 +45,9 @@ describe("AdDirectoryUserSearch", () => {
 
   it("should collapse rapid keystrokes into a single debounced search call", async () => {
     const user = userEvent.setup({ delay: 1 });
-    render(<AdDirectoryUserSearch accessToken="token" resetSignal={0} onSelectUser={vi.fn()} />);
+    render(<AdDirectoryUserSearch accessToken="token" />);
 
-    await user.type(screen.getByRole("combobox", { name: /user email/i }), "ali");
+    await user.type(screen.getByRole("combobox"), "ali");
 
     await waitFor(() => {
       expect(mockDirectoryUsersSearchCall).toHaveBeenCalledTimes(1);
@@ -49,32 +55,33 @@ describe("AdDirectoryUserSearch", () => {
     expect(mockDirectoryUsersSearchCall).toHaveBeenCalledWith("token", "ali");
   });
 
-  it("should call onSelectUser with the chosen directory user", async () => {
+  it("should call onChange with the selected user's email", async () => {
     const user = userEvent.setup();
-    const onSelectUser = vi.fn();
+    const onChange = vi.fn();
     mockDirectoryUsersSearchCall.mockResolvedValue([
       { id: "aad-user-id", display_name: "Alice Example", email: "alice@example.com" },
     ]);
 
-    render(<AdDirectoryUserSearch accessToken="token" resetSignal={0} onSelectUser={onSelectUser} />);
+    render(<AdDirectoryUserSearch accessToken="token" onChange={onChange} />);
 
-    await user.type(screen.getByRole("combobox", { name: /user email/i }), "ali");
+    await user.type(screen.getByRole("combobox"), "ali");
     await user.click(await screen.findByText("Alice Example"));
 
-    expect(onSelectUser).toHaveBeenCalledWith({
-      id: "aad-user-id",
-      display_name: "Alice Example",
-      email: "alice@example.com",
-    });
+    expect(onChange).toHaveBeenCalledWith("alice@example.com");
+  });
+
+  it("should show the controlled value in the input", () => {
+    render(<AdDirectoryUserSearch accessToken="token" value="bob@example.com" />);
+    expect(screen.getByRole("combobox")).toHaveValue("bob@example.com");
   });
 
   it("should show an error message instead of 'No users found' when the search call fails", async () => {
     const user = userEvent.setup();
     mockDirectoryUsersSearchCall.mockRejectedValue(new Error("Microsoft directory search is not configured."));
 
-    render(<AdDirectoryUserSearch accessToken="token" resetSignal={0} onSelectUser={vi.fn()} />);
+    render(<AdDirectoryUserSearch accessToken="token" />);
 
-    await user.type(screen.getByRole("combobox", { name: /user email/i }), "ali");
+    await user.type(screen.getByRole("combobox"), "ali");
 
     await waitFor(() => {
       expect(
@@ -93,9 +100,9 @@ describe("AdDirectoryUserSearch", () => {
       { id: "bob-id", display_name: "Bob Example", email: "bob@example.com" },
     ]);
 
-    render(<AdDirectoryUserSearch accessToken="token" resetSignal={0} onSelectUser={vi.fn()} />);
+    render(<AdDirectoryUserSearch accessToken="token" />);
 
-    const searchBox = screen.getByRole("combobox", { name: /user email/i });
+    const searchBox = screen.getByRole("combobox");
     await user.type(searchBox, "ali");
     await waitFor(() => {
       expect(mockDirectoryUsersSearchCall).toHaveBeenCalledWith("token", "ali");
@@ -116,20 +123,18 @@ describe("AdDirectoryUserSearch", () => {
     expect(screen.queryByText("Alice Example")).not.toBeInTheDocument();
   });
 
-  it("should clear the selected value and options when resetSignal changes", async () => {
+  it("should clear search results when remounted via a changed key", async () => {
     const user = userEvent.setup();
     mockDirectoryUsersSearchCall.mockResolvedValue([
       { id: "aad-user-id", display_name: "Alice Example", email: "alice@example.com" },
     ]);
 
-    const { rerender } = render(
-      <AdDirectoryUserSearch accessToken="token" resetSignal={0} onSelectUser={vi.fn()} />,
-    );
+    const { rerender } = render(<AdDirectoryUserSearch key={0} accessToken="token" />);
 
-    await user.type(screen.getByRole("combobox", { name: /user email/i }), "ali");
+    await user.type(screen.getByRole("combobox"), "ali");
     await user.click(await screen.findByText("Alice Example"));
 
-    rerender(<AdDirectoryUserSearch accessToken="token" resetSignal={1} onSelectUser={vi.fn()} />);
+    rerender(<AdDirectoryUserSearch key={1} accessToken="token" />);
 
     expect(screen.queryByText("Alice Example")).not.toBeInTheDocument();
   });
