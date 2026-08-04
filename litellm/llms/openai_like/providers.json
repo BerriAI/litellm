@@ -212,5 +212,12 @@
     "api_key_env": "SAIL_API_KEY",
     "api_base_env": "SAIL_API_BASE",
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+  },
+  "flexai": {
+    "base_url": "https://api.flex.ai/v1",
+    "api_key_env": "FLEXAI_API_KEY",
+    "api_base_env": "FLEXAI_API_BASE",
+    "base_class": "openai_gpt",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   }
 }

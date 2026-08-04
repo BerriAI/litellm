@@ -951,6 +951,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.scx.ai/v1",
     "https://api.prisminference.com/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
+    "https://api.flex.ai/v1",
 ]
 
 
@@ -1025,6 +1026,7 @@ openai_compatible_providers: Final[list] = [
     "scx-ai",
     "prism",
     "sail",
+    "flexai",  # FlexAI Token Service - JSON-configured provider
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
