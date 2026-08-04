@@ -649,6 +649,18 @@ model LiteLLM_SpendLogs {
   @@index([session_id])
 }
 
+model LiteLLM_BudgetWindowSpend {
+  entity_type     String
+  entity_id       String
+  window_duration String
+  window_start    DateTime
+  spend           Float    @default(0.0)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@id([entity_type, entity_id, window_duration])
+}
+
 // View spend, model, api_key per request
 model LiteLLM_ErrorLogs {
   request_id          String   @id @default(uuid())
