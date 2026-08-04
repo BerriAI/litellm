@@ -207,7 +207,7 @@ async def directory_user_search(
         # handle_exception_on_proxy instead of falling into the 500 below.
         raise handle_exception_on_proxy(e)
     except httpx.HTTPStatusError as e:
-        verbose_proxy_logger.exception(f"Directory search failed - {e}")
+        verbose_proxy_logger.exception("Directory search failed - %s", e)
         raise handle_exception_on_proxy(
             HTTPException(
                 status_code=502,
@@ -215,7 +215,7 @@ async def directory_user_search(
             )
         )
     except httpx.HTTPError as e:
-        verbose_proxy_logger.exception(f"Directory search request failed - {e}")
+        verbose_proxy_logger.exception("Directory search request failed - %s", e)
         raise handle_exception_on_proxy(
             HTTPException(
                 status_code=502,
@@ -226,7 +226,7 @@ async def directory_user_search(
         # The provider's response body wasn't valid JSON - every other
         # failure mode (auth, transport, deliberate HTTPException) is
         # already handled above.
-        verbose_proxy_logger.exception(f"directory_user_search(): failed to parse provider response - {e}")
+        verbose_proxy_logger.exception("directory_user_search(): failed to parse provider response - %s", e)
         raise handle_exception_on_proxy(e)
 
 
