@@ -10,7 +10,8 @@
         "REASONING": ["claude-opus-5"]
       },
       "classifier_type": "heuristic",
-      "escalation_keywords": ["LITELLM ESCALATE"]
+      "escalation_keywords": ["LITELLM ESCALATE"],
+      "session_affinity": false
     }
   },
   "openai_family": {
@@ -24,7 +25,8 @@
         "REASONING": ["o3"]
       },
       "classifier_type": "heuristic",
-      "escalation_keywords": ["LITELLM ESCALATE"]
+      "escalation_keywords": ["LITELLM ESCALATE"],
+      "session_affinity": false
     }
   }
 }

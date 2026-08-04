@@ -387,6 +387,8 @@ describe("AddAutoRouterTab", () => {
 
     renderWithProviders(<Harness />);
 
+    openTemplateDropdown();
+    fireEvent.click(optionByLabel("Custom Configuration")!);
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     await user.click(screen.getByText("Advanced: Session Affinity"));
     expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
@@ -405,6 +407,8 @@ describe("AddAutoRouterTab", () => {
 
     renderWithProviders(<Harness />);
 
+    openTemplateDropdown();
+    fireEvent.click(optionByLabel("Custom Configuration")!);
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     await user.click(screen.getByText("Advanced: Session Affinity"));
     await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
