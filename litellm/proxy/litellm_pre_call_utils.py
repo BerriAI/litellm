@@ -4,7 +4,7 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException, Request
@@ -120,8 +120,11 @@ _ENABLE_TEAM_STALE_ALIAS_BYPASS: bool | None = None
 
 
 if TYPE_CHECKING:
+    from litellm.integrations.otel.model.destination import OtelDestination
+    from litellm.models.credentials import CredentialItem
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
     from litellm.types.proxy.policy_engine import PolicyMatchContext
+    from litellm.types.utils import OtelDestinationParams
 
     ProxyConfig = _ProxyConfig
 else:
@@ -672,6 +675,160 @@ class KeyAndTeamLoggingSettings:
         if user_api_key_dict.team_metadata is not None and "logging" in user_api_key_dict.team_metadata:
             return decrypt_callback_vars(user_api_key_dict.team_metadata).get("logging")
         return None
+
+
+async def _effective_org_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    """The org this request belongs to, falling back to the team's org when the token
+    carries none. Team keys frequently have no ``org_id`` on the token, so without this
+    an org-scoped destination would be invisible at request time even though the write
+    gate (which loads the team) accepted it. Mirrors the fallback in ``_check_org_budget``.
+    """
+    if user_api_key_dict.org_id is not None:
+        return user_api_key_dict.org_id
+    team_id = user_api_key_dict.team_id
+    if team_id is None:
+        return None
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.auth_checks import get_team_object
+
+    if proxy_server.prisma_client is None:
+        return None
+    try:
+        team_obj = await get_team_object(
+            team_id=team_id,
+            prisma_client=proxy_server.prisma_client,
+            user_api_key_cache=proxy_server.user_api_key_cache,
+            parent_otel_span=getattr(user_api_key_dict, "parent_otel_span", None),
+        )
+    except HTTPException:
+        return None
+    return getattr(team_obj, "organization_id", None)
+
+
+async def _resolve_logging_exporters(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> "tuple[tuple[OtelDestinationParams, ...], tuple[str, ...]]":
+    """Resolve the destinations this request fans out to, as (destinations, backends).
+
+    ``credential_info.access`` is the sole routing determinant: a destination is
+    selected when its ``access`` grants the caller's team/org. Empty access grants no
+    one, so an empty-access destination never fires (proxy-wide requires
+    ``access.global``). Each survivor is built via ``destination_for_credential`` and deduped on
+    (endpoint, headers, resource attributes). Returns ([], []) when nothing is selected
+    (default-deny).
+    """
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.proxy.management_endpoints.logging_exporter_access import (
+        access_grants,
+        destination_for_credential,
+        identity_scope,
+        parse_credential_info,
+    )
+
+    # Admin-owned destinations are an OTEL v2 feature; the LITELLM_OTEL_V2 flag is the
+    # sole activation gate. With the flag off, registering a destination resolves to
+    # nothing (no backend is activated for the request) until the admin sets the flag.
+    if not is_otel_v2_enabled():
+        return (), ()
+
+    if not any(
+        (info := parse_credential_info(credential.credential_info)) is not None and info.credential_type == "logging"
+        for credential in litellm.credential_list
+    ):
+        return (), ()
+
+    team_id = user_api_key_dict.team_id
+    org_id = await _effective_org_id(user_api_key_dict)
+    team_ids, org_ids = identity_scope(team_id, org_id)
+
+    def _selected(credential: "CredentialItem") -> bool:
+        info = parse_credential_info(credential.credential_info)
+        if info is None or info.credential_type != "logging":
+            return False
+        return access_grants(info.access, team_ids, org_ids)
+
+    built = tuple(
+        result
+        for credential in litellm.credential_list
+        if _selected(credential)
+        if (result := destination_for_credential(credential)) is not None
+    )
+    deduped = {
+        (
+            destination.endpoint,
+            tuple(sorted(destination.headers.items())),
+            tuple(sorted(destination.resource_attributes.items())),
+        ): (
+            backend,
+            destination,
+        )
+        for backend, destination in built
+    }
+    destinations: tuple[OtelDestinationParams, ...] = tuple(
+        {
+            "callback_name": backend,
+            "endpoint": destination.endpoint,
+            "headers": destination.headers,
+            "resource_attributes": destination.resource_attributes,
+            "protocol": destination.protocol,
+        }
+        for backend, destination in deduped.values()
+    )
+    backends = tuple(dict.fromkeys(backend for backend, _ in deduped.values()))
+    return destinations, backends
+
+
+def _request_destination_from_raw(item: object) -> "OtelDestination | None":
+    from litellm.integrations.otel.model.destination import OtelDestination
+
+    if isinstance(item, OtelDestination):
+        return item
+    if not isinstance(item, dict) or not item.get("endpoint"):
+        return None
+    try:
+        return OtelDestination.model_validate(item)
+    except PydanticValidationError:
+        return None
+
+
+def _set_request_otel_destinations(destinations: Sequence[object]) -> None:
+    from litellm.integrations.otel.plumbing.context import set_request_destinations
+
+    set_request_destinations(
+        tuple(destination for item in destinations if (destination := _request_destination_from_raw(item)) is not None)
+    )
+
+
+async def _apply_admin_logging_exporters(
+    user_api_key_dict: UserAPIKeyAuth,
+    cached_destinations: "Sequence[object] | None" = None,
+) -> None:
+    """Anchor the resolved fan-out destinations on the request context.
+
+    The destinations are set on a server-only ContextVar (never on ``data``), so
+    they are neither request-shaped nor reachable by the provider body; the OTEL v2
+    router and the fan-out processor both read them from that ContextVar. Default-deny
+    means an identity no destination's access grants gets no per-tenant destination here.
+
+    ``cached_destinations`` -- when ``user_api_key_auth`` already resolved the
+    destinations on this request (the FastAPI path), reuse the result instead of
+    running the resolver a second time. The SDK path passes ``None`` and the
+    resolver runs here.
+
+    An empty resolution is published too, matching ``_hoist_request_destinations``.
+    Returning early instead would leave a previous message's destinations standing on
+    a ContextVar this request never overwrites: a stateful MCP session runs every
+    message on the task its ``initialize`` spawned, so a revoked grant would keep
+    exporting for the life of that session.
+    """
+    if cached_destinations is not None:
+        destinations = tuple(cached_destinations)
+    else:
+        try:
+            destinations, _backends = await _resolve_logging_exporters(user_api_key_dict)
+        except Exception:  # noqa: BLE001  # best-effort telemetry setup must never break the request
+            return
+    _set_request_otel_destinations(destinations)
 
 
 def _get_dynamic_logging_metadata(
@@ -1873,6 +2030,11 @@ async def add_litellm_data_to_request(
                 )
 
     # Team Callbacks controls
+    data.pop("otel_destinations", None)
+    for _carrier_key in (_metadata_variable_name, "litellm_metadata"):
+        carrier = data.get(_carrier_key)
+        if isinstance(carrier, dict):
+            carrier.pop("otel_destinations", None)
     callback_settings_obj: Final = _get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
@@ -1881,12 +2043,14 @@ async def add_litellm_data_to_request(
         data["failure_callback"] = callback_settings_obj.failure_callback
 
         if callback_settings_obj.callback_vars is not None:
-            # unpack callback_vars in data
             for k, v in callback_settings_obj.callback_vars.items():
                 data[k] = v
             # Callbacks that must not honour request-supplied credentials read this
             # proxy-owned field instead of the raw request kwargs.
             data[TRUSTED_CALLBACK_VARS_FIELD] = callback_settings_obj.callback_vars
+
+    cached = getattr(getattr(request, "state", None), "otel_destinations", None)
+    await _apply_admin_logging_exporters(user_api_key_dict, cached_destinations=cached)
 
     # Add disabled callbacks from key metadata
     if user_api_key_dict.metadata and "litellm_disabled_callbacks" in user_api_key_dict.metadata:

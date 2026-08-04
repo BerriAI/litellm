@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from contextvars import ContextVar, Token
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from opentelemetry import baggage
 from opentelemetry.context import Context, get_current
@@ -17,6 +17,9 @@ from opentelemetry.trace import (
 from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
 )
+
+if TYPE_CHECKING:
+    from litellm.integrations.otel.model.destination import OtelDestination
 
 _PROPAGATOR: Final = TraceContextTextMapPropagator()
 
@@ -36,6 +39,20 @@ _PROPAGATOR: Final = TraceContextTextMapPropagator()
 # callbacks that close the span. It is never reset: the contextvar dies with the
 # request task, so there is nothing to leak.
 _request_root_span: Final["ContextVar[Span | None]"] = ContextVar("litellm_otel_request_root_span", default=None)
+
+_request_destinations: 'ContextVar[tuple["OtelDestination", ...]]' = ContextVar(
+    "litellm_otel_request_destinations", default=()
+)
+
+
+def set_request_destinations(destinations: 'tuple["OtelDestination", ...]') -> None:
+    """Anchor the admin-resolved destinations for this request."""
+    _request_destinations.set(tuple(destinations))
+
+
+def request_destinations() -> 'tuple["OtelDestination", ...]':
+    """Destinations the request fans out to, or empty when none were resolved."""
+    return _request_destinations.get()
 
 
 def set_request_root_span(span: Span) -> None:
