@@ -86,6 +86,9 @@ from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
     OPTIONAL_KWARGS_KEYS,
 )
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    normalize_openai_chat_completions_model,
+)
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
 )
@@ -4956,11 +4959,12 @@ def completion(  # type: ignore
     ######### unpacking kwargs #####################
     args = locals()
 
-    # Set by the responses->completion fallback so completion() does not bridge
-    # back to the Responses API: that round-trip mutually recurses forever for a
-    # model whose model_cost mode is "responses" but whose provider has no
-    # Responses API config (get_provider_responses_api_config -> None).
-    skip_responses_api_bridge = kwargs.pop("_skip_responses_api_bridge", False)
+    model, model_forces_chat_completions = normalize_openai_chat_completions_model(model)
+    skip_responses_api_bridge = (
+        bool(kwargs.pop("_skip_responses_api_bridge", False))
+        or bool(kwargs.get("use_chat_completions_api"))
+        or model_forces_chat_completions
+    )
 
     skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
