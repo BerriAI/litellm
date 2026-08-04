@@ -11,8 +11,8 @@ this track) and then walks the flow implemented here:
    "none"``); PKCE S256 is what protects the code.
 2. ``GET /authorize``: validates the client and redirect URI, requires S256 PKCE, and
    interposes LiteLLM sign-in. Without a session cookie the browser is sent through
-   ``/sso/key/generate`` with a same-origin ``return_to`` so it lands back here after
-   login. With a session, the flow parameters and the SSO user are sealed into a per-flow
+   LiteLLM's native ``/ui/login/`` route with a same-origin ``return_to`` so it lands
+   back here after login. With a session, the flow parameters and the signed-in user are sealed into a per-flow
    HttpOnly cookie (the same pattern as the upstream OAuth state relay) and the browser is
    sent to the connect page, where the user authorizes individual servers (vaulting those
    tokens server-side) before finishing.
@@ -347,7 +347,7 @@ def aggregate_authorize(
         return _oauth_error(400, "invalid_request", f"state must be at most {MAX_STATE_LENGTH} characters")
     base_url = get_request_base_url(request)
     if session_user_id is None:
-        login_url = f"{base_url}/sso/key/generate?{urlencode({'return_to': relative_request_url(request)})}"
+        login_url = f"{base_url}/ui/login/?{urlencode({'return_to': relative_request_url(request)})}"
         return RedirectResponse(login_url, status_code=303)
     now = datetime.now(timezone.utc)
     handle = secrets.token_urlsafe(24)
