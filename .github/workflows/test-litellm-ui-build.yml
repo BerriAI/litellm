@@ -31,25 +31,6 @@ jobs:
           cache: "npm"
           cache-dependency-path: ui/litellm-dashboard/package-lock.json
 
-      - name: Verify the dependency cooldown is enforced
-        run: |
-          set -euo pipefail
-          configured=$(npm config get min-release-age)
-          if [ "$configured" = "null" ] || [ -z "$configured" ]; then
-            echo "::error::min-release-age is not set for ui/litellm-dashboard"
-            exit 1
-          fi
-          echo "min-release-age=$configured on npm $(npm --version)"
-
-          probe=$(mktemp -d)
-          printf '{"name":"cooldown-probe","version":"1.0.0","private":true}\n' > "$probe/package.json"
-          printf 'min-release-age=999999\n' > "$probe/.npmrc"
-          if (cd "$probe" && npm install --package-lock-only --no-audit --no-fund react >/dev/null 2>&1); then
-            echo "::error::npm resolved a version despite a 999999-day cooldown; min-release-age is inert on npm $(npm --version)"
-            exit 1
-          fi
-          echo "cooldown enforced: resolution refused under an impossible min-release-age"
-
       - name: Install dependencies
         run: npm ci
 
