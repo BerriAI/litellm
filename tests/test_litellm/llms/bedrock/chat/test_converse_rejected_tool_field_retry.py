@@ -238,3 +238,95 @@ async def test_async_retry_leaves_unrelated_errors_alone() -> None:
 
     assert excinfo.value.status_code == 500
     assert len(attempts) == 1
+
+
+_CONVERSE_OK = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+}
+
+
+class _RejectThenAcceptClient:
+    """Fake transport: rejects the first body the way Bedrock does, accepts the second.
+
+    Drives the real ``_send``/``_send_stream`` closures inside the handler rather than
+    calling the retry wrapper directly, so the wiring at each call site is covered too.
+    """
+
+    def __init__(self) -> None:
+        self.posts: list[str] = []
+
+    def _respond(self, data: str) -> httpx.Response:
+        self.posts.append(data)
+        if len(self.posts) == 1:
+            request = httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/x")
+            raise httpx.HTTPStatusError(
+                "400", request=request, response=httpx.Response(400, text=_STRICT_REJECTION, request=request)
+            )
+        return httpx.Response(200, json=_CONVERSE_OK)
+
+    def post(self, *args, **kwargs) -> httpx.Response:
+        return self._respond(kwargs.get("data") or "")
+
+
+def _converse_kwargs(client, **overrides):
+    return {
+        "model": "us.anthropic.claude-sonnet-5",
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_base": "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse-stream",
+        "model_response": __import__("litellm").ModelResponse(),
+        "timeout": None,
+        "encoding": None,
+        "logging_obj": _logging_obj(),
+        "stream": True,
+        "optional_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "d",
+                        "strict": True,
+                        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                    },
+                }
+            ]
+        },
+        "litellm_params": {"aws_region_name": "us-east-1"},
+        "credentials": _raw_credentials(),
+        "client": client,
+        "fake_stream": True,
+        "api_key": None,
+        **overrides,
+    }
+
+
+def _raw_credentials():
+    from botocore.credentials import Credentials
+
+    return Credentials(access_key="AKIAEXAMPLE", secret_key="secret", token=None)
+
+
+def _logging_obj():
+    from unittest.mock import MagicMock
+
+    obj = MagicMock()
+    obj.litellm_params = {}
+    return obj
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_closure_retries_and_resends_without_the_field() -> None:
+    """Covers the `_send` closure inside async_streaming, not just the wrapper."""
+    class _AsyncClient(_RejectThenAcceptClient):
+        async def post(self, *args, **kwargs):
+            return self._respond(kwargs.get("data") or "")
+
+    async_client = _AsyncClient()
+    await BedrockConverseLLM().async_streaming(**_converse_kwargs(async_client))
+
+    assert len(async_client.posts) == 2
+    assert '"strict"' in async_client.posts[0]
+    assert '"strict"' not in async_client.posts[1]
+    assert '"get_weather"' in async_client.posts[1]
