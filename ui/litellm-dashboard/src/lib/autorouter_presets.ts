@@ -22,11 +22,24 @@ export const getAllPresets = (): AutoRouterPreset[] => PRESETS;
 
 export const getPresetByKey = (key: string): AutoRouterPreset | undefined => PRESETS.find((p) => p.key === key);
 
-export const getRequiredModelsInPreset = (preset: AutoRouterPreset): Set<string> => {
-  const { tiers, classifier_llm_config: classifier, embedding_model: embedding } = preset.complexity_router_config;
+// Generalized over ComplexityRouterConfigPayload (a preset's bundled config) so the same accessors
+// can check either a preset's own models or a caller's actually-built config - the two need to
+// agree, since a preset only prefills once and the config is edited freely after.
+export const getRequiredModels = (
+  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model">,
+): Set<string> => {
+  const { tiers, classifier_llm_config: classifier, embedding_model: embedding } = config;
   const models = [...tiers.SIMPLE, ...tiers.MEDIUM, ...tiers.COMPLEX, ...tiers.REASONING, classifier?.model, embedding];
   return new Set(models.filter((model): model is string => model != null));
 };
 
+export const getMissingModels = (
+  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model">,
+  availableModels: Set<string>,
+): string[] => [...getRequiredModels(config)].filter((model) => !availableModels.has(model)).sort();
+
+export const getRequiredModelsInPreset = (preset: AutoRouterPreset): Set<string> =>
+  getRequiredModels(preset.complexity_router_config);
+
 export const getMissingModelsInPreset = (preset: AutoRouterPreset, availableModels: Set<string>): string[] =>
-  [...getRequiredModelsInPreset(preset)].filter((model) => !availableModels.has(model)).sort();
+  getMissingModels(preset.complexity_router_config, availableModels);

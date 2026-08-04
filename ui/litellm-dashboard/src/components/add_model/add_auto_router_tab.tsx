@@ -27,7 +27,13 @@ import {
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import NotificationManager from "../molecules/notifications_manager";
-import { getAllPresets, getPresetByKey, getMissingModelsInPreset, AutoRouterPreset } from "@/lib/autorouter_presets";
+import {
+  getAllPresets,
+  getPresetByKey,
+  getMissingModelsInPreset,
+  getMissingModels,
+  AutoRouterPreset,
+} from "@/lib/autorouter_presets";
 
 type PresetAvailability =
   | { kind: "available" }
@@ -193,15 +199,25 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     setEscalationKeywords(config.escalation_keywords ?? DEFAULT_ESCALATION_KEYWORDS);
   };
 
+  // Checks the config actually being built, not which preset (if any) it came from: a model that
+  // was available when it entered a tier, whether via a preset or picked by hand, can have gone
+  // missing since (the caller's access narrowed, or a background refetch never caught it).
+  const missingReferencedModels = getMissingModels(
+    {
+      tiers: complexityRouterConfig.tiers,
+      classifier_llm_config: complexityRouterConfig.classifier_llm_config,
+      embedding_model: embeddingModel,
+    },
+    availableModelSet,
+  );
+
   // Why the submit is unavailable, or null when it is available. The button reads this to disable
   // itself and to say what is missing, so the two can never give different answers.
   const submitBlockedReason =
-    getMissingTiersError(complexityRouterConfig.tiers) ?? getKeywordTierRulesError(keywordTierRules);
+    getMissingTiersError(complexityRouterConfig.tiers) ??
+    getKeywordTierRulesError(keywordTierRules) ??
+    (missingReferencedModels.length > 0 ? `Model(s) no longer available: ${missingReferencedModels.join(", ")}` : null);
 
-  // A preset only ever prefills complexityRouterConfig at selection time (handlePresetChange);
-  // after that it's edited exactly like Custom, so there is nothing preset-specific left to verify
-  // at submit. The tier selects already only ever offer models from modelInfo, so submitBlockedReason
-  // covering the actual config is the whole check, regardless of how it got there.
   const submitRecommendedRouter = async (name: string) => {
     const {
       tiers,

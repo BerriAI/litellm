@@ -305,6 +305,27 @@ describe("AddAutoRouterTab", () => {
     expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(true);
   });
 
+  // A preset only prefills once; nothing re-checks selectedPreset afterward. So the config itself,
+  // not the preset it came from, has to stay checked against availableModelSet - here the caller's
+  // access narrows after a preset already filled in a model, and submitBlockedReason must catch it
+  // the same way it would catch an empty tier, not let a stale reference through.
+  it("blocks submit when a model already in the config is no longer in the caller's available list", async () => {
+    mockFetchAvailableModels
+      .mockResolvedValueOnce(ALL_FAMILY_MODELS)
+      .mockResolvedValueOnce(ALL_FAMILY_MODELS.filter((m) => m.model_group !== "claude-opus-5"));
+
+    const { rerender } = renderWithProviders(
+      <AddAutoRouterTab handleOk={vi.fn()} accessToken="caller-a" userRole="Admin" />,
+    );
+    openTemplateDropdown();
+    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false));
+    fireEvent.click(optionByLabel("Anthropic Family")!);
+
+    rerender(<AddAutoRouterTab handleOk={vi.fn()} accessToken="caller-b" userRole="Admin" />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled());
+  });
+
   // Prefill must preserve a preset's deliberately-falsy fields (a 0 match threshold, an empty
   // escalation list). Using `||` instead of `??` would swap the 0 for the create-form default and
   // re-enable escalation the preset meant to turn off, so this asserts the exact submitted values.
