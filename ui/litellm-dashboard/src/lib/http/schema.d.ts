@@ -29536,6 +29536,44 @@ export interface components {
             version: string | null;
         };
         /**
+         * PluginResponse
+         * @description Plugin information in API responses.
+         */
+        PluginResponse: {
+            /**
+             * Description
+             * @description Plugin description
+             */
+            description?: string | null;
+            /**
+             * Enabled
+             * @description Whether plugin is enabled
+             */
+            enabled: boolean;
+            /**
+             * Id
+             * @description Plugin unique ID
+             */
+            id: string;
+            /**
+             * Name
+             * @description Plugin name
+             */
+            name: string;
+            /**
+             * Source
+             * @description Git source reference
+             */
+            source: {
+                [key: string]: string;
+            };
+            /**
+             * Version
+             * @description Plugin version
+             */
+            version?: string | null;
+        };
+        /**
          * PolicyAttachmentCreateRequest
          * @description Request body for creating a policy attachment.
          */
@@ -30806,6 +30844,24 @@ export interface components {
              * @default 1.0.0
              */
             version: string | null;
+        };
+        /**
+         * RegisterPluginResponse
+         * @description Response from plugin registration.
+         */
+        RegisterPluginResponse: {
+            /**
+             * Action
+             * @description Action taken (created/updated)
+             */
+            action: string;
+            /** @description Plugin information */
+            plugin: components["schemas"]["PluginResponse"];
+            /**
+             * Status
+             * @description Operation status
+             */
+            status: string;
         };
         /** RejectMCPServerRequest */
         RejectMCPServerRequest: {
@@ -36873,7 +36929,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["RegisterPluginResponse"];
                 };
             };
             /** @description Validation Error */
@@ -36939,7 +36995,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["RegisterPluginResponse"];
                 };
             };
             /** @description Validation Error */

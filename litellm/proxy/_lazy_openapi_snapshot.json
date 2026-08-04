@@ -4525,6 +4525,66 @@
           "title": "PluginListItem",
           "type": "object"
         },
+        "PluginResponse": {
+          "description": "Plugin information in API responses.",
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin description",
+              "title": "Description"
+            },
+            "enabled": {
+              "description": "Whether plugin is enabled",
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "id": {
+              "description": "Plugin unique ID",
+              "title": "Id",
+              "type": "string"
+            },
+            "name": {
+              "description": "Plugin name",
+              "title": "Name",
+              "type": "string"
+            },
+            "source": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Git source reference",
+              "title": "Source",
+              "type": "object"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin version",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "source",
+            "enabled"
+          ],
+          "title": "PluginResponse",
+          "type": "object"
+        },
         "RegisterPluginRequest": {
           "description": "Request body for registering a plugin in the marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket and referenced by their git source.",
           "properties": {
@@ -4643,10 +4703,36 @@
             }
           },
           "required": [
-            "name",
-            "source"
+            "source",
+            "name"
           ],
           "title": "RegisterPluginRequest",
+          "type": "object"
+        },
+        "RegisterPluginResponse": {
+          "description": "Response from plugin registration.",
+          "properties": {
+            "action": {
+              "description": "Action taken (created/updated)",
+              "title": "Action",
+              "type": "string"
+            },
+            "plugin": {
+              "$ref": "#/components/schemas/PluginResponse",
+              "description": "Plugin information"
+            },
+            "status": {
+              "description": "Operation status",
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "action",
+            "plugin"
+          ],
+          "title": "RegisterPluginResponse",
           "type": "object"
         },
         "UpdatePluginRequest": {
@@ -4767,6 +4853,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -4886,7 +4979,9 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/RegisterPluginResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -5030,7 +5125,9 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/RegisterPluginResponse"
+                  }
                 }
               },
               "description": "Successful Response"

@@ -68,7 +68,7 @@ class UpdatePluginRequest(PluginSpec):
     defaulting to the create-time "1.0.0".
     """
 
-    version: Optional[str] = Field(None, description="Semantic version; cleared if omitted")
+    version: str | None = Field(None, description="Semantic version; cleared if omitted")
 
 
 class PluginResponse(BaseModel):

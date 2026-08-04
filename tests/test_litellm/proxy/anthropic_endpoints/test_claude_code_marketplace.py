@@ -85,10 +85,10 @@ async def test_register_plugin_git_subdir_success():
 
     response = await register_plugin(request=request, user_api_key_dict=_USER)
 
-    assert response["status"] == "success"
-    assert response["action"] == "created"
-    assert response["plugin"]["source"]["source"] == "git-subdir"
-    assert response["plugin"]["source"]["path"] == "plugins/my-plugin"
+    assert response.status == "success"
+    assert response.action == "created"
+    assert response.plugin.source["source"] == "git-subdir"
+    assert response.plugin.source["path"] == "plugins/my-plugin"
 
 
 async def _read_stored_manifest(name: str) -> dict:
@@ -143,13 +143,12 @@ async def test_update_plugin_replaces_existing_source():
     response = await update_plugin(
         plugin_name=name,
         request=UpdatePluginRequest(source=new_source, version="2.0.0", description="updated"),
-        user_api_key_dict=_USER,
     )
 
-    assert response["status"] == "success"
-    assert response["action"] == "updated"
-    assert response["plugin"]["version"] == "2.0.0"
-    assert response["plugin"]["source"] == new_source
+    assert response.status == "success"
+    assert response.action == "updated"
+    assert response.plugin.version == "2.0.0"
+    assert response.plugin.source == new_source
 
     stored = await _read_stored_manifest(name)
     assert stored["source"] == new_source
@@ -163,7 +162,6 @@ async def test_update_plugin_not_found():
         await update_plugin(
             plugin_name="does-not-exist",
             request=UpdatePluginRequest(source=_GIT_SUBDIR_SOURCE),
-            user_api_key_dict=_USER,
         )
 
     assert exc_info.value.status_code == 404
@@ -207,7 +205,6 @@ async def test_update_plugin_db_error_maps_to_structured_500():
         await update_plugin(
             plugin_name=name,
             request=UpdatePluginRequest(source={"source": "github", "repo": "org/replacement"}),
-            user_api_key_dict=_USER,
         )
 
     assert exc_info.value.status_code == 500
