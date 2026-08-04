@@ -61,6 +61,9 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import (
     ProviderConfigManager,
     client,
+    filter_tools_by_allowed_types,
+    reconcile_tool_choice_after_tool_filtering,
+    relocate_input_additional_tools,
 )
 
 if TYPE_CHECKING:
@@ -918,6 +921,27 @@ def responses(
         if text is not None:
             # Update local_vars to include the converted text parameter
             local_vars["text"] = text
+
+        # Per-deployment opt-in tool-type filtering (litellm_param
+        # allowed_tool_types). Must run here and not only in completion():
+        # providers with NATIVE /responses support never go through the
+        # responses -> chat bridge, so the completion() hook cannot protect
+        # them (e.g. an upstream that 400s on a Codex-private tool type would
+        # fail every request despite the flag). local_vars is re-synced
+        # because downstream helpers read request params from it.
+        _allowed_tool_types = kwargs.get("allowed_tool_types")
+        if _allowed_tool_types is not None:
+            input, tools = relocate_input_additional_tools(input=input, tools=tools)
+            local_vars["input"] = input
+            if tools is not None:
+                tools = filter_tools_by_allowed_types(
+                    tools=list(tools), allowed_tool_types=_allowed_tool_types
+                )
+                tool_choice = reconcile_tool_choice_after_tool_filtering(
+                    tool_choice=tool_choice, tools=tools
+                )
+            local_vars["tools"] = tools
+            local_vars["tool_choice"] = tool_choice
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
