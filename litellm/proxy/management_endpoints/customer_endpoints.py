@@ -553,10 +553,7 @@ async def update_end_user(
         # get non default values for key
         non_default_values = {}
         for k, v in data_json.items():
-            if v is not None and (
-                (isinstance(v, bool) and k in data.fields_set())
-                or v not in ([], {}, 0)
-            ):
+            if v is not None and ((isinstance(v, bool) and k in data.fields_set()) or v not in ([], {}, 0)):
                 non_default_values[k] = v
 
         ## Get end user table data ##
