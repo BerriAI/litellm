@@ -59,9 +59,13 @@ LIT010  Variable assignment without a `Final` declaration. Every local and modul
         re-binds -- a distinct statement form re-using a name is out of scope),
         assignments inside a `for`/`while` body (pyright forbids Final in a loop;
         this exemption applies everywhere, including under `global`), valueless
-        declarations (`x: int` binds nothing), dunder names, `_`, class bodies, and
-        `TypeAlias` declarations. Suppress a deliberately rebindable name with
-        `# rebind-ok: <reason>` on each offending line.
+        declarations (`x: int` binds nothing), dunder names, `_`, class bodies,
+        `TypeAlias` declarations, and module-level names in `litellm/__init__.py`:
+        that namespace is the SDK's runtime-settable config surface (users follow
+        the documented `litellm.api_key = ...` pattern and the proxy rebinds these
+        via setattr), and the package ships py.typed, so a Final there turns every
+        documented downstream assignment into a mypy error. Suppress a deliberately
+        rebindable name with `# rebind-ok: <reason>` on each offending line.
 LIT011  Function-argument mutation: a parameter that is re-bound (`param = ...`,
         `param += ...`, a `for`/`with`/unpacking/walrus target, `del param`, or a
         re-bind in a nested function under `nonlocal param`) or mutated in place
@@ -494,6 +498,7 @@ def iter_construction_violations(path: Path, tree: ast.AST, comments: Comments) 
 # --------------------------------------------------------------------------- #
 
 CONSTANT_DECLARATIONS = frozenset(("Final", "TypeAlias"))
+CONFIG_SURFACE_PARTS = ("litellm", "__init__.py")
 SELF_PARAMS = frozenset(("self", "cls"))
 NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 ASSIGN_FORMS = frozenset(("assign", "annassign", "aug"))
@@ -676,8 +681,17 @@ def _first_binding_index(bindings: Sequence[Binding]) -> Mapping[str, int]:
     return {b.name: i for i, b in reversed(tuple(enumerate(bindings)))}
 
 
+def _is_config_surface(path: Path) -> bool:
+    """The SDK's runtime-settable config module: `litellm.<name> = ...` is the
+    documented way to configure the library and the proxy rebinds these names via
+    setattr, so with py.typed shipped a Final here breaks downstream mypy runs."""
+    return path.parts[-2:] == CONFIG_SURFACE_PARTS
+
+
 def iter_final_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
     for scope in iter_scopes(tree):
+        if isinstance(scope, ast.Module) and _is_config_surface(path):
+            continue
         params = (
             _function_params(scope)
             if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef))

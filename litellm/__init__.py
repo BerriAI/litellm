@@ -95,7 +95,7 @@ import httpx
 
 # register_async_client_cleanup is lazy-loaded and called on first access
 
-litellm_mode: Final = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
+litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 
 
 ####################################################
@@ -107,7 +107,7 @@ CALLBACK_TYPES = Union[str, Callable, "CustomLogger"]  # CustomLogger is lazy-lo
 input_callback: List[CALLBACK_TYPES] = []
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
-service_callback: Final[List[CALLBACK_TYPES]] = []
+service_callback: List[CALLBACK_TYPES] = []
 audit_log_callbacks: List[CALLBACK_TYPES] = []
 # logging_callback_manager is lazy-loaded via __getattr__
 _custom_logger_compatible_callbacks_literal = Literal[
@@ -163,25 +163,25 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "compression_interception",
     "newrelic",
 ]
-cold_storage_custom_logger: Final[Optional[_custom_logger_compatible_callbacks_literal]] = None
-logged_real_time_event_types: Final[Optional[Union[List[str], Literal["*"]]]] = None
-_known_custom_logger_compatible_callbacks: Final[List] = list(get_args(_custom_logger_compatible_callbacks_literal))
+cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
+logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
+_known_custom_logger_compatible_callbacks: List = list(get_args(_custom_logger_compatible_callbacks_literal))
 callbacks: List[
     Union[Callable, _custom_logger_compatible_callbacks_literal, "CustomLogger"]  # CustomLogger is lazy-loaded
 ] = []
 callback_settings: Dict[str, Dict[str, Any]] = {}
 initialized_langfuse_clients: int = 0
-langfuse_default_tags: Final[Optional[List[str]]] = None
-langsmith_batch_size: Final[Optional[int]] = None
-prometheus_initialize_budget_metrics: Final[Optional[bool]] = False
-prometheus_latency_buckets: Final[Optional[List[float]]] = None
-require_auth_for_metrics_endpoint: Final[Optional[bool]] = True
-argilla_batch_size: Final[Optional[int]] = None
+langfuse_default_tags: Optional[List[str]] = None
+langsmith_batch_size: Optional[int] = None
+prometheus_initialize_budget_metrics: Optional[bool] = False
+prometheus_latency_buckets: Optional[List[float]] = None
+require_auth_for_metrics_endpoint: Optional[bool] = True
+argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload.
-gcs_pub_sub_use_v1: Final[Optional[bool]] = False  # if you want to use v1 gcs pubsub logged payload
-generic_api_use_v1: Final[Optional[bool]] = False  # if you want to use v1 generic api logged payload
-argilla_transformation_object: Final[Optional[Dict[str, Any]]] = None
-_async_input_callback: Final[List[Union[str, Callable, "CustomLogger"]]] = (  # CustomLogger is lazy-loaded
+gcs_pub_sub_use_v1: Optional[bool] = False  # if you want to use v1 gcs pubsub logged payload
+generic_api_use_v1: Optional[bool] = False  # if you want to use v1 generic api logged payload
+argilla_transformation_object: Optional[Dict[str, Any]] = None
+_async_input_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
 _async_success_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
@@ -190,13 +190,13 @@ _async_success_callback: List[Union[str, Callable, "CustomLogger"]] = (  # Custo
 _async_failure_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
-pre_call_rules: Final[List[Callable]] = []
+pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
 turn_off_message_logging: Optional[bool] = False
-standard_logging_payload_excluded_fields: Final[Optional[List[str]]] = (
+standard_logging_payload_excluded_fields: Optional[List[str]] = (
     None  # Fields to exclude from StandardLoggingPayload before callbacks receive it
 )
-log_raw_request_response: Final[bool] = False
+log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
 # When True (default — preserves historical behavior), the Router appends
@@ -207,27 +207,27 @@ redact_user_api_key_info: Optional[bool] = False
 # Deprecation: planned to flip to False (redact by default) in a future
 # major release; opt in early with `litellm.expose_router_debug_in_errors
 # = False`.
-expose_router_debug_in_errors: Final[bool] = True
-filter_invalid_headers: Final[Optional[bool]] = False
-add_user_information_to_llm_headers: Final[Optional[bool]] = (
+expose_router_debug_in_errors: bool = True
+filter_invalid_headers: Optional[bool] = False
+add_user_information_to_llm_headers: Optional[bool] = (
     None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
 )
-overwrite_user_with_key_hash: Final[bool] = (
+overwrite_user_with_key_hash: bool = (
     False  # force the outgoing `user` param to the hashed api key, so providers see a stable, tamper-proof id
 )
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
-skip_system_message_in_guardrail: Final[bool] = False
-skip_tool_message_in_guardrail: Final[bool] = False
+skip_system_message_in_guardrail: bool = False
+skip_tool_message_in_guardrail: bool = False
 ### end of callbacks #############
 
-email: Final[Optional[str]] = (
+email: Optional[str] = (
     None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
-token: Final[Optional[str]] = (
+token: Optional[str] = (
     None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
-telemetry: Final = True
-max_tokens: Final[int] = DEFAULT_MAX_TOKENS  # OpenAI Defaults
+telemetry = True
+max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
 use_chat_completions_url_for_anthropic_messages: bool = bool(
@@ -244,7 +244,7 @@ use_chat_completions_url_for_anthropic_messages: bool = bool(
 # Or via `litellm_settings.strip_anthropic_total_tokens: true` in
 # config.yaml.
 strip_anthropic_total_tokens: bool = False
-route_all_chat_openai_to_responses: Final[bool] = (
+route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
 # When True, Gemini/Vertex Live setup is deferred until client `session.update`.
@@ -254,126 +254,126 @@ use_legacy_interactions_schema: bool = (
     os.getenv("LITELLM_USE_LEGACY_INTERACTIONS_SCHEMA", "false").lower() == "true"
 )  # When True, sends Api-Revision: 2026-05-07 to Google so responses use the legacy `outputs`
 # schema instead of the new `steps` schema. Remove this flag after June 8, 2026.
-retry: Final = True
+retry = True
 ### AUTH ###
-api_key: Final[Optional[str]] = None
-openai_key: Final[Optional[str]] = None
-groq_key: Final[Optional[str]] = None
-gigachat_key: Final[Optional[str]] = None
-xai_key: Final[Optional[str]] = None
-databricks_key: Final[Optional[str]] = None
-openai_like_key: Final[Optional[str]] = None
-azure_key: Final[Optional[str]] = None
-anthropic_key: Final[Optional[str]] = None
-autorouter_savings_baseline_model: Final[Optional[str]] = None
-replicate_key: Final[Optional[str]] = None
-bytez_key: Final[Optional[str]] = None
-gdc_key: Final[Optional[str]] = None
-gdc_api_base: Final[Optional[str]] = None
-cohere_key: Final[Optional[str]] = None
-infinity_key: Final[Optional[str]] = None
-clarifai_key: Final[Optional[str]] = None
-maritalk_key: Final[Optional[str]] = None
-ai21_key: Final[Optional[str]] = None
-ollama_key: Final[Optional[str]] = None
-openrouter_key: Final[Optional[str]] = None
-datarobot_key: Final[Optional[str]] = None
-predibase_key: Final[Optional[str]] = None
-huggingface_key: Final[Optional[str]] = None
-vertex_project: Final[Optional[str]] = None
-vertex_location: Final[Optional[str]] = None
-predibase_tenant_id: Final[Optional[str]] = None
-togetherai_api_key: Final[Optional[str]] = None
-cloudflare_api_key: Final[Optional[str]] = None
-vercel_ai_gateway_key: Final[Optional[str]] = None
-baseten_key: Final[Optional[str]] = None
-llama_api_key: Final[Optional[str]] = None
-aleph_alpha_key: Final[Optional[str]] = None
-nlp_cloud_key: Final[Optional[str]] = None
-novita_api_key: Final[Optional[str]] = None
-snowflake_key: Final[Optional[str]] = None
-gradient_ai_api_key: Final[Optional[str]] = None
-nebius_key: Final[Optional[str]] = None
-wandb_key: Final[Optional[str]] = None
-heroku_key: Final[Optional[str]] = None
-cometapi_key: Final[Optional[str]] = None
-ovhcloud_key: Final[Optional[str]] = None
-lemonade_key: Final[Optional[str]] = None
-sap_service_key: Final[Optional[str]] = None
-amazon_nova_api_key: Final[Optional[str]] = None
-inception_key: Final[Optional[str]] = None
-common_cloud_provider_auth_params: Final[dict] = {
+api_key: Optional[str] = None
+openai_key: Optional[str] = None
+groq_key: Optional[str] = None
+gigachat_key: Optional[str] = None
+xai_key: Optional[str] = None
+databricks_key: Optional[str] = None
+openai_like_key: Optional[str] = None
+azure_key: Optional[str] = None
+anthropic_key: Optional[str] = None
+autorouter_savings_baseline_model: Optional[str] = None
+replicate_key: Optional[str] = None
+bytez_key: Optional[str] = None
+gdc_key: Optional[str] = None
+gdc_api_base: Optional[str] = None
+cohere_key: Optional[str] = None
+infinity_key: Optional[str] = None
+clarifai_key: Optional[str] = None
+maritalk_key: Optional[str] = None
+ai21_key: Optional[str] = None
+ollama_key: Optional[str] = None
+openrouter_key: Optional[str] = None
+datarobot_key: Optional[str] = None
+predibase_key: Optional[str] = None
+huggingface_key: Optional[str] = None
+vertex_project: Optional[str] = None
+vertex_location: Optional[str] = None
+predibase_tenant_id: Optional[str] = None
+togetherai_api_key: Optional[str] = None
+cloudflare_api_key: Optional[str] = None
+vercel_ai_gateway_key: Optional[str] = None
+baseten_key: Optional[str] = None
+llama_api_key: Optional[str] = None
+aleph_alpha_key: Optional[str] = None
+nlp_cloud_key: Optional[str] = None
+novita_api_key: Optional[str] = None
+snowflake_key: Optional[str] = None
+gradient_ai_api_key: Optional[str] = None
+nebius_key: Optional[str] = None
+wandb_key: Optional[str] = None
+heroku_key: Optional[str] = None
+cometapi_key: Optional[str] = None
+ovhcloud_key: Optional[str] = None
+lemonade_key: Optional[str] = None
+sap_service_key: Optional[str] = None
+amazon_nova_api_key: Optional[str] = None
+inception_key: Optional[str] = None
+common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
 }
-use_litellm_proxy: Final[bool] = False  # when True, requests will be sent to the specified litellm proxy endpoint
-use_client: Final[bool] = False
+use_litellm_proxy: bool = False  # when True, requests will be sent to the specified litellm proxy endpoint
+use_client: bool = False
 ssl_verify: Union[str, bool] = True
-ssl_security_level: Final[Optional[str]] = None
-ssl_certificate: Final[Optional[str]] = None
+ssl_security_level: Optional[str] = None
+ssl_certificate: Optional[str] = None
 user_url_validation: bool = True
 user_url_allowed_hosts: List[str] = []
 provider_url_destination_allowed_hosts: List[str] = []
-ssl_ecdh_curve: Final[Optional[str]] = None  # Set to 'X25519' to disable PQC and improve performance
+ssl_ecdh_curve: Optional[str] = None  # Set to 'X25519' to disable PQC and improve performance
 disable_streaming_logging: bool = False
-disable_token_counter: Final[bool] = False
-disable_add_transform_inline_image_block: Final[bool] = False
-disable_add_user_agent_to_request_tags: Final[bool] = False
+disable_token_counter: bool = False
+disable_add_transform_inline_image_block: bool = False
+disable_add_user_agent_to_request_tags: bool = False
 disable_anthropic_gemini_context_caching_transform: bool = False
 enable_anthropic_prompt_caching: bool = os.getenv("LITELLM_ENABLE_ANTHROPIC_PROMPT_CACHING", "false").lower() == "true"
-_anthropic_prompt_caching_ttl_env: Final[Optional[str]] = os.getenv("LITELLM_ANTHROPIC_PROMPT_CACHING_TTL")
-anthropic_prompt_caching_ttl: Final[Optional[Literal["5m", "1h"]]] = (
+_anthropic_prompt_caching_ttl_env: Optional[str] = os.getenv("LITELLM_ANTHROPIC_PROMPT_CACHING_TTL")
+anthropic_prompt_caching_ttl: Optional[Literal["5m", "1h"]] = (
     "1h" if _anthropic_prompt_caching_ttl_env == "1h" else "5m" if _anthropic_prompt_caching_ttl_env == "5m" else None
 )
 disable_vertex_batch_output_transformation: bool = False
-extra_spend_tag_headers: Final[Optional[List[str]]] = None
+extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
-safe_memory_mode: Final[bool] = False
-enable_azure_ad_token_refresh: Final[Optional[bool]] = False
+safe_memory_mode: bool = False
+enable_azure_ad_token_refresh: Optional[bool] = False
 # Proxy Authentication - auto-obtain/refresh OAuth2/JWT tokens for LiteLLM Proxy
 proxy_auth: Optional[Any] = None
 ### DEFAULT AZURE API VERSION ###
-AZURE_DEFAULT_API_VERSION: Final = "2025-02-01-preview"  # this is updated to the latest
+AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the latest
 ### DEFAULT WATSONX API VERSION ###
-WATSONX_DEFAULT_API_VERSION: Final = "2024-03-13"
+WATSONX_DEFAULT_API_VERSION = "2024-03-13"
 ### COHERE EMBEDDINGS DEFAULT TYPE ###
-COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: Final["COHERE_EMBEDDING_INPUT_TYPES"] = "search_document"
+COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: "COHERE_EMBEDDING_INPUT_TYPES" = "search_document"
 ### CREDENTIALS ###
 credential_list: List["CredentialItem"] = []
 ### GUARDRAILS ###
-llamaguard_model_name: Final[Optional[str]] = None
-openai_moderations_model_name: Final[Optional[str]] = None
-presidio_ad_hoc_recognizers: Final[Optional[str]] = None
-google_moderation_confidence_threshold: Final[Optional[float]] = None
-llamaguard_unsafe_content_categories: Final[Optional[str]] = None
-blocked_user_list: Final[Optional[Union[str, List]]] = None
-banned_keywords_list: Final[Optional[Union[str, List]]] = None
-llm_guard_mode: Final[Literal["all", "key-specific", "request-specific"]] = "all"
+llamaguard_model_name: Optional[str] = None
+openai_moderations_model_name: Optional[str] = None
+presidio_ad_hoc_recognizers: Optional[str] = None
+google_moderation_confidence_threshold: Optional[float] = None
+llamaguard_unsafe_content_categories: Optional[str] = None
+blocked_user_list: Optional[Union[str, List]] = None
+banned_keywords_list: Optional[Union[str, List]] = None
+llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
-include_cost_in_streaming_usage: Final[bool] = False
-reasoning_auto_summary: Final[bool] = False
+include_cost_in_streaming_usage: bool = False
+reasoning_auto_summary: bool = False
 ### PROMPTS ####
 from litellm.types.prompts.init_prompts import PromptSpec
 
-prompt_name_config_map: Final[Dict[str, PromptSpec]] = {}
+prompt_name_config_map: Dict[str, PromptSpec] = {}
 
 ##################
 ### PREVIEW FEATURES ###
-enable_preview_features: Final[bool] = False
+enable_preview_features: bool = False
 return_response_headers: bool = False  # get response headers from LLM Api providers - example x-remaining-requests,
-enable_json_schema_validation: Final[bool] = False
+enable_json_schema_validation: bool = False
 enable_model_config_credential_overrides: bool = False
-enable_key_alias_format_validation: Final[bool] = (
+enable_key_alias_format_validation: bool = (
     False  # opt-in validation of key_alias format on /key/generate and /key/update
 )
-enable_gemini_default_thinking_level_low: Final[bool] = (
+enable_gemini_default_thinking_level_low: bool = (
     False  # opt-in: force thinkingLevel low/minimal for Gemini 3 thinking param mapping
 )
 ####################
-logging: Final[bool] = True
-enable_loadbalancing_on_batch_endpoints: Final[Optional[bool]] = None
-require_managed_files: Final[bool] = False  # proxy only - require target_model_names on POST /v1/files
-enable_caching_on_provider_specific_optional_params: Final[bool] = (
+logging: bool = True
+enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
+require_managed_files: bool = False  # proxy only - require target_model_names on POST /v1/files
+enable_caching_on_provider_specific_optional_params: bool = (
     False  # feature-flag for caching on optional params - e.g. 'top_k'
 )
 caching: bool = False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
@@ -381,91 +381,91 @@ caching_with_models: bool = False  # # Not used anymore, will be removed in next
 cache: Optional["Cache"] = None  # cache object <- use this - https://docs.litellm.ai/docs/caching
 default_in_memory_ttl: Optional[float] = None
 default_redis_ttl: Optional[float] = None
-default_redis_batch_cache_expiry: Final[Optional[float]] = None
-model_alias_map: Final[Dict[str, str]] = {}
+default_redis_batch_cache_expiry: Optional[float] = None
+model_alias_map: Dict[str, str] = {}
 model_group_settings: Optional["ModelGroupSettings"] = None
 max_budget: float = 0.0  # set the max budget across all providers
-budget_duration: Final[Optional[str]] = (
+budget_duration: Optional[str] = (
     None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 )
-default_soft_budget: Final[float] = DEFAULT_SOFT_BUDGET  # by default all litellm proxy keys have a soft budget of 50.0
-budget_exceeded_throttle_percentage: Final[Optional[float]] = None
-forward_traceparent_to_llm_provider: Final[bool] = False
+default_soft_budget: float = DEFAULT_SOFT_BUDGET  # by default all litellm proxy keys have a soft budget of 50.0
+budget_exceeded_throttle_percentage: Optional[float] = None
+forward_traceparent_to_llm_provider: bool = False
 
 
 _current_cost = 0.0  # private variable, used if max budget is set
-error_logs: Final[Dict] = {}
+error_logs: Dict = {}
 add_function_to_prompt: bool = (
     False  # if function calling not supported by api, append function call details to system prompt
 )
-client_session: Final[Optional[httpx.Client]] = None
-aclient_session: Final[Optional[httpx.AsyncClient]] = None
-model_fallbacks: Final[Optional[List]] = None  # Deprecated for 'litellm.fallbacks'
-model_cost_map_url: Final[str] = os.getenv(
+client_session: Optional[httpx.Client] = None
+aclient_session: Optional[httpx.AsyncClient] = None
+model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
+model_cost_map_url: str = os.getenv(
     "LITELLM_MODEL_COST_MAP_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
 )
-blog_posts_url: Final[str] = os.getenv(
+blog_posts_url: str = os.getenv(
     "LITELLM_BLOG_POSTS_URL",
     "https://docs.litellm.ai/blog/rss.xml",
 )
-anthropic_beta_headers_url: Final[str] = os.getenv(
+anthropic_beta_headers_url: str = os.getenv(
     "LITELLM_ANTHROPIC_BETA_HEADERS_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/anthropic_beta_headers_config.json",
 )
 suppress_debug_info: bool = False
 dynamodb_table_name: Optional[str] = None
-s3_callback_params: Final[Optional[Dict]] = None
-s3_audit_callback_params: Final[Optional[Dict]] = None
-datadog_llm_observability_params: Final[Optional[Union[DatadogLLMObsInitParams, Dict]]] = None
-datadog_params: Final[Optional[Union[DatadogInitParams, Dict]]] = None
-newrelic_params: Final[Optional[Union[NewRelicInitParams, Dict]]] = None
+s3_callback_params: Optional[Dict] = None
+s3_audit_callback_params: Optional[Dict] = None
+datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None
+datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
+newrelic_params: Optional[Union[NewRelicInitParams, Dict]] = None
 aws_sqs_callback_params: Optional[Dict] = None
-generic_logger_headers: Final[Optional[Dict]] = None
-default_key_generate_params: Final[Optional[Dict]] = None
-default_key_max_budget_alert_emails: Final[Optional[Dict[str, list]]] = None
+generic_logger_headers: Optional[Dict] = None
+default_key_generate_params: Optional[Dict] = None
+default_key_max_budget_alert_emails: Optional[Dict[str, list]] = None
 upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = None
-key_generation_settings: Final[Optional["StandardKeyGenerationConfig"]] = None
+key_generation_settings: Optional["StandardKeyGenerationConfig"] = None
 default_internal_user_params: Optional[Dict] = None
-default_team_params: Final[Optional[Union[DefaultTeamSSOParams, Dict]]] = None
-default_team_settings: Final[Optional[List]] = None
-max_user_budget: Final[Optional[float]] = None
+default_team_params: Optional[Union[DefaultTeamSSOParams, Dict]] = None
+default_team_settings: Optional[List] = None
+max_user_budget: Optional[float] = None
 default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
 max_ui_session_budget: Optional[float] = (
     1.0  # USD budget for each dashboard login session (playground, test connection)
 )
-internal_user_budget_duration: Final[Optional[str]] = None
-tag_budget_config: Final[Optional[Dict[str, "BudgetConfig"]]] = None
-max_end_user_budget: Final[Optional[float]] = None
-max_end_user_budget_id: Final[Optional[str]] = None
+internal_user_budget_duration: Optional[str] = None
+tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
+max_end_user_budget: Optional[float] = None
+max_end_user_budget_id: Optional[str] = None
 # When True, end-user IDs extracted from requests are validated against
 # LiteLLM_EndUserTable / LiteLLM_UserTable. Values that do not resolve to a
 # known row are dropped before reaching spend logs. Defaults to False for
 # backwards compatibility — arbitrary client-supplied identifiers still
 # pass through unchanged.
-validate_end_user_id_in_db: Final[bool] = False
-disable_end_user_cost_tracking: Final[Optional[bool]] = None
-disable_end_user_cost_tracking_prometheus_only: Final[Optional[bool]] = None
-enable_end_user_cost_tracking_prometheus_only: Final[Optional[bool]] = None
-custom_prometheus_metadata_labels: Final[List[str]] = []
-custom_prometheus_tags: Final[List[str]] = []
-prometheus_metrics_config: Final[Optional[List]] = None
-prometheus_exclude_metrics: Final[Optional[List[str]]] = None
-prometheus_exclude_labels: Final[Optional[List[str]]] = None
-prometheus_emit_stream_label: Final[bool] = False
+validate_end_user_id_in_db: bool = False
+disable_end_user_cost_tracking: Optional[bool] = None
+disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
+enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
+custom_prometheus_metadata_labels: List[str] = []
+custom_prometheus_tags: List[str] = []
+prometheus_metrics_config: Optional[List] = None
+prometheus_exclude_metrics: Optional[List[str]] = None
+prometheus_exclude_labels: Optional[List[str]] = None
+prometheus_emit_stream_label: bool = False
 # Opt-in: emit `rate_limit_category` and `rate_limit_type` labels on
 # `litellm_proxy_failed_requests_metric`. Off by default to preserve the
 # pre-unification label set so existing dashboards / recording rules keyed on
 # that metric keep matching after upgrade. Enable when downstream consumers
 # are ready to split 429s by source (vendor vs. litellm) and dimension
 # (RPM/TPM/concurrent/budget).
-prometheus_emit_rate_limit_labels: Final[bool] = False
-prometheus_user_budget_label_include_email_alias: Final[bool] = False
-prometheus_end_user_metrics_max_series_per_metric: Final[Optional[int]] = 10000
-prometheus_end_user_metrics_ttl_seconds: Final[Optional[float]] = 3600.0
-prometheus_end_user_metrics_cleanup_interval_seconds: Final[Optional[float]] = 60.0
-disable_add_prefix_to_prompt: Final[bool] = False  # used by anthropic, to disable adding prefix to prompt
+prometheus_emit_rate_limit_labels: bool = False
+prometheus_user_budget_label_include_email_alias: bool = False
+prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
+prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
+prometheus_end_user_metrics_cleanup_interval_seconds: Optional[float] = 60.0
+disable_add_prefix_to_prompt: bool = False  # used by anthropic, to disable adding prefix to prompt
 disable_copilot_system_to_assistant: bool = False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 public_mcp_servers: Optional[List[str]] = None
 public_mcp_hub_strict_whitelist: bool = True
@@ -476,7 +476,7 @@ public_agent_groups: Optional[List[str]] = None
 # Old format: { "displayName": "url" } (for backward compatibility)
 public_model_groups_links: Dict[str, Union[str, Dict[str, Any]]] = {}
 #### REQUEST PRIORITIZATION #######
-priority_reservation: Final[Optional[Dict[str, Union[float, "PriorityReservationDict"]]]] = None
+priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
 # priority_reservation_settings is lazy-loaded via __getattr__
 # Only declare for type checking - at runtime __getattr__ handles it
 if TYPE_CHECKING:
@@ -485,25 +485,25 @@ if TYPE_CHECKING:
 
 ######## Networking Settings ########
 use_aiohttp_transport: bool = True  # Older variable, aiohttp is now the default. use disable_aiohttp_transport instead.
-aiohttp_trust_env: Final[bool] = False  # set to true to use HTTP_ Proxy settings
+aiohttp_trust_env: bool = False  # set to true to use HTTP_ Proxy settings
 disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
-disable_aiohttp_trust_env: Final[bool] = False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
+disable_aiohttp_trust_env: bool = False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
 force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
-network_mock: Final[bool] = False  # When True, use mock transport — no real network calls
+network_mock: bool = False  # When True, use mock transport — no real network calls
 
 ####### STOP SEQUENCE LIMIT #######
-disable_stop_sequence_limit: Final[bool] = False  # when True, stop sequence limit is disabled
+disable_stop_sequence_limit: bool = False  # when True, stop sequence limit is disabled
 
 #### RETRIES ####
 num_retries: Optional[int] = None  # per model endpoint
-max_fallbacks: Final[Optional[int]] = None
-default_fallbacks: Final[Optional[List]] = None
-fallbacks: Final[Optional[List]] = None
-context_window_fallbacks: Final[Optional[List]] = None
-content_policy_fallbacks: Final[Optional[List]] = None
-allowed_fails: Final[int] = 3
-allow_dynamic_callback_disabling: Final[bool] = True
-num_retries_per_request: Final[Optional[int]] = None  # for the request overall (incl. fallbacks + model retries)
+max_fallbacks: Optional[int] = None
+default_fallbacks: Optional[List] = None
+fallbacks: Optional[List] = None
+context_window_fallbacks: Optional[List] = None
+content_policy_fallbacks: Optional[List] = None
+allowed_fails: int = 3
+allow_dynamic_callback_disabling: bool = True
+num_retries_per_request: Optional[int] = None  # for the request overall (incl. fallbacks + model retries)
 ####### SECRET MANAGERS #####################
 secret_manager_client: Optional[Any] = (
     None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
@@ -515,7 +515,7 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 # We'll import it after the lazy import system is set up
 # We can't define it here because KeyManagementSettings is lazy-loaded
 #### PII MASKING ####
-output_parse_pii: Final[bool] = False
+output_parse_pii: bool = False
 #############################################
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 
@@ -528,8 +528,8 @@ cost_margin_config: Dict[
 # Fixed: {"openai": {"fixed_amount": 0.001}} = $0.001 per request
 # Global: {"global": 0.05} = 5% global margin on all providers
 # Combined: {"vertex_ai": {"percentage": 0.08, "fixed_amount": 0.0005}}
-custom_prompt_dict: Final[Dict[str, dict]] = {}
-check_provider_endpoint: Final = False
+custom_prompt_dict: Dict[str, dict] = {}
+check_provider_endpoint = False
 
 
 ####### THREAD-SPECIFIC DATA ####################
@@ -538,7 +538,7 @@ class MyLocal(threading.local):
         self.user = "Hello World"
 
 
-_thread_context: Final = MyLocal()
+_thread_context = MyLocal()
 
 
 def identify(event_details):
@@ -549,126 +549,126 @@ def identify(event_details):
 
 ####### ADDITIONAL PARAMS ################### configurable params if you use proxy models like Helicone, map spend to org id, etc.
 api_base: Optional[str] = None
-headers: Final = None
+headers = None
 api_version: Optional[str] = None
-organization: Final = None
-project: Final = None
+organization = None
+project = None
 config_path = None
-vertex_ai_safety_settings: Final[Optional[dict]] = None
+vertex_ai_safety_settings: Optional[dict] = None
 
 ####### COMPLETION MODELS ###################
 from typing import Set
 
-open_ai_chat_completion_models: Final[Set] = set()
-open_ai_text_completion_models: Final[Set] = set()
-cohere_models: Final[Set] = set()
-cohere_chat_models: Final[Set] = set()
-mistral_chat_models: Final[Set] = set()
-text_completion_codestral_models: Final[Set] = set()
-text_completion_inception_models: Final[Set] = set()
-anthropic_models: Final[Set] = set()
-openrouter_models: Final[Set] = set()
-datarobot_models: Final[Set] = set()
-vertex_language_models: Final[Set] = set()
-vertex_vision_models: Final[Set] = set()
-vertex_chat_models: Final[Set] = set()
-vertex_code_chat_models: Final[Set] = set()
-vertex_ai_image_models: Final[Set] = set()
-vertex_ai_video_models: Final[Set] = set()
-vertex_text_models: Final[Set] = set()
-vertex_code_text_models: Final[Set] = set()
-vertex_embedding_models: Final[Set] = set()
-vertex_anthropic_models: Final[Set] = set()
-vertex_llama3_models: Final[Set] = set()
-vertex_deepseek_models: Final[Set] = set()
-vertex_ai_ai21_models: Final[Set] = set()
-vertex_mistral_models: Final[Set] = set()
-vertex_openai_models: Final[Set] = set()
-vertex_minimax_models: Final[Set] = set()
-vertex_moonshot_models: Final[Set] = set()
-vertex_zai_models: Final[Set] = set()
-ai21_models: Final[Set] = set()
-ai21_chat_models: Final[Set] = set()
-nlp_cloud_models: Final[Set] = set()
-aleph_alpha_models: Final[Set] = set()
-bedrock_models: Final[Set] = set()
-bedrock_converse_models: Final[Set] = set(BEDROCK_CONVERSE_MODELS)
-fal_ai_models: Final[Set] = set()
-fireworks_ai_models: Final[Set] = set()
-fireworks_ai_embedding_models: Final[Set] = set()
-deepinfra_models: Final[Set] = set()
-perplexity_models: Final[Set] = set()
-watsonx_models: Final[Set] = set()
-gemini_models: Final[Set] = set()
-xai_models: Final[Set] = set()
-zai_models: Final[Set] = set()
-deepseek_models: Final[Set] = set()
-tencent_models: Final[Set] = set()
-runwayml_models: Final[Set] = set()
-azure_ai_models: Final[Set] = set()
-jina_ai_models: Final[Set] = set()
-voyage_models: Final[Set] = set()
-infinity_models: Final[Set] = set()
-heroku_models: Final[Set] = set()
-databricks_models: Final[Set] = set()
-cloudflare_models: Final[Set] = set()
-codestral_models: Final[Set] = set()
-friendliai_models: Final[Set] = set()
-featherless_ai_models: Final[Set] = set()
-palm_models: Final[Set] = set()
-groq_models: Final[Set] = set()
-azure_models: Final[Set] = set()
-azure_anthropic_models: Final[Set] = set()
-azure_text_models: Final[Set] = set()
-anyscale_models: Final[Set] = set()
-cerebras_models: Final[Set] = set()
-galadriel_models: Final[Set] = set()
-nvidia_nim_models: Final[Set] = set()
-nvidia_riva_models: Final[Set] = set()
-soniox_models: Final[Set] = set()
-sambanova_models: Final[Set] = set()
-sambanova_embedding_models: Final[Set] = set()
-novita_models: Final[Set] = set()
-assemblyai_models: Final[Set] = set()
-snowflake_models: Final[Set] = set()
-gradient_ai_models: Final[Set] = set()
-llama_models: Final[Set] = set()
-nscale_models: Final[Set] = set()
-nebius_models: Final[Set] = set()
-nebius_embedding_models: Final[Set] = set()
-aiml_models: Final[Set] = set()
-deepgram_models: Final[Set] = set()
-elevenlabs_models: Final[Set] = set()
-dashscope_models: Final[Set] = set()
-moonshot_models: Final[Set] = set()
-publicai_models: Final[Set] = set()
-darkbloom_models: Final[Set] = set()
-v0_models: Final[Set] = set()
-morph_models: Final[Set] = set()
-lambda_ai_models: Final[Set] = set()
-inception_models: Final[Set] = set()
-hyperbolic_models: Final[Set] = set()
-black_forest_labs_models: Final[Set] = set()
-recraft_models: Final[Set] = set()
-cometapi_models: Final[Set] = set()
-oci_models: Final[Set] = set()
-vercel_ai_gateway_models: Final[Set] = set()
-volcengine_models: Final[Set] = set()
-wandb_models: Final[Set] = set(WANDB_MODELS)
-ovhcloud_models: Final[Set] = set()
-ovhcloud_embedding_models: Final[Set] = set()
-lemonade_models: Final[Set] = set()
-docker_model_runner_models: Final[Set] = set()
-amazon_nova_models: Final[Set] = set()
-stability_models: Final[Set] = set()
-github_copilot_models: Final[Set] = set()
-chatgpt_models: Final[Set] = set()
-minimax_models: Final[Set] = set()
-aws_polly_models: Final[Set] = set()
-gigachat_models: Final[Set] = set()
-llamagate_models: Final[Set] = set()
-reducto_models: Final[Set] = set()
-bedrock_mantle_models: Final[Set] = set()
+open_ai_chat_completion_models: Set = set()
+open_ai_text_completion_models: Set = set()
+cohere_models: Set = set()
+cohere_chat_models: Set = set()
+mistral_chat_models: Set = set()
+text_completion_codestral_models: Set = set()
+text_completion_inception_models: Set = set()
+anthropic_models: Set = set()
+openrouter_models: Set = set()
+datarobot_models: Set = set()
+vertex_language_models: Set = set()
+vertex_vision_models: Set = set()
+vertex_chat_models: Set = set()
+vertex_code_chat_models: Set = set()
+vertex_ai_image_models: Set = set()
+vertex_ai_video_models: Set = set()
+vertex_text_models: Set = set()
+vertex_code_text_models: Set = set()
+vertex_embedding_models: Set = set()
+vertex_anthropic_models: Set = set()
+vertex_llama3_models: Set = set()
+vertex_deepseek_models: Set = set()
+vertex_ai_ai21_models: Set = set()
+vertex_mistral_models: Set = set()
+vertex_openai_models: Set = set()
+vertex_minimax_models: Set = set()
+vertex_moonshot_models: Set = set()
+vertex_zai_models: Set = set()
+ai21_models: Set = set()
+ai21_chat_models: Set = set()
+nlp_cloud_models: Set = set()
+aleph_alpha_models: Set = set()
+bedrock_models: Set = set()
+bedrock_converse_models: Set = set(BEDROCK_CONVERSE_MODELS)
+fal_ai_models: Set = set()
+fireworks_ai_models: Set = set()
+fireworks_ai_embedding_models: Set = set()
+deepinfra_models: Set = set()
+perplexity_models: Set = set()
+watsonx_models: Set = set()
+gemini_models: Set = set()
+xai_models: Set = set()
+zai_models: Set = set()
+deepseek_models: Set = set()
+tencent_models: Set = set()
+runwayml_models: Set = set()
+azure_ai_models: Set = set()
+jina_ai_models: Set = set()
+voyage_models: Set = set()
+infinity_models: Set = set()
+heroku_models: Set = set()
+databricks_models: Set = set()
+cloudflare_models: Set = set()
+codestral_models: Set = set()
+friendliai_models: Set = set()
+featherless_ai_models: Set = set()
+palm_models: Set = set()
+groq_models: Set = set()
+azure_models: Set = set()
+azure_anthropic_models: Set = set()
+azure_text_models: Set = set()
+anyscale_models: Set = set()
+cerebras_models: Set = set()
+galadriel_models: Set = set()
+nvidia_nim_models: Set = set()
+nvidia_riva_models: Set = set()
+soniox_models: Set = set()
+sambanova_models: Set = set()
+sambanova_embedding_models: Set = set()
+novita_models: Set = set()
+assemblyai_models: Set = set()
+snowflake_models: Set = set()
+gradient_ai_models: Set = set()
+llama_models: Set = set()
+nscale_models: Set = set()
+nebius_models: Set = set()
+nebius_embedding_models: Set = set()
+aiml_models: Set = set()
+deepgram_models: Set = set()
+elevenlabs_models: Set = set()
+dashscope_models: Set = set()
+moonshot_models: Set = set()
+publicai_models: Set = set()
+darkbloom_models: Set = set()
+v0_models: Set = set()
+morph_models: Set = set()
+lambda_ai_models: Set = set()
+inception_models: Set = set()
+hyperbolic_models: Set = set()
+black_forest_labs_models: Set = set()
+recraft_models: Set = set()
+cometapi_models: Set = set()
+oci_models: Set = set()
+vercel_ai_gateway_models: Set = set()
+volcengine_models: Set = set()
+wandb_models: Set = set(WANDB_MODELS)
+ovhcloud_models: Set = set()
+ovhcloud_embedding_models: Set = set()
+lemonade_models: Set = set()
+docker_model_runner_models: Set = set()
+amazon_nova_models: Set = set()
+stability_models: Set = set()
+github_copilot_models: Set = set()
+chatgpt_models: Set = set()
+minimax_models: Set = set()
+aws_polly_models: Set = set()
+gigachat_models: Set = set()
+llamagate_models: Set = set()
+reducto_models: Set = set()
+bedrock_mantle_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -958,7 +958,7 @@ add_known_models()
 # used for Cost Tracking & Token counting
 # https://azure.microsoft.com/en-in/pricing/details/cognitive-services/openai-service/
 # Azure returns gpt-35-turbo in their responses, we need to map this to azure/gpt-3.5-turbo for token counting
-azure_llms: Final = {
+azure_llms = {
     "gpt-35-turbo": "azure/gpt-35-turbo",
     "gpt-35-turbo-16k": "azure/gpt-35-turbo-16k",
     "gpt-35-turbo-instruct": "azure/gpt-35-turbo-instruct",
@@ -967,19 +967,19 @@ azure_llms: Final = {
     "azure/gpt-41-nano": "gpt-4.1-nano",
 }
 
-azure_embedding_models: Final = {
+azure_embedding_models = {
     "ada": "azure/ada",
 }
 
-petals_models: Final = [
+petals_models = [
     "petals-team/StableBeluga2",
 ]
 
-ollama_models: Final = ["llama2"]
+ollama_models = ["llama2"]
 
-maritalk_models: Final = ["maritalk"]
+maritalk_models = ["maritalk"]
 
-model_list: Final = list(
+model_list = list(
     open_ai_chat_completion_models
     | open_ai_text_completion_models
     | cohere_models
@@ -1066,12 +1066,12 @@ model_list: Final = list(
     | set(clarifai_models)
 )
 
-model_list_set: Final = set(model_list)
+model_list_set = set(model_list)
 
 # provider_list is lazy-loaded via __getattr__ to avoid importing LlmProviders at import time
 
 
-models_by_provider: Final[dict] = {
+models_by_provider: dict = {
     "openai": open_ai_chat_completion_models | open_ai_text_completion_models,
     "text-completion-openai": open_ai_text_completion_models,
     "cohere": cohere_models | cohere_chat_models,
@@ -1179,7 +1179,7 @@ models_by_provider: Final[dict] = {
 }
 
 # mapping for those models which have larger equivalents
-longer_context_model_fallback_dict: Final[dict] = {
+longer_context_model_fallback_dict: dict = {
     # openai chat completion models
     "gpt-3.5-turbo": "gpt-3.5-turbo-16k",
     "gpt-3.5-turbo-0301": "gpt-3.5-turbo-16k-0301",
@@ -1202,7 +1202,7 @@ longer_context_model_fallback_dict: Final[dict] = {
 
 ####### EMBEDDING MODELS ###################
 
-all_embedding_models: Final = (
+all_embedding_models = (
     open_ai_embedding_models
     | set(cohere_embedding_models)
     | set(bedrock_embedding_models)
@@ -1214,10 +1214,10 @@ all_embedding_models: Final = (
 )
 
 ####### IMAGE GENERATION MODELS ###################
-openai_image_generation_models: Final = ["dall-e-2", "dall-e-3"]
+openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
 ####### VIDEO GENERATION MODELS ###################
-openai_video_generation_models: Final = ["sora-2"]
+openai_video_generation_models = ["sora-2"]
 
 # timeout is lazy-loaded via __getattr__
 # get_llm_provider is lazy-loaded via __getattr__
@@ -1249,7 +1249,7 @@ from .llms.vertex_ai.vertex_embeddings.transformation import (
     VertexAITextEmbeddingConfig,
 )
 
-vertexAITextEmbeddingConfig: Final = VertexAITextEmbeddingConfig()
+vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
 
 
 from .llms.bedrock.embed.amazon_titan_v2_transformation import (
@@ -1424,11 +1424,11 @@ from . import rag
 from .types.llms.custom_llm import CustomLLMItem
 
 custom_provider_map: List[CustomLLMItem] = []
-_custom_providers: Final[List[str]] = []  # internal helper util, used to track names of custom providers
-disable_hf_tokenizer_download: Final[Optional[bool]] = (
+_custom_providers: List[str] = []  # internal helper util, used to track names of custom providers
+disable_hf_tokenizer_download: Optional[bool] = (
     None  # disable huggingface tokenizer download. Defaults to openai clk100
 )
-global_disable_no_log_param: Final[bool] = False
+global_disable_no_log_param: bool = False
 
 ### CLI UTILITIES ###
 from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
