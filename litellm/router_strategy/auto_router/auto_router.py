@@ -125,6 +125,7 @@ class AutoRouter(CustomLogger):
             LiteLLMRouterEncoder,
         )
         from litellm.types.router import PreRoutingHookResponse
+        from litellm.types.utils import StandardLoggingRoutingDecision
 
         if messages is None:
             # do nothing, return same inputs
@@ -148,12 +149,21 @@ class AutoRouter(CustomLogger):
         message_content = self._extract_text_from_messages(messages)
         route_choice: RouteChoice | list[RouteChoice] | None = routelayer(text=message_content)
         verbose_router_logger.debug("route_choice: %s", route_choice)
+        matched: str | None = None
         if isinstance(route_choice, RouteChoice):
-            model = route_choice.name or self.default_model
+            matched = route_choice.name
+            model = matched or self.default_model
         elif isinstance(route_choice, list):
-            model = route_choice[0].name or self.default_model
+            matched = route_choice[0].name
+            model = matched or self.default_model
 
         return PreRoutingHookResponse(
             model=model,
             messages=messages,
+            routing_decision=StandardLoggingRoutingDecision(
+                router_model_name=self.model_name,
+                router_type="semantic",
+                routed_model=model,
+                cause="semantic_keyword_match" if matched else "default_fallback",
+            ),
         )

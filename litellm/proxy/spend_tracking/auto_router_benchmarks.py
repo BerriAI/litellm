@@ -98,6 +98,7 @@ class _GroupRow(BaseModel):
 
     model_group: str
     baseline_model: str | None
+    router_kind: str
     sessions: int
     turns: int
     total_session_seconds: float
@@ -131,6 +132,7 @@ _GROUP_SQL = """
 SELECT
     model_group,
     MAX(baseline_model) AS baseline_model,
+    MAX(router_kind) AS router_kind,
     COUNT(*)::bigint AS sessions,
     COALESCE(SUM(turns), 0)::bigint AS turns,
     COALESCE(SUM(EXTRACT(EPOCH FROM (last_turn_at - first_turn_at))), 0) AS total_session_seconds,
@@ -226,8 +228,14 @@ def summarize_cache(row: _GroupRow) -> AutoRouterCacheBenchmark | None:
     )
 
 
-def summarize_group(row: _GroupRow, router_kind: str) -> AutoRouterGroupBenchmark | None:
+def summarize_group(row: _GroupRow) -> AutoRouterGroupBenchmark | None:
     """Fold one group's session rows into its benchmark.
+
+    ``router_kind`` comes off the rows rather than from the configured groups,
+    because the rows recorded which strategy actually served each turn while the
+    config only says which are registered under the alias. Those differ when one
+    alias owns several tagged strategies, and labelling the card from the config
+    would name a router the numbers underneath it did not come from.
 
     ``savings`` keeps its sign. A router that thrashes the prompt cache can cost
     more than the baseline it is measured against, and an operator needs to be
@@ -238,7 +246,7 @@ def summarize_group(row: _GroupRow, router_kind: str) -> AutoRouterGroupBenchmar
     savings = row.baseline_spend - row.actual_spend
     return AutoRouterGroupBenchmark(
         model_group=row.model_group,
-        router_kind=router_kind,
+        router_kind=row.router_kind,
         baseline_model=row.baseline_model,
         sessions=row.sessions,
         turns=row.turns,
@@ -268,10 +276,7 @@ async def compute_benchmarks(
         window.start,
         window.end,
     )
-    summarized = (
-        summarize_group(row, group_kinds.get(row.model_group, "auto_router"))
-        for row in _GROUP_ROWS.validate_python(raw)
-    )
+    summarized = (summarize_group(row) for row in _GROUP_ROWS.validate_python(raw))
     return AutoRouterBenchmarksResponse(
         start_date=window.start,
         end_date=window.end,

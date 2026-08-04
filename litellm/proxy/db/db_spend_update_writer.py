@@ -59,7 +59,7 @@ from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
 from litellm.proxy.spend_tracking.auto_router_sessions import (
-    auto_router_kind,
+    serves_an_auto_router,
     turn_from_spend_payload,
 )
 from litellm.proxy.spend_tracking.compression_savings import (
@@ -305,8 +305,7 @@ class DBSpendUpdateWriter:
         model = payload.get("model")
         if prisma_client is None or llm_router is None or not session_id or not model_group or not model:
             return
-        router_kind = auto_router_kind(llm_router, model_group)
-        if router_kind is None:
+        if not serves_an_auto_router(llm_router, model_group):
             return
         start_time = payload.get("startTime")
         started_at = start_time if isinstance(start_time, datetime) else _parse_start_time(start_time)
@@ -314,6 +313,13 @@ class DBSpendUpdateWriter:
             return
 
         _metadata: SpendLogsMetadata = json.loads(payload["metadata"])
+        routing_decision = _metadata.get("routing_decision")
+        # The kind is read off the decision the router recorded rather than derived
+        # again here: one alias can own several strategies and which of them ran
+        # depends on the request's tags, which only the router resolved.
+        router_kind = routing_decision.get("router_type") if routing_decision else None
+        if router_kind is None:
+            return
         usage_obj = _metadata.get("usage_object", {}) or {}  # mutable-ok: empty fallback for an absent usage payload
         cache_read_tokens = _extract_cache_read_tokens(usage_obj)
         savings_spend = compute_savings_spend(
@@ -321,7 +327,7 @@ class DBSpendUpdateWriter:
             custom_llm_provider=payload.get("custom_llm_provider", None),
             compression_saved_tokens=extract_compression_saved_tokens(_metadata),
             cache_read_input_tokens=cache_read_tokens,
-            routing_decision=_metadata.get("routing_decision"),
+            routing_decision=routing_decision,
             model_id=payload.get("model_id"),
             llm_router=_get_llm_router,
             usage_object=usage_obj,

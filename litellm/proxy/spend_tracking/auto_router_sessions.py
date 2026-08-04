@@ -28,7 +28,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.router_utils.auto_router_model_naming import StrategyRouterKind, classify_strategy_router_model
+from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -289,35 +289,28 @@ def _unclassified(turn: TurnFacts, baseline_spend: float, state: SessionState) -
     )
 
 
-def auto_router_kind(router: "Router", model_group: str) -> StrategyRouterKind | None:
-    """Which kind of auto-router serves ``model_group``, or None when none does.
+def serves_an_auto_router(router: "Router", model_group: str) -> bool:
+    """Whether any pre-routing strategy is registered under ``model_group``.
 
-    Answered from the registries the router already keys by public alias, so the
-    lookup costs the same on a proxy with a thousand models as on one with ten.
-    It runs on every request that carries a session, most of which never touched
-    an auto-router, so it must decide that before paying for anything else; a
-    scan of ``model_list`` charged the whole proxy for a feature few requests use.
+    A gate, not a classifier. It runs on every request that carries a session,
+    most of which never touched an auto-router, so it answers from the registries
+    the router already keys by public alias and costs the same on a proxy with a
+    thousand models as on one with ten. Scanning ``model_list`` instead charged
+    the whole proxy for a feature few requests use.
 
-    The alias is load-bearing rather than incidental: the auto-router's own
-    classifier sub-calls share the session but carry the judge model's group, so
-    keying on it folds one turn per routed request and no classifier noise.
-
-    One deployment can own an entry in more than one registry; a complexity
-    router with ``adaptive`` enabled is in both. The order below is therefore the
-    order ``classify_strategy_router_model`` resolves its prefixes in, which is
-    what ``auto_router_group_kinds`` labels the same group with on the read side.
-    The two have to agree, or the dashboard would label a group one way and the
-    rows it aggregates another.
+    Which kind of router ran is deliberately not answered here. One alias can own
+    entries in several registries, and which of them served a given request
+    depends on the request's tags; only ``Router._select_pre_routing_strategy``
+    resolves that, and it already recorded the answer on the routing decision. A
+    second derivation here would disagree with it on exactly the tagged
+    deployments the first one exists to disambiguate.
     """
-    if model_group in router.complexity_routers:
-        return "complexity"
-    if model_group in router.adaptive_routers:
-        return "adaptive"
-    if model_group in router.quality_routers:
-        return "quality"
-    if model_group in router.auto_routers:
-        return "semantic"
-    return None
+    return (
+        model_group in router.complexity_routers
+        or model_group in router.adaptive_routers
+        or model_group in router.quality_routers
+        or model_group in router.auto_routers
+    )
 
 
 def auto_router_group_kinds(router: "Router") -> Mapping[str, str]:

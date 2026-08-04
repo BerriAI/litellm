@@ -843,26 +843,20 @@ class _RegistriesOnly:
         self.auto_routers = dict.fromkeys(semantic, ())
 
 
-class TestResolvingOneGroupsKind:
-    @pytest.mark.parametrize(
-        "registry, kind",
-        [
-            ("complexity", "complexity"),
-            ("quality", "quality"),
-            ("adaptive", "adaptive"),
-            ("semantic", "semantic"),
-        ],
-    )
-    def test_every_kind_of_auto_router_is_resolved_from_its_own_registry(self, registry, kind):
-        from litellm.proxy.spend_tracking.auto_router_sessions import auto_router_kind
+class TestTheGateRecognisesAnAutoRouterGroup:
+    """The write path gates on membership only. Which strategy ran is the router's
+    answer, recorded on the routing decision, not something re-derived here."""
 
-        router = _RegistriesOnly(**{registry: ("a-router",)})
-        assert auto_router_kind(router, "a-router") == kind
+    @pytest.mark.parametrize("registry", ["complexity", "quality", "adaptive", "semantic"])
+    def test_a_group_in_any_registry_passes_the_gate(self, registry):
+        from litellm.proxy.spend_tracking.auto_router_sessions import serves_an_auto_router
 
-    def test_a_plain_model_group_resolves_to_nothing(self):
-        from litellm.proxy.spend_tracking.auto_router_sessions import auto_router_kind
+        assert serves_an_auto_router(_RegistriesOnly(**{registry: ("a-router",)}), "a-router")
 
-        assert auto_router_kind(_RegistriesOnly(complexity=("a-router",)), "gpt-4o") is None
+    def test_a_plain_model_group_does_not(self):
+        from litellm.proxy.spend_tracking.auto_router_sessions import serves_an_auto_router
+
+        assert not serves_an_auto_router(_RegistriesOnly(complexity=("a-router",)), "gpt-4o")
 
 
 class TestTheWriteAndReadPathsAgreeOnWhatAnAutoRouterIs:
@@ -871,14 +865,14 @@ class TestTheWriteAndReadPathsAgreeOnWhatAnAutoRouterIs:
     dashboard labels another, or filters out entirely, is a benchmark that reads
     empty for traffic that really happened."""
 
-    def test_every_group_the_dashboard_asks_about_resolves_to_the_kind_it_labels(self):
-        from litellm.proxy.spend_tracking.auto_router_sessions import auto_router_group_kinds, auto_router_kind
+    def test_every_group_the_dashboard_asks_about_passes_the_write_paths_gate(self):
+        from litellm.proxy.spend_tracking.auto_router_sessions import auto_router_group_kinds, serves_an_auto_router
 
         router = _router_with_auto_routers()
         group_kinds = auto_router_group_kinds(router)
 
         assert dict(group_kinds) == {"adaptive-complexity-router": "complexity", "quality-router": "quality"}
-        assert {group: auto_router_kind(router, group) for group in group_kinds} == dict(group_kinds)
+        assert all(serves_an_auto_router(router, group) for group in group_kinds)
 
     def test_a_complexity_router_running_the_bandit_is_still_a_complexity_router(self):
         """It owns an entry in both registries, so the lookup order decides, and only
@@ -889,9 +883,9 @@ class TestTheWriteAndReadPathsAgreeOnWhatAnAutoRouterIs:
         assert "adaptive-complexity-router" in router.adaptive_routers
 
     def test_a_group_no_auto_router_serves_is_left_out_of_both(self):
-        from litellm.proxy.spend_tracking.auto_router_sessions import auto_router_group_kinds, auto_router_kind
+        from litellm.proxy.spend_tracking.auto_router_sessions import auto_router_group_kinds, serves_an_auto_router
 
         router = _router_with_auto_routers()
 
         assert "cheap" not in auto_router_group_kinds(router)
-        assert auto_router_kind(router, "cheap") is None
+        assert not serves_an_auto_router(router, "cheap")

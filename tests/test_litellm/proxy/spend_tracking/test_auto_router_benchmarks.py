@@ -42,6 +42,7 @@ class _FakePrisma:
 def group_row(**overrides):
     row = {
         "model_group": "claude-auto",
+        "router_kind": "semantic",
         "baseline_model": "anthropic/claude-opus-4-8",
         "sessions": 10,
         "turns": 100,
@@ -204,9 +205,10 @@ class TestReadPathSource:
         assert len(prisma.db.queries) == 1
         assert {g.model_group for g in result.groups} == {"claude-auto", "claude-router-2"}
 
-    async def test_each_group_is_labelled_with_its_router_kind(self):
-        prisma = _FakePrisma([group_row(model_group="claude-router-2")])
-        result = await compute_benchmarks(prisma, {"claude-router-2": "complexity"}, START, END)
+    async def test_a_group_is_labelled_with_the_kind_its_rows_recorded(self):
+        """The rows know which strategy served the turns; the config only knows what is registered."""
+        prisma = _FakePrisma([group_row(model_group="claude-router-2", router_kind="complexity")])
+        result = await compute_benchmarks(prisma, {"claude-router-2": "semantic"}, START, END)
         assert result.groups[0].router_kind == "complexity"
 
 
