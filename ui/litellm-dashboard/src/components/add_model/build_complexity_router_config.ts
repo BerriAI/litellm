@@ -1,5 +1,5 @@
 import { KeywordTierRule } from "./KeywordTierRules";
-import { serializeKeywordTierRules } from "./complexity_router_keywords";
+import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
@@ -58,6 +58,12 @@ export const getMissingTiersError = (tiers: ComplexityTiers): string | null => {
   return `Select a model for the following tier(s): ${missing.join(", ")}`;
 };
 
+export const getKeywordTierRulesError = (keywordTierRules: KeywordTierRule[]): string | null => {
+  const emptyRows = emptyKeywordTierRuleIndexes(keywordTierRules);
+  if (emptyRows.length === 0) return null;
+  return `Add at least one keyword to keyword rule(s): ${emptyRows.map((index) => index + 1).join(", ")}`;
+};
+
 export const getSemanticConfigError = ({
   semanticMatchingEnabled,
   embeddingModel,
@@ -68,8 +74,6 @@ export const getSemanticConfigError = ({
   if (!semanticMatchingEnabled) return null;
   if (!embeddingModel) return "Select an embedding model to use semantic keyword matching";
   if (keywordTierRules.length === 0) return "Add at least one keyword tier rule to use semantic keyword matching";
-  if (keywordTierRules.some((rule) => !rule.keywords.some((keyword) => keyword.trim())))
-    return "Every keyword tier rule needs at least one keyword";
   return null;
 };
 
@@ -94,7 +98,6 @@ export const buildComplexityRouterConfig = ({
   returnRawModelName,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
-  // Trim keywords and drop empty ones; drop any rule left with no keywords. Clicking
   const cleanedKeywordTierRules = serializeKeywordTierRules(keywordTierRules);
 
   return {

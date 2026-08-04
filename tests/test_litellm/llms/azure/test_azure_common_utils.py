@@ -1430,7 +1430,7 @@ def test_token_provider_returns_non_string(setup_mocks):
 
     # Verify the error was logged
     setup_mocks["logger"].error.assert_any_call(
-        "Azure AD token provider returned non-string value: <class 'int'>"
+        "Azure AD token provider returned non-string value: %s", int
     )
 
 

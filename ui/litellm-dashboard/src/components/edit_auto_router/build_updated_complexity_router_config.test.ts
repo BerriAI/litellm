@@ -54,13 +54,16 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
     expect(result.keyword_tier_rules).toEqual([{ keywords: ["chargeback"], tier: "COMPLEX" }]);
   });
 
-  it("drops a rule left empty rather than shipping one the backend 400s on", () => {
+  // getKeywordTierRulesError blocks this save, so the builder never runs on a real edit. Keeping
+  // the rule here means that if a caller ever reaches it anyway, the stored rules are replaced by
+  // something the backend rejects out loud rather than by silence that reads as a clean save.
+  it("keeps a rule left empty rather than quietly dropping the caller's row", () => {
     const result = buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE, undefined, {
       ...hydratedState,
       keywordTierRules: [{ id: "new-1", keywords: ["   "], tier: "SIMPLE" }],
     });
 
-    expect(result.keyword_tier_rules).toBeUndefined();
+    expect(result.keyword_tier_rules).toEqual([{ keywords: [], tier: "SIMPLE" }]);
   });
 
   it("removes the semantic trio when the toggle is turned off", () => {
