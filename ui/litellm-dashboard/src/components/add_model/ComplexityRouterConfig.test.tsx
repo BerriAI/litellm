@@ -12,10 +12,10 @@ const mockModelInfo = [
 
 const defaultValue: ComplexityRouterConfigValue = {
   tiers: {
-    SIMPLE: "gpt-3.5-turbo",
-    MEDIUM: "gpt-3.5-turbo",
-    COMPLEX: "gpt-4",
-    REASONING: "claude-3-opus",
+    SIMPLE: ["gpt-3.5-turbo"],
+    MEDIUM: ["gpt-3.5-turbo"],
+    COMPLEX: ["gpt-4"],
+    REASONING: ["claude-3-opus"],
   },
   classifier_type: "heuristic",
 };
@@ -58,11 +58,13 @@ describe("ComplexityRouterConfig", () => {
 
   it("should display the how classification works section", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText("How Classification Works")).toBeInTheDocument();
   });
 
   it("should show score thresholds in the classification section", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText(/Score < 0.15/)).toBeInTheDocument();
     expect(screen.getByText(/Score 0.15 - 0.35/)).toBeInTheDocument();
     expect(screen.getByText(/Score 0.35 - 0.60/)).toBeInTheDocument();
@@ -75,6 +77,20 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.queryByText("Classifier Model")).not.toBeInTheDocument();
   });
 
+  it("should toggle returning the raw model name", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+
+    await user.click(screen.getByText("Advanced: Response Format"));
+    await user.click(screen.getByRole("switch"));
+
+    expect(onChange).toHaveBeenCalledWith({
+      ...defaultValue,
+      return_raw_model_name: true,
+    });
+  });
+
   it("should reveal classifier model and timeout fields when llm is selected", () => {
     const onChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={onChange} />);
@@ -83,11 +99,14 @@ describe("ComplexityRouterConfig", () => {
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
     fireEvent.click(screen.getByText("LLM Classifier"));
 
-    expect(onChange).toHaveBeenCalledWith({
+    const expectedValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
       classifier_llm_config: { model: "", timeout_ms: 3000 },
-    });
+      classifier_context_window_size: 3,
+      classifier_context_per_turn_chars: 200,
+    };
+    expect(onChange).toHaveBeenCalledWith(expectedValue);
   });
 
   it("should show classifier fields and use the configured values when classifier_type is llm", () => {
@@ -95,6 +114,8 @@ describe("ComplexityRouterConfig", () => {
       ...defaultValue,
       classifier_type: "llm",
       classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 750 },
+      classifier_context_window_size: 5,
+      classifier_context_per_turn_chars: 400,
     };
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
 
@@ -103,10 +124,130 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.getByText("Classifier Model")).toBeInTheDocument();
     expect(screen.getByText("Timeout (ms)")).toBeInTheDocument();
     expect(screen.getByDisplayValue("750")).toBeInTheDocument();
+    expect(screen.getByText("Context Window Size")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("5")).toBeInTheDocument();
+    expect(screen.getByText("Context Per-Turn Character Limit")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("400")).toBeInTheDocument();
+  });
+
+  it("should default classifier context fields to 3 and 200 when llm is selected without explicit values", () => {
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    const windowSizeSection = screen.getByText("Context Window Size").closest("div") as HTMLElement;
+    expect(within(windowSizeSection).getByDisplayValue("3")).toBeInTheDocument();
+
+    const perTurnCharsSection = screen.getByText("Context Per-Turn Character Limit").closest("div") as HTMLElement;
+    expect(within(perTurnCharsSection).getByDisplayValue("200")).toBeInTheDocument();
+  });
+
+  it("should show the assistant-turns switch with its configured value when classifier_type is llm", () => {
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 750 },
+      classifier_context_include_assistant_turns: true,
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    expect(screen.getByText("Include Assistant Turns")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Include Assistant Turns" })).toBeChecked();
+  });
+
+  it("should render the assistant-turns switch off when it is not set", () => {
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    expect(screen.getByRole("switch", { name: "Include Assistant Turns" })).not.toBeChecked();
+  });
+
+  it("should hide the assistant-turns switch when classifier_type is heuristic", () => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.queryByText("Include Assistant Turns")).not.toBeInTheDocument();
+  });
+
+  it("should call onChange when the assistant-turns switch is toggled", () => {
+    const onChange = vi.fn();
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.click(screen.getByRole("switch", { name: "Include Assistant Turns" }));
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ classifier_context_include_assistant_turns: true }),
+    );
+  });
+
+  it("should hide classifier context fields when classifier_type is heuristic", () => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.queryByText("Context Window Size")).not.toBeInTheDocument();
+    expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
+  });
+
+  it("should call onChange with the updated classifier_context_window_size when edited", () => {
+    const onChange = vi.fn();
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    const windowSizeSection = screen.getByText("Context Window Size").closest("div") as HTMLElement;
+    const input = within(windowSizeSection).getByRole("spinbutton");
+    fireEvent.change(input, { target: { value: "7" } });
+
+    expect(onChange).toHaveBeenCalledWith({
+      ...llmValue,
+      classifier_context_window_size: 7,
+    });
+  });
+
+  it("should call onChange with the updated classifier_context_per_turn_chars when edited", () => {
+    const onChange = vi.fn();
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    const perTurnCharsSection = screen.getByText("Context Per-Turn Character Limit").closest("div") as HTMLElement;
+    const input = within(perTurnCharsSection).getByRole("spinbutton");
+    fireEvent.change(input, { target: { value: "500" } });
+
+    expect(onChange).toHaveBeenCalledWith({
+      ...llmValue,
+      classifier_context_per_turn_chars: 500,
+    });
   });
 
   it("should render the custom technical keywords field", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText("Custom Technical Keywords")).toBeInTheDocument();
   });
 
@@ -118,6 +259,7 @@ describe("ComplexityRouterConfig", () => {
         onCustomTechnicalKeywordsChange={vi.fn()}
       />,
     );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText("udp")).toBeInTheDocument();
     expect(screen.getByText("kafka")).toBeInTheDocument();
   });
@@ -132,14 +274,16 @@ describe("ComplexityRouterConfig", () => {
         onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
       />,
     );
-    const keywordsCard = screen.getByText("Custom Technical Keywords").closest(".ant-card") as HTMLElement;
-    const input = within(keywordsCard).getByRole("combobox");
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    const keywordsSection = screen.getByText("Custom Technical Keywords").closest("div")?.parentElement as HTMLElement;
+    const input = within(keywordsSection).getByRole("combobox");
     await user.type(input, "udp,");
     expect(onCustomTechnicalKeywordsChange).toHaveBeenCalledWith(["udp"]);
   });
 
   it("should render an empty state when no keyword tier rules exist", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     expect(screen.getByText("Keyword Tier Overrides")).toBeInTheDocument();
     expect(screen.getByText("No keyword tier overrides configured")).toBeInTheDocument();
   });
@@ -158,11 +302,32 @@ describe("ComplexityRouterConfig", () => {
     const user = userEvent.setup();
     const onKeywordTierRulesChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onKeywordTierRulesChange={onKeywordTierRulesChange} />);
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
     expect(onKeywordTierRulesChange).toHaveBeenCalledTimes(1);
     const newRules = onKeywordTierRulesChange.mock.calls[0][0];
     expect(newRules).toHaveLength(1);
     expect(newRules[0]).toMatchObject({ keywords: [], tier: "COMPLEX" });
+  });
+
+  // The dropdown is closed, so antd has nothing for Enter to select and the word would only land
+  // on blur. Submitting used to provide that blur; it no longer can while the row reads as empty.
+  it("commits a typed keyword on Enter, with the dropdown closed", async () => {
+    const user = userEvent.setup();
+    const onKeywordTierRulesChange = vi.fn();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        keywordTierRules={[{ id: "rule-1", keywords: [], tier: "COMPLEX" }]}
+        onKeywordTierRulesChange={onKeywordTierRulesChange}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+
+    const field = screen.getByText("Keywords 1").closest("div") as HTMLElement;
+    await user.type(within(field).getByRole("combobox"), "invoice{enter}");
+
+    expect(onKeywordTierRulesChange).toHaveBeenCalledWith([{ id: "rule-1", keywords: ["invoice"], tier: "COMPLEX" }]);
   });
 
   it("should render an existing keyword tier rule and remove it when the delete button is clicked", async () => {
@@ -175,6 +340,7 @@ describe("ComplexityRouterConfig", () => {
         onKeywordTierRulesChange={onKeywordTierRulesChange}
       />,
     );
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     expect(screen.getByText("invoice")).toBeInTheDocument();
     expect(screen.getByText("refund")).toBeInTheDocument();
 
@@ -184,6 +350,7 @@ describe("ComplexityRouterConfig", () => {
 
   it("should not show embedding model or match score fields when semantic matching is disabled", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} semanticMatchingEnabled={false} />);
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     expect(screen.getByText("Semantic keyword matching")).toBeInTheDocument();
     expect(screen.queryByText("Embedding model")).not.toBeInTheDocument();
     expect(screen.queryByText("Minimum match score")).not.toBeInTheDocument();
@@ -191,6 +358,7 @@ describe("ComplexityRouterConfig", () => {
 
   it("should show embedding model and match score fields when semantic matching is enabled", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} semanticMatchingEnabled={true} />);
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     expect(screen.getByText("Embedding model")).toBeInTheDocument();
     expect(screen.getByText("Minimum match score")).toBeInTheDocument();
   });
@@ -205,6 +373,7 @@ describe("ComplexityRouterConfig", () => {
         onSemanticMatchingEnabledChange={onSemanticMatchingEnabledChange}
       />,
     );
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("switch"));
     expect(onSemanticMatchingEnabledChange).toHaveBeenCalledWith(true, expect.anything());
   });
@@ -252,10 +421,28 @@ describe("ComplexityRouterConfig", () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
-        value={{ ...defaultValue, tiers: { ...defaultValue.tiers, REASONING: "" } }}
+        value={{ ...defaultValue, tiers: { ...defaultValue.tiers, REASONING: [] } }}
         showValidationErrors={true}
       />,
     );
     expect(screen.getAllByText("This tier is required")).toHaveLength(1);
+  });
+
+  it("renders the escalation keywords section with current keywords when the handler is provided", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        escalationKeywords={["LITELLM ESCALATE"]}
+        onEscalationKeywordsChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Escalation Keywords"));
+    expect(screen.getByText("Escalation Keywords")).toBeInTheDocument();
+    expect(screen.getByText("LITELLM ESCALATE")).toBeInTheDocument();
+  });
+
+  it("hides the escalation keywords section when no handler is provided", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    expect(screen.queryByText("Advanced: Escalation Keywords")).not.toBeInTheDocument();
   });
 });

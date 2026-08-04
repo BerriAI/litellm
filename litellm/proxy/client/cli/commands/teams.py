@@ -1,6 +1,6 @@
 """Team management commands for LiteLLM CLI."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import click
 import requests
@@ -13,15 +13,14 @@ from litellm.proxy.client import Client
 @click.group()
 def teams():
     """Manage teams and team assignments"""
-    pass
 
 
-def display_teams_table(teams: List[Dict[str, Any]]) -> None:
+def display_teams_table(teams: list[dict[str, Any]]) -> None:
     """Display teams in a formatted table"""
     console = Console()
 
     if not teams:
-        console.print("❌ No teams found for your user.")
+        console.print("No teams found for your user.")
         return
 
     table = Table(title="Available Teams")
@@ -77,7 +76,7 @@ def list(ctx: click.Context):
         click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:
-        click.echo(f"Error: {str(e)}", err=True)
+        click.echo(f"Error: {e}", err=True)
         raise click.Abort()
 
 
@@ -91,29 +90,29 @@ def available(ctx: click.Context):
         teams = client.teams.get_available()
         if teams:
             console = Console()
-            console.print("\n🎯 Available Teams to Join:")
+            console.print("\nAvailable Teams to Join:")
             display_teams_table(teams)
         else:
-            click.echo("ℹ️ No available teams to join.")
+            click.echo("No available teams to join.")
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         error_body = e.response.json()
         click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
     except Exception as e:
-        click.echo(f"Error: {str(e)}", err=True)
+        click.echo(f"Error: {e}", err=True)
         raise click.Abort()
 
 
 @teams.command()
 @click.option("--team-id", type=str, help="Team ID to assign the key to")
 @click.pass_context
-def assign_key(ctx: click.Context, team_id: Optional[str]):
+def assign_key(ctx: click.Context, team_id: str | None):
     """Assign your current CLI key to a team"""
     client = Client(ctx.obj["base_url"], ctx.obj["api_key"])
     api_key = ctx.obj["api_key"]
 
     if not api_key:
-        click.echo("❌ No API key found. Please login first using 'litellm login'")
+        click.echo("No API key found. Please login first using 'litellm login'")
         raise click.Abort()
 
     try:
@@ -122,7 +121,7 @@ def assign_key(ctx: click.Context, team_id: Optional[str]):
             teams = client.teams.list()
 
             if not teams:
-                click.echo("❌ No teams found for your user.")
+                click.echo("No teams found for your user.")
                 return
 
             # Use interactive selection from auth module
@@ -133,14 +132,14 @@ def assign_key(ctx: click.Context, team_id: Optional[str]):
             if selected_team:
                 team_id = selected_team.get("team_id")
             else:
-                click.echo("❌ Operation cancelled.")
+                click.echo("Operation cancelled.")
                 return
 
         # Update the key with the selected team
         if team_id:
-            click.echo(f"\n🔄 Assigning your key to team: {team_id}")
+            click.echo(f"\nAssigning your key to team: {team_id}")
             client.keys.update(key=api_key, team_id=team_id)
-            click.echo(f"✅ Successfully assigned key to team: {team_id}")
+            click.echo(f"Successfully assigned key to team: {team_id}")
 
             # Show team details if available
             teams = client.teams.list()
@@ -148,9 +147,9 @@ def assign_key(ctx: click.Context, team_id: Optional[str]):
                 if team.get("team_id") == team_id:
                     models = team.get("models", [])
                     if models:
-                        click.echo(f"🎯 You can now access models: {', '.join(models)}")
+                        click.echo(f"You can now access models: {', '.join(models)}")
                     else:
-                        click.echo("🎯 You can now access all available models")
+                        click.echo("You can now access all available models")
                     break
 
     except requests.exceptions.HTTPError as e:
@@ -159,5 +158,5 @@ def assign_key(ctx: click.Context, team_id: Optional[str]):
         click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:
-        click.echo(f"Error: {str(e)}", err=True)
+        click.echo(f"Error: {e}", err=True)
         raise click.Abort()

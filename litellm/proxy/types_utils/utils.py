@@ -2,10 +2,11 @@ import asyncio
 import importlib
 import importlib.util
 import os
-from typing import Any, Callable, Literal, Optional, get_type_hints
+from collections.abc import Callable
+from typing import Any, Literal, get_type_hints
 
 
-def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
+def get_instance_fn(value: str, config_file_path: str | None = None) -> Any:
     module_name = value
     instance_name = None
     try:
@@ -34,16 +35,12 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
         module_name = ".".join(parts[:-1])
         instance_name = parts[-1]
 
-        # If config_file_path is provided, use it to determine the module spec and load the module
+        module_file_path = None
         if config_file_path is not None:
             directory = os.path.dirname(config_file_path)
-            module_file_path = os.path.join(directory, *module_name.split("."))
-            module_file_path += ".py"
+            module_file_path = os.path.join(directory, *module_name.split(".")) + ".py"
 
-            # Check if the file exists before trying to load it
-            if not os.path.exists(module_file_path):
-                raise ImportError(f"Could not find module file {module_file_path}")
-
+        if module_file_path is not None and os.path.exists(module_file_path):
             spec = importlib.util.spec_from_file_location(module_name, module_file_path)  # type: ignore
             if spec is None:
                 raise ImportError(f"Could not find a module specification for {module_file_path}")
@@ -52,7 +49,6 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
                 raise ImportError(f"Could not find a module loader for {module_file_path}")
             spec.loader.exec_module(module)  # type: ignore
         else:
-            # Dynamically import the module
             module = importlib.import_module(module_name)
 
         # Get the instance from the module
@@ -69,7 +65,7 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
         raise e
 
 
-def _load_instance_from_remote_storage(remote_url: str, config_file_path: Optional[str] = None) -> Any:
+def _load_instance_from_remote_storage(remote_url: str, config_file_path: str | None = None) -> Any:
     """
     Load custom logger instance from S3 or GCS URL.
 
@@ -131,8 +127,11 @@ def _load_instance_from_remote_storage(remote_url: str, config_file_path: Option
         object_key = f"{module_path}.py"
 
         verbose_proxy_logger.debug(
-            f"Loading custom logger from {storage_type}: bucket={bucket_name}, "
-            f"object_key={object_key}, instance={instance_name}"
+            "Loading custom logger from %s: bucket=%s, object_key=%s, instance=%s",
+            storage_type,
+            bucket_name,
+            object_key,
+            instance_name,
         )
 
         import tempfile
@@ -174,13 +173,13 @@ def _load_instance_from_remote_storage(remote_url: str, config_file_path: Option
         try:
             os.remove(local_file_path)
         except Exception as cleanup_error:
-            verbose_proxy_logger.warning(f"Could not clean up temporary file {local_file_path}: {cleanup_error}")
+            verbose_proxy_logger.warning("Could not clean up temporary file %s: %s", local_file_path, cleanup_error)
 
-        verbose_proxy_logger.info(f"Successfully loaded custom logger from {remote_url}")
+        verbose_proxy_logger.info("Successfully loaded custom logger from %s", remote_url)
         return instance
 
     except Exception as e:
-        raise ImportError(f"Failed to load custom logger from {remote_url}: {str(e)}") from e
+        raise ImportError(f"Failed to load custom logger from {remote_url}: {e}") from e
 
 
 async def _download_gcs_file_wrapper(bucket_name: str, object_key: str, local_file_path: str) -> bool:
@@ -194,13 +193,13 @@ async def _download_gcs_file_wrapper(bucket_name: str, object_key: str, local_fi
     except Exception as e:
         from litellm._logging import verbose_proxy_logger
 
-        verbose_proxy_logger.error(f"Error downloading from GCS: {str(e)}")
+        verbose_proxy_logger.error("Error downloading from GCS: %s", e)
         return False
 
 
 def validate_custom_validate_return_type(
-    fn: Optional[Callable[..., Any]],
-) -> Optional[Callable[..., Literal[True]]]:
+    fn: Callable[..., Any] | None,
+) -> Callable[..., Literal[True]] | None:
     if fn is None:
         return None
 

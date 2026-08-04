@@ -4,17 +4,13 @@ import logging
 import math
 import time
 import traceback
+from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import datetime
+from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
-    Callable,
-    Dict,
     Literal,
-    Optional,
-    Tuple,
-    Union,
 )
 
 import anyio
@@ -33,16 +29,21 @@ from litellm.constants import (
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
+from litellm.litellm_core_utils.get_supported_openai_params import (
+    get_supported_openai_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
@@ -50,9 +51,10 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.utils import ServerToolUse
@@ -91,7 +93,14 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: StandardLoggingPayloadErrorInformation =
 }
 
 
-def _apply_client_disconnect_metadata(target_metadata: Optional[dict[str, object]]) -> None:
+def _should_return_raw_model_name(request_data: dict[str, object]) -> bool:
+    return any(
+        isinstance(metadata, dict) and metadata.get(RETURN_RAW_MODEL_NAME_METADATA_KEY) is True
+        for metadata in (request_data.get("metadata"), request_data.get("litellm_metadata"))
+    )
+
+
+def _apply_client_disconnect_metadata(target_metadata: dict[str, object] | None) -> None:
     if target_metadata is None:
         return
     target_metadata["client_disconnected"] = True
@@ -151,6 +160,80 @@ async def _record_streaming_client_disconnect_if_needed(
     return True
 
 
+def _deferred_stream_logging_is_armed(request_data: dict) -> bool:
+    logging_obj = request_data.get("litellm_logging_obj")
+    if logging_obj is None:
+        return False
+    return (
+        getattr(logging_obj, "_on_deferred_stream_complete", None) is not None
+        and getattr(logging_obj, "_deferred_stream_complete_args", None) is not None
+    )
+
+
+async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: object) -> bool:
+    """
+    A client disconnect throws GeneratorExit/CancelledError into the streaming
+    generator, so neither the success nor the failure logging callback fires
+    and the chunks already streamed (plus any sub-call cost folded into the
+    logging object) would never reach spend tracking. Assemble the partial
+    response from the wrapper's collected chunks and dispatch success logging
+    for it; dispatch_success_handlers dedups against a natural end-of-stream
+    dispatch via has_dispatched_final_stream_success.
+
+    Awaited directly by the shielded cleanup rather than scheduled with
+    create_task: the client is already gone so the extra latency is harmless,
+    and an unrooted task could be garbage-collected before it bills.
+
+    Returns True when a disconnect-time success event owns the request's
+    max_parallel_requests slot release (one was dispatched here, or one had
+    already been dispatched for this stream), so the caller can skip the
+    explicit slot release and avoid a double release. Returns False when no
+    success event fired (logging disabled, nothing streamed, or assembly
+    failed) and the caller must release the slot itself.
+    """
+    if litellm.disable_streaming_logging is True:
+        return False
+    logging_obj = request_data.get("litellm_logging_obj")
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
+        return False
+    if logging_obj.model_call_details.get("has_dispatched_final_stream_success"):
+        # A natural end-of-stream success event already fired and released the
+        # slot; do not bill again, and let the caller skip the slot release.
+        return True
+    chunks: object = getattr(response, "chunks", None)
+    if not isinstance(chunks, list) or not chunks:
+        return False
+    verbose_proxy_logger.debug(
+        "Billing partial streamed spend for %s chunks after client disconnect, litellm_call_id=%s",
+        len(chunks),
+        request_data.get("litellm_call_id"),
+    )
+    messages: object = getattr(response, "messages", None)
+    try:
+        partial_response = litellm.stream_chunk_builder(
+            chunks=chunks,
+            messages=messages if isinstance(messages, list) else None,
+            logging_obj=logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # partial billing is best-effort; never break stream teardown
+        verbose_proxy_logger.debug("Failed to assemble partial streamed response for disconnect billing: %s", e)
+        return False
+    if partial_response is None:
+        return False
+    try:
+        await logging_obj.dispatch_success_handlers(
+            partial_response,
+            cache_hit=False,
+            start_time=None,
+            end_time=None,
+            prefer_async_handlers=True,
+        )
+    except Exception as e:  # noqa: BLE001  # partial billing is best-effort; never break stream teardown
+        verbose_proxy_logger.debug("Failed to dispatch disconnect billing event: %s", e)
+        return False
+    return True
+
+
 async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None:
     pending_tasks = [task for task in tasks if not task.done()]
     for task in pending_tasks:
@@ -162,9 +245,74 @@ async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None
             pass
 
 
+@lru_cache(maxsize=512)
+def _litellm_model_supports_stream_options(litellm_model: str) -> bool:
+    try:
+        supported_params = get_supported_openai_params(model=litellm_model)
+    except Exception:  # noqa: BLE001  # unmapped or malformed model strings must disable injection, not fail the request
+        return False
+    return supported_params is not None and "stream_options" in supported_params
+
+
+def _deployment_litellm_model(deployment: Mapping[str, object]) -> str | None:
+    litellm_params = deployment.get("litellm_params")
+    if isinstance(litellm_params, Mapping):
+        litellm_model = litellm_params.get("model")
+    else:
+        litellm_model = getattr(litellm_params, "model", None)
+    return litellm_model if isinstance(litellm_model, str) else None
+
+
+def _model_deployments_support_stream_options(
+    model: object,
+    llm_router: Router | None,
+    team_id: str | None,
+) -> bool:
+    if not isinstance(model, str):
+        return False
+    deployments = llm_router.get_model_list(model_name=model, team_id=team_id) if llm_router is not None else None
+    deployment_models = tuple(
+        litellm_model
+        for deployment in deployments or ()
+        if (litellm_model := _deployment_litellm_model(deployment)) is not None
+    )
+    candidate_models = deployment_models if deployment_models else (model,)
+    return all(_litellm_model_supports_stream_options(m) for m in candidate_models)
+
+
+def _stream_usage_tracking_updates(
+    data: Mapping[str, object],
+    general_settings: Mapping[str, object],
+    route_type: str,
+    supports_stream_options: Callable[[], bool],
+) -> Mapping[str, object]:
+    scrub = {"_litellm_strip_stream_usage": False} if "_litellm_strip_stream_usage" in data else {}
+    if data.get("stream", False) is not True:
+        return scrub
+    always_include = general_settings.get("always_include_stream_usage")
+    stream_options = data.get("stream_options")
+    if always_include is True:
+        if "stream_options" not in data:
+            return {**scrub, "stream_options": {"include_usage": True}}
+        if isinstance(stream_options, dict) and "include_usage" not in stream_options:
+            return {**scrub, "stream_options": {**stream_options, "include_usage": True}}
+        return scrub
+    if always_include is False or route_type != "acompletion":
+        return scrub
+    if isinstance(stream_options, dict) and stream_options.get("include_usage") is True:
+        return scrub
+    if not supports_stream_options():
+        return scrub
+    merged_stream_options = {**stream_options} if isinstance(stream_options, dict) else {}
+    return {
+        "stream_options": {**merged_stream_options, "include_usage": True},
+        "_litellm_strip_stream_usage": True,
+    }
+
+
 def _serialize_http_exception_detail(
     detail: Any,
-) -> Tuple[str, Optional[dict]]:
+) -> tuple[str, dict | None]:
     """
     Convert an HTTPException.detail value into (message, structured_fields)
     for ProxyException / SSE error frames.
@@ -193,7 +341,7 @@ def _serialize_http_exception_detail(
     return str(detail), None
 
 
-def _collect_response_file_search_vector_store_ids(data: Dict[str, Any]) -> set[str]:
+def _collect_response_file_search_vector_store_ids(data: dict[str, Any]) -> set[str]:
     vector_store_ids: set[str] = set()
     tools = data.get("tools")
     if not isinstance(tools, list):
@@ -220,7 +368,7 @@ def _collect_response_file_search_vector_store_ids(data: Dict[str, Any]) -> set[
 
 
 async def _authorize_response_file_search_vector_stores(
-    data: Dict[str, Any],
+    data: dict[str, Any],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     vector_store_ids = _collect_response_file_search_vector_store_ids(data)
@@ -238,7 +386,40 @@ async def _authorize_response_file_search_vector_stores(
         )
 
 
-async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional[int]:
+async def _resolve_per_request_model_group_alias(
+    requested_model: object,
+    router_settings: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router,
+) -> str | None:
+    """
+    Resolve ``router_settings.model_group_alias`` coming from a key or team.
+
+    The Router only ever resolves aliases from its own instance attribute, which
+    holds the global config map and is shared across requests, so a per-request
+    map has to be applied here instead of being forwarded to the Router.
+
+    Model access was authorized against the requested group, so the target is
+    authorized in its own right before the rewrite; a key that may not call the
+    target gets the usual 403 rather than being quietly served it.
+
+    Returns the target model group, or None when no alias applies.
+    """
+    if not isinstance(requested_model, str):
+        return None
+    target = resolve_model_group_alias(router_settings.get("model_group_alias"), requested_model)
+    if target is None or target == requested_model:
+        return None
+    await can_key_call_resolved_model(
+        model=target,
+        llm_model_list=llm_router.model_list,
+        valid_token=user_api_key_dict,
+        llm_router=llm_router,
+    )
+    return target
+
+
+async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
     """Parses an event line and returns an error code if present, else None."""
     event_line = event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
     if event_line.startswith("data: "):
@@ -249,7 +430,7 @@ async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional
             data = orjson.loads(json_str)
             if isinstance(data, dict) and "error" in data and isinstance(data["error"], dict):
                 error_code_raw = data["error"].get("code")
-                error_code: Optional[int] = None
+                error_code: int | None = None
 
                 if isinstance(error_code_raw, int):
                     error_code = error_code_raw
@@ -258,23 +439,22 @@ async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional
                         error_code = int(error_code_raw)
                     except ValueError:
                         verbose_proxy_logger.warning(
-                            f"Error code is a string but not a valid integer: {error_code_raw}"
+                            "Error code is a string but not a valid integer: %s", error_code_raw
                         )
                         # Not a valid integer string, treat as if no valid code was found for this check
-                        pass
 
                 # Ensure error_code is a valid HTTP status code
                 if error_code is not None and 100 <= error_code <= 599:
                     return error_code
                 elif error_code_raw is not None:  # Log if original code was present but not valid
-                    verbose_proxy_logger.warning(f"Error has invalid or non-convertible code: {error_code_raw}")
+                    verbose_proxy_logger.warning("Error has invalid or non-convertible code: %s", error_code_raw)
         except (orjson.JSONDecodeError, json.JSONDecodeError):
             # not a known error chunk
             pass
     return None
 
 
-def _extract_error_from_sse_chunk(event_line: Union[str, bytes]) -> dict:
+def _extract_error_from_sse_chunk(event_line: str | bytes) -> dict:
     """
     Extract error dictionary from SSE format chunk.
 
@@ -328,10 +508,10 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
         self,
         content: AsyncGenerator[str, None],
         *,
-        media_type: Optional[str] = None,
-        headers: Optional[dict] = None,
+        media_type: str | None = None,
+        headers: dict | None = None,
         status_code: int = status.HTTP_200_OK,
-        upstream_generator: Optional[AsyncGenerator[str, None]] = None,
+        upstream_generator: AsyncGenerator[str, None] | None = None,
     ) -> None:
         super().__init__(content, status_code=status_code, headers=headers, media_type=media_type)
         self._upstream_generator = upstream_generator
@@ -377,7 +557,7 @@ async def _wait_for_http_disconnect(request: Request) -> None:
 
 async def _buffer_first_chunk_honoring_disconnect(
     generator: AsyncGenerator[str, None],
-    request: Optional[Request],
+    request: Request | None,
 ) -> str:
     """Fetch the first streamed chunk, cancelling the upstream LLM call if the
     client disconnects before it arrives.
@@ -431,8 +611,8 @@ async def create_response(
     media_type: str,
     headers: dict,
     default_status_code: int = status.HTTP_200_OK,
-    request: Optional[Request] = None,
-) -> Union[StreamingResponse, JSONResponse]:
+    request: Request | None = None,
+) -> StreamingResponse | JSONResponse:
     """
     Create streaming response, checking if the first chunk is an error.
     If the first chunk is an error, return a standard JSON error response.
@@ -445,7 +625,7 @@ async def create_response(
         "Cache-Control": "no-cache",
         "X-Accel-Buffering": "no",
     }
-    first_chunk_value: Optional[str] = None
+    first_chunk_value: str | None = None
     final_status_code = default_status_code
 
     try:
@@ -464,7 +644,8 @@ async def create_response(
                     # Should return standard JSON error response instead of SSE format
                     final_status_code = error_code_from_chunk
                     verbose_proxy_logger.debug(
-                        f"Error detected in first stream chunk. Returning JSON error response with status code: {final_status_code}"
+                        "Error detected in first stream chunk. Returning JSON error response with status code: %s",
+                        final_status_code,
                     )
 
                     # Parse error content
@@ -483,7 +664,7 @@ async def create_response(
                         headers=headers,
                     )
             except Exception as e:
-                verbose_proxy_logger.debug(f"Error parsing first chunk value: {e}")
+                verbose_proxy_logger.debug("Error parsing first chunk value: %s", e)
 
     except _ClientDisconnectedBeforeFirstChunk:
         # Client vanished during the time-to-first-token wait; the upstream
@@ -514,7 +695,7 @@ async def create_response(
         )
     except Exception as e:
         # Unexpected error consuming first chunk.
-        verbose_proxy_logger.exception(f"Error consuming first chunk from generator: {e}")
+        verbose_proxy_logger.exception("Error consuming first chunk from generator: %s", e)
 
         # Preserve status code from HTTPException (e.g., guardrail blocks)
         error_status = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -523,13 +704,13 @@ async def create_response(
 
         existing_fields = getattr(e, "provider_specific_fields", None) or {}
         if structured_fields:
-            merged_fields: Optional[dict] = {**existing_fields, **structured_fields}
+            merged_fields: dict | None = {**existing_fields, **structured_fields}
         else:
             merged_fields = existing_fields or None
 
         # Match ProxyException.to_dict() shape so streaming and non-streaming
         # error frames are byte-identical.
-        error_obj: Dict[str, Any] = {
+        error_obj: dict[str, Any] = {
             "message": message,
             "type": getattr(e, "type", "None"),
             "param": getattr(e, "param", "None"),
@@ -598,6 +779,7 @@ def _override_openai_response_model(
     response_obj: Any,
     requested_model: str,
     log_context: str,
+    return_raw_model_name: bool = False,
 ) -> None:
     """
     Force the OpenAI-compatible `model` field in the response to match what the client requested.
@@ -621,7 +803,7 @@ def _override_openai_response_model(
     3. If this was a fastest_response batch completion, use the winning model's
        model group name instead of the comma-separated list the client sent.
     """
-    if not requested_model:
+    if return_raw_model_name or not requested_model:
         return
 
     hidden_params = get_hidden_params_dict(response_obj)
@@ -704,8 +886,8 @@ def _override_openai_response_model(
 
 
 def _get_cost_breakdown_from_logging_obj(
-    litellm_logging_obj: Optional[LiteLLMLoggingObj],
-) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+    litellm_logging_obj: LiteLLMLoggingObj | None,
+) -> tuple[float | None, float | None, float | None, float | None]:
     """
     Extract discount and margin information from logging object's cost breakdown.
 
@@ -762,9 +944,7 @@ def _log_llm_api_exception(e: Exception) -> None:
             "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, upstream LLM request cancelled"
         )
         return
-    verbose_proxy_logger.exception(
-        f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {str(e)}"
-    )
+    verbose_proxy_logger.exception("litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - %s", e)
 
 
 async def _cancel_llm_call_on_client_disconnect(
@@ -813,18 +993,18 @@ class ProxyBaseLLMRequestProcessing:
     def get_custom_headers(
         *,
         user_api_key_dict: UserAPIKeyAuth,
-        call_id: Optional[str] = None,
-        model_id: Optional[str] = None,
-        cache_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        version: Optional[str] = None,
-        model_region: Optional[str] = None,
-        response_cost: Optional[Union[float, str]] = None,
-        hidden_params: Optional[dict] = None,
-        fastest_response_batch_completion: Optional[bool] = None,
-        request_data: Optional[dict] = {},
-        timeout: Optional[Union[float, int, httpx.Timeout]] = None,
-        litellm_logging_obj: Optional[LiteLLMLoggingObj] = None,
+        call_id: str | None = None,
+        model_id: str | None = None,
+        cache_key: str | None = None,
+        api_base: str | None = None,
+        version: str | None = None,
+        model_region: str | None = None,
+        response_cost: float | str | None = None,
+        hidden_params: dict | None = None,
+        fastest_response_batch_completion: bool | None = None,
+        request_data: dict | None = {},
+        timeout: float | httpx.Timeout | None = None,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
         **kwargs,
     ) -> dict:
         exclude_values = {"", None, "None"}
@@ -851,9 +1031,12 @@ class ProxyBaseLLMRequestProcessing:
                 # If conversion fails, use original spend
                 pass
 
+        model_name = ProxyBaseLLMRequestProcessing._get_deployment_model_name(litellm_logging_obj)
+
         headers = {
             "x-litellm-call-id": call_id,
             "x-litellm-model-id": model_id,
+            "x-litellm-model-name": model_name,
             "x-litellm-cache-key": cache_key,
             "x-litellm-model-api-base": (
                 api_base.split("?")[0] if api_base else None
@@ -901,7 +1084,7 @@ class ProxyBaseLLMRequestProcessing:
         try:
             return {key: str(value) for key, value in headers.items() if value not in exclude_values}
         except Exception as e:
-            verbose_proxy_logger.error(f"Error setting custom headers: {e}")
+            verbose_proxy_logger.error("Error setting custom headers: %s", e)
             return {}
 
     @staticmethod
@@ -912,9 +1095,9 @@ class ProxyBaseLLMRequestProcessing:
         request: Request,
         user_api_key_dict: UserAPIKeyAuth,
         logging_obj: LiteLLMLoggingObj,
-        version: Optional[str],
+        version: str | None,
         proxy_logging_obj: ProxyLogging,
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """
         Build LiteLLM proxy response headers for routes that call the LLM directly
         (e.g. Google native :generateContent) instead of base_process_llm_request.
@@ -1059,15 +1242,15 @@ class ProxyBaseLLMRequestProcessing:
             "adelete_run",
             "apply_guardrail",
         ],
-        version: Optional[str] = None,
-        user_model: Optional[str] = None,
-        user_temperature: Optional[float] = None,
-        user_request_timeout: Optional[float] = None,
-        user_max_tokens: Optional[int] = None,
-        user_api_base: Optional[str] = None,
-        model: Optional[str] = None,
-        llm_router: Optional[Router] = None,
-    ) -> Tuple[dict, LiteLLMLoggingObj]:
+        version: str | None = None,
+        user_model: str | None = None,
+        user_temperature: float | None = None,
+        user_request_timeout: float | None = None,
+        user_max_tokens: int | None = None,
+        user_api_base: str | None = None,
+        model: str | None = None,
+        llm_router: Router | None = None,
+    ) -> tuple[dict, LiteLLMLoggingObj]:
         start_time = datetime.now()  # start before calling guardrail hooks
 
         self.data = await add_litellm_data_to_request(
@@ -1138,46 +1321,12 @@ class ProxyBaseLLMRequestProcessing:
         ):
             self.data["model"] = user_api_key_dict.aliases[self.data["model"]]
 
-        self.data["litellm_call_id"] = request.headers.get("x-litellm-call-id", str(uuid.uuid4()))
-        DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
-        DDSpanTagger.tag_request(
-            user_api_key_dict=user_api_key_dict,
-            requested_model=self.data.get("model"),
-        )
-
-        ### AUTO STREAM USAGE TRACKING ###
-        # If always_include_stream_usage is enabled and this is a streaming request
-        # automatically add stream_options={'include_usage': True} if not already set
-        if (
-            general_settings.get("always_include_stream_usage", False) is True
-            and self.data.get("stream", False) is True
-        ):
-            # Only set if stream_options is not already provided by the client
-            if "stream_options" not in self.data:
-                self.data["stream_options"] = {"include_usage": True}
-            elif isinstance(self.data["stream_options"], dict) and "include_usage" not in self.data["stream_options"]:
-                self.data["stream_options"]["include_usage"] = True
-        ### CALL HOOKS ### - modify/reject incoming data before calling the model
-
-        ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
-        ## IMPORTANT Note: - initialize this before running pre-call checks. Ensures we log rejected requests to langfuse.
-        logging_obj, self.data = litellm.utils.function_setup(
-            original_function=route_type,
-            rules_obj=litellm.utils.Rules(),
-            start_time=start_time,
-            **self.data,
-        )
-
-        self.data["litellm_logging_obj"] = logging_obj
-
-        self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
-            user_api_key_dict=user_api_key_dict,
-            data=self.data,
-            call_type=route_type,  # type: ignore
-        )
-
         # Apply hierarchical router_settings (Key > Team)
         # Global router_settings are already on the Router object itself.
+        # This sits with the other alias rewrites, and ahead of the guardrail
+        # merge and the pre-call hooks, so everything that keys off the model
+        # group -- model-level guardrails, per-model budgets and rate limits,
+        # the logging object -- sees the group that will actually serve.
         if llm_router is not None and proxy_config is not None:
             from litellm.proxy.proxy_server import prisma_client
 
@@ -1192,6 +1341,68 @@ class ProxyBaseLLMRequestProcessing:
             # This avoids expensive Router instantiation on each request
             if router_settings is not None:
                 self.data["router_settings_override"] = router_settings
+                alias_target = await _resolve_per_request_model_group_alias(
+                    requested_model=self.data.get("model"),
+                    router_settings=router_settings,
+                    user_api_key_dict=user_api_key_dict,
+                    llm_router=llm_router,
+                )
+                if alias_target is not None:
+                    self.data["model"] = alias_target
+
+        self.data["litellm_call_id"] = request.headers.get("x-litellm-call-id", str(uuid.uuid4()))
+        DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
+        DDSpanTagger.tag_request(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=self.data.get("model"),
+        )
+
+        ### AUTO STREAM USAGE TRACKING ###
+        self.data.update(
+            _stream_usage_tracking_updates(
+                data=self.data,
+                general_settings=general_settings,
+                route_type=route_type,
+                supports_stream_options=lambda: _model_deployments_support_stream_options(
+                    model=self.data.get("model"),
+                    llm_router=llm_router,
+                    team_id=user_api_key_dict.team_id,
+                ),
+            )
+        )
+        ### CALL HOOKS ### - modify/reject incoming data before calling the model
+
+        ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
+        ## IMPORTANT Note: - initialize this before running pre-call checks. Ensures we log rejected requests to langfuse.
+        logging_obj, self.data = litellm.utils.function_setup(
+            original_function=route_type,
+            rules_obj=litellm.utils.Rules(),
+            start_time=start_time,
+            **self.data,
+        )
+
+        self.data["litellm_logging_obj"] = logging_obj
+
+        # Merge model-level guardrails before pre_call_hook so DB/UI-configured
+        # guardrails actually execute on pre_call. Without this, guardrails set
+        # via litellm_params.guardrails are only honored on post_call paths
+        # (#29652, partial fix in #23774 covered non-streaming post_call only).
+        # trust_client_model_info=False on pre_call: route_request hasn't run
+        # and add_litellm_data_to_request preserves client-supplied
+        # model_info when allow_client_pricing_override is set, so a caller
+        # could otherwise spoof an unguarded model_info.id while requesting
+        # a guarded alias and bypass guardrails (veria-ai HIGH on #29654).
+        self.data = _check_and_merge_model_level_guardrails(
+            data=self.data,
+            llm_router=llm_router,
+            trust_client_model_info=False,
+        )
+
+        self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
+            user_api_key_dict=user_api_key_dict,
+            data=self.data,
+            call_type=route_type,  # type: ignore
+        )
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
@@ -1204,16 +1415,16 @@ class ProxyBaseLLMRequestProcessing:
         general_settings: dict,
         proxy_logging_obj: ProxyLogging,
         user_api_key_dict: UserAPIKeyAuth,
-        version: Optional[str],
+        version: str | None,
         proxy_config: ProxyConfig,
-        user_model: Optional[str],
-        user_temperature: Optional[float],
-        user_request_timeout: Optional[float],
-        user_max_tokens: Optional[int],
-        user_api_base: Optional[str],
-        model: Optional[str],
+        user_model: str | None,
+        user_temperature: float | None,
+        user_request_timeout: float | None,
+        user_max_tokens: int | None,
+        user_api_base: str | None,
+        model: str | None,
         route_type: str,
-        llm_router: Optional[Router],
+        llm_router: Router | None,
     ) -> tuple[dict, LiteLLMLoggingObj]:
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
@@ -1289,7 +1500,7 @@ class ProxyBaseLLMRequestProcessing:
         model: str,
         llm_router: Router,
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> Optional[list]:
+    ) -> list | None:
         from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 
         fallbacks = None
@@ -1321,6 +1532,27 @@ class ProxyBaseLLMRequestProcessing:
             model_info = litellm_metadata.get("model_info", {}) or {}
             model_id = model_info.get("id", "") or ""
         return model_id
+
+    @staticmethod
+    def _get_deployment_model_name(
+        litellm_logging_obj: LiteLLMLoggingObj | None,
+    ) -> str | None:
+        """Extract the underlying deployment model string (e.g. ``azure/gpt-4o``).
+
+        The router rewrites the response ``model`` field to the model-group alias
+        the client requested, so neither the response body nor the existing
+        headers expose the concrete deployment model. The router records it under
+        ``litellm_params`` metadata as ``deployment``, so read it back from there.
+        """
+        litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
+        if not isinstance(litellm_params, dict):
+            return None
+        for key in ("litellm_metadata", "metadata"):
+            metadata = litellm_params.get(key, {}) or {}
+            deployment = metadata.get("deployment")
+            if deployment:
+                return deployment
+        return None
 
     @staticmethod
     def _response_cost_from_logging_obj(
@@ -1458,23 +1690,23 @@ class ProxyBaseLLMRequestProcessing:
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
         proxy_config: ProxyConfig,
-        select_data_generator: Optional[Callable] = None,
-        llm_router: Optional[Router] = None,
-        model: Optional[str] = None,
-        user_model: Optional[str] = None,
-        user_temperature: Optional[float] = None,
-        user_request_timeout: Optional[float] = None,
-        user_max_tokens: Optional[int] = None,
-        user_api_base: Optional[str] = None,
-        version: Optional[str] = None,
-        is_streaming_request: Optional[bool] = False,
-        contents: Optional[list] = None,  # Add contents parameter
+        select_data_generator: Callable | None = None,
+        llm_router: Router | None = None,
+        model: str | None = None,
+        user_model: str | None = None,
+        user_temperature: float | None = None,
+        user_request_timeout: float | None = None,
+        user_max_tokens: int | None = None,
+        user_api_base: str | None = None,
+        version: str | None = None,
+        is_streaming_request: bool | None = False,
+        contents: list | None = None,  # Add contents parameter
         skip_pre_call_logic: bool = False,
     ) -> Any:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
-        requested_model_from_client: Optional[str] = (
+        requested_model_from_client: str | None = (
             self.data.get("model") if isinstance(self.data.get("model"), str) else None
         )
         self._debug_log_request_payload()
@@ -1840,6 +2072,7 @@ class ProxyBaseLLMRequestProcessing:
                 response_obj=response,
                 requested_model=requested_model_from_client,
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
+                return_raw_model_name=_should_return_raw_model_name(self.data),
             )
 
         hidden_params = get_hidden_params_dict(response)  # get any updated response headers
@@ -1996,14 +2229,14 @@ class ProxyBaseLLMRequestProcessing:
         general_settings: dict,
         proxy_config: ProxyConfig,
         select_data_generator: Callable,
-        llm_router: Optional[Router] = None,
-        model: Optional[str] = None,
-        user_model: Optional[str] = None,
-        user_temperature: Optional[float] = None,
-        user_request_timeout: Optional[float] = None,
-        user_max_tokens: Optional[int] = None,
-        user_api_base: Optional[str] = None,
-        version: Optional[str] = None,
+        llm_router: Router | None = None,
+        model: str | None = None,
+        user_model: str | None = None,
+        user_temperature: float | None = None,
+        user_request_timeout: float | None = None,
+        user_max_tokens: int | None = None,
+        user_api_base: str | None = None,
+        version: str | None = None,
     ):
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             HttpPassThroughEndpointHelpers,
@@ -2067,7 +2300,7 @@ class ProxyBaseLLMRequestProcessing:
 
         return False
 
-    def _is_streaming_request(self, data: dict, is_streaming_request: Optional[bool] = False) -> bool:
+    def _is_streaming_request(self, data: dict, is_streaming_request: bool | None = False) -> bool:
         """
         Check if the request is a streaming request.
 
@@ -2140,7 +2373,7 @@ class ProxyBaseLLMRequestProcessing:
             self.data.get("endpoint"),
         )
 
-    def _passthrough_event_stream_media_type(self) -> Optional[str]:
+    def _passthrough_event_stream_media_type(self) -> str | None:
         """
         Content-type for a buffered passthrough event-stream response, resolved
         from the provider handler so the proxy stays provider-agnostic. Mirrors
@@ -2159,8 +2392,8 @@ class ProxyBaseLLMRequestProcessing:
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
         custom_headers: dict,
-        request_headers: Dict[str, str],
-    ) -> Optional[Response]:
+        request_headers: dict[str, str],
+    ) -> Response | None:
         if not self._has_post_call_guardrails_for_passthrough():
             return None
 
@@ -2407,7 +2640,7 @@ class ProxyBaseLLMRequestProcessing:
         e: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         proxy_logging_obj: ProxyLogging,
-        version: Optional[str] = None,
+        version: str | None = None,
     ):
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
         _log_llm_api_exception(e)
@@ -2430,7 +2663,7 @@ class ProxyBaseLLMRequestProcessing:
         timeout = getattr(
             e, "timeout", None
         )  # returns the timeout set by the wrapper. Used for testing if model-specific timeout are set correctly
-        _litellm_logging_obj: Optional[LiteLLMLoggingObj] = self.data.get("litellm_logging_obj", None)
+        _litellm_logging_obj: LiteLLMLoggingObj | None = self.data.get("litellm_logging_obj", None)
 
         # Attempt to get model_id from logging object
         #
@@ -2489,7 +2722,7 @@ class ProxyBaseLLMRequestProcessing:
             message, structured_fields = _serialize_http_exception_detail(raw_detail)
             existing_fields = getattr(e, "provider_specific_fields", None) or {}
             if structured_fields:
-                merged_fields: Optional[dict] = {**existing_fields, **structured_fields}
+                merged_fields: dict | None = {**existing_fields, **structured_fields}
             else:
                 merged_fields = existing_fields or None
             raise ProxyException(
@@ -2511,7 +2744,7 @@ class ProxyBaseLLMRequestProcessing:
                 status_code=http_status_error.response.status_code,
                 detail={"error": error_text},
             )
-        error_msg = f"{str(e)}"
+        error_msg = f"{e}"
         # Check for AttributeError in the exception chain.
         # The AttributeError may be wrapped in multiple layers
         # (e.g. AttributeError -> OpenAIException -> APIConnectionError),
@@ -2575,6 +2808,8 @@ class ProxyBaseLLMRequestProcessing:
         response: Any,
         stream_completed: bool = False,
         client_disconnected: bool = False,
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+        proxy_logging_obj: ProxyLogging | None = None,
     ) -> None:
         with anyio.CancelScope(shield=True):
             should_record_client_disconnect = client_disconnected or (not stream_completed)
@@ -2586,7 +2821,26 @@ class ProxyBaseLLMRequestProcessing:
                     client_disconnected,
                 )
             if recorded_client_disconnect:
+                deferred_stream_logging_armed = _deferred_stream_logging_is_armed(request_data)
                 ProxyLogging._fire_deferred_stream_logging(request_data)
+                # A disconnect-time success event (the deferred-guardrail flush
+                # above, or the partial-spend billing below) releases the
+                # request's max_parallel_requests slot through the limiter's
+                # own success callback. Release the slot explicitly only when
+                # no such event fires, so exactly one release happens; two
+                # concurrent releases would race and double-decrement under the
+                # limiter's in-memory fallback.
+                success_event_owns_slot_release = deferred_stream_logging_armed
+                if not deferred_stream_logging_armed:
+                    success_event_owns_slot_release = await _bill_partial_streamed_spend_on_disconnect(
+                        request_data, response
+                    )
+                if (
+                    not success_event_owns_slot_release
+                    and proxy_logging_obj is not None
+                    and user_api_key_dict is not None
+                ):
+                    await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
 
             if hasattr(response, "aclose"):
                 try:
@@ -2675,12 +2929,13 @@ class ProxyBaseLLMRequestProcessing:
         except (asyncio.CancelledError, GeneratorExit):
             # Client disconnected mid-stream. CancelledError / GeneratorExit
             # are BaseException and bypass the success/failure logging
-            # callbacks that release the pre-call max_parallel_requests +1;
-            # release it here. This is the outermost generator Starlette closes
-            # on disconnect, so the nested iterator hook (which only sees
-            # GeneratorExit on GC) cannot own the refund.
+            # callbacks that release the pre-call max_parallel_requests +1.
+            # Flag the disconnect; the shielded cleanup in `finally` owns the
+            # slot release so it can coordinate with disconnect-time success
+            # billing and release exactly once. This is the outermost generator
+            # Starlette closes on disconnect, so the nested iterator hook (which
+            # only sees GeneratorExit on GC) cannot own the refund.
             if not stream_completed:
-                proxy_logging_obj._release_max_parallel_requests_on_disconnect(user_api_key_dict)
                 client_disconnected = True
             if not delivered_chunk:
                 from litellm.proxy.spend_tracking.budget_reservation import (
@@ -2691,7 +2946,7 @@ class ProxyBaseLLMRequestProcessing:
             raise
         except Exception as e:
             verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(str(e))
+                "litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e
             )
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -2701,13 +2956,14 @@ class ProxyBaseLLMRequestProcessing:
             if transformed_exception is not None:
                 e = transformed_exception
             verbose_proxy_logger.debug(
-                f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
+                "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+                e,
             )
 
             if isinstance(e, HTTPException):
                 raise e
             error_traceback = _redact_string(traceback.format_exc())
-            error_msg = f"{str(e)}\n\n{error_traceback}"
+            error_msg = f"{e}\n\n{error_traceback}"
             proxy_exception = ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -2723,6 +2979,8 @@ class ProxyBaseLLMRequestProcessing:
                 response=response,
                 stream_completed=stream_completed,
                 client_disconnected=client_disconnected,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
             )
 
     @staticmethod
@@ -2795,7 +3053,7 @@ class ProxyBaseLLMRequestProcessing:
         return chunk
 
     @staticmethod
-    def _inject_cost_into_sse_frame_str(frame_str: str, model_name: str) -> Optional[str]:
+    def _inject_cost_into_sse_frame_str(frame_str: str, model_name: str) -> str | None:
         """
         Inject cost information into an SSE frame string by modifying the JSON in the 'data:' line.
 
@@ -2825,7 +3083,7 @@ class ProxyBaseLLMRequestProcessing:
             return None
 
     @staticmethod
-    def _inject_cost_into_usage_dict(obj: dict, model_name: str) -> Optional[dict]:
+    def _inject_cost_into_usage_dict(obj: dict, model_name: str) -> dict | None:
         """
         Inject cost information into a usage dictionary for message_delta events.
 
@@ -2888,7 +3146,7 @@ class ProxyBaseLLMRequestProcessing:
                 return obj
         return None
 
-    def maybe_get_model_id(self, _logging_obj: Optional[LiteLLMLoggingObj]) -> Optional[str]:
+    def maybe_get_model_id(self, _logging_obj: LiteLLMLoggingObj | None) -> str | None:
         """
         Get model_id from logging object or request metadata.
 

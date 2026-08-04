@@ -1,5 +1,5 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors
@@ -16,6 +16,10 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         event_hook=litellm_params.mode,
         guardrailIdentifier=litellm_params.guardrailIdentifier,
         guardrailVersion=litellm_params.guardrailVersion,
+        checks=litellm_params.checks,
+        content_filter_threshold=litellm_params.content_filter_threshold,
+        prompt_attack_threshold=litellm_params.prompt_attack_threshold,
+        pii_confidence_threshold=litellm_params.pii_confidence_threshold,
         default_on=litellm_params.default_on,
         disable_exception_on_block=litellm_params.disable_exception_on_block,
         mask_request_content=litellm_params.mask_request_content,
@@ -31,6 +35,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         aws_sts_endpoint=litellm_params.aws_sts_endpoint,
         aws_bedrock_runtime_endpoint=litellm_params.aws_bedrock_runtime_endpoint,
         experimental_use_latest_role_message_only=litellm_params.experimental_use_latest_role_message_only,
+        only_scan_new_messages=litellm_params.only_scan_new_messages or False,
     )
     litellm.logging_callback_manager.add_litellm_callback(_bedrock_callback)
     return _bedrock_callback
@@ -147,7 +152,7 @@ def initialize_tool_permission(litellm_params: LitellmParams, guardrail: Guardra
         ToolPermissionGuardrail,
     )
 
-    rules: Optional[List[Dict[str, Any]]] = None
+    rules: list[dict[str, Any]] | None = None
     if litellm_params.rules:
         rules = []
         for rule in litellm_params.rules:

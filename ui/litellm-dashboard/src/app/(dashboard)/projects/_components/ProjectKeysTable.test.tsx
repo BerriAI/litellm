@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen } from "../../../../../tests/test-utils";
 import { ProjectKeysTable } from "./ProjectKeysTable";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
@@ -6,6 +7,13 @@ import { KeyResponse } from "@/components/key_team_helpers/key_list";
 vi.mock("@/components/common_components/DefaultProxyAdminTag", () => ({
   default: ({ userId }: { userId: string }) => <span data-testid="owner-tag">{userId}</span>,
 }));
+
+const defaultProps = {
+  totalCount: 0,
+  isLoading: false,
+  pagination: { pageIndex: 0, pageSize: 5 },
+  onPaginationChange: vi.fn(),
+};
 
 function makeKey(overrides: Partial<KeyResponse> = {}): KeyResponse {
   return {
@@ -70,52 +78,78 @@ function makeKey(overrides: Partial<KeyResponse> = {}): KeyResponse {
 
 describe("ProjectKeysTable", () => {
   it("should render", () => {
-    renderWithProviders(<ProjectKeysTable keys={[]} />);
+    renderWithProviders(<ProjectKeysTable {...defaultProps} keys={[]} />);
     expect(screen.getByRole("table")).toBeInTheDocument();
   });
 
   it("should display 'No keys found' when the keys list is empty", () => {
-    renderWithProviders(<ProjectKeysTable keys={[]} />);
+    renderWithProviders(<ProjectKeysTable {...defaultProps} keys={[]} />);
     expect(screen.getByText("No keys found")).toBeInTheDocument();
   });
 
   it("should display the key alias when provided", () => {
-    renderWithProviders(<ProjectKeysTable keys={[makeKey({ key_alias: "My API Key" })]} />);
+    renderWithProviders(<ProjectKeysTable {...defaultProps} keys={[makeKey({ key_alias: "My API Key" })]} />);
     expect(screen.getByText("My API Key")).toBeInTheDocument();
   });
 
   it("should display '—' when the key alias is null", () => {
     // Provide a user_id so only the alias column shows "—" (not the owner column too)
-    renderWithProviders(<ProjectKeysTable keys={[makeKey({ key_alias: null as any, user_id: "owner-1" })]} />);
+    renderWithProviders(
+      <ProjectKeysTable {...defaultProps} keys={[makeKey({ key_alias: null as any, user_id: "owner-1" })]} />,
+    );
     expect(screen.getByText("—")).toBeInTheDocument();
   });
 
   it("should display the owner using user.user_email when available", () => {
-    const key = makeKey({ user: { user_id: "u1", user_email: "alice@example.com" } });
-    renderWithProviders(<ProjectKeysTable keys={[key]} />);
+    const key = makeKey({ user: { user_id: "u1", user_email: "alice@example.com", user_alias: null } });
+    renderWithProviders(<ProjectKeysTable {...defaultProps} keys={[key]} />);
     expect(screen.getByTestId("owner-tag")).toHaveTextContent("alice@example.com");
   });
 
   it("should fall back to user_id when user.user_email is absent", () => {
     const key = makeKey({ user_id: "user-99" });
-    renderWithProviders(<ProjectKeysTable keys={[key]} />);
+    renderWithProviders(<ProjectKeysTable {...defaultProps} keys={[key]} />);
     expect(screen.getByTestId("owner-tag")).toHaveTextContent("user-99");
   });
 
   it("should display 'Never' in the Last Active column when last_active is null", () => {
-    renderWithProviders(<ProjectKeysTable keys={[makeKey({ last_active: null })]} />);
+    renderWithProviders(<ProjectKeysTable {...defaultProps} keys={[makeKey({ last_active: null })]} />);
     expect(screen.getByText("Never")).toBeInTheDocument();
   });
 
   it("should display a formatted date in the Last Active column when last_active is provided", () => {
-    renderWithProviders(<ProjectKeysTable keys={[makeKey({ last_active: "2024-06-15T10:00:00Z" })]} />);
+    renderWithProviders(
+      <ProjectKeysTable {...defaultProps} keys={[makeKey({ last_active: "2024-06-15T10:00:00Z" })]} />,
+    );
     expect(screen.queryByText("Never")).not.toBeInTheDocument();
   });
 
   it("should render multiple keys as separate rows", () => {
     const keys = [makeKey({ token: "tok-1", key_alias: "Key One" }), makeKey({ token: "tok-2", key_alias: "Key Two" })];
-    renderWithProviders(<ProjectKeysTable keys={keys} />);
+    renderWithProviders(<ProjectKeysTable {...defaultProps} keys={keys} />);
     expect(screen.getByText("Key One")).toBeInTheDocument();
     expect(screen.getByText("Key Two")).toBeInTheDocument();
+  });
+
+  it("should show skeleton rows while loading", () => {
+    renderWithProviders(<ProjectKeysTable {...defaultProps} keys={[]} isLoading />);
+    expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+    expect(screen.queryByText("No keys found")).not.toBeInTheDocument();
+  });
+
+  it("should show the server-side total in the pagination footer", () => {
+    renderWithProviders(<ProjectKeysTable {...defaultProps} keys={[makeKey()]} totalCount={42} />);
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-5 of 42");
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 9");
+  });
+
+  it("should request the next page through the pagination footer", async () => {
+    const user = userEvent.setup();
+    const onPaginationChange = vi.fn();
+    renderWithProviders(
+      <ProjectKeysTable {...defaultProps} keys={[makeKey()]} totalCount={42} onPaginationChange={onPaginationChange} />,
+    );
+    await user.click(screen.getByTestId("pagination-next"));
+    expect(onPaginationChange).toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
@@ -31,11 +31,11 @@ router = APIRouter()
 
 
 def _update_request_data_with_managed_file_id(
-    data: Dict,
+    data: dict,
     file_id: str,
     request: Request,
     llm_router: Optional["Router"] = None,
-) -> tuple[Dict, Optional[str]]:
+) -> tuple[dict, str | None]:
     """
     Update request data with model routing information from managed file ID.
 
@@ -71,7 +71,7 @@ def _update_request_data_with_managed_file_id(
 
     if decoded_id:
         # This is a unified managed file ID
-        verbose_logger.debug(f"Processing unified managed file ID: {file_id}")
+        verbose_logger.debug("Processing unified managed file ID: %s", file_id)
 
         # Parse the unified ID to extract components
         parsed_id = parse_unified_id(file_id)
@@ -90,7 +90,9 @@ def _update_request_data_with_managed_file_id(
                 pass
 
             verbose_logger.debug(
-                f"Decoded unified file ID - target_model_names: {target_model_names}, llm_output_file_id: {llm_output_file_id}"
+                "Decoded unified file ID - target_model_names: %s, llm_output_file_id: %s",
+                target_model_names,
+                llm_output_file_id,
             )
 
             # Set the model for routing
@@ -108,14 +110,17 @@ def _update_request_data_with_managed_file_id(
                             file_id=llm_output_file_id,  # Use the actual provider file ID
                         )
                         verbose_logger.info(
-                            f"Routing vector store file operation to model: {routing_model}, file_id: {file_id} -> {llm_output_file_id}"
+                            "Routing vector store file operation to model: %s, file_id: %s -> %s",
+                            routing_model,
+                            file_id,
+                            llm_output_file_id,
                         )
                         return data, file_id  # Return original managed file ID
 
             # If we extracted the provider file ID but no routing, still use it
             if llm_output_file_id:
                 data["file_id"] = llm_output_file_id
-                verbose_logger.debug(f"Replaced unified file ID with provider file ID: {llm_output_file_id}")
+                verbose_logger.debug("Replaced unified file ID with provider file ID: %s", llm_output_file_id)
                 return data, file_id  # Return original managed file ID
 
         return data, file_id if decoded_id else None
@@ -188,7 +193,7 @@ async def _authorize_model_routing_hint(
     *,
     model: str,
     llm_router: Optional["Router"],
-    user_api_key_dict: Optional[UserAPIKeyAuth],
+    user_api_key_dict: UserAPIKeyAuth | None,
 ) -> None:
     if user_api_key_dict is None:
         return
@@ -215,17 +220,19 @@ async def _authorize_model_routing_hint(
 
 
 async def _update_request_data_with_model_routing_hint(
-    data: Dict,
+    data: dict,
     request: Request,
     llm_router: Optional["Router"] = None,
-    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-) -> Dict:
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+) -> dict:
     if data.get("api_key") is not None or data.get("api_base") is not None:
         return data
 
     user_controlled_model_hint = request.query_params.get("model") or request.headers.get("x-litellm-model")
     model_hint = data.get("model") or user_controlled_model_hint
     should_authorize_model_hint = isinstance(model_hint, str) and model_hint == user_controlled_model_hint
+
+    caller_team_id = getattr(user_api_key_dict, "team_id", None) if user_api_key_dict else None
 
     should_route = False
     credentials = None
@@ -237,7 +244,9 @@ async def _update_request_data_with_model_routing_hint(
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                 )
-            credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_hint)
+            credentials = llm_router.get_deployment_credentials_with_provider(
+                model_id=model_hint, team_id=caller_team_id
+            )
             should_route = credentials is not None
     else:
         if isinstance(model_hint, str) and should_authorize_model_hint:
@@ -285,7 +294,7 @@ async def _update_request_data_with_model_routing_hint(
 
     openai_credentials = None
     for model_name in model_names_to_check:
-        credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_name)
+        credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_name, team_id=caller_team_id)
         if credentials is None:
             continue
 
@@ -319,12 +328,12 @@ async def _update_request_data_with_model_routing_hint(
 
 
 def _update_request_data_with_litellm_managed_vector_store_registry(
-    data: Dict,
+    data: dict,
     vector_store_id: str,
     llm_router: Optional["Router"] = None,
-    managed_vector_store: Optional[LiteLLM_ManagedVectorStore] = None,
+    managed_vector_store: LiteLLM_ManagedVectorStore | None = None,
     should_lookup_registry: bool = True,
-) -> Dict:
+) -> dict:
     """
     Update request data with model routing information from managed vector store.
 
@@ -357,7 +366,7 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
     if decoded_id:
         # This is a managed vector store - decode and extract routing information
-        verbose_logger.debug(f"Processing managed vector store ID: {vector_store_id}")
+        verbose_logger.debug("Processing managed vector store ID: %s", vector_store_id)
 
         parsed_id = parse_unified_id(vector_store_id)
 
@@ -367,7 +376,10 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
             target_model_names = parsed_id.get("target_model_names", [])
 
             verbose_logger.debug(
-                f"Decoded vector store - model_id: {model_id}, provider_resource_id: {provider_resource_id}, target_model_names: {target_model_names}"
+                "Decoded vector store - model_id: %s, provider_resource_id: %s, target_model_names: %s",
+                model_id,
+                provider_resource_id,
+                target_model_names,
             )
 
             # Set the model for routing - this tells the router which deployment to use
@@ -380,13 +392,13 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
             if routing_model:
                 data["model"] = routing_model
-                verbose_logger.info(f"Routing vector store files operation to model: {routing_model}")
+                verbose_logger.info("Routing vector store files operation to model: %s", routing_model)
 
             # Replace unified vector store ID with provider resource ID
             if provider_resource_id:
                 data["vector_store_id"] = provider_resource_id
                 verbose_logger.debug(
-                    f"Replaced unified vector store ID with provider resource ID: {provider_resource_id}"
+                    "Replaced unified vector store ID with provider resource ID: %s", provider_resource_id
                 )
 
         return data
@@ -412,9 +424,9 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
 async def _resolve_provider(
     *,
-    data: Dict,
+    data: dict,
     request: Request,
-) -> Optional[LlmProviders]:
+) -> LlmProviders | None:
     provider = (
         data.get("custom_llm_provider")
         or get_custom_llm_provider_from_request_headers(request=request)
@@ -435,7 +447,7 @@ async def _resolve_provider(
 
 def _maybe_check_permissions(
     *,
-    provider: Optional[LlmProviders],
+    provider: LlmProviders | None,
     vector_store_id: str,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
@@ -589,7 +601,7 @@ async def vector_store_file_list(
     )
 
     query_params = dict(request.query_params)
-    data: Dict[str, Optional[str]] = {"vector_store_id": vector_store_id}
+    data: dict[str, str | None] = {"vector_store_id": vector_store_id}
     data.update(query_params)
     data["vector_store_id"] = vector_store_id
     managed_vector_store = await assert_user_can_access_vector_store_id(
@@ -685,7 +697,7 @@ async def vector_store_file_retrieve(
         version,
     )
 
-    data: Dict[str, str] = {
+    data: dict[str, str] = {
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
@@ -787,7 +799,7 @@ async def vector_store_file_content(
         version,
     )
 
-    data: Dict[str, str] = {
+    data: dict[str, str] = {
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
@@ -991,7 +1003,7 @@ async def vector_store_file_delete(
         version,
     )
 
-    data: Dict[str, str] = {
+    data: dict[str, str] = {
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }

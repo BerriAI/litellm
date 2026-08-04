@@ -4,7 +4,7 @@ Calls DataForSEO SERP API to search the web.
 DataForSEO API Reference: https://docs.dataforseo.com/v3/serp/google/organic/live/advanced/?bash
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal
 
 import httpx
 
@@ -40,11 +40,11 @@ class DataForSEOSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate DataForSEO environment and set up authentication.
 
@@ -91,9 +91,9 @@ class DataForSEOSearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -105,11 +105,11 @@ class DataForSEOSearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         **kwargs,
-    ) -> Union[Dict, List[Dict]]:
+    ) -> dict | list[dict]:
         """
         Transform Search request to DataForSEO SERP API format.
 
@@ -126,7 +126,7 @@ class DataForSEOSearchConfig(BaseSearchConfig):
             List[Dict]: Request body for DataForSEO API (array of task objects as required by API)
         """
         # DataForSEO expects an array of task objects
-        task: Dict[str, Any] = {}
+        task: dict[str, Any] = {}
 
         # Convert query to string if it's a list
         if isinstance(query, list):

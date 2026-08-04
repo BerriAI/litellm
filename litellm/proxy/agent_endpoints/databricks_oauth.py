@@ -26,7 +26,7 @@ import asyncio
 import base64
 import hashlib
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import httpx
 
@@ -43,7 +43,7 @@ _TOKEN_EXPIRY_BUFFER_SECONDS = 60
 _DEFAULT_TTL_SECONDS = 3600
 
 
-def _resolve_secret(value: Any) -> Optional[str]:
+def _resolve_secret(value: Any) -> str | None:
     """Resolve a config value, expanding ``os.environ/`` references."""
     if not isinstance(value, str):
         return None
@@ -55,8 +55,7 @@ def _resolve_secret(value: Any) -> Optional[str]:
 def _token_url_from_workspace(workspace_url: str) -> str:
     """Build the workspace OIDC token endpoint from a workspace URL."""
     base = workspace_url.strip().rstrip("/")
-    if base.endswith("/serving-endpoints"):
-        base = base[: -len("/serving-endpoints")]
+    base = base.removesuffix("/serving-endpoints")
     return f"{base}/oidc/v1/token"
 
 
@@ -76,8 +75,8 @@ class DatabricksAppOAuthConfig:
 
 
 def parse_databricks_oauth_config(
-    litellm_params: Optional[Dict[str, Any]],
-) -> Optional[DatabricksAppOAuthConfig]:
+    litellm_params: dict[str, Any] | None,
+) -> DatabricksAppOAuthConfig | None:
     """Build a Databricks App OAuth config from an agent's ``litellm_params``.
 
     Returns ``None`` when the agent has no ``databricks_oauth`` block. Raises
@@ -129,7 +128,7 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
 
     def __init__(self) -> None:
         super().__init__(default_ttl=_DEFAULT_TTL_SECONDS)
-        self._locks: Dict[str, asyncio.Lock] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
 
     def _get_lock(self, cache_key: str) -> asyncio.Lock:
         return self._locks.setdefault(cache_key, asyncio.Lock())
@@ -167,7 +166,7 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
                 self._locks.pop(cache_key, None)
             return token
 
-    async def _fetch_token(self, config: DatabricksAppOAuthConfig) -> Tuple[str, int]:
+    async def _fetch_token(self, config: DatabricksAppOAuthConfig) -> tuple[str, int]:
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.A2A)
 
         verbose_logger.debug("Fetching Databricks App OAuth token from %s", config.token_url)
@@ -216,8 +215,8 @@ databricks_app_oauth_token_cache = DatabricksAppOAuthTokenCache()
 
 
 async def resolve_databricks_app_auth_header(
-    litellm_params: Optional[Dict[str, Any]],
-) -> Optional[Dict[str, str]]:
+    litellm_params: dict[str, Any] | None,
+) -> dict[str, str] | None:
     """Return ``{"Authorization": "Bearer <token>"}`` for a Databricks App agent.
 
     Returns ``None`` when the agent is not configured for Databricks App OAuth.

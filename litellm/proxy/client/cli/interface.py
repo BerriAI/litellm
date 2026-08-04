@@ -1,15 +1,11 @@
 # stdlib imports
 import os
 import sys
-from typing import TYPE_CHECKING
 
 # third party imports
 import click
 
 from litellm._logging import verbose_logger
-
-if TYPE_CHECKING:
-    pass
 
 
 def styled_prompt():
@@ -24,16 +20,16 @@ def styled_prompt():
             click.echo("\n" * 3)
     except Exception as e:
         # Fallback if we can't get terminal size
-        verbose_logger.debug(f"Error getting terminal size: {e}")
+        verbose_logger.debug("Error getting terminal size: %s", e)
         click.echo("\n" * 3)
 
-    # Unicode box drawing characters
-    top_left = "┌"
-    top_right = "┐"
-    bottom_left = "└"
-    bottom_right = "┘"
-    horizontal = "─"
-    vertical = "│"
+    # ASCII box drawing characters
+    top_left = "+"
+    top_right = "+"
+    bottom_left = "+"
+    bottom_right = "+"
+    horizontal = "-"
+    vertical = "|"
 
     # Create the box with increased width
     width = 80

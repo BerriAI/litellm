@@ -7,7 +7,7 @@ Use this to route requests between Teams
 """
 
 import re
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal
 
 from litellm._logging import verbose_logger
 from litellm.types.router import RouterErrors
@@ -23,7 +23,7 @@ else:
 def _is_valid_deployment_tag_regex(
     tag_regexes: list[str],
     header_strings: list[str],
-) -> Optional[str]:
+) -> str | None:
     """
     Test compiled regex patterns against "Header-Name: value" strings.
 
@@ -71,10 +71,10 @@ def is_valid_deployment_tag(deployment_tags: list[str], request_tags: list[str],
 
 def _match_deployment(
     deployment: Any,
-    request_tags: Optional[list[str]],
+    request_tags: list[str] | None,
     header_strings: list[str],
     match_any: bool,
-) -> Optional[dict[str, str]]:
+) -> dict[str, str] | None:
     """
     Determine whether *deployment* matches the current request.
 
@@ -87,8 +87,8 @@ def _match_deployment(
          ran and failed, so the regex cannot override strict-tag policy.
     """
     litellm_params = deployment.get("litellm_params", {})
-    deployment_tags: Optional[list[str]] = litellm_params.get("tags")
-    deployment_tag_regex: Optional[list[str]] = litellm_params.get("tag_regex")
+    deployment_tags: list[str] | None = litellm_params.get("tags")
+    deployment_tag_regex: list[str] | None = litellm_params.get("tag_regex")
 
     # 1. Exact tag match (existing behaviour).
     if deployment_tags and request_tags:
@@ -121,7 +121,7 @@ def _split_tags(tags: list[str]) -> tuple[list[str], list[str]]:
 
 
 def _exclude_deployments(
-    deployments: Union[list[Any], dict[Any, Any]],
+    deployments: list[Any] | dict[Any, Any],
     excluded_set: frozenset[str],
 ) -> list[Any]:
     if not excluded_set:
@@ -142,7 +142,7 @@ def _require_candidates(
 
 
 def _ban_only_base_pool(
-    deployments: Union[list[Any], dict[Any, Any]],
+    deployments: list[Any] | dict[Any, Any],
 ) -> list[Any]:
     # Mirrors untagged-request semantics so callers can't use !tags to escape the default pool.
     defaults = [d for d in deployments if "default" in (d.get("litellm_params", {}).get("tags") or [])]
@@ -152,16 +152,22 @@ def _ban_only_base_pool(
 async def get_deployments_for_tag(
     llm_router_instance: LitellmRouter,
     model: str,  # used to raise the correct error
-    healthy_deployments: Union[list[Any], dict[Any, Any]],
-    request_kwargs: Optional[dict[Any, Any]] = None,
+    healthy_deployments: list[Any] | dict[Any, Any],
+    request_kwargs: dict[Any, Any] | None = None,
     metadata_variable_name: Literal["metadata", "litellm_metadata"] = "metadata",
 ):
     """
     Returns a list of deployments that match the requested model and tags in the request.
 
     Executes tag based filtering based on the tags in request metadata and the tags on the deployments
+
+    Runs when the router-level `enable_tag_filtering` is True or the request carries
+    `enable_tag_filtering=True` (set from key/team router_settings by the proxy).
+    A request-level False never disables a router-level True, so per-request settings
+    cannot escape an operator's global tag-routing policy.
     """
-    if llm_router_instance.enable_tag_filtering is not True:
+    request_enable_tag_filtering = request_kwargs.get("enable_tag_filtering") if request_kwargs else None
+    if request_enable_tag_filtering is not True and llm_router_instance.enable_tag_filtering is not True:
         return healthy_deployments
 
     if request_kwargs is None:
@@ -264,7 +270,7 @@ async def get_deployments_for_tag(
 
 
 def _get_tags_from_request_kwargs(
-    request_kwargs: Optional[dict[Any, Any]] = None,
+    request_kwargs: dict[Any, Any] | None = None,
     metadata_variable_name: Literal["metadata", "litellm_metadata"] = "metadata",
 ) -> list[str]:
     """

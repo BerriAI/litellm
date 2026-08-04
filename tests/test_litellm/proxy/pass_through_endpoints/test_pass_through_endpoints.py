@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import sys
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Optional
@@ -31,6 +31,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     resolve_pass_through_request_timeout,
     resolve_llm_passthrough_timeout,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -394,6 +395,122 @@ def test_is_langfuse_route():
     )
     assert handler.is_langfuse_route("https://example.com/other") is False
     assert handler.is_langfuse_route("") is False
+
+
+def test_is_vertex_route_ignores_plain_predict_path_segment():
+    """
+    Regression for LIT-4527: a custom (non-Vertex) passthrough URL whose path
+    contains a plain `predict`/`search` segment must not be classified as a
+    Vertex route, otherwise its success logging is routed into the Vertex
+    handler, the Vertex-shaped transform fails, and no log row is recorded.
+
+    Real Vertex custom methods are invoked with the GCP `resource:method` colon
+    syntax, so only the colon form should count as Vertex.
+    """
+    handler = PassThroughEndpointLogging()
+
+    assert (
+        handler.is_vertex_route(
+            "https://upstream.example.com/ml/api/v1/time-series-forecast/predict"
+        )
+        is False
+    )
+    assert handler.is_vertex_route("https://upstream.example.com/api/v1/search") is False
+    assert (
+        handler.is_vertex_route("https://upstream.example.com/predict/generateContent")
+        is False
+    )
+
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/l/publishers/google/models/m:predict"
+        )
+        is True
+    )
+    assert (
+        handler.is_vertex_route(
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/l/publishers/anthropic/models/claude:rawPredict"
+        )
+        is True
+    )
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/l/publishers/google/models/m:generateContent"
+        )
+        is True
+    )
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/l/publishers/google/models/m:predictLongRunning"
+        )
+        is True
+    )
+    assert (
+        handler.is_vertex_route("https://discoveryengine.googleapis.com/v1/x:search")
+        is True
+    )
+
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/l/batchPredictionJobs"
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_custom_passthrough_predict_path_logs_via_generic_handler():
+    """
+    Regression for LIT-4527: an upstream-successful custom passthrough request to
+    a `/predict` path (non-Vertex body) must still produce a log row. Before the
+    fix it was routed into VertexPassthroughLoggingHandler, which failed on the
+    non-Vertex body and dropped the log entirely.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        PassthroughStandardLoggingPayload,
+    )
+
+    handler = PassThroughEndpointLogging()
+    handler._handle_logging = AsyncMock()
+
+    mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    mock_logging_obj.model_call_details = {}
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.text = '{"forecast": [1, 2, 3]}'
+
+    url_route = "https://upstream.example.com/ml/api/v1/time-series-forecast/predict"
+    passthrough_logging_payload = PassthroughStandardLoggingPayload(
+        url=url_route,
+        request_body={"series": [1, 2]},
+        request_method="POST",
+    )
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.success_handler.VertexPassthroughLoggingHandler.vertex_passthrough_handler"
+    ) as mock_vertex_handler:
+        await handler.pass_through_async_success_handler(
+            httpx_response=mock_response,
+            response_body={"forecast": [1, 2, 3]},
+            logging_obj=mock_logging_obj,
+            url_route=url_route,
+            result="",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+            request_body={"series": [1, 2]},
+            passthrough_logging_payload=passthrough_logging_payload,
+        )
+
+    mock_vertex_handler.assert_not_called()
+    handler._handle_logging.assert_awaited_once()
+    logged_object = handler._handle_logging.call_args.kwargs[
+        "standard_logging_response_object"
+    ]
+    assert logged_object == {"response": '{"forecast": [1, 2, 3]}'}
 
 
 @pytest.mark.asyncio
@@ -4501,3 +4618,262 @@ async def test_pass_through_relay_full_consumption_logs_no_partial_relay_warning
     finally:
         cleanup()
         await fake_client.aclose()
+
+
+class _StandardLoggingPayloadRecorder(CustomLogger):
+    """Stands in for a real logging integration so the assertions run against
+    the StandardLoggingPayload that spend tracking consumes, not an internal."""
+
+    def __init__(self):
+        super().__init__()
+        self.payloads = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.payloads.append(kwargs.get("standard_logging_object"))
+
+
+@contextmanager
+def _recording_success_callback():
+    import litellm
+
+    recorder = _StandardLoggingPayloadRecorder()
+    original = litellm._async_success_callback
+    litellm._async_success_callback = [*original, recorder]
+    try:
+        yield recorder
+    finally:
+        litellm._async_success_callback = original
+
+
+def _enter_upstream_usage_mocks(stack, parsed_body):
+    """Same seams as _enter_relay_logging_mocks, but leaves the real
+    pass-through success handler in place and captures the coroutines the
+    logging worker would have run so the test can await them."""
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    mock_proxy_logging = stack.enter_context(
+        patch("litellm.proxy.proxy_server.proxy_logging_obj")
+    )
+    mock_proxy_logging.pre_call_hook = AsyncMock(return_value=parsed_body)
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+    mock_proxy_logging.get_proxy_hook = MagicMock(return_value=None)
+
+    enqueued = []
+    stack.enter_context(
+        patch.object(
+            GLOBAL_LOGGING_WORKER,
+            "ensure_initialized_and_enqueue",
+            new=MagicMock(side_effect=lambda async_coroutine: enqueued.append(async_coroutine)),
+        )
+    )
+    return mock_proxy_logging, enqueued
+
+
+async def _run_upstream_reporting_passthrough(
+    upstream_headers, status_code=200, cost_per_request=None
+):
+    """Drive a generic pass-through against an upstream that reports its own
+    cost/usage. Returns (recorded standard logging payloads, proxy logging mock)."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=status_code,
+            headers={"content-type": "application/json", **upstream_headers},
+            stream=_RecordingUpstreamByteStream((b'{"answer": "ok"}',)),
+        ),
+        timeout=None,
+    )
+    try:
+        with ExitStack() as stack:
+            mock_proxy_logging, enqueued = _enter_upstream_usage_mocks(stack, {})
+            with _recording_success_callback() as recorder:
+                await pass_through_request(
+                    request=_relay_client_request(method="POST"),
+                    target="http://internal-api.test/v1/summarize",
+                    custom_headers={},
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="sk-upstream-usage", team_id="team-fil"
+                    ),
+                    cost_per_request=cost_per_request,
+                )
+                for coroutine in enqueued:
+                    await coroutine
+        return recorder.payloads, mock_proxy_logging
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_passthrough_records_cost_and_tokens_reported_by_upstream():
+    """
+    A pass-through target that prices the request itself reports the totals in
+    x-litellm-response-cost / x-litellm-total-tokens. LiteLLM must record those
+    values verbatim; before this, a generic pass-through always logged 0 spend
+    and 0 tokens because there was nothing in the body to price.
+    """
+    payloads, _ = await _run_upstream_reporting_passthrough(
+        {
+            "x-litellm-response-cost": "0.000415",
+            "x-litellm-total-tokens": "1874",
+        }
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.000415
+    assert payloads[0]["total_tokens"] == 1874
+
+
+@pytest.mark.asyncio
+async def test_passthrough_records_zero_when_upstream_reports_zero():
+    payloads, _ = await _run_upstream_reporting_passthrough(
+        {"x-litellm-response-cost": "0", "x-litellm-total-tokens": "0"}
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.0
+    assert payloads[0]["total_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_passthrough_records_zero_when_upstream_reports_nothing():
+    payloads, _ = await _run_upstream_reporting_passthrough({})
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.0
+    assert payloads[0]["total_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_passthrough_records_upstream_reported_cost_on_error_response():
+    """
+    An upstream that already burned tokens before failing still reports them on
+    the error response, so the spend must land on the failure row rather than
+    being dropped because the status code was >= 400.
+    """
+    import litellm
+
+    _, mock_proxy_logging = await _run_upstream_reporting_passthrough(
+        {
+            "x-litellm-response-cost": "0.00021",
+            "x-litellm-total-tokens": "930",
+        },
+        status_code=500,
+    )
+
+    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+    request_data = mock_proxy_logging.post_call_failure_hook.await_args.kwargs[
+        "request_data"
+    ]
+    assert request_data["response_cost"] == 0.00021
+    assert request_data["combined_usage_object"] == litellm.Usage(total_tokens=930)
+
+
+@pytest.mark.asyncio
+async def test_passthrough_error_response_without_usage_headers_records_no_spend():
+    _, mock_proxy_logging = await _run_upstream_reporting_passthrough(
+        {}, status_code=500
+    )
+
+    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+    request_data = mock_proxy_logging.post_call_failure_hook.await_args.kwargs[
+        "request_data"
+    ]
+    assert "combined_usage_object" not in request_data
+
+
+@pytest.mark.asyncio
+async def test_streaming_passthrough_records_cost_and_tokens_reported_by_upstream():
+    """
+    The totals are reported in the response headers, which are known before the
+    first byte of the stream, so a streamed pass-through must record the same
+    spend a buffered one does.
+    """
+    from fastapi.responses import StreamingResponse
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=200,
+            headers={
+                "content-type": "text/event-stream",
+                "x-litellm-response-cost": "0.00312",
+                "x-litellm-total-tokens": "4021",
+            },
+            stream=_RecordingUpstreamByteStream((b'data: {"delta": "hi"}\n\n',)),
+        ),
+        timeout=None,
+    )
+    try:
+        with ExitStack() as stack:
+            _, enqueued = _enter_upstream_usage_mocks(stack, {})
+            with _recording_success_callback() as recorder:
+                response = await pass_through_request(
+                    request=_relay_client_request(method="POST"),
+                    target="http://internal-api.test/v1/summarize",
+                    custom_headers={},
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="sk-upstream-usage", team_id="team-fil"
+                    ),
+                )
+                assert isinstance(response, StreamingResponse)
+                assert [chunk async for chunk in response.body_iterator] == [
+                    b'data: {"delta": "hi"}\n\n'
+                ]
+                for coroutine in enqueued:
+                    await coroutine
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert len(recorder.payloads) == 1
+    assert recorder.payloads[0]["response_cost"] == 0.00312
+    assert recorder.payloads[0]["total_tokens"] == 4021
+
+
+@pytest.mark.asyncio
+async def test_upstream_reported_cost_survives_default_cost_per_request():
+    """
+    PassThroughGenericEndpoint.cost_per_request defaults to 0.0, so every
+    config-defined endpoint forwards a 0.0 flat cost even when the operator
+    never configured one. That flat estimate must not overwrite the real cost
+    the upstream reported for the request.
+    """
+    payloads, _ = await _run_upstream_reporting_passthrough(
+        {
+            "x-litellm-response-cost": "0.000415",
+            "x-litellm-total-tokens": "1874",
+        },
+        cost_per_request=0.0,
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.000415
+
+
+@pytest.mark.asyncio
+async def test_configured_cost_per_request_still_applies_without_usage_headers():
+    payloads, _ = await _run_upstream_reporting_passthrough({}, cost_per_request=0.25)
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.25
+
+
+@pytest.mark.asyncio
+async def test_unusable_upstream_cost_records_zero_not_the_flat_estimate():
+    """
+    A target that speaks this contract owns the cost for the request. When the
+    value it sends is unusable the contract records 0, rather than falling back
+    to a flat cost_per_request the upstream just contradicted.
+    """
+    payloads, _ = await _run_upstream_reporting_passthrough(
+        {"x-litellm-response-cost": "not-a-number", "x-litellm-total-tokens": "1874"},
+        cost_per_request=0.05,
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.0
+    assert payloads[0]["total_tokens"] == 1874

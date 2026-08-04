@@ -4,16 +4,42 @@ Check if prompt caching is valid for a given deployment
 Route to previously cached model id, if valid
 """
 
-from typing import List, Optional, cast
+from typing import cast
 
 from litellm import verbose_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes, StandardLoggingPayload
-from litellm.utils import is_prompt_caching_valid_prompt
+from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt
 
 from ..prompt_caching_cache import PromptCachingCache
+
+
+def _get_min_token_count_for_deployments(healthy_deployments: list[dict]) -> int:
+    """
+    Returns the lowest minimum cacheable prefix across a model group.
+
+    This gate only decides whether the cache lookup is worth doing. It cannot cause a wrong pin,
+    because a deployment is only pinned when the cache already holds an entry for the prefix, and
+    entries are written by `async_log_success_event` against the deployment's real model. A model
+    that will not cache a prefix never records one, so there is nothing to pin it to.
+
+    That makes the lowest minimum in the group the correct threshold rather than the highest.
+    `model` here is the model-group alias the operator chose, not a model name, so the threshold
+    has to come from the deployments themselves, and a group may mix models whose minimums differ.
+    Taking the highest would skip the lookup for a prefix a lower-minimum member genuinely cached,
+    losing a cache hit it had earned. The lowest can only cost a lookup that finds nothing.
+    """
+    return min(
+        (
+            get_prompt_cache_min_tokens(model=deployment["litellm_params"]["model"])
+            for deployment in healthy_deployments
+            if deployment.get("litellm_params", {}).get("model")
+        ),
+        default=DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+    )
 
 
 class PromptCachingDeploymentCheck(CustomLogger):
@@ -23,21 +49,22 @@ class PromptCachingDeploymentCheck(CustomLogger):
     async def async_filter_deployments(
         self,
         model: str,
-        healthy_deployments: List,
-        messages: Optional[List[AllMessageValues]],
-        request_kwargs: Optional[dict] = None,
-        parent_otel_span: Optional[Span] = None,
-    ) -> List[dict]:
+        healthy_deployments: list,
+        messages: list[AllMessageValues] | None,
+        request_kwargs: dict | None = None,
+        parent_otel_span: Span | None = None,
+    ) -> list[dict]:
         if messages is not None and is_prompt_caching_valid_prompt(
             messages=messages,
             model=model,
-        ):  # prompt > 1024 tokens
+            min_token_count=_get_min_token_count_for_deployments(healthy_deployments),
+        ):
             prompt_cache = PromptCachingCache(
                 cache=self.cache,
             )
 
             model_id_dict = await prompt_cache.async_get_model_id(
-                messages=cast(List[AllMessageValues], messages),
+                messages=cast(list[AllMessageValues], messages),
                 tools=None,
             )
             if model_id_dict is not None:
@@ -49,7 +76,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
         return healthy_deployments
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
+        standard_logging_object: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
 
         if standard_logging_object is None:
             return
@@ -84,7 +111,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
         ## PROMPT CACHING - cache model id, if prompt caching valid prompt + provider
         if is_prompt_caching_valid_prompt(
             model=model,
-            messages=cast(List[AllMessageValues], messages),
+            messages=cast(list[AllMessageValues], messages),
         ):
             cache = PromptCachingCache(
                 cache=self.cache,

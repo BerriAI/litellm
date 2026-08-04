@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from mcp.types import CallToolResult
@@ -80,18 +80,18 @@ async def handle_mcp_tool_search(
     query: str,
     top_k: int,
     user_api_key_dict: UserAPIKeyAuth,
-    client_ip: Optional[str] = None,
-    mcp_servers: Optional[list[str]] = None,
-    mcp_auth_header: Optional[str] = None,
-    mcp_server_auth_headers: Optional[dict[str, dict[str, str]]] = None,
-    oauth2_headers: Optional[dict[str, str]] = None,
-    raw_headers: Optional[dict[str, str]] = None,
+    client_ip: str | None = None,
+    mcp_servers: list[str] | None = None,
+    mcp_auth_header: str | None = None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
+    oauth2_headers: dict[str, str] | None = None,
+    raw_headers: dict[str, str] | None = None,
 ) -> CallToolResult:
     from mcp.types import CallToolResult, TextContent
 
     from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
 
-    mcp_tools = await _list_mcp_tools(
+    mcp_listing = await _list_mcp_tools(
         user_api_key_auth=user_api_key_dict,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
@@ -100,6 +100,7 @@ async def handle_mcp_tool_search(
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
     )
+    mcp_tools = mcp_listing.tools
     tools = [
         {
             "name": t.name,
@@ -116,13 +117,13 @@ async def handle_mcp_tool_call(
     tool_name: str,
     arguments: dict[str, Any],
     user_api_key_dict: UserAPIKeyAuth,
-    client_ip: Optional[str] = None,
-    mcp_servers: Optional[list[str]] = None,
-    mcp_auth_header: Optional[str] = None,
-    mcp_server_auth_headers: Optional[dict[str, dict[str, str]]] = None,
-    oauth2_headers: Optional[dict[str, str]] = None,
-    raw_headers: Optional[dict[str, str]] = None,
-    litellm_logging_obj: Optional[LiteLLMLoggingObj] = None,
+    client_ip: str | None = None,
+    mcp_servers: list[str] | None = None,
+    mcp_auth_header: str | None = None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
+    oauth2_headers: dict[str, str] | None = None,
+    raw_headers: dict[str, str] | None = None,
+    litellm_logging_obj: LiteLLMLoggingObj | None = None,
 ) -> CallToolResult:
     from litellm.proxy._experimental.mcp_server.server import (
         _get_allowed_mcp_servers,

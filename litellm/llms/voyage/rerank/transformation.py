@@ -4,7 +4,7 @@ Transformation logic for Voyage AI's /v1/rerank endpoint.
 Docs - https://docs.voyageai.com/docs/reranker
 """
 
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any
 
 import httpx
 
@@ -32,17 +32,17 @@ class VoyageRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
+        documents: list[str | dict[str, Any]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
-        rank_fields: List[str] | None = None,
+        rank_fields: list[str] | None = None,
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> Dict:
+    ) -> dict:
         # Voyage AI uses 'top_k' instead of 'top_n'
-        optional_params: Dict[str, Any] = {"query": query, "documents": documents}
+        optional_params: dict[str, Any] = {"query": query, "documents": documents}
         if top_n is not None:
             optional_params["top_k"] = top_n
         if return_documents is not None:
@@ -70,10 +70,10 @@ class VoyageRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Dict,
-        headers: Dict,
+        optional_rerank_params: dict,
+        headers: dict,
         litellm_params: dict | None = None,
-    ) -> Dict:
+    ) -> dict:
         return {"model": model, **optional_rerank_params}
 
     def transform_rerank_response(
@@ -83,9 +83,9 @@ class VoyageRerankConfig(BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: Dict = {},
-        optional_params: Dict = {},
-        litellm_params: Dict = {},
+        request_data: dict = {},
+        optional_params: dict = {},
+        litellm_params: dict = {},
     ) -> RerankResponse:
         if raw_response.status_code != 200:
             raise VoyageError(message=raw_response.text, status_code=raw_response.status_code)
@@ -101,14 +101,14 @@ class VoyageRerankConfig(BaseRerankConfig):
             )
 
         # Voyage AI returns results in "data" key, not "results"
-        _results: List[dict] | None = _json_response.get("data")
+        _results: list[dict] | None = _json_response.get("data")
         if _results is None:
             raise ValueError(f"No results found in the response={_json_response}")
 
         # Transform to LiteLLM format
         transformed_results = []
         for result in _results:
-            transformed_result: Dict[str, Any] = {
+            transformed_result: dict[str, Any] = {
                 "index": result["index"],
                 "relevance_score": result["relevance_score"],
             }
@@ -133,11 +133,11 @@ class VoyageRerankConfig(BaseRerankConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
-    ) -> Dict:
+    ) -> dict:
         if api_key is None:
             api_key = get_secret_str("VOYAGE_API_KEY") or get_secret_str("VOYAGE_AI_API_KEY")
         if api_key is None:
@@ -153,7 +153,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         custom_llm_provider: str | None = None,
         billed_units: RerankBilledUnits | None = None,
         model_info: ModelInfo | None = None,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         if (
             model_info is None
             or "input_cost_per_token" not in model_info
@@ -166,5 +166,5 @@ class VoyageRerankConfig(BaseRerankConfig):
             return 0.0, 0.0
         return model_info["input_cost_per_token"] * total_tokens, 0.0
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]):
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers):
         return VoyageError(message=error_message, status_code=status_code, headers=headers)

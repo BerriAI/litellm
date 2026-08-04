@@ -7,7 +7,8 @@ storage backends (e.g., Azure Blob Storage) and managing associated metadata.
 
 import base64
 import time
-from typing import Any, List, Mapping, cast
+from collections.abc import Mapping
+from typing import Any, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid as uuid_module
@@ -34,7 +35,7 @@ class StorageBackendFileService:
     async def upload_file_to_storage_backend(
         file_data: Mapping[str, Any],
         target_storage: str,
-        target_model_names: List[str],
+        target_model_names: list[str],
         purpose: OpenAIFilesPurpose,
         proxy_logging_obj: ProxyLogging,
         user_api_key_dict: UserAPIKeyAuth,
@@ -81,7 +82,7 @@ class StorageBackendFileService:
             file_naming_strategy="uuid",
         )
 
-        verbose_proxy_logger.debug(f"Storage backend upload complete: backend={target_storage}, url={storage_url}")
+        verbose_proxy_logger.debug("Storage backend upload complete: backend=%s, url=%s", target_storage, storage_url)
 
         # Create file object with storage metadata
         file_object = StorageBackendFileService._create_file_object_with_storage_metadata(
@@ -153,7 +154,7 @@ class StorageBackendFileService:
     @staticmethod
     def _create_unified_file_id(
         file_type: str,
-        target_model_names: List[str],
+        target_model_names: list[str],
         file_id: str,
     ) -> str:
         """
@@ -183,7 +184,7 @@ class StorageBackendFileService:
     async def _store_in_managed_files(
         file_object: OpenAIFileObject,
         file_data: Mapping[str, Any],
-        target_model_names: List[str],
+        target_model_names: list[str],
         target_storage: str,
         storage_url: str,
         proxy_logging_obj: ProxyLogging,
@@ -222,8 +223,10 @@ class StorageBackendFileService:
         file_object.id = base64_unified_file_id
 
         verbose_proxy_logger.debug(
-            f"Storing file in managed files: unified_id={base64_unified_file_id}, "
-            f"storage_backend={target_storage}, storage_url={storage_url}"
+            "Storing file in managed files: unified_id=%s, storage_backend=%s, storage_url=%s",
+            base64_unified_file_id,
+            target_storage,
+            storage_url,
         )
 
         # Store in managed files

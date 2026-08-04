@@ -7,18 +7,20 @@ Provides:
 """
 
 import base64
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import ORJSONResponse, StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -105,9 +107,9 @@ async def _authorize_nested_vector_store_ids(
 
 def _build_file_metadata_entry(
     response: Any,
-    file_data: Optional[Tuple[str, bytes, str]] = None,
-    file_url: Optional[str] = None,
-) -> Dict[str, Any]:
+    file_data: tuple[str, bytes, str] | None = None,
+    file_url: str | None = None,
+) -> dict[str, Any]:
     """
     Build a file metadata entry for storing in vector_store_metadata.
 
@@ -157,11 +159,11 @@ def _build_file_metadata_entry(
 
 async def _save_vector_store_to_db_from_rag_ingest(
     response: Any,
-    ingest_options: Dict[str, Any],
+    ingest_options: dict[str, Any],
     prisma_client,
     user_api_key_dict: UserAPIKeyAuth,
-    file_data: Optional[Tuple[str, bytes, str]] = None,
-    file_url: Optional[str] = None,
+    file_data: tuple[str, bytes, str] | None = None,
+    file_url: str | None = None,
 ) -> None:
     """
     Helper function to save a newly created vector store from RAG ingest to the database.
@@ -189,7 +191,7 @@ async def _save_vector_store_to_db_from_rag_ingest(
     elif hasattr(response, "vector_store_id"):
         vector_store_id = response.vector_store_id
     else:
-        verbose_proxy_logger.warning(f"Unable to extract vector_store_id from response type: {type(response)}")
+        verbose_proxy_logger.warning("Unable to extract vector_store_id from response type: %s", type(response))
         return
 
     if vector_store_id is None or not isinstance(vector_store_id, str):
@@ -227,7 +229,7 @@ async def _save_vector_store_to_db_from_rag_ingest(
 
         # Only create if it doesn't exist
         if existing_vector_store is None:
-            verbose_proxy_logger.info(f"Saving newly created vector store {vector_store_id} to database")
+            verbose_proxy_logger.info("Saving newly created vector store %s to database", vector_store_id)
 
             # Initialize metadata with first file
             initial_metadata = {"ingested_files": [file_entry]}
@@ -248,9 +250,9 @@ async def _save_vector_store_to_db_from_rag_ingest(
                 user_id=user_api_key_dict.user_id,
             )
 
-            verbose_proxy_logger.info(f"Vector store {vector_store_id} saved to database successfully")
+            verbose_proxy_logger.info("Vector store %s saved to database successfully", vector_store_id)
         else:
-            verbose_proxy_logger.info(f"Vector store {vector_store_id} already exists, appending file to metadata")
+            verbose_proxy_logger.info("Vector store %s already exists, appending file to metadata", vector_store_id)
 
             # Update existing vector store with new file
             existing_metadata = existing_vector_store.vector_store_metadata or {}
@@ -272,16 +274,18 @@ async def _save_vector_store_to_db_from_rag_ingest(
             )
 
             verbose_proxy_logger.info(
-                f"Added file {file_entry.get('filename') or file_entry.get('file_url', 'Unknown')} to vector store {vector_store_id} metadata"
+                "Added file %s to vector store %s metadata",
+                file_entry.get("filename") or file_entry.get("file_url", "Unknown"),
+                vector_store_id,
             )
     except Exception as db_error:
         # Log the error but don't fail the request since ingestion succeeded
-        verbose_proxy_logger.exception(f"Failed to save vector store {vector_store_id} to database: {db_error}")
+        verbose_proxy_logger.exception("Failed to save vector store %s to database: %s", vector_store_id, db_error)
 
 
 async def parse_rag_ingest_request(
     request: Request,
-) -> Tuple[Dict[str, Any], Optional[Tuple[str, bytes, str]], Optional[str], Optional[str]]:
+) -> tuple[dict[str, Any], tuple[str, bytes, str] | None, str | None, str | None]:
     """
     Parse RAG ingest request.
 
@@ -298,7 +302,7 @@ async def parse_rag_ingest_request(
     file_data = None
     file_url = None
     file_id = None
-    ingest_options: Dict[str, Any] = {}
+    ingest_options: dict[str, Any] = {}
 
     if "multipart/form-data" in content_type:
         # Form upload
@@ -483,7 +487,7 @@ async def rag_ingest(
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
         # Add litellm data
-        request_data: Dict[str, Any] = {}
+        request_data: dict[str, Any] = {}
         request_data = await add_litellm_data_to_request(
             data=request_data,
             request=request,
@@ -493,7 +497,7 @@ async def rag_ingest(
             proxy_config=proxy_config,
         )
 
-        verbose_proxy_logger.debug(f"RAG Ingest - options: {ingest_options}")
+        verbose_proxy_logger.debug("RAG Ingest - options: %s", ingest_options)
 
         # Call ingest
         response = await litellm.aingest(
@@ -507,7 +511,10 @@ async def rag_ingest(
 
         # Save vector store to database if it was newly created and prisma_client is available
         verbose_proxy_logger.debug(
-            f"RAG Ingest - Checking database save conditions: prisma_client={prisma_client is not None}, response={response is not None}, response_type={type(response)}"
+            "RAG Ingest - Checking database save conditions: prisma_client=%s, response=%s, response_type=%s",
+            prisma_client is not None,
+            response is not None,
+            type(response),
         )
 
         if prisma_client is not None and response is not None:
@@ -521,7 +528,7 @@ async def rag_ingest(
             )
         else:
             verbose_proxy_logger.warning(
-                f"Skipping database save: prisma_client={prisma_client is not None}, response={response is not None}"
+                "Skipping database save: prisma_client=%s, response=%s", prisma_client is not None, response is not None
             )
 
         return response
@@ -529,7 +536,7 @@ async def rag_ingest(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"RAG Ingest failed: {e}")
+        verbose_proxy_logger.exception("RAG Ingest failed: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": str(e)},
@@ -604,6 +611,7 @@ async def rag_query(
         general_settings,
         llm_router,
         proxy_config,
+        select_data_generator,
         version,
     )
 
@@ -650,7 +658,7 @@ async def rag_query(
         )
 
         # Add litellm data
-        request_data: Dict[str, Any] = {}
+        request_data: dict[str, Any] = {}
         request_data = await add_litellm_data_to_request(
             data=request_data,
             request=request,
@@ -660,7 +668,7 @@ async def rag_query(
             proxy_config=proxy_config,
         )
 
-        verbose_proxy_logger.debug(f"RAG Query - model: {model}, retrieval_config: {retrieval_config}")
+        verbose_proxy_logger.debug("RAG Query - model: %s, retrieval_config: %s", model, retrieval_config)
 
         # Call query
         response = await litellm.aquery(
@@ -673,12 +681,37 @@ async def rag_query(
             **request_data,
         )
 
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            call_id=hidden_params.get("litellm_call_id", None) or "",
+            model_id=hidden_params.get("model_id", None) or "",
+            cache_key=hidden_params.get("cache_key", None) or "",
+            api_base=hidden_params.get("api_base", None) or "",
+            version=version,
+            response_cost=hidden_params.get("response_cost", None),
+            request_data=request_data,
+        )
+
+        if isinstance(response, CustomStreamWrapper):
+            return StreamingResponse(
+                select_data_generator(
+                    response=response,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                    request=request,
+                ),
+                media_type="text/event-stream",
+                headers=custom_headers,
+            )
+
+        fastapi_response.headers.update(custom_headers)
         return response
 
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"RAG Query failed: {e}")
+        verbose_proxy_logger.exception("RAG Query failed: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"error": str(e)},

@@ -1,5 +1,5 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Card, InputNumber, Select as AntdSelect, Switch, Tooltip, Typography } from "antd";
+import { InputNumber, Select as AntdSelect, Switch, Tooltip, Typography } from "antd";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 
@@ -36,7 +36,7 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
   const embeddingModelMissing = showValidationErrors && !embeddingModel;
 
   return (
-    <Card className="mb-4">
+    <div>
       <div className="flex items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
@@ -86,7 +86,7 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
           </div>
         </div>
       )}
-    </Card>
+    </div>
   );
 };
 

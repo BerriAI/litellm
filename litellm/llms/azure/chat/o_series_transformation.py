@@ -12,8 +12,6 @@ Translations handled by LiteLLM:
 - Temperature => drop param (if user opts in to dropping param)
 """
 
-from typing import List, Optional
-
 import litellm
 from litellm import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
@@ -68,9 +66,9 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         """
         Currently no Azure O Series models support native streaming.
@@ -93,7 +91,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
                 ):  # allow user to override default with model_info={"supports_native_streaming": true}
                     return False
             except Exception as e:
-                verbose_logger.debug(f"Error getting model info in AzureOpenAIO1Config: {e}")
+                verbose_logger.debug("Error getting model info in AzureOpenAIO1Config: %s", e)
         return True
 
     def is_o_series_model(self, model: str) -> bool:
@@ -102,7 +100,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,

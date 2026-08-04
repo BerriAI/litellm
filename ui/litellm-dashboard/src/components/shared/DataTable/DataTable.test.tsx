@@ -358,6 +358,23 @@ describe("DataTable loading", () => {
     expect(names()).toEqual(["Charlie", "Alice", "Bob"]);
   });
 
+  it("gives compact skeleton rows the same height as loaded rows so loading does not shrink the table", () => {
+    const { rerender } = render(
+      <DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} size="compact" isLoading />,
+    );
+    const skeletonRow = screen.getAllByTestId("skeleton-row").at(0);
+    const loadedRowHeight = "h-8";
+    expect(skeletonRow?.className).toContain(loadedRowHeight);
+
+    rerender(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} size="compact" />);
+    expect(document.querySelector("[data-row-id]")?.className).toContain(loadedRowHeight);
+  });
+
+  it("does not force the compact height on default-size skeleton rows", () => {
+    render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} isLoading />);
+    expect(screen.getAllByTestId("skeleton-row").at(0)?.className).not.toContain("h-8");
+  });
+
   it("varies skeleton shape and width per column instead of one fixed bar", () => {
     const columns: ColumnDef<Person, unknown>[] = [
       { accessorKey: "name", header: "Name", meta: { skeleton: "twoLine" }, cell: () => null },
@@ -607,6 +624,44 @@ describe("DataTable layout", () => {
     expect(container.querySelector("thead")?.className).toContain("sticky");
     const scroller = container.querySelector('[data-slot="table-container"]')?.parentElement as HTMLElement;
     expect(scroller.style.maxHeight).toBe("240px");
+  });
+
+  it("caps fillHeight at the parent's height instead of stretching to it, so a short table stays short", () => {
+    const { container } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} fillHeight />);
+    const scroller = container.querySelector('[data-slot="table-container"]')?.parentElement as HTMLElement;
+    const frame = scroller.parentElement as HTMLElement;
+    const outer = frame.parentElement as HTMLElement;
+
+    // A ceiling, not a stretch: flex-1 here would hold the footer at the bottom on a two-row table.
+    expect(outer.className).toContain("max-h-full");
+    expect(outer.className).not.toContain("flex-1");
+    expect(frame.className).not.toContain("flex-1");
+    expect(scroller.className).not.toContain("flex-1");
+
+    expect(outer.className).toContain("flex-col");
+    expect(frame.className).toContain("flex-col");
+    expect(scroller.className).toContain("min-h-0");
+    expect(scroller.className).toContain("overflow-auto");
+    expect(scroller.style.maxHeight).toBe("");
+    // Without this the Table primitive's own overflow container captures the sticky header.
+    expect(scroller.className).toContain("[&_[data-slot=table-container]]:overflow-visible");
+
+    const thead = container.querySelector("thead") as HTMLElement;
+    expect(thead.className).toContain("sticky");
+    // Rows pass under the header, so the semi-transparent row tint alone would let them show through.
+    expect(thead.className).toContain("bg-background");
+  });
+
+  it("leaves the default layout untouched when neither height mode is set", () => {
+    const { container } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} />);
+    const scroller = container.querySelector('[data-slot="table-container"]')?.parentElement as HTMLElement;
+
+    expect(scroller.className).toContain("overflow-x-auto");
+    expect(scroller.className).not.toContain("min-h-0");
+    expect(scroller.style.maxHeight).toBe("");
+    expect((scroller.parentElement as HTMLElement).className).not.toContain("flex-col");
+    expect(container.querySelector("thead")?.className).not.toContain("sticky");
+    expect(container.querySelector("thead")?.className).not.toContain("bg-background");
   });
 });
 

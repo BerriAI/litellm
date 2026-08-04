@@ -7,7 +7,7 @@ so this implementation skips the embedding step and directly uploads files.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -35,16 +35,16 @@ class GeminiRAGIngestion(BaseRAGIngestion):
 
     def __init__(
         self,
-        ingest_options: "RAGIngestOptions",
-        router: Optional["Router"] = None,
+        ingest_options: RAGIngestOptions,
+        router: Router | None = None,
     ):
         super().__init__(ingest_options=ingest_options, router=router)
         self.model_info = GeminiModelInfo()
 
     async def embed(
         self,
-        chunks: List[str],
-    ) -> Optional[List[List[float]]]:
+        chunks: list[str],
+    ) -> list[list[float]] | None:
         """
         Gemini handles embedding internally - skip this step.
 
@@ -56,13 +56,13 @@ class GeminiRAGIngestion(BaseRAGIngestion):
 
     async def store(
         self,
-        file_content: Optional[bytes],
-        filename: Optional[str],
-        content_type: Optional[str],
-        chunks: List[str],
-        embeddings: Optional[List[List[float]]],
+        file_content: bytes | None,
+        filename: str | None,
+        content_type: str | None,
+        chunks: list[str],
+        embeddings: list[list[float]] | None,
         existing_file_id: str | None = None,
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         """
         Store content in Gemini File Search store.
 
@@ -83,11 +83,11 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         """
         vector_store_id = self.vector_store_config.get("vector_store_id")
 
-        vector_store_config = cast(Dict[str, Any], self.vector_store_config)
+        vector_store_config = cast(dict[str, Any], self.vector_store_config)
 
         # Get API credentials
-        api_key = cast(Optional[str], vector_store_config.get("api_key")) or GeminiModelInfo.get_api_key()
-        api_base = cast(Optional[str], vector_store_config.get("api_base")) or GeminiModelInfo.get_api_base()
+        api_key = cast(str | None, vector_store_config.get("api_key")) or GeminiModelInfo.get_api_key()
+        api_base = cast(str | None, vector_store_config.get("api_base")) or GeminiModelInfo.get_api_base()
 
         if not api_key:
             raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini File Search")
@@ -162,7 +162,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         response_data = response.json()
         store_name = response_data.get("name", "")
 
-        verbose_logger.debug(f"Created File Search store: {store_name}")
+        verbose_logger.debug("Created File Search store: %s", store_name)
         return store_name
 
     async def _upload_to_file_search_store(
@@ -172,7 +172,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         vector_store_id: str,
         filename: str,
         file_content: bytes,
-        content_type: Optional[str],
+        content_type: str | None,
     ) -> str:
         """
         Upload a file to Gemini File Search store using resumable upload.
@@ -228,7 +228,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         url = f"{api_base}/upload/v1beta/{vector_store_id}:uploadToFileSearchStore"
 
         # Build request body with chunking config and metadata if provided
-        request_body: Dict[str, Any] = {"displayName": filename}
+        request_body: dict[str, Any] = {"displayName": filename}
 
         # Add chunking configuration if provided
         chunking_strategy = self.chunking_strategy
@@ -244,7 +244,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
 
         # Add custom metadata if provided in vector_store_config
         custom_metadata = cast(
-            Optional[List[Dict[str, Any]]],
+            list[dict[str, Any]] | None,
             self.vector_store_config.get("custom_metadata"),
         )
         if custom_metadata:
@@ -259,7 +259,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             "x-goog-api-key": api_key,
         }
 
-        verbose_logger.debug(f"Initiating resumable upload: {url}")
+        verbose_logger.debug("Initiating resumable upload: %s", url)
 
         client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
@@ -275,13 +275,13 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             error_msg = f"Failed to initiate upload: {response.text}"
             verbose_logger.error(error_msg)
             raise Exception(error_msg)
-        verbose_logger.debug(f"Initiate resumable upload response: {response.headers}")
+        verbose_logger.debug("Initiate resumable upload response: %s", response.headers)
         # Extract upload URL from response headers
         upload_url = response.headers.get("x-goog-upload-url")
         if not upload_url:
             raise Exception("No upload URL returned in response headers")
 
-        verbose_logger.debug(f"Got upload URL: {upload_url}")
+        verbose_logger.debug("Got upload URL: %s", upload_url)
         return upload_url
 
     async def _upload_file_content(
@@ -301,7 +301,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             "X-Goog-Upload-Command": "upload, finalize",
         }
 
-        verbose_logger.debug(f"Uploading file content ({len(file_content)} bytes)")
+        verbose_logger.debug("Uploading file content (%s bytes)", len(file_content))
 
         client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
@@ -323,9 +323,9 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             response_data = response.json()
             # The response should contain the document name or file reference
             file_id = response_data.get("name", "") or response_data.get("file", {}).get("name", "")
-            verbose_logger.debug(f"Upload complete. File ID: {file_id}")
+            verbose_logger.debug("Upload complete. File ID: %s", file_id)
             return file_id
         except Exception as e:
-            verbose_logger.warning(f"Could not parse upload response: {e}")
+            verbose_logger.warning("Could not parse upload response: %s", e)
             # Return a placeholder if we can't get the ID
             return "uploaded"

@@ -24,6 +24,7 @@ export interface TeamListCallOptions {
   teamID?: string | null;
   team_alias?: string | null;
   search?: string | null;
+  searchTeamIdMatch?: "exact" | "prefix" | null;
   userID?: string | null;
   sortBy?: string | null;
   sortOrder?: string | null;
@@ -48,6 +49,7 @@ export const teamListCall = async (
         organization_id: options.organizationID,
         team_alias: options.team_alias,
         search: options.search,
+        search_team_id_match: options.searchTeamIdMatch,
         user_id: options.userID,
         page,
         page_size: pageSize,
@@ -82,6 +84,24 @@ export const teamListCall = async (
     console.error("Failed to list teams:", error);
     throw error;
   }
+};
+
+export const teamsTableKeys = createQueryKeys("teamsTable");
+
+export const useTeamsTable = (
+  page: number,
+  pageSize: number,
+  options: TeamListCallOptions = {},
+): UseQueryResult<TeamsResponse> => {
+  const { accessToken } = useAuthorized();
+
+  return useQuery<TeamsResponse>({
+    queryKey: teamsTableKeys.list({ page, limit: pageSize, ...options }),
+    queryFn: async () => await teamListCall(accessToken!, page, pageSize, options),
+    enabled: Boolean(accessToken),
+    staleTime: 30000,
+    placeholderData: keepPreviousData,
+  });
 };
 
 const teamKeys = createQueryKeys("teams");
@@ -195,6 +215,7 @@ const deletedTeamListCall = async (
         organization_id: options.organizationID,
         team_alias: options.team_alias,
         search: options.search,
+        search_team_id_match: options.searchTeamIdMatch,
         user_id: options.userID,
         page,
         page_size: pageSize,

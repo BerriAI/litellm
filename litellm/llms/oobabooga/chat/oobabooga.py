@@ -1,5 +1,6 @@
 import json
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
@@ -14,7 +15,7 @@ oobabooga_config = OobaboogaConfig()
 def completion(
     model: str,
     messages: list,
-    api_base: Optional[str],
+    api_base: str | None,
     model_response: ModelResponse,
     print_verbose: Callable,
     encoding,
@@ -34,7 +35,7 @@ def completion(
         optional_params=optional_params,
         litellm_params=litellm_params,
     )
-    if "https" in model:
+    if model.startswith(("http://", "https://")):
         completion_url = model
     elif api_base:
         completion_url = api_base
@@ -89,14 +90,14 @@ def embedding(
     model: str,
     input: list,
     model_response: EmbeddingResponse,
-    api_key: Optional[str],
-    api_base: Optional[str],
+    api_key: str | None,
+    api_base: str | None,
     logging_obj: Any,
     optional_params: dict,
     encoding=None,
 ):
     # Create completion URL
-    if "https" in model:
+    if model.startswith(("http://", "https://")):
         embeddings_url = model
     elif api_base:
         embeddings_url = f"{api_base}/v1/embeddings"

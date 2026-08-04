@@ -18,6 +18,7 @@ import { Popover, Tooltip, Typography } from "antd";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { deriveKeyModelScope } from "../key_scope";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
@@ -339,14 +340,24 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         enableSorting: false,
         cell: (info) => {
           const models = info.getValue() as string[];
+          const scope = deriveKeyModelScope(info.row.original.allowed_routes, info.row.original.key_type);
+          const emptyModelsBadge = !scope.hasModelAccess ? (
+            <Tooltip title={`Scoped to ${scope.label} routes; this key cannot call any models`}>
+              <Badge size="xs" className="mb-1" color="gray">
+                <Text>No model access</Text>
+              </Badge>
+            </Tooltip>
+          ) : (
+            <Badge size="xs" className="mb-1" color="red">
+              <Text>All Proxy Models</Text>
+            </Badge>
+          );
           return (
             <div className="flex flex-col py-2">
               {Array.isArray(models) ? (
                 <div className="flex flex-col">
                   {models.length === 0 ? (
-                    <Badge size="xs" className="mb-1" color="red">
-                      <Text>All Proxy Models</Text>
-                    </Badge>
+                    emptyModelsBadge
                   ) : (
                     <>
                       <div className="flex items-start">

@@ -12,14 +12,11 @@ Provides standalone functions with @client decorator for LiteLLM logging integra
 import asyncio
 import datetime
 import uuid
+from collections.abc import AsyncIterator, Coroutine
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Coroutine,
-    Dict,
     Optional,
-    Union,
     cast,
 )
 
@@ -87,7 +84,7 @@ A2ACardResolver = LiteLLMA2ACardResolver
 
 
 def _set_usage_on_logging_obj(
-    kwargs: Dict[str, Any],
+    kwargs: dict[str, Any],
     prompt_tokens: int,
     completion_tokens: int,
 ) -> None:
@@ -110,7 +107,7 @@ def _set_usage_on_logging_obj(
 
 
 def _set_agent_id_on_logging_obj(
-    kwargs: Dict[str, Any],
+    kwargs: dict[str, Any],
     agent_id: str | None,
 ) -> None:
     """
@@ -156,7 +153,7 @@ def _set_litellm_params_on_logging_obj(
     logging_obj.model_call_details["litellm_params"] = {**existing, **cost_params}
 
 
-def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
+def _get_a2a_model_info(a2a_client: Any, kwargs: dict[str, Any]) -> str:
     """
     Extract agent info and set model/custom_llm_provider for cost tracking.
 
@@ -199,15 +196,15 @@ async def _send_message_via_completion_bridge(
     request: "SendMessageRequest",
     custom_llm_provider: str,
     api_base: str | None,
-    litellm_params: Dict[str, Any],
-    agent_extra_headers: Dict[str, str] | None = None,
+    litellm_params: dict[str, Any],
+    agent_extra_headers: dict[str, str] | None = None,
 ) -> LiteLLMSendMessageResponse:
     """
     Route a send_message through the LiteLLM completion bridge (e.g. LangGraph, Bedrock AgentCore).
 
     Requires request; api_base is optional for providers that derive endpoint from model.
     """
-    verbose_logger.info(f"A2A using completion bridge: provider={custom_llm_provider}, api_base={api_base}")
+    verbose_logger.info("A2A using completion bridge: provider=%s, api_base=%s", custom_llm_provider, api_base)
 
     from litellm.a2a_protocol.litellm_completion_bridge.handler import (
         A2ACompletionBridgeHandler,
@@ -370,9 +367,9 @@ async def asend_message(
     a2a_client: Optional["A2AClientType"] = None,
     request: Optional["SendMessageRequest"] = None,
     api_base: str | None = None,
-    litellm_params: Dict[str, Any] | None = None,
+    litellm_params: dict[str, Any] | None = None,
     agent_id: str | None = None,
-    agent_extra_headers: Dict[str, str] | None = None,
+    agent_extra_headers: dict[str, str] | None = None,
     **kwargs: Any,
 ) -> LiteLLMSendMessageResponse:
     """
@@ -453,7 +450,7 @@ async def asend_message(
         if api_base is None:
             raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
         trace_id = trace_id or str(uuid.uuid4())
-        extra_headers: Dict[str, str] = {"X-LiteLLM-Trace-Id": trace_id}
+        extra_headers: dict[str, str] = {"X-LiteLLM-Trace-Id": trace_id}
         if agent_id:
             extra_headers["X-LiteLLM-Agent-Id"] = agent_id
         # Overlay agent-level headers (agent headers take precedence over LiteLLM internal ones)
@@ -466,7 +463,7 @@ async def asend_message(
 
     agent_name = _get_a2a_model_info(a2a_client, kwargs)
 
-    verbose_logger.info(f"A2A send_message request_id={request.id}, agent={agent_name}")
+    verbose_logger.info("A2A send_message request_id=%s, agent=%s", request.id, agent_name)
 
     # Get agent card URL for localhost retry logic
     agent_card = _get_a2a_client_agent_card(a2a_client)
@@ -481,7 +478,7 @@ async def asend_message(
         agent_name=agent_name,
     )
 
-    verbose_logger.info(f"A2A send_message completed, request_id={request.id}")
+    verbose_logger.info("A2A send_message completed, request_id=%s", request.id)
 
     # Wrap in LiteLLM response type for _hidden_params support
     response = LiteLLMSendMessageResponse.from_a2a_response(a2a_response, request_id=str(request.id))
@@ -518,7 +515,7 @@ def send_message(
     a2a_client: "A2AClientType",
     request: "SendMessageRequest",
     **kwargs: Any,
-) -> Union[LiteLLMSendMessageResponse, Coroutine[Any, Any, LiteLLMSendMessageResponse]]:
+) -> LiteLLMSendMessageResponse | Coroutine[Any, Any, LiteLLMSendMessageResponse]:
     """
     Sync: Send a message to an A2A agent.
 
@@ -547,9 +544,9 @@ def _build_streaming_logging_obj(
     request: "SendStreamingMessageRequest",
     agent_name: str,
     agent_id: str | None,
-    litellm_params: Dict[str, Any] | None,
-    metadata: Dict[str, Any] | None,
-    proxy_server_request: Dict[str, Any] | None,
+    litellm_params: dict[str, Any] | None,
+    metadata: dict[str, Any] | None,
+    proxy_server_request: dict[str, Any] | None,
 ) -> Logging:
     """Build logging object for streaming A2A requests."""
     start_time = datetime.datetime.now()
@@ -568,6 +565,7 @@ def _build_streaming_logging_obj(
     logging_obj.custom_llm_provider = "a2a_agent"
     logging_obj.model_call_details["model"] = model
     logging_obj.model_call_details["custom_llm_provider"] = "a2a_agent"
+    logging_obj.model_call_details["call_type"] = logging_obj.call_type
     if agent_id:
         logging_obj.model_call_details["agent_id"] = agent_id
 
@@ -589,11 +587,11 @@ async def asend_message_streaming(
     a2a_client: Optional["A2AClientType"] = None,
     request: Optional["SendStreamingMessageRequest"] = None,
     api_base: str | None = None,
-    litellm_params: Dict[str, Any] | None = None,
+    litellm_params: dict[str, Any] | None = None,
     agent_id: str | None = None,
-    metadata: Dict[str, Any] | None = None,
-    proxy_server_request: Dict[str, Any] | None = None,
-    agent_extra_headers: Dict[str, str] | None = None,
+    metadata: dict[str, Any] | None = None,
+    proxy_server_request: dict[str, Any] | None = None,
+    agent_extra_headers: dict[str, str] | None = None,
     **kwargs: object,
 ) -> AsyncIterator[Any]:
     """
@@ -642,7 +640,7 @@ async def asend_message_streaming(
             raise ValueError("request is required for completion bridge")
         # api_base is optional for providers that derive endpoint from model (e.g., bedrock/agentcore)
 
-        verbose_logger.info(f"A2A streaming using completion bridge: provider={custom_llm_provider}")
+        verbose_logger.info("A2A streaming using completion bridge: provider=%s", custom_llm_provider)
 
         from litellm.a2a_protocol.litellm_completion_bridge.handler import (
             A2ACompletionBridgeHandler,
@@ -699,7 +697,7 @@ async def asend_message_streaming(
             proxy_server_request=proxy_server_request,
         )
 
-    verbose_logger.info(f"A2A send_message_streaming request_id={request.id}, agent={agent_name}")
+    verbose_logger.info("A2A send_message_streaming request_id=%s, agent=%s", request.id, agent_name)
 
     agent_card = _get_a2a_client_agent_card(a2a_client)
     card_url = get_agent_card_url(agent_card) if agent_card else None
@@ -727,7 +725,7 @@ async def asend_message_streaming(
 async def create_a2a_client(
     base_url: str,
     timeout: float = DEFAULT_A2A_AGENT_TIMEOUT,
-    extra_headers: Dict[str, str] | None = None,
+    extra_headers: dict[str, str] | None = None,
     streaming: bool = False,
 ) -> "A2AClientType":
     """
@@ -761,7 +759,7 @@ async def create_a2a_client(
             "The 'a2a' package is required for A2A agent invocation. Install it with: pip install a2a-sdk"
         )
 
-    verbose_logger.info(f"Creating A2A client for {base_url}")
+    verbose_logger.info("Creating A2A client for %s", base_url)
 
     # Use get_async_httpx_client with per-agent params so that different agents
     # (with different extra_headers) get separate cached clients.  The params
@@ -783,7 +781,7 @@ async def create_a2a_client(
     httpx_client = _async_handler.client
     if extra_headers:
         httpx_client.headers.update(extra_headers)
-        verbose_proxy_logger.debug(f"A2A client created with extra_headers={list(extra_headers.keys())}")
+        verbose_proxy_logger.debug("A2A client created with extra_headers=%s", list(extra_headers.keys()))
 
     a2a_client = await create_client(  # pyright: ignore[reportOptionalCall]
         base_url,
@@ -800,7 +798,7 @@ async def create_a2a_client(
     if agent_card is not None:
         a2a_client._litellm_agent_card = agent_card  # type: ignore[attr-defined]
 
-    verbose_logger.info(f"A2A client created for {base_url}")
+    verbose_logger.info("A2A client created for %s", base_url)
 
     return a2a_client
 
@@ -808,7 +806,7 @@ async def create_a2a_client(
 async def aget_agent_card(
     base_url: str,
     timeout: float = DEFAULT_A2A_AGENT_TIMEOUT,
-    extra_headers: Dict[str, str] | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> "AgentCard":
     """
     Fetch the agent card from an A2A agent.
@@ -826,7 +824,7 @@ async def aget_agent_card(
             "The 'a2a' package is required for A2A agent invocation. Install it with: pip install a2a-sdk"
         )
 
-    verbose_logger.info(f"Fetching agent card from {base_url}")
+    verbose_logger.info("Fetching agent card from %s", base_url)
 
     # Use LiteLLM's cached httpx client
     http_handler = get_async_httpx_client(
@@ -841,5 +839,5 @@ async def aget_agent_card(
     )
     agent_card = await resolver.get_agent_card()
 
-    verbose_logger.info(f"Fetched agent card: {agent_card.name if hasattr(agent_card, 'name') else 'unknown'}")
+    verbose_logger.info("Fetched agent card: %s", agent_card.name if hasattr(agent_card, "name") else "unknown")
     return agent_card

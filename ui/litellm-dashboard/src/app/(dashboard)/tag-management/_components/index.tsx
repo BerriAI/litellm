@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from "react";
-import { Icon, Button, Col, Text, Grid } from "@tremor/react";
-import { RefreshIcon } from "@heroicons/react/outline";
+import { RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import TagInfoView from "./tag_info";
 import { modelInfoCall } from "@/components/networking";
 import { tagCreateCall, tagListCall, tagDeleteCall } from "@/components/networking";
 import { Tag } from "@/components/tag_management/types";
 import TagTable from "./TagTable";
 import NotificationsManager from "@/components/molecules/notifications_manager";
+import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import CreateTagModal from "./components/CreateTagModal";
 
 interface ModelInfo {
@@ -27,22 +28,29 @@ interface TagProps {
 
 const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) => {
   const [tags, setTags] = useState<Tag[]>([]);
+  const [isLoadingTags, setIsLoadingTags] = useState(true);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
   const [editTag, setEditTag] = useState<boolean>(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [tagToDelete, setTagToDelete] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
 
   const fetchTags = async () => {
-    if (!accessToken) return;
+    if (!accessToken) {
+      setIsLoadingTags(false);
+      return;
+    }
     try {
       const response = await tagListCall(accessToken);
       setTags(Object.values(response));
     } catch (error) {
       console.error("Error fetching tags:", error);
       NotificationsManager.fromBackend("Error fetching tags: " + error);
+    } finally {
+      setIsLoadingTags(false);
     }
   };
 
@@ -81,6 +89,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
 
   const confirmDelete = async () => {
     if (!accessToken || !tagToDelete) return;
+    setIsDeleting(true);
     try {
       await tagDeleteCall(accessToken, tagToDelete);
       NotificationsManager.success("Tag deleted successfully");
@@ -88,9 +97,11 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
     } catch (error) {
       console.error("Error deleting tag:", error);
       NotificationsManager.fromBackend("Error deleting tag: " + error);
+    } finally {
+      setIsDeleting(false);
+      setIsDeleteModalOpen(false);
+      setTagToDelete(null);
     }
-    setIsDeleteModalOpen(false);
-    setTagToDelete(null);
   };
 
   useEffect(() => {
@@ -128,22 +139,18 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
           editTag={editTag}
         />
       ) : (
-        <div className="gap-2 p-8 h-[75vh] w-full mt-2">
-          <div className="flex justify-between mt-2 w-full items-center mb-4">
+        <div className="mt-2 h-[75vh] w-full gap-2 p-8">
+          <div className="mt-2 mb-4 flex w-full items-center justify-between">
             <h1>Tag Management</h1>
             <div className="flex items-center space-x-2">
-              {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-              <Icon
-                icon={RefreshIcon}
-                variant="shadow"
-                size="xs"
-                className="self-center cursor-pointer"
-                onClick={handleRefreshClick}
-              />
+              {lastRefreshed && <p className="text-sm">Last Refreshed: {lastRefreshed}</p>}
+              <Button variant="outline" size="icon-sm" aria-label="Refresh tags" onClick={handleRefreshClick}>
+                <RefreshCw />
+              </Button>
             </div>
           </div>
 
-          <Text className="mb-4">
+          <div className="mb-4 text-sm">
             Click on a tag name to view and edit its details.
             <p>
               You can use tags to restrict the usage of certain LLMs based on tags passed in the request. Read more
@@ -153,16 +160,17 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
               </a>
               .
             </p>
-          </Text>
+          </div>
 
           <Button className="mb-4" onClick={() => setIsCreateModalVisible(true)}>
             + Create New Tag
           </Button>
 
-          <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
-            <Col numColSpan={1}>
+          <div className="mt-2 grid h-[75vh] w-full grid-cols-1 gap-2 pt-2 pb-2">
+            <div>
               <TagTable
                 data={tags}
+                isLoading={isLoadingTags}
                 onEdit={(tag) => {
                   setSelectedTagId(tag.name);
                   setEditTag(true);
@@ -170,8 +178,8 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
                 onDelete={handleDelete}
                 onSelectTag={setSelectedTagId}
               />
-            </Col>
-          </Grid>
+            </div>
+          </div>
 
           {/* Create Tag Modal */}
           <CreateTagModal
@@ -182,40 +190,19 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
           />
 
           {/* Delete Confirmation Modal */}
-          {isDeleteModalOpen && (
-            <div className="fixed z-10 inset-0 overflow-y-auto">
-              <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-                <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-                  <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-                </div>
-                <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-                  <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                    <div className="sm:flex sm:items-start">
-                      <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                        <h3 className="text-lg leading-6 font-medium text-gray-900">Delete Tag</h3>
-                        <div className="mt-2">
-                          <p className="text-sm text-gray-500">Are you sure you want to delete this tag?</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                    <Button onClick={confirmDelete} color="red" className="ml-2">
-                      Delete
-                    </Button>
-                    <Button
-                      onClick={() => {
-                        setIsDeleteModalOpen(false);
-                        setTagToDelete(null);
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+          <DeleteResourceModal
+            isOpen={isDeleteModalOpen}
+            title="Delete Tag"
+            message="Are you sure you want to delete this tag? This action cannot be undone."
+            resourceInformationTitle="Tag Information"
+            resourceInformation={[{ label: "Tag Name", value: tagToDelete, code: true }]}
+            onCancel={() => {
+              setIsDeleteModalOpen(false);
+              setTagToDelete(null);
+            }}
+            onOk={confirmDelete}
+            confirmLoading={isDeleting}
+          />
         </div>
       )}
     </div>

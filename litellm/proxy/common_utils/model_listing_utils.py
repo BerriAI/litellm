@@ -53,7 +53,7 @@ class TeamModelNameTranslator:
 
     @staticmethod
     def build_internal_to_public_map(
-        llm_router: "Router | None",
+        llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> dict[str, str]:
         """Internal team routing key -> public `team_public_model_name`.
@@ -92,7 +92,7 @@ class TeamModelNameTranslator:
     @staticmethod
     def listing_entries(
         model_names: list[str],
-        llm_router: "Router | None",
+        llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> list[tuple[str, str]]:
         """`(response_id, metadata_lookup_id)` for each listed model, de-duplicated
@@ -114,7 +114,7 @@ class TeamModelNameTranslator:
     @staticmethod
     def translate_listing(
         model_names: list[str],
-        llm_router: "Router | None",
+        llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> list[str]:
         """Public-name view of `model_names` (the `response_id` of each listing
@@ -129,7 +129,7 @@ class TeamModelNameTranslator:
     def resolve_public_name(
         model_id: str,
         available_models: list[str],
-        llm_router: "Router | None",
+        llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> str:
         """Resolve a public team name back to the internal routing key the router

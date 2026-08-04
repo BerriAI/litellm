@@ -3,14 +3,12 @@
 import { getProxyBaseUrl } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
-import { buildLoginUrlWithReturn, storeReturnUrl } from "@/utils/returnUrlUtils";
-import { useRouter } from "next/navigation";
+import { buildLoginUrlWithReturn, getLoginUrl, storeReturnUrl } from "@/utils/returnUrlUtils";
 import { useCallback, useEffect, useMemo } from "react";
 import { formatUserRole } from "@/utils/roles";
 import { useUIConfig } from "./uiConfig/useUIConfig";
 
 const useAuthorized = () => {
-  const router = useRouter();
   const { data: uiConfig, isLoading: isUIConfigLoading } = useUIConfig();
 
   const token = typeof document !== "undefined" ? getCookie("token") : null;
@@ -23,10 +21,10 @@ const useAuthorized = () => {
   // Helper function to redirect to login while preserving the current URL
   const redirectToLogin = useCallback(() => {
     storeReturnUrl();
-    const baseLoginUrl = `${getProxyBaseUrl()}/ui/login`;
+    const baseLoginUrl = getLoginUrl(getProxyBaseUrl());
     const loginUrlWithReturn = buildLoginUrlWithReturn(baseLoginUrl);
-    router.replace(loginUrlWithReturn);
-  }, [router]);
+    window.location.replace(loginUrlWithReturn);
+  }, []);
 
   // Single useEffect for all redirect logic
   useEffect(() => {

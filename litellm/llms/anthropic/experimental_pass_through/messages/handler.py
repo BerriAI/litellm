@@ -7,16 +7,10 @@
 
 import asyncio
 import contextvars
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from functools import partial
 from typing import (
     Any,
-    AsyncIterator,
-    Coroutine,
-    Dict,
-    Iterator,
-    List,
-    Optional,
-    Union,
     cast,
 )
 
@@ -36,12 +30,12 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager, client
-
-from ..utils import is_reasoning_auto_summary_enabled
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
+from ..utils import is_reasoning_auto_summary_enabled
 from .interceptors import get_messages_interceptors
 from .utils import AnthropicMessagesRequestUtils, mock_response
 
@@ -50,7 +44,7 @@ from .utils import AnthropicMessagesRequestUtils, mock_response
 _RESPONSES_API_PROVIDERS = frozenset({"openai"})
 
 
-def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
+def _should_route_to_responses_api(custom_llm_provider: str | None) -> bool:
     """Return True when the provider should use the Responses API path.
 
     Set ``litellm.use_chat_completions_url_for_anthropic_messages = True`` to
@@ -82,12 +76,12 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 
 async def _execute_pre_request_hooks(
     model: str,
-    messages: List[Dict],
-    tools: Optional[List[Dict]],
-    stream: Optional[bool],
-    custom_llm_provider: Optional[str],
+    messages: list[dict],
+    tools: list[dict] | None,
+    stream: bool | None,
+    custom_llm_provider: str | None,
     **kwargs,
-) -> Dict:
+) -> dict:
     """
     Execute pre-request hooks from CustomLogger callbacks.
 
@@ -144,12 +138,12 @@ async def _execute_pre_request_hooks(
 
 async def _try_websearch_short_circuit(
     model: str,
-    messages: List[Dict],
-    tools: Optional[List[Dict]],
-    custom_llm_provider: Optional[str],
-    stream: Optional[bool],
-    kwargs: Optional[dict] = None,
-) -> Optional[Union[AnthropicMessagesResponse, AsyncIterator]]:
+    messages: list[dict],
+    tools: list[dict] | None,
+    custom_llm_provider: str | None,
+    stream: bool | None,
+    kwargs: dict | None = None,
+) -> AnthropicMessagesResponse | AsyncIterator | None:
     """
     Attempt to short-circuit a web-search-only request.
 
@@ -196,24 +190,24 @@ async def _try_websearch_short_circuit(
 @client
 async def anthropic_messages(
     max_tokens: int,
-    messages: List[Dict],
+    messages: list[dict],
     model: str,
-    metadata: Optional[Dict] = None,
-    stop_sequences: Optional[List[str]] = None,
-    stream: Optional[bool] = False,
-    system: Optional[Union[str, list]] = None,
-    temperature: Optional[float] = None,
-    thinking: Optional[Dict] = None,
-    tool_choice: Optional[Dict] = None,
-    tools: Optional[List[Dict]] = None,
-    top_k: Optional[int] = None,
-    top_p: Optional[float] = None,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    client: Optional[AsyncHTTPHandler] = None,
-    custom_llm_provider: Optional[str] = None,
+    metadata: dict | None = None,
+    stop_sequences: list[str] | None = None,
+    stream: bool | None = False,
+    system: str | list | None = None,
+    temperature: float | None = None,
+    thinking: dict | None = None,
+    tool_choice: dict | None = None,
+    tools: list[dict] | None = None,
+    top_k: int | None = None,
+    top_p: float | None = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    client: AsyncHTTPHandler | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[AnthropicMessagesResponse, Iterator[bytes], AsyncIterator[Any]]:
+) -> AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[Any]:
     """
     Async: Make llm api request in Anthropic /messages API spec.
 
@@ -236,7 +230,9 @@ async def anthropic_messages(
         AnthropicCacheControlHook,
     )
 
-    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(messages, system, kwargs)
+    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools
+    )
 
     original_stream = stream or kwargs.get("_websearch_interception_converted_stream", False)
 
@@ -365,7 +361,7 @@ async def anthropic_messages(
     return response
 
 
-def validate_anthropic_api_metadata(metadata: Optional[Dict] = None) -> Optional[Dict]:
+def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict | None:
     """
     Validate Anthropic API metadata - This is done to ensure only allowed `metadata` fields are passed to Anthropic API
 
@@ -379,30 +375,30 @@ def validate_anthropic_api_metadata(metadata: Optional[Dict] = None) -> Optional
 
 def anthropic_messages_handler(
     max_tokens: int,
-    messages: List[Dict],
+    messages: list[dict],
     model: str,
-    metadata: Optional[Dict] = None,
-    stop_sequences: Optional[List[str]] = None,
-    stream: Optional[bool] = False,
-    system: Optional[Union[str, list]] = None,
-    temperature: Optional[float] = None,
-    thinking: Optional[Dict] = None,
-    tool_choice: Optional[Dict] = None,
-    tools: Optional[List[Dict]] = None,
-    top_k: Optional[int] = None,
-    top_p: Optional[float] = None,
-    container: Optional[Dict] = None,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    client: Optional[AsyncHTTPHandler] = None,
-    custom_llm_provider: Optional[str] = None,
+    metadata: dict | None = None,
+    stop_sequences: list[str] | None = None,
+    stream: bool | None = False,
+    system: str | list | None = None,
+    temperature: float | None = None,
+    thinking: dict | None = None,
+    tool_choice: dict | None = None,
+    tools: list[dict] | None = None,
+    top_k: int | None = None,
+    top_p: float | None = None,
+    container: dict | None = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    client: AsyncHTTPHandler | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[
-    AnthropicMessagesResponse,
-    Iterator[bytes],
-    AsyncIterator[Any],
-    Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any], Iterator[bytes]]],
-]:
+) -> (
+    AnthropicMessagesResponse
+    | Iterator[bytes]
+    | AsyncIterator[Any]
+    | Coroutine[Any, Any, AnthropicMessagesResponse | AsyncIterator[Any] | Iterator[bytes]]
+):
     """
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
 
@@ -425,7 +421,9 @@ def anthropic_messages_handler(
         AnthropicCacheControlHook,
     )
 
-    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(messages, system, kwargs)
+    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools
+    )
 
     metadata = validate_anthropic_api_metadata(metadata)
 
@@ -463,6 +461,9 @@ def anthropic_messages_handler(
             "model": original_model,
             "custom_llm_provider": custom_llm_provider,
         }
+        litellm_logging_obj.model_call_details.setdefault("litellm_params", {})[CallTypes.aanthropic_messages.value] = (
+            is_async
+        )
 
         # Check if stream was converted for WebSearch interception
         # This is set in the async wrapper above when stream=True is converted to stream=False
@@ -477,7 +478,42 @@ def anthropic_messages_handler(
             mock_response=litellm_params.mock_response,
         )
 
-    anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = None
+    # Expand litellm_proxy MCP references through the MCP gateway before dispatch, so every
+    # downstream path (native passthrough and both bridges) gets real tools rather than a
+    # reference the provider cannot resolve. Popped from kwargs so it never reaches the provider.
+    skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
+    if not skip_mcp_handler and tools:
+        from litellm.llms.anthropic.experimental_pass_through.messages.mcp_handler import (
+            anthropic_messages_with_mcp,
+        )
+        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+            LiteLLM_Proxy_MCP_Handler,
+        )
+
+        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
+            return anthropic_messages_with_mcp(
+                max_tokens=max_tokens,
+                messages=messages,
+                model=model,
+                metadata=metadata,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                container=container,
+                api_key=api_key,
+                api_base=api_base,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                **kwargs,
+            )
+
+    anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None = None
 
     if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
         anthropic_messages_provider_config = ProviderConfigManager.get_provider_anthropic_messages_config(

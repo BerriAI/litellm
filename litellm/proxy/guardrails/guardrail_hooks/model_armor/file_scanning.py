@@ -15,8 +15,9 @@ is false) rather than letting an unscanned document reach the model.
 import base64
 import binascii
 import mimetypes
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Annotated, Literal, Sequence
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
@@ -24,10 +25,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.types.llms.openai import AllMessageValues
 
 MODEL_ARMOR_MAX_FILE_SIZE_BYTES = 4 * 1024 * 1024
-
-# Hard cap on how many attachments a single request may submit to Model Armor, to bound
-# per-request fan-out (latency and quota).
-MAX_FILE_ATTACHMENTS_PER_REQUEST = 10
 
 _REMOTE_URI_SCHEMES = ("gs://", "http://", "https://")
 

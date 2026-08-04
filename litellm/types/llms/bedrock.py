@@ -301,7 +301,7 @@ class BedrockToolSpec(dict):
             "name": name,
             "description": description,
         }
-        if supports_strict_tools and strict is not None:
+        if supports_strict_tools and strict:
             tool_spec["strict"] = strict
 
         super().__init__(toolSpec=tool_spec)
@@ -985,6 +985,11 @@ class BedrockOutputDataConfig(TypedDict):
     s3OutputDataConfig: BedrockS3OutputDataConfig
 
 
+class BedrockTag(TypedDict):
+    key: str
+    value: str
+
+
 class BedrockCreateBatchRequest(TypedDict, total=False):
     """
     Request structure for creating a Bedrock batch inference job.
@@ -999,7 +1004,7 @@ class BedrockCreateBatchRequest(TypedDict, total=False):
     outputDataConfig: BedrockOutputDataConfig
     timeoutDurationInHours: Optional[int]
     clientRequestToken: Optional[str]
-    tags: Optional[List[dict]]
+    tags: Optional[List[BedrockTag]]
 
 
 BedrockBatchJobStatus = Literal["Submitted", "InProgress", "Completed", "Failed", "Stopping", "Stopped"]

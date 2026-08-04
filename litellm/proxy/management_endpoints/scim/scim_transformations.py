@@ -1,5 +1,9 @@
-from typing import List, Union
+from collections.abc import Callable
+from typing import TypeVar
 
+from pydantic import ValidationError
+
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -8,6 +12,8 @@ from litellm.proxy._types import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.scim_v2 import *
+
+T = TypeVar("T")
 
 
 class ScimTransformations:
@@ -18,7 +24,7 @@ class ScimTransformations:
 
     @staticmethod
     async def transform_litellm_user_to_scim_user(
-        user: Union[LiteLLM_UserTable, NewUserResponse],
+        user: LiteLLM_UserTable | NewUserResponse,
     ) -> SCIMUser:
         from litellm.proxy.proxy_server import prisma_client
 
@@ -47,10 +53,18 @@ class ScimTransformations:
         active = True if scim_active is None else bool(scim_active)
 
         schemas = ["urn:ietf:params:scim:schemas:core:2.0:User"]
-        enterprise_user = None
-        if metadata.get(SCIM_ENTERPRISE_METADATA_KEY):
-            enterprise_user = SCIMEnterpriseUser.model_validate(metadata[SCIM_ENTERPRISE_METADATA_KEY])
+        enterprise_user = ScimTransformations._parse_directory_metadata(
+            user, SCIM_ENTERPRISE_METADATA_KEY, SCIMEnterpriseUser.model_validate
+        )
+        if enterprise_user is not None:
             schemas.append(SCIM_ENTERPRISE_USER_SCHEMA)
+
+        entitlements = ScimTransformations._parse_directory_metadata(
+            user, SCIM_ENTITLEMENTS_METADATA_KEY, SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python
+        )
+        roles = ScimTransformations._parse_directory_metadata(
+            user, SCIM_ROLES_METADATA_KEY, SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python
+        )
 
         return SCIMUser(
             schemas=schemas,
@@ -64,6 +78,8 @@ class ScimTransformations:
             emails=emails,
             groups=groups,
             active=active,
+            entitlements=entitlements,
+            roles=roles,
             enterprise_user=enterprise_user,
             meta={
                 "resourceType": "User",
@@ -73,7 +89,32 @@ class ScimTransformations:
         )
 
     @staticmethod
-    def _get_scim_user_name(user: Union[LiteLLM_UserTable, NewUserResponse]) -> str:
+    def _parse_directory_metadata(
+        user: LiteLLM_UserTable | NewUserResponse,
+        key: str,
+        validate: Callable[[object], T],
+    ) -> T | None:
+        """A SCIM directory attribute parsed from user metadata, or None when absent or malformed.
+
+        Metadata is writable outside the SCIM surface, so a malformed value on one user must not
+        fail the whole directory response; the attribute is omitted and the corruption logged.
+        """
+        metadata = user.metadata or {}
+        raw = metadata.get(key)
+        if not raw:
+            return None
+        try:
+            return validate(raw)
+        except ValidationError:
+            verbose_proxy_logger.warning(
+                "Skipping malformed %s metadata on user %s in SCIM response",
+                key,
+                user.user_id,
+            )
+            return None
+
+    @staticmethod
+    def _get_scim_user_name(user: LiteLLM_UserTable | NewUserResponse) -> str:
         """
         SCIM requires a display name with length > 0
 
@@ -84,7 +125,7 @@ class ScimTransformations:
         return ScimTransformations.DEFAULT_SCIM_DISPLAY_NAME
 
     @staticmethod
-    def _get_scim_family_name(user: Union[LiteLLM_UserTable, NewUserResponse]) -> str:
+    def _get_scim_family_name(user: LiteLLM_UserTable | NewUserResponse) -> str:
         """
         SCIM requires a family name with length > 0
         """
@@ -99,7 +140,7 @@ class ScimTransformations:
         return ScimTransformations.DEFAULT_SCIM_FAMILY_NAME
 
     @staticmethod
-    def _get_scim_given_name(user: Union[LiteLLM_UserTable, NewUserResponse]) -> str:
+    def _get_scim_given_name(user: LiteLLM_UserTable | NewUserResponse) -> str:
         """
         SCIM requires a given name with length > 0
         """
@@ -115,7 +156,7 @@ class ScimTransformations:
 
     @staticmethod
     async def transform_litellm_team_to_scim_group(
-        team: Union[LiteLLM_TeamTable, dict],
+        team: LiteLLM_TeamTable | dict,
     ) -> SCIMGroup:
         from litellm.proxy.proxy_server import prisma_client
 
@@ -126,7 +167,7 @@ class ScimTransformations:
             team = LiteLLM_TeamTable(**team)
 
         # Get team members with proper display names
-        scim_members: List[SCIMMember] = []
+        scim_members: list[SCIMMember] = []
         for member in team.members_with_roles or []:
             if isinstance(member, dict):
                 member = Member(**member)
@@ -135,6 +176,7 @@ class ScimTransformations:
                 SCIMMember(
                     value=ScimTransformations._get_scim_member_value(member),
                     display=ScimTransformations._get_scim_member_display(member),
+                    type="User",
                 )
             )
 

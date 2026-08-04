@@ -3,25 +3,22 @@
 import logging
 from typing import (
     Any,
-    List,
-    Optional,
-    Union,
     cast,
 )
 
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 
 def _add_mcp_metadata_to_response(
-    response: Union[ModelResponse, CustomStreamWrapper],
-    openai_tools: Optional[List],
-    tool_calls: Optional[List] = None,
-    tool_results: Optional[List] = None,
+    response: ModelResponse | CustomStreamWrapper,
+    openai_tools: list | None,
+    tool_calls: list | None = None,
+    tool_results: list | None = None,
 ) -> None:
     """
     Add MCP metadata to response's provider_specific_fields.
@@ -80,10 +77,10 @@ def _add_mcp_metadata_to_response(
 
 async def acompletion_with_mcp(
     model: str,
-    messages: List,
-    tools: Optional[List] = None,
+    messages: list,
+    tools: list | None = None,
     **kwargs: Any,
-) -> Union[ModelResponse, CustomStreamWrapper]:
+) -> ModelResponse | CustomStreamWrapper:
     """
     Async completion with MCP integration.
 
@@ -114,20 +111,13 @@ async def acompletion_with_mcp(
             **kwargs,
         )
 
-    # Extract user_api_key_auth from metadata or kwargs
-    user_api_key_auth = kwargs.get("user_api_key_auth") or ((kwargs.get("metadata", {}) or {}).get("user_api_key_auth"))
-    request_tags = LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs)
-
-    # Extract MCP auth headers before fetching tools (needed for dynamic auth)
-    (
-        mcp_auth_header,
-        mcp_server_auth_headers,
-        oauth2_headers,
-        raw_headers,
-    ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
-        secret_fields=kwargs.get("secret_fields"),
-        tools=tools,
-    )
+    context = MCPRequestContext.resolve(kwargs=kwargs, tools=tools)
+    user_api_key_auth = context.user_api_key_auth
+    request_tags = list(context.request_tags) if context.request_tags else None
+    mcp_auth_header = context.mcp_auth_header
+    mcp_server_auth_headers = context.mcp_server_auth_headers
+    oauth2_headers = context.oauth2_headers
+    raw_headers = context.raw_headers
 
     # Process MCP tools (pass auth headers for dynamic auth)
     (
@@ -236,10 +226,10 @@ async def acompletion_with_mcp(
                 self.openai_tools = openai_tools
                 self.base_call_args = base_call_args
                 self.request_tags = request_tags
-                self.collected_chunks: List[ModelResponseStream] = []
-                self.tool_calls: Optional[List] = None
-                self.tool_results: Optional[List] = None
-                self.complete_response: Optional[ModelResponse] = None
+                self.collected_chunks: list[ModelResponseStream] = []
+                self.tool_calls: list | None = None
+                self.tool_results: list | None = None
+                self.complete_response: ModelResponse | None = None
                 self.stream_exhausted = False
                 self.tool_execution_done = False
                 self.follow_up_stream = None
@@ -386,7 +376,7 @@ async def acompletion_with_mcp(
                         chunk = await self.follow_up_iterator.__anext__()
                         from litellm._logging import verbose_logger
 
-                        verbose_logger.debug(f"Follow-up chunk yielded: {chunk}")
+                        verbose_logger.debug("Follow-up chunk yielded: %s", chunk)
                         return chunk
                     except StopAsyncIteration:
                         self.follow_up_exhausted = True
@@ -486,7 +476,7 @@ async def acompletion_with_mcp(
                     from litellm._logging import verbose_logger
 
                     verbose_logger.warning(
-                        f"Follow-up response is not a CustomStreamWrapper: {type(follow_up_response)}"
+                        "Follow-up response is not a CustomStreamWrapper: %s", type(follow_up_response)
                     )
                     self.follow_up_stream = None
 

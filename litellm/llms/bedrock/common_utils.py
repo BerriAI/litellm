@@ -9,16 +9,12 @@ import functools
 import json
 import os
 import re
+from collections.abc import Mapping
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    List,
     Literal,
-    Mapping,
-    Optional,
     TypedDict,
-    Union,
 )
 
 if TYPE_CHECKING:
@@ -49,7 +45,7 @@ class BedrockError(BaseLLMException):
 _get_model_info = None
 
 BedrockOutputConfigEffort = Literal["low", "medium", "high", "max", "xhigh"]
-_BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER: Dict[BedrockOutputConfigEffort, int] = {
+_BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER: dict[BedrockOutputConfigEffort, int] = {
     "low": 0,
     "medium": 1,
     "high": 2,
@@ -75,13 +71,13 @@ def get_cached_model_info():
 
 
 @functools.lru_cache(maxsize=1)
-def _get_local_model_cost_map() -> Dict:
+def _get_local_model_cost_map() -> dict:
     from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
     return GetModelCostMap.load_local_model_cost_map()
 
 
-def pop_bedrock_invoke_output_config_format(request_body: Dict) -> Optional[Dict]:
+def pop_bedrock_invoke_output_config_format(request_body: dict) -> dict | None:
     """
     Remove and return Anthropic's nested ``output_config.format`` field.
 
@@ -102,8 +98,8 @@ def pop_bedrock_invoke_output_config_format(request_body: Dict) -> Optional[Dict
 
 
 def convert_bedrock_invoke_output_format_to_inline_schema(
-    output_format: Dict,
-    request_body: Dict,
+    output_format: dict,
+    request_body: dict,
 ) -> None:
     """
     Embed an Anthropic structured-output schema into the last user message.
@@ -177,7 +173,7 @@ def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
 
     Uses an explicit stack (not recursion) to satisfy recursive-function guards in CI.
     """
-    stack: List[Any] = [schema]
+    stack: list[Any] = [schema]
     seen: set[int] = set()
     while stack:
         node = stack.pop()
@@ -267,7 +263,7 @@ class AmazonBedrockGlobalConfig:
                 optional_params[mapped_params[param]] = value
         return optional_params
 
-    def get_all_regions(self) -> List[str]:
+    def get_all_regions(self) -> list[str]:
         return (
             self.get_us_regions()
             + self.get_eu_regions()
@@ -276,7 +272,7 @@ class AmazonBedrockGlobalConfig:
             + self.get_sa_regions()
         )
 
-    def get_ap_regions(self) -> List[str]:
+    def get_ap_regions(self) -> list[str]:
         """
         Source: https://www.aws-services.info/bedrock.html
         """
@@ -290,10 +286,10 @@ class AmazonBedrockGlobalConfig:
             "ap-southeast-2",  # Asia Pacific (Sydney)
         ]
 
-    def get_sa_regions(self) -> List[str]:
+    def get_sa_regions(self) -> list[str]:
         return ["sa-east-1"]
 
-    def get_eu_regions(self) -> List[str]:
+    def get_eu_regions(self) -> list[str]:
         """
         Source: https://www.aws-services.info/bedrock.html
         """
@@ -308,10 +304,10 @@ class AmazonBedrockGlobalConfig:
             "eu-north-1",  # Europe (Stockholm)
         ]
 
-    def get_ca_regions(self) -> List[str]:
+    def get_ca_regions(self) -> list[str]:
         return ["ca-central-1"]
 
-    def get_us_regions(self) -> List[str]:
+    def get_us_regions(self) -> list[str]:
         """
         Source: https://www.aws-services.info/bedrock.html
         """
@@ -336,7 +332,7 @@ def add_custom_header(headers):
     return callback
 
 
-def _get_bedrock_client_ssl_verify() -> Union[bool, str]:
+def _get_bedrock_client_ssl_verify() -> bool | str:
     """
     Get SSL verification setting for Bedrock client.
 
@@ -352,16 +348,16 @@ def _get_bedrock_client_ssl_verify() -> Union[bool, str]:
 
 def init_bedrock_client(
     region_name=None,
-    aws_access_key_id: Optional[str] = None,
-    aws_secret_access_key: Optional[str] = None,
-    aws_region_name: Optional[str] = None,
-    aws_bedrock_runtime_endpoint: Optional[str] = None,
-    aws_session_name: Optional[str] = None,
-    aws_profile_name: Optional[str] = None,
-    aws_role_name: Optional[str] = None,
-    aws_web_identity_token: Optional[str] = None,
-    extra_headers: Optional[dict] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    aws_access_key_id: str | None = None,
+    aws_secret_access_key: str | None = None,
+    aws_region_name: str | None = None,
+    aws_bedrock_runtime_endpoint: str | None = None,
+    aws_session_name: str | None = None,
+    aws_profile_name: str | None = None,
+    aws_role_name: str | None = None,
+    aws_web_identity_token: str | None = None,
+    extra_headers: dict | None = None,
+    timeout: float | httpx.Timeout | None = None,
 ):
     # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client
     litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
@@ -567,10 +563,10 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
 
 
 # Cache the global regions list at module level
-_BEDROCK_GLOBAL_REGIONS: Optional[List[str]] = None
+_BEDROCK_GLOBAL_REGIONS: list[str] | None = None
 
 
-def _get_all_bedrock_regions() -> List[str]:
+def _get_all_bedrock_regions() -> list[str]:
     """Get all Bedrock regions, cached at module level."""
     global _BEDROCK_GLOBAL_REGIONS
     if _BEDROCK_GLOBAL_REGIONS is None:
@@ -578,7 +574,7 @@ def _get_all_bedrock_regions() -> List[str]:
     return _BEDROCK_GLOBAL_REGIONS
 
 
-def get_bedrock_cross_region_inference_regions() -> List[str]:
+def get_bedrock_cross_region_inference_regions() -> list[str]:
     """Abbreviations of regions AWS Bedrock supports for cross region inference."""
     return ["global", "us", "eu", "apac", "jp", "au", "us-gov"]
 
@@ -627,8 +623,8 @@ MANTLE_MESSAGES_PATH = "/anthropic/v1/messages"
 
 
 def build_mantle_messages_url(
-    api_base: Optional[str],
-    aws_bedrock_runtime_endpoint: Optional[str],
+    api_base: str | None,
+    aws_bedrock_runtime_endpoint: str | None,
     region: str,
 ) -> str:
     """Build the bedrock-mantle Anthropic /messages URL.
@@ -730,7 +726,7 @@ def bedrock_converse_supports_strict_tools(model: str) -> bool:
     return flag if flag is not None else True
 
 
-def _get_bedrock_converse_strict_tools_flag(base_model: str) -> Optional[bool]:
+def _get_bedrock_converse_strict_tools_flag(base_model: str) -> bool | None:
     candidates = dict.fromkeys((base_model, _BEDROCK_MODEL_VERSION_SUFFIX_RE.sub("", base_model)))
     for candidate in candidates:
         with contextlib.suppress(Exception):
@@ -782,7 +778,7 @@ def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) 
 
 def _get_bedrock_output_config_effort_ceiling(
     model: str,
-) -> Optional[BedrockOutputConfigEffort]:
+) -> BedrockOutputConfigEffort | None:
     try:
         model_info = get_cached_model_info()(
             model=model,
@@ -815,14 +811,14 @@ class BedrockModelInfo(BaseLLMModelInfo):
     all_global_regions = global_config.get_all_regions()
 
     @staticmethod
-    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+    def get_api_base(api_base: str | None = None) -> str | None:
         """
         Get the API base for the given model.
         """
         return api_base
 
     @staticmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         """
         Get the API key for the given model.
         """
@@ -832,15 +828,15 @@ class BedrockModelInfo(BaseLLMModelInfo):
         self,
         headers: dict,
         model: str,
-        messages: List["AllMessageValues"],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         return headers
 
-    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         return []
 
     # def get_provider_info(self, model: str) -> Optional[ProviderSpecificModelInfo]:
@@ -859,7 +855,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
 
     #     return overrides if overrides else None
 
-    def get_token_counter(self) -> Optional[BaseTokenCounter]:
+    def get_token_counter(self) -> BaseTokenCounter | None:
         """
         Factory method to create a Bedrock token counter.
 
@@ -884,7 +880,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return get_bedrock_base_model(model)
 
     @staticmethod
-    def _supported_cross_region_inference_region() -> List[str]:
+    def _supported_cross_region_inference_region() -> list[str]:
         """Wrapper for standalone function. See get_bedrock_cross_region_inference_regions()."""
         return get_bedrock_cross_region_inference_regions()
 
@@ -905,7 +901,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Get the bedrock route for the given model.
         """
-        route_mappings: Dict[
+        route_mappings: dict[
             str,
             Literal[
                 "invoke",
@@ -1056,7 +1052,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
     @staticmethod
     def get_bedrock_provider_config_for_messages_api(
         model: str,
-    ) -> Optional[BaseAnthropicMessagesConfig]:
+    ) -> BaseAnthropicMessagesConfig | None:
         """
         Get the bedrock provider config for the given model.
 
@@ -1109,8 +1105,10 @@ def get_bedrock_chat_config(model: str):
     Returns:
         The appropriate Bedrock config class instance
     """
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
     bedrock_route = BedrockModelInfo.get_bedrock_route(model)
-    bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(model=model)
+    bedrock_invoke_provider = BaseAWSLLM.get_bedrock_invoke_provider(model=model)
     base_model = BedrockModelInfo.get_base_model(model)
 
     # Handle explicit routes first
@@ -1246,7 +1244,7 @@ class BedrockEventStreamDecoderBase:
 
         self.parser = EventStreamJSONParser()
 
-    def _parse_message_from_event(self, event) -> Optional[str]:
+    def _parse_message_from_event(self, event) -> str | None:
         response_stream_shape = get_bedrock_response_stream_shape()
         if response_stream_shape is None:
             raise BedrockError(
@@ -1274,7 +1272,7 @@ class BedrockEventStreamDecoderBase:
             return chunk.decode()  # type: ignore[no-any-return]
 
 
-def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
+def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
     """
     Extract anthropic-beta header values and convert them to a list.
     Supports both JSON array format and comma-separated values from user headers.
@@ -1386,8 +1384,7 @@ class CommonBatchFilesUtils:
                 if len(parts) > 1:
                     # Reconstruct model name (everything except the last UUID part and .jsonl)
                     model_name = "-".join(parts[:-1])
-                    if model_name.endswith(".jsonl"):
-                        model_name = model_name[:-6]  # Remove .jsonl
+                    model_name = model_name.removesuffix(".jsonl")  # Remove .jsonl
                     return model_name
         except Exception:
             pass
@@ -1398,7 +1395,7 @@ class CommonBatchFilesUtils:
     def sign_aws_request(
         self,
         service_name: str,
-        data: Union[str, dict, "BedrockCreateBatchRequest"],
+        data: str | dict | BedrockCreateBatchRequest,
         endpoint_url: str,
         optional_params: dict,
         method: str = "POST",
@@ -1521,9 +1518,7 @@ class CommonBatchFilesUtils:
 
         return bucket_name, object_key
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         """
         Get Bedrock-specific error class.
         """

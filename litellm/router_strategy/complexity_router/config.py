@@ -10,7 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from litellm.types.router import AdaptiveRouterWeights
+from litellm.types.router import AdaptiveRouterWeights, RoutingPlugin
 
 
 class ComplexityTier(str, Enum):
@@ -30,6 +30,9 @@ TIER_SEVERITY_ORDER: tuple[ComplexityTier, ...] = (
 )
 
 DEFAULT_TIER_DISTANCE_PENALTY: float = 0.5
+
+DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE: int = 3
+DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS: int = 200
 
 
 class KeywordTierRule(BaseModel):
@@ -161,6 +164,9 @@ DEFAULT_TECHNICAL_KEYWORDS: list[str] = [
     "orchestration",
     # Note: "async", "kubernetes", "docker" are in DEFAULT_CODE_KEYWORDS
 ]
+
+DEFAULT_ESCALATION_KEYWORDS: list[str] = ["LITELLM ESCALATE"]
+
 
 DEFAULT_SIMPLE_KEYWORDS: list[str] = [
     "what is",
@@ -308,6 +314,14 @@ class ComplexityRouterConfig(BaseModel):
         description="Default model to use if tier cannot be determined",
     )
 
+    return_raw_model_name: bool = Field(
+        default=False,
+        description=(
+            "Return the resolved raw model name in the response model field instead of "
+            "the client-requested complexity-router alias"
+        ),
+    )
+
     # Classifier strategy
     classifier_type: Literal["heuristic", "llm"] = Field(
         default="heuristic",
@@ -316,6 +330,45 @@ class ComplexityRouterConfig(BaseModel):
     classifier_llm_config: ClassifierLLMConfig | None = Field(
         default=None,
         description="Configuration for the LLM classifier; required when classifier_type is 'llm'",
+    )
+
+    classifier_context_window_size: int = Field(
+        default=DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+        ge=0,
+        description=(
+            "Number of prior user turns (tool output and harness reminders excluded) to include as context "
+            "in the LLM classifier prompt, so a follow-up like 'now do the same for the streaming path' is "
+            "classified against what it refers to. Counts turns of both roles when "
+            "classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier "
+            "model, which may "
+            "be a different deployment or provider than the routed completion model; that call already "
+            "carries the current user ask and the caller's system prompt in full. Set to 0 to send neither "
+            "prior turns nor any conversation context beyond the current ask. Only applies when "
+            "classifier_type is 'llm'."
+        ),
+    )
+    classifier_context_per_turn_chars: int = Field(
+        default=DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS,
+        gt=0,
+        description=(
+            "Maximum character length for each prior turn's text in the classifier context window. "
+            "Turns exceeding this are truncated. Only applies when classifier_type is 'llm'."
+        ),
+    )
+    classifier_context_include_assistant_turns: bool = Field(
+        default=False,
+        description=(
+            "Include assistant turns in the classifier context window, so difficulty stated by the "
+            "model rather than by the user stays visible: a plan the assistant calls complex, which "
+            "the user approves with 'yes', is classified on the work being approved instead of on the "
+            "word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the "
+            "conversation across both roles rather than the last N user turns, and assistant text is "
+            "sent to the classifier model, which may be a different deployment or provider than the "
+            "routed completion model. Assistant replies share classifier_context_per_turn_chars with "
+            "user turns, so raise it if replies are truncated before the part that carries the "
+            "difficulty. Off by default because enabling it shifts tier decisions, and therefore "
+            "spend, for an already-deployed router. Only applies when classifier_type is 'llm'."
+        ),
     )
 
     adaptive: bool = Field(
@@ -336,6 +389,16 @@ class ComplexityRouterConfig(BaseModel):
         description=(
             "When adaptive=True: 'all' scores every pool model with a tier-distance penalty (soft floors); "
             "'classified_tier' Thompson-samples only inside the classified tier's pool"
+        ),
+    )
+
+    escalation_keywords: list[str] | None = Field(
+        default=None,
+        description=(
+            "Case-sensitive phrases a user can include to force a bump to the next-higher "
+            "complexity tier when they aren't satisfied with results (they can force a stronger "
+            "model, but not choose which one). Defaults to ['LITELLM ESCALATE'] when unset; "
+            "set to an empty list to disable."
         ),
     )
 
@@ -361,7 +424,29 @@ class ComplexityRouterConfig(BaseModel):
         description="Minimum cosine similarity for a semantic keyword match",
     )
 
-    model_config = ConfigDict(extra="allow")  # Allow additional fields
+    # Session affinity: pin the first turn's routed model for the rest of the session
+    session_affinity: bool = Field(
+        default=False,
+        description=(
+            "When True and a session_id is resolvable on the request, pin the model chosen on the "
+            "session's first turn and reuse it for every later turn, skipping re-classification. "
+            "Off by default so every turn is classified on its own merits and routed to the cheapest "
+            "adequate tier. Set True to keep a multi-turn session on one model, which preserves "
+            "provider prompt caches and avoids cross-model conversation-history errors."
+        ),
+    )
+    session_affinity_ttl_seconds: int = Field(
+        default=3600,
+        gt=0,
+        description="TTL for the session affinity pin; refreshed on every cache hit",
+    )
+
+    plugins: list[RoutingPlugin] | None = Field(
+        default=None,
+        description="RoutingPlugin instances that narrow the classified tier's candidate models before selection",
+    )
+
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)  # Allow additional fields
 
     @field_validator("tiers", mode="before")
     @classmethod
@@ -377,6 +462,13 @@ class ComplexityRouterConfig(BaseModel):
             else:
                 coerced[key] = item
         return coerced
+
+    @field_validator("escalation_keywords")
+    @classmethod
+    def _normalize_escalation_keywords(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return [stripped for keyword in value if (stripped := keyword.strip())]
 
     @model_validator(mode="after")
     def _validate_llm_classifier_config(self) -> "ComplexityRouterConfig":
@@ -405,6 +497,15 @@ class ComplexityRouterConfig(BaseModel):
             raise ValueError("embedding_model is required when semantic_keyword_matching is enabled")
         if not self.keyword_tier_rules:
             raise ValueError("keyword_tier_rules must be non-empty when semantic_keyword_matching is enabled")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_plugins_adaptive_combo(self) -> "ComplexityRouterConfig":
+        if self.plugins and self.adaptive:
+            raise ValueError(
+                "plugins and adaptive=True cannot both be set: adaptive's bandit selection doesn't yet "
+                "consume plugin-narrowed candidate pools. Disable adaptive or remove plugins."
+            )
         return self
 
 

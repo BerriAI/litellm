@@ -5,6 +5,7 @@
 # gating CI checks, so a clean run means a green CI lint:
 #   - litellm/ Python staged -> `make lint` (test-linting.yml's lint job)
 #   - tests/e2e Python staged -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
+#                                + raw HTTP client ban (test-code-quality.yml's check_e2e_no_raw_requests)
 #   - dashboard staged        -> prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
 #   - proxy/types staged      -> regenerate dashboard API types and fail on drift (check-ui-api-types.yml)
 #
@@ -110,6 +111,12 @@ fi
 if [ -n "$e2e_py_files" ] && [ -z "$litellm_py_files" ]; then
     echo "pre-commit: type-checking tests/e2e (make lint-e2e-basedpyright)"
     make lint-e2e-basedpyright || { echo "✗ tests/e2e basedpyright failed. Fix the errors above, then re-run make pre-commit." >&2; status=1; }
+fi
+
+if [ -n "$e2e_py_files" ]; then
+    echo "pre-commit: checking tests/e2e raw HTTP client ban (check_e2e_no_raw_requests)"
+    uv run --no-sync python tests/code_coverage_tests/check_e2e_no_raw_requests.py \
+        || { echo "✗ Raw HTTP client import in tests/e2e. Route the call through tests/e2e/e2e_http.py, then re-run make pre-commit." >&2; status=1; }
 fi
 
 if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ]; then

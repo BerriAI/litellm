@@ -2,12 +2,11 @@
 # This file contains the LiteralAILogger class which is used to log steps to the LiteralAI observability platform.
 import asyncio
 import os
-from litellm._uuid import uuid
-from typing import List, Optional
 
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
@@ -95,9 +94,9 @@ class LiteralAILogger(CustomBatchLogger):
             )
 
             if response.status_code >= 300:
-                verbose_logger.error(f"Literal AI Error: {response.status_code} - {response.text}")
+                verbose_logger.error("Literal AI Error: %s - %s", response.status_code, response.text)
             else:
-                verbose_logger.debug(f"Batch of {len(self.log_queue)} runs successfully created")
+                verbose_logger.debug("Batch of %s runs successfully created", len(self.log_queue))
         except Exception:
             verbose_logger.exception("Literal AI Layer Error")
 
@@ -153,16 +152,16 @@ class LiteralAILogger(CustomBatchLogger):
                 headers=self.headers,
             )
             if response.status_code >= 300:
-                verbose_logger.error(f"Literal AI Error: {response.status_code} - {response.text}")
+                verbose_logger.error("Literal AI Error: %s - %s", response.status_code, response.text)
             else:
-                verbose_logger.debug(f"Batch of {len(self.log_queue)} runs successfully created")
+                verbose_logger.debug("Batch of %s runs successfully created", len(self.log_queue))
         except httpx.HTTPStatusError as e:
-            verbose_logger.exception(f"Literal AI HTTP Error: {e.response.status_code} - {e.response.text}")
+            verbose_logger.exception("Literal AI HTTP Error: %s - %s", e.response.status_code, e.response.text)
         except Exception:
             verbose_logger.exception("Literal AI Layer Error")
 
     def _prepare_log_data(self, kwargs, response_obj, start_time, end_time) -> dict:
-        logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
+        logging_payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
 
         if logging_payload is None:
             raise ValueError("standard_logging_object not found in kwargs")
@@ -172,7 +171,7 @@ class LiteralAILogger(CustomBatchLogger):
         settings = logging_payload["model_parameters"]
         messages = logging_payload["messages"]
         response = logging_payload["response"]
-        choices: List = []
+        choices: list = []
         if isinstance(response, dict) and "choices" in response:
             choices = response["choices"]
         message_completion = choices[0]["message"] if choices else None

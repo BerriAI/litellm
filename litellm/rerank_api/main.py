@@ -1,7 +1,8 @@
 import asyncio
 import contextvars
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Literal, Union
+from typing import Any, Literal
 
 import litellm
 from litellm._logging import verbose_logger
@@ -29,16 +30,16 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 async def arerank(
     model: str,
     query: str,
-    documents: List[Union[str, Dict[str, Any]]],
+    documents: list[str | dict[str, Any]],
     custom_llm_provider: (
         Literal["cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx"] | None
     ) = None,
     top_n: int | None = None,
-    rank_fields: List[str] | None = None,
+    rank_fields: list[str] | None = None,
     return_documents: bool | None = None,
     max_chunks_per_doc: int | None = None,
     **kwargs,
-) -> Union[RerankResponse, Coroutine[Any, Any, RerankResponse]]:
+) -> RerankResponse | Coroutine[Any, Any, RerankResponse]:
     """
     Async: Reranks a list of documents based on their relevance to the query
     """
@@ -76,7 +77,7 @@ async def arerank(
 def rerank(
     model: str,
     query: str,
-    documents: List[Union[str, Dict[str, Any]]],
+    documents: list[str | dict[str, Any]],
     custom_llm_provider: (
         Literal[
             "cohere",
@@ -93,12 +94,12 @@ def rerank(
         | None
     ) = None,
     top_n: int | None = None,
-    rank_fields: List[str] | None = None,
+    rank_fields: list[str] | None = None,
     return_documents: bool | None = True,
     max_chunks_per_doc: int | None = None,
     max_tokens_per_doc: int | None = None,
     **kwargs,
-) -> Union[RerankResponse, Coroutine[Any, Any, RerankResponse]]:
+) -> RerankResponse | Coroutine[Any, Any, RerankResponse]:
     """
     Reranks a list of documents based on their relevance to the query
     """
@@ -143,7 +144,7 @@ def rerank(
             present_version_params=present_version_params,
         )
 
-        optional_rerank_params: Dict = get_optional_rerank_params(
+        optional_rerank_params: dict = get_optional_rerank_params(
             rerank_provider_config=rerank_provider_config,
             model=model,
             drop_params=kwargs.get("drop_params") or litellm.drop_params or False,
@@ -158,7 +159,7 @@ def rerank(
             instruction=instruction,
             non_default_params=kwargs,
         )
-        verbose_logger.debug(f"optional_rerank_params: {optional_rerank_params}")
+        verbose_logger.debug("optional_rerank_params: %s", optional_rerank_params)
         if isinstance(optional_params.timeout, str):
             optional_params.timeout = float(optional_params.timeout)
 
@@ -533,5 +534,5 @@ def rerank(
         # Placeholder return
         return response
     except Exception as e:
-        verbose_logger.error(f"Error in rerank: {str(e)}")
+        verbose_logger.error("Error in rerank: %s", e)
         raise exception_type(model=model, custom_llm_provider=custom_llm_provider, original_exception=e)

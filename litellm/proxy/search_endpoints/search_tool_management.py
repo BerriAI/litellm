@@ -3,7 +3,7 @@ CRUD ENDPOINTS FOR SEARCH TOOLS
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -29,7 +29,7 @@ router = APIRouter()
 SEARCH_TOOL_REGISTRY = SearchToolRegistry()
 
 
-def _convert_datetime_to_str(value: Union[datetime, str, None]) -> Union[str, None]:
+def _convert_datetime_to_str(value: datetime | str | None) -> str | None:
     """
     Convert datetime object to ISO format string.
 
@@ -47,9 +47,9 @@ def _convert_datetime_to_str(value: Union[datetime, str, None]) -> Union[str, No
 
 
 async def _filter_visible_search_tools(
-    search_tools: List[SearchToolInfoResponse],
+    search_tools: list[SearchToolInfoResponse],
     user_api_key_dict: UserAPIKeyAuth,
-) -> List[SearchToolInfoResponse]:
+) -> list[SearchToolInfoResponse]:
     """
     Drop search tools the caller is not authorized to invoke, applying the same
     key/team object_permission allowlists enforced on /search. Admins see all tools.
@@ -70,7 +70,7 @@ async def _filter_visible_search_tools(
         user_api_key_cache,
     )
 
-    team_object: Optional[LiteLLM_TeamTable] = None
+    team_object: LiteLLM_TeamTable | None = None
     if user_api_key_dict.team_id:
         team_object = await get_team_object(
             team_id=user_api_key_dict.team_id,
@@ -80,7 +80,7 @@ async def _filter_visible_search_tools(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    visible: List[SearchToolInfoResponse] = []
+    visible: list[SearchToolInfoResponse] = []
     for tool in search_tools:
         tool_name = tool.get("search_tool_name")
         if tool_name and await can_user_view_search_tool(
@@ -151,7 +151,7 @@ async def list_search_tools(
 
         db_tool_names = {tool.get("search_tool_name") for tool in search_tools_from_db}
 
-        search_tool_configs: List[SearchToolInfoResponse] = []
+        search_tool_configs: list[SearchToolInfoResponse] = []
 
         config_search_tools = []
 
@@ -161,7 +161,7 @@ async def list_search_tools(
             if parsed_tools:
                 config_search_tools = parsed_tools
         except Exception as e:
-            verbose_proxy_logger.debug(f"Could not get config-defined search tools: {e}")
+            verbose_proxy_logger.debug("Could not get config-defined search tools: %s", e)
 
         for config_search_tool in config_search_tools:
             tool_name = config_search_tool.get("search_tool_name")
@@ -214,7 +214,7 @@ async def list_search_tools(
 
         return ListSearchToolsResponse(search_tools=visible_search_tools)
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting search tools: {e}")
+        verbose_proxy_logger.exception("Error getting search tools: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -278,13 +278,13 @@ async def create_search_tool(request: CreateSearchToolRequest):
         )
 
         verbose_proxy_logger.debug(
-            f"Successfully added search tool '{result.get('search_tool_name')}' to database. "
-            f"Router will be updated by the cron job."
+            "Successfully added search tool '%s' to database. Router will be updated by the cron job.",
+            result.get("search_tool_name"),
         )
 
         return result
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error adding search tool to db: {e}")
+        verbose_proxy_logger.exception("Error adding search tool to db: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -361,15 +361,15 @@ async def update_search_tool(search_tool_id: str, request: UpdateSearchToolReque
         )
 
         verbose_proxy_logger.debug(
-            f"Successfully updated search tool '{result.get('search_tool_name')}' in database. "
-            f"Router will be updated by the cron job."
+            "Successfully updated search tool '%s' in database. Router will be updated by the cron job.",
+            result.get("search_tool_name"),
         )
 
         return result
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating search tool: {e}")
+        verbose_proxy_logger.exception("Error updating search tool: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -425,7 +425,7 @@ async def delete_search_tool(search_tool_id: str):
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error deleting search tool: {e}")
+        verbose_proxy_logger.exception("Error deleting search tool: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -498,12 +498,12 @@ async def get_search_tool_info(search_tool_id: str):
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting search tool info: {e}")
+        verbose_proxy_logger.exception("Error getting search tool info: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 class TestSearchToolConnectionRequest(BaseModel):
-    litellm_params: Dict[str, Any]
+    litellm_params: dict[str, Any]
 
 
 @router.post(
@@ -561,7 +561,7 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
         if not search_provider:
             raise HTTPException(status_code=400, detail="search_provider is required in litellm_params")
 
-        verbose_proxy_logger.debug(f"Testing connection to search provider: {search_provider}")
+        verbose_proxy_logger.debug("Testing connection to search provider: %s", search_provider)
 
         # Make a simple test search query with max_results=1 to minimize cost
         test_query = "test"
@@ -574,7 +574,7 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
             timeout=10.0,  # 10 second timeout for test
         )
 
-        verbose_proxy_logger.debug(f"Successfully tested connection to {search_provider} search provider")
+        verbose_proxy_logger.debug("Successfully tested connection to %s search provider", search_provider)
 
         return {
             "status": "success",
@@ -587,7 +587,7 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
         error_message = str(e)
         error_type = type(e).__name__
 
-        verbose_proxy_logger.exception(f"Failed to connect to search provider: {error_message}")
+        verbose_proxy_logger.exception("Failed to connect to search provider: %s", error_message)
 
         # Return error details in a structured format
         return {
@@ -652,10 +652,10 @@ async def get_available_search_providers():
                         }
                     )
             except Exception as e:
-                verbose_proxy_logger.debug(f"Could not get config for search provider {provider.value}: {e}")
+                verbose_proxy_logger.debug("Could not get config for search provider %s: %s", provider.value, e)
                 continue
 
         return {"providers": available_providers}
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting available search providers: {e}")
+        verbose_proxy_logger.exception("Error getting available search providers: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

@@ -9,7 +9,6 @@ from ...http_client import HTTPClient
 @click.group()
 def encryption():
     """Migrate at-rest credentials to AES-256-GCM and attest residual state."""
-    pass
 
 
 @encryption.command(name="migrate")
@@ -32,7 +31,7 @@ def migrate(ctx: click.Context, check_only: bool, dry_run: bool):
 
     Requires the proxy to be started with
     ``general_settings.encryption_algorithm: aes-256-gcm``. Idempotent and
-    resumable — safe to re-run after an interruption.
+    resumable; safe to re-run after an interruption.
 
     Examples:
         litellm-proxy encryption migrate --check   # attestation scan, no writes

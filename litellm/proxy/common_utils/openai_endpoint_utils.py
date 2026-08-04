@@ -2,8 +2,6 @@
 Contains utils used by OpenAI compatible endpoints
 """
 
-from typing import Optional, Set
-
 from fastapi import Request
 
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
@@ -14,7 +12,7 @@ SENSITIVE_DATA_MASKER = SensitiveDataMasker()
 
 def remove_sensitive_info_from_deployment(
     deployment_dict: dict,
-    excluded_keys: Optional[Set[str]] = None,
+    excluded_keys: set[str] | None = None,
 ) -> dict:
     """
     Removes sensitive information from a deployment dictionary.
@@ -49,7 +47,7 @@ def remove_sensitive_info_from_deployment(
     return deployment_dict
 
 
-async def get_custom_llm_provider_from_request_body(request: Request) -> Optional[str]:
+async def get_custom_llm_provider_from_request_body(request: Request) -> str | None:
     """
     Get the `custom_llm_provider` from the request body
 
@@ -61,7 +59,7 @@ async def get_custom_llm_provider_from_request_body(request: Request) -> Optiona
     return None
 
 
-def get_custom_llm_provider_from_request_query(request: Request) -> Optional[str]:
+def get_custom_llm_provider_from_request_query(request: Request) -> str | None:
     """
     Get the `custom_llm_provider` from the request query parameters
 
@@ -72,7 +70,7 @@ def get_custom_llm_provider_from_request_query(request: Request) -> Optional[str
     return None
 
 
-def get_custom_llm_provider_from_request_headers(request: Request) -> Optional[str]:
+def get_custom_llm_provider_from_request_headers(request: Request) -> str | None:
     """
     Get the `custom_llm_provider` from the request header `custom-llm-provider`
     """

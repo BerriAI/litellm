@@ -10,7 +10,7 @@
 import asyncio
 import copy
 import inspect
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -77,6 +77,22 @@ def _redact_streaming_response(streaming_response):
             streaming_response.reasoning = None
 
 
+def _redact_tool_calls(tool_calls) -> None:
+    """Redact tool call arguments (assistant tool calls carry prompt-derived data)."""
+    if not tool_calls:
+        return
+    for tool_call in tool_calls:
+        function = getattr(tool_call, "function", None)
+        if function is not None and hasattr(function, "arguments"):
+            function.arguments = "redacted-by-litellm"
+
+
+def _redact_function_call(function_call) -> None:
+    """Redact legacy assistant function_call arguments."""
+    if function_call is not None and hasattr(function_call, "arguments"):
+        function_call.arguments = "redacted-by-litellm"
+
+
 def _redact_choice_content(choice):
     """Helper to redact content in a choice (message or delta)."""
     if isinstance(choice, litellm.Choices):
@@ -85,12 +101,16 @@ def _redact_choice_content(choice):
             choice.message.reasoning_content = "redacted-by-litellm"
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
+        _redact_tool_calls(getattr(choice.message, "tool_calls", None))
+        _redact_function_call(getattr(choice.message, "function_call", None))
     elif isinstance(choice, litellm.utils.StreamingChoices):
         choice.delta.content = "redacted-by-litellm"
         if hasattr(choice.delta, "reasoning_content"):
             choice.delta.reasoning_content = "redacted-by-litellm"
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
+        _redact_tool_calls(getattr(choice.delta, "tool_calls", None))
+        _redact_function_call(getattr(choice.delta, "function_call", None))
 
 
 def _redact_responses_api_output(output_items):
@@ -111,6 +131,9 @@ def _redact_responses_api_output(output_items):
                     if hasattr(summary_item, "text"):
                         summary_item.text = "redacted-by-litellm"
 
+        if hasattr(output_item, "type") and output_item.type == "function_call" and hasattr(output_item, "arguments"):
+            output_item.arguments = "redacted-by-litellm"
+
 
 def _redact_responses_api_output_dict(output_items, redacted_str: str):
     """Helper to redact ResponsesAPIResponse output items in dict form."""
@@ -130,6 +153,9 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
             for summary_item in output_item["summary"]:
                 if isinstance(summary_item, dict) and "text" in summary_item:
                     summary_item["text"] = redacted_str
+
+        if output_item.get("type") == "function_call" and "arguments" in output_item:
+            output_item["arguments"] = redacted_str
 
 
 def _redact_standard_logging_object(model_call_details: dict):
@@ -162,6 +188,19 @@ def _redact_standard_logging_object(model_call_details: dict):
             standard_logging_object["response"] = {"text": redacted_str}
 
 
+def _redact_tool_calls_dict(message: dict, redacted_str: str) -> None:
+    """Redact tool call / function_call arguments in a dict-form message or delta."""
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for tool_call in tool_calls:
+            if isinstance(tool_call, dict) and isinstance(tool_call.get("function"), dict):
+                tool_call["function"]["arguments"] = redacted_str
+
+    function_call = message.get("function_call")
+    if isinstance(function_call, dict) and "arguments" in function_call:
+        function_call["arguments"] = redacted_str
+
+
 def _redact_model_response_dict_choices(choices, redacted_str: str):
     for choice in choices:
         if isinstance(choice, dict):
@@ -173,6 +212,7 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["message"]["thinking_blocks"] = None
                 if "audio" in choice["message"]:
                     choice["message"]["audio"] = None
+                _redact_tool_calls_dict(choice["message"], redacted_str)
             elif "delta" in choice and isinstance(choice["delta"], dict):
                 choice["delta"]["content"] = redacted_str
                 if "reasoning_content" in choice["delta"]:
@@ -181,6 +221,7 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["delta"]["thinking_blocks"] = None
                 if "audio" in choice["delta"]:
                     choice["delta"]["audio"] = None
+                _redact_tool_calls_dict(choice["delta"], redacted_str)
         else:
             _redact_choice_content(choice)
 
@@ -297,7 +338,7 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
     return litellm.turn_off_message_logging is True
 
 
-def redact_message_input_output_from_logging(model_call_details: dict, result, input: Optional[Any] = None) -> Any:
+def redact_message_input_output_from_logging(model_call_details: dict, result, input: Any | None = None) -> Any:
     """
     Removes messages, prompts, input, response from logging. This modifies the data in-place
     only redacts when litellm.turn_off_message_logging == True
@@ -309,13 +350,13 @@ def redact_message_input_output_from_logging(model_call_details: dict, result, i
 
 def _get_turn_off_message_logging_from_dynamic_params(
     model_call_details: dict,
-) -> Optional[bool]:
+) -> bool | None:
     """
     gets the value of `turn_off_message_logging` from the dynamic params, if it exists.
 
     handles boolean and string values of `turn_off_message_logging`
     """
-    standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = model_call_details.get(
+    standard_callback_dynamic_params: StandardCallbackDynamicParams | None = model_call_details.get(
         "standard_callback_dynamic_params", None
     )
     if standard_callback_dynamic_params:
