@@ -407,7 +407,9 @@ async def test_get_user_groups_uses_default_graph_endpoint(monkeypatch):
         mock_client.return_value = MagicMock()
         mock_client.return_value.get = mock_get
 
-        await MicrosoftSSOHandler.get_user_groups_from_graph_api(access_token="mock_token")
+        await MicrosoftSSOHandler.get_user_groups_from_graph_api(
+            access_token="mock_token"
+        )
 
     assert requested_urls == ["https://graph.microsoft.com/v1.0/me/memberOf"]
 
@@ -430,13 +432,17 @@ async def test_get_user_groups_uses_configured_graph_endpoint(monkeypatch):
         mock_client.return_value = MagicMock()
         mock_client.return_value.get = mock_get
 
-        await MicrosoftSSOHandler.get_user_groups_from_graph_api(access_token="mock_token")
+        await MicrosoftSSOHandler.get_user_groups_from_graph_api(
+            access_token="mock_token"
+        )
 
     assert requested_urls == ["https://graph.microsoft.us/v1.0/me/memberOf"]
 
 
 @pytest.mark.asyncio
-async def test_get_group_ids_from_service_principal_uses_configured_graph_endpoint(monkeypatch):
+async def test_get_group_ids_from_service_principal_uses_configured_graph_endpoint(
+    monkeypatch,
+):
     monkeypatch.setenv("MICROSOFT_GRAPH_ENDPOINT", "https://graph.microsoft.us/v1.0")
 
     requested_urls: list[str] = []
@@ -610,11 +616,15 @@ async def test_default_team_params(team_params):
 @pytest.mark.parametrize(
     "team_params",
     [
-        DefaultTeamSSOParams(max_budget=10, budget_duration="1d", organization_id="default-org"),
+        DefaultTeamSSOParams(
+            max_budget=10, budget_duration="1d", organization_id="default-org"
+        ),
         {"max_budget": 10, "budget_duration": "1d", "organization_id": "default-org"},
     ],
 )
-async def test_default_team_params_organization_id_reaches_sso_created_team(team_params):
+async def test_default_team_params_organization_id_reaches_sso_created_team(
+    team_params,
+):
     """The SSO auto-team path builds NewTeamRequest straight from default_team_params,
     so a default organization_id must land on the created team row and be validated."""
     from litellm.proxy._types import LiteLLM_OrganizationTable
@@ -635,10 +645,13 @@ async def test_default_team_params_organization_id_reaches_sso_created_team(team
         updated_by="admin",
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
-        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
-        AsyncMock(return_value=mock_org),
-    ) as mock_get_org:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+            AsyncMock(return_value=mock_org),
+        ) as mock_get_org,
+    ):
         team_id = str(uuid.uuid4())
         await MicrosoftSSOHandler.create_litellm_teams_from_service_principal_team_ids(
             service_principal_teams=[
@@ -650,7 +663,9 @@ async def test_default_team_params_organization_id_reaches_sso_created_team(team
         )
 
         mock_prisma.db.litellm_teamtable.create.assert_called_once()
-        create_call_args = mock_prisma.db.litellm_teamtable.create.call_args.kwargs["data"]
+        create_call_args = mock_prisma.db.litellm_teamtable.create.call_args.kwargs[
+            "data"
+        ]
         assert create_call_args["organization_id"] == "default-org"
         assert mock_get_org.call_args.kwargs["org_id"] == "default-org"
 
@@ -2337,8 +2352,10 @@ class TestCLIKeyRegenerationFlow:
 
         redis_store: dict = {}
         redis_cache = MagicMock()
-        redis_cache.set_cache.side_effect = lambda key, value, ttl: redis_store.__setitem__(
-            key, str(value).encode("utf-8")
+        redis_cache.set_cache.side_effect = (
+            lambda key, value, ttl: redis_store.__setitem__(
+                key, str(value).encode("utf-8")
+            )
         )
         redis_cache.get_cache.side_effect = lambda key: RedisCache._get_cache_logic(
             MagicMock(), redis_store.get(key)
@@ -2350,8 +2367,13 @@ class TestCLIKeyRegenerationFlow:
         flow = _get_cli_sso_flow_or_raise(login_id=login_id, cache=cache)
 
         assert flow["sso_complete"] is True
-        assert flow["session_data"]["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
-        assert flow["session_data"]["team_details"] == [{"team_id": "team-1", "team_alias": "alias"}]
+        assert (
+            flow["session_data"]["user_role"]
+            == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+        )
+        assert flow["session_data"]["team_details"] == [
+            {"team_id": "team-1", "team_alias": "alias"}
+        ]
 
     @pytest.mark.asyncio
     async def test_cli_sso_start_creates_bound_flow(self):
@@ -3288,7 +3310,9 @@ class TestCLIKeyRegenerationFlow:
         assert mock_get_jwt.call_args.kwargs["max_budget"] is None
 
     @pytest.mark.asyncio
-    async def test_cli_poll_key_does_not_cap_session_even_without_user_or_team_budget(self):
+    async def test_cli_poll_key_does_not_cap_session_even_without_user_or_team_budget(
+        self,
+    ):
         """Regression: a CLI session token must not inherit the UI chat-pane budget
         (max_ui_session_budget). Even when the user and team have no budget of their
         own, the minted token carries max_budget=None and is governed only by the
@@ -3835,6 +3859,76 @@ async def test_get_ui_settings_includes_api_doc_base_url():
     ):
         response = await get_ui_settings(mock_request)
         assert response["LITELLM_UI_API_DOC_BASE_URL"] == "https://custom.docs"
+
+
+class TestMicrosoftDirectorySearchConfiguredSafe:
+    """_is_microsoft_directory_search_configured_safe() must never let a
+    secret manager failure break /sso/get_ui_settings for every user."""
+
+    def test_returns_true_when_configured(self, mocker):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _is_microsoft_directory_search_configured_safe,
+        )
+
+        mocker.patch(
+            "litellm.proxy.management_endpoints.ui_sso.is_microsoft_directory_search_configured",
+            return_value=True,
+        )
+        assert _is_microsoft_directory_search_configured_safe() is True
+
+    def test_returns_false_when_not_configured(self, mocker):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _is_microsoft_directory_search_configured_safe,
+        )
+
+        mocker.patch(
+            "litellm.proxy.management_endpoints.ui_sso.is_microsoft_directory_search_configured",
+            return_value=False,
+        )
+        assert _is_microsoft_directory_search_configured_safe() is False
+
+    def test_swallows_exception_and_returns_false(self, mocker):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _is_microsoft_directory_search_configured_safe,
+        )
+
+        mocker.patch(
+            "litellm.proxy.management_endpoints.ui_sso.is_microsoft_directory_search_configured",
+            side_effect=Exception("secret manager unreachable"),
+        )
+        assert _is_microsoft_directory_search_configured_safe() is False
+
+    @pytest.mark.asyncio
+    async def test_get_ui_settings_survives_directory_search_config_failure(
+        self, mocker
+    ):
+        """A secret manager blip resolving the directory-search flag must not
+        break the rest of /sso/get_ui_settings."""
+        from fastapi import Request
+
+        from litellm.proxy.management_endpoints.ui_sso import get_ui_settings
+
+        mocker.patch(
+            "litellm.proxy.management_endpoints.ui_sso.is_microsoft_directory_search_configured",
+            side_effect=Exception("secret manager unreachable"),
+        )
+
+        mock_request = Request(
+            scope={
+                "type": "http",
+                "headers": [],
+                "method": "GET",
+                "scheme": "http",
+                "server": ("testserver", 80),
+                "path": "/sso/get/ui_settings",
+                "query_string": b"",
+            }
+        )
+
+        response = await get_ui_settings(mock_request)
+
+        assert response["MICROSOFT_DIRECTORY_SEARCH_ENABLED"] is False
+        assert "PROXY_BASE_URL" in response
 
 
 class TestGenericResponseConvertorNestedAttributes:
@@ -7487,16 +7581,19 @@ async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
 
     request_double = SimpleNamespace(cookies={}, headers={}, stream=_stream)
 
-    with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}), patch(
-        "litellm.proxy.proxy_server.premium_user", False
-    ), patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
-        "litellm.proxy.proxy_server.master_key", "sk-1234"
-    ), patch(
-        "litellm.proxy.management_endpoints.sso.saml_sso.SAMLAuthHandler.handle_acs",
-        new=_fake_handle_acs,
-    ), patch(
-        "litellm.repositories.user_repository.UserRepository.count_billable_users",
-        new=AsyncMock(side_effect=_fake_count_billable_users),
+    with (
+        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch(
+            "litellm.proxy.management_endpoints.sso.saml_sso.SAMLAuthHandler.handle_acs",
+            new=_fake_handle_acs,
+        ),
+        patch(
+            "litellm.repositories.user_repository.UserRepository.count_billable_users",
+            new=AsyncMock(side_effect=_fake_count_billable_users),
+        ),
     ):
         with pytest.raises(ProxyException) as exc:
             await saml_callback(request_double)
@@ -7543,7 +7640,11 @@ async def test_cli_poll_key_tolerates_missing_user_row():
         ),
         patch(
             "litellm.proxy.auth.auth_checks.get_user_object",
-            new=AsyncMock(side_effect=ValueError("User doesn't exist in db. 'user_id'=just-created-user")),
+            new=AsyncMock(
+                side_effect=ValueError(
+                    "User doesn't exist in db. 'user_id'=just-created-user"
+                )
+            ),
         ),
     ):
         result = await cli_poll_key(
@@ -7573,7 +7674,10 @@ async def test_auth_callback_surfaces_oauth_error_with_description():
     from litellm.proxy.management_endpoints.ui_sso import auth_callback
 
     mock_request = _make_sso_callback_request(
-        {"error": "access_denied", "error_description": "User is not assigned to the client application"}
+        {
+            "error": "access_denied",
+            "error_description": "User is not assigned to the client application",
+        }
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -7581,7 +7685,9 @@ async def test_auth_callback_surfaces_oauth_error_with_description():
 
     assert exc_info.value.status_code == 401
     assert "access_denied" in str(exc_info.value.detail)
-    assert "User is not assigned to the client application" in str(exc_info.value.detail)
+    assert "User is not assigned to the client application" in str(
+        exc_info.value.detail
+    )
 
 
 @pytest.mark.asyncio
@@ -7764,7 +7870,9 @@ async def test_redirect_from_openid_persists_assertion_under_canonical_user_id()
 
     retain_mock = AsyncMock()
     with (
-        patch("litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()),
+        patch(
+            "litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()
+        ),
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.premium_user", False),
@@ -7885,15 +7993,24 @@ class TestSameOriginReturnPath:
     browser off the gateway origin."""
 
     def test_accepts_relative_paths(self):
-        from litellm.proxy.management_endpoints.ui_sso import _is_same_origin_return_path
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _is_same_origin_return_path,
+        )
 
-        assert _is_same_origin_return_path("/authorize?client_id=llm_dcrc_x&state=s") is True
+        assert (
+            _is_same_origin_return_path("/authorize?client_id=llm_dcrc_x&state=s")
+            is True
+        )
         assert _is_same_origin_return_path("/some_server/authorize") is True
 
     def test_rejects_absolute_protocol_relative_and_backslash_paths(self):
-        from litellm.proxy.management_endpoints.ui_sso import _is_same_origin_return_path
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _is_same_origin_return_path,
+        )
 
-        assert _is_same_origin_return_path("https://evil.example.com/authorize") is False
+        assert (
+            _is_same_origin_return_path("https://evil.example.com/authorize") is False
+        )
         assert _is_same_origin_return_path("//evil.example.com/authorize") is False
         assert _is_same_origin_return_path("/\\evil.example.com") is False
         assert _is_same_origin_return_path("javascript:alert(1)") is False
@@ -7904,7 +8021,8 @@ class TestPersistReturnToCookieSharedHelper:
     """The single shared return_to helper used by EVERY sign-in branch (SSO / Okta / generic AND the
     username/password form). It must be best-effort and NEVER raise — a bad return_to can never block
     sign-in. Regression: the password form previously 400'd because it called _validate_return_to
-    directly (which raises for a non-matching absolute return_to when control_plane_url is set)."""
+    directly (which raises for a non-matching absolute return_to when control_plane_url is set).
+    """
 
     @staticmethod
     def _cookie(resp) -> str:
@@ -7920,7 +8038,9 @@ class TestPersistReturnToCookieSharedHelper:
         _persist_return_to_cookie(resp, "/mcp/authorize?client_id=llm_dcrc_abc")
         assert "litellm_cp_return_to=" in self._cookie(resp)
 
-    def test_bad_absolute_with_control_plane_configured_does_not_raise_and_is_not_stored(self, monkeypatch):
+    def test_bad_absolute_with_control_plane_configured_does_not_raise_and_is_not_stored(
+        self, monkeypatch
+    ):
         """THE regression: a non-matching absolute return_to with control_plane_url set must NOT raise
         (it did, blocking the login form) and must NOT be stored — sign-in proceeds."""
         from fastapi import Response
@@ -7928,10 +8048,13 @@ class TestPersistReturnToCookieSharedHelper:
         from litellm.proxy.management_endpoints.ui_sso import _persist_return_to_cookie
 
         monkeypatch.setattr(
-            "litellm.proxy.proxy_server.general_settings", {"control_plane_url": "https://cp.example.com"}
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
         )
         resp = Response()
-        _persist_return_to_cookie(resp, "https://evil.example.com/steal")  # must not raise
+        _persist_return_to_cookie(
+            resp, "https://evil.example.com/steal"
+        )  # must not raise
         assert "litellm_cp_return_to=" not in self._cookie(resp)
 
     def test_none_return_to_is_a_noop(self):
@@ -7949,7 +8072,8 @@ class TestPersistReturnToCookieSharedHelper:
         from litellm.proxy.management_endpoints.ui_sso import _persist_return_to_cookie
 
         monkeypatch.setattr(
-            "litellm.proxy.proxy_server.general_settings", {"control_plane_url": "https://cp.example.com"}
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
         )
         resp = Response()
         _persist_return_to_cookie(resp, "https://cp.example.com/ui?page=models")

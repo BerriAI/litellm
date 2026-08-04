@@ -21,8 +21,10 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     LiteLLM_UserTableWithKeyCount,
+    MicrosoftDirectoryUser,
     _resolve_user_email_metadata,
     _update_internal_user_params,
+    directory_user_search,
     get_user_key_counts,
     get_users,
     new_user,
@@ -31,6 +33,224 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 from litellm.proxy.proxy_server import app
 
 client = TestClient(app)
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_returns_microsoft_directory_users(mocker):
+    async def mock_search(query: str):
+        assert query == "alice"
+        return [
+            MicrosoftDirectoryUser(
+                id="aad-user-id",
+                display_name="Alice Example",
+                email="alice@example.com",
+            )
+        ]
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.is_microsoft_directory_search_configured",
+        return_value=True,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users",
+        mock_search,
+    )
+
+    response = await directory_user_search(
+        query=" alice ",
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    assert response == [
+        MicrosoftDirectoryUser(
+            id="aad-user-id",
+            display_name="Alice Example",
+            email="alice@example.com",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_requires_admin_view(mocker):
+    mock_search = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users"
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await directory_user_search(
+            query="alice",
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="user", user_role=LitellmUserRoles.INTERNAL_USER
+            ),
+        )
+
+    assert exc_info.value.code == 403 or exc_info.value.code == "403"
+    mock_search.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_ignores_short_queries(mocker):
+    mock_search = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users"
+    )
+
+    response = await directory_user_search(
+        query="a",
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    assert response == []
+    mock_search.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_allows_admin_view_only(mocker):
+    """PROXY_ADMIN_VIEW_ONLY should be allowed - _user_has_admin_view grants
+    both PROXY_ADMIN and PROXY_ADMIN_VIEW_ONLY read access."""
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.is_microsoft_directory_search_configured",
+        return_value=True,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users",
+        return_value=[],
+    )
+
+    response = await directory_user_search(
+        query="alice",
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+        ),
+    )
+
+    assert response == []
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_exact_min_length_proceeds(mocker):
+    """A query of exactly MICROSOFT_DIRECTORY_SEARCH_MIN_QUERY_LENGTH should
+    proceed to search, not short-circuit."""
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.is_microsoft_directory_search_configured",
+        return_value=True,
+    )
+    mock_search = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users",
+        return_value=[],
+    )
+
+    await directory_user_search(
+        query="al",
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    mock_search.assert_called_once_with("al")
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_whitespace_padded_short_query_is_ignored(mocker):
+    """A query that trims below the length threshold should short-circuit,
+    even if its raw (untrimmed) length would have passed."""
+    mock_search = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users"
+    )
+
+    response = await directory_user_search(
+        query="  a  ",
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    assert response == []
+    mock_search.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_returns_404_when_not_configured(mocker):
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.is_microsoft_directory_search_configured",
+        return_value=False,
+    )
+    mock_search = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users"
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await directory_user_search(
+            query="alice",
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+            ),
+        )
+
+    assert exc_info.value.code == 404 or exc_info.value.code == "404"
+    mock_search.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_http_status_error_maps_to_502(mocker):
+    import httpx
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.is_microsoft_directory_search_configured",
+        return_value=True,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users",
+        side_effect=httpx.HTTPStatusError(
+            "boom", request=mocker.MagicMock(), response=mocker.MagicMock()
+        ),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await directory_user_search(
+            query="alice",
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+            ),
+        )
+
+    assert exc_info.value.code == 502 or exc_info.value.code == "502"
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_does_not_relabel_deliberate_http_exceptions(
+    mocker,
+):
+    """A deliberate HTTPException raised inside _search_microsoft_directory_users
+    (e.g. missing Graph credentials -> 500) must propagate with its original
+    status code, not get relabeled by the generic except-Exception branch."""
+    from fastapi import HTTPException
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.is_microsoft_directory_search_configured",
+        return_value=True,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users",
+        side_effect=HTTPException(
+            status_code=500,
+            detail="Microsoft directory search is missing tenant, client id, or client secret.",
+        ),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await directory_user_search(
+            query="alice",
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+            ),
+        )
+
+    assert exc_info.value.code == 500 or exc_info.value.code == "500"
+    assert "tenant, client id, or client secret" in str(exc_info.value.message)
 
 
 @pytest.mark.asyncio
@@ -1035,9 +1255,7 @@ async def test_new_user_non_admin_permissions_non_empty_rejected(mocker):
         user_role=LitellmUserRoles.INTERNAL_USER,
         permissions={"get_spend_routes": True},
     )
-    caller = UserAPIKeyAuth(
-        user_id="org-admin", user_role=LitellmUserRoles.ORG_ADMIN
-    )
+    caller = UserAPIKeyAuth(user_id="org-admin", user_role=LitellmUserRoles.ORG_ADMIN)
 
     with pytest.raises(ProxyException) as exc_info:
         await new_user(data=data, user_api_key_dict=caller)
@@ -1081,9 +1299,7 @@ async def test_new_user_non_admin_permissions_explicit_empty_rejected(mocker):
         permissions={},
     )
     assert "permissions" in data.model_fields_set
-    caller = UserAPIKeyAuth(
-        user_id="org-admin", user_role=LitellmUserRoles.ORG_ADMIN
-    )
+    caller = UserAPIKeyAuth(user_id="org-admin", user_role=LitellmUserRoles.ORG_ADMIN)
 
     with pytest.raises(ProxyException) as exc_info:
         await new_user(data=data, user_api_key_dict=caller)
@@ -1136,9 +1352,7 @@ async def test_new_user_non_admin_omits_permissions_succeeds(mocker):
         user_role=LitellmUserRoles.INTERNAL_USER,
     )
     assert "permissions" not in data.model_fields_set
-    caller = UserAPIKeyAuth(
-        user_id="org-admin", user_role=LitellmUserRoles.ORG_ADMIN
-    )
+    caller = UserAPIKeyAuth(user_id="org-admin", user_role=LitellmUserRoles.ORG_ADMIN)
 
     result = await new_user(data=data, user_api_key_dict=caller)
     assert result is not None
@@ -1212,14 +1426,10 @@ async def test_update_single_user_non_admin_permissions_rejected(mocker):
         user_id="alice",
         permissions={"get_spend_routes": True},
     )
-    caller = UserAPIKeyAuth(
-        user_id="org-admin", user_role=LitellmUserRoles.ORG_ADMIN
-    )
+    caller = UserAPIKeyAuth(user_id="org-admin", user_role=LitellmUserRoles.ORG_ADMIN)
 
     with pytest.raises(HTTPException) as exc_info:
-        await _update_single_user_helper(
-            user_request=data, user_api_key_dict=caller
-        )
+        await _update_single_user_helper(user_request=data, user_api_key_dict=caller)
     assert exc_info.value.status_code == 403
     assert "permissions" in str(exc_info.value.detail)
 
@@ -1241,14 +1451,10 @@ async def test_update_single_user_non_admin_permissions_explicit_empty_rejected(
 
     data = UpdateUserRequest(user_id="alice", permissions={})
     assert "permissions" in data.model_fields_set
-    caller = UserAPIKeyAuth(
-        user_id="org-admin", user_role=LitellmUserRoles.ORG_ADMIN
-    )
+    caller = UserAPIKeyAuth(user_id="org-admin", user_role=LitellmUserRoles.ORG_ADMIN)
 
     with pytest.raises(HTTPException) as exc_info:
-        await _update_single_user_helper(
-            user_request=data, user_api_key_dict=caller
-        )
+        await _update_single_user_helper(user_request=data, user_api_key_dict=caller)
     assert exc_info.value.status_code == 403
     assert "permissions" in str(exc_info.value.detail)
 
@@ -3572,7 +3778,9 @@ async def test_add_new_user_to_default_team_propagates_max_budget_in_team(mocker
         user_email="jwt-user@example.com",
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
         teams=[
-            NewUserRequestTeam(team_id="budgeted-team", max_budget_in_team=25.0, user_role="admin"),
+            NewUserRequestTeam(
+                team_id="budgeted-team", max_budget_in_team=25.0, user_role="admin"
+            ),
             NewUserRequestTeam(team_id="uncapped-team"),
         ],
         prisma_client=mocker.MagicMock(),
@@ -3657,7 +3865,9 @@ async def test_add_user_to_team_keeps_already_a_member_quiet(mocker, caplog):
     mocker.patch(
         "litellm.proxy.management_endpoints.team_endpoints.team_member_add",
         new_callable=mocker.AsyncMock,
-        side_effect=HTTPException(status_code=400, detail={"error": "User already exists in team"}),
+        side_effect=HTTPException(
+            status_code=400, detail={"error": "User already exists in team"}
+        ),
     )
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
@@ -3686,7 +3896,12 @@ async def test_get_user_info_for_proxy_admin_validates_keys_and_teams():
                 {"team_id": "team-a", "team_alias": "alpha"},
             ],
             "keys": [
-                {"token": "hashed-token-1", "team_id": "team-a", "models": None, "spend": 1.0},
+                {
+                    "token": "hashed-token-1",
+                    "team_id": "team-a",
+                    "models": None,
+                    "spend": 1.0,
+                },
             ],
         }
     ]
@@ -3695,7 +3910,9 @@ async def test_get_user_info_for_proxy_admin_validates_keys_and_teams():
     mock_prisma_client.db.query_raw = AsyncMock(return_value=raw_rows)
 
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-        result = await _get_user_info_for_proxy_admin(user_api_key_dict=UserAPIKeyAuth(user_id=None))
+        result = await _get_user_info_for_proxy_admin(
+            user_api_key_dict=UserAPIKeyAuth(user_id=None)
+        )
 
     assert all(isinstance(team, LiteLLM_TeamTable) for team in result.teams)
     assert [team.team_alias for team in result.teams] == ["alpha", "beta"]
@@ -3767,7 +3984,9 @@ async def test_user_update_persists_mcp_entitlement_and_links_it(mocker):
         ),
     )
 
-    upsert_kwargs = mock_prisma_client.db.litellm_objectpermissiontable.upsert.call_args.kwargs
+    upsert_kwargs = (
+        mock_prisma_client.db.litellm_objectpermissiontable.upsert.call_args.kwargs
+    )
     created = upsert_kwargs["data"]["create"]
     assert created["mcp_servers"] == ["github"]
     assert json.loads(created["mcp_tool_permissions"]) == {"github": ["list_issues"]}
@@ -3983,7 +4202,11 @@ async def test_new_user_persists_the_requested_mcp_entitlement(mocker):
         ),
     )
 
-    created = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+    created = (
+        mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs[
+            "data"
+        ]
+    )
     assert json.loads(created["mcp_tool_permissions"]) == {"github": ["list_issues"]}
     forwarded = mock_generate.call_args.kwargs
     assert forwarded["object_permission_id"] == "perm-created"

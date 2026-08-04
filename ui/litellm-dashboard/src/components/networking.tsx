@@ -885,6 +885,43 @@ export const userCreateCall = async (
   }
 };
 
+export interface DirectoryUser {
+  id: string;
+  display_name?: string | null;
+  email: string;
+}
+
+export const directoryUsersSearchCall = async (
+  accessToken: string,
+  query: string,
+): Promise<DirectoryUser[]> => {
+  try {
+    const params = new URLSearchParams({ query });
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/directory_search?${params.toString()}`
+      : `/user/directory_search?${params.toString()}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return response.json();
+  } catch (error) {
+    console.error("Failed to search directory users:", error);
+    throw error;
+  }
+};
+
 export const keyDeleteCall = async (accessToken: string, user_key: string) => {
   try {
     return await apiClient.post(`/key/delete`, { accessToken, body: { keys: [user_key] } });
