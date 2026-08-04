@@ -1,7 +1,93 @@
-use crate::error::CoreResult;
+use crate::error::{CoreError, CoreResult};
 use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
-use crate::messages::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
-use crate::providers::bedrock::constants::{AWS_REGION, AWS_REGION_NAME, DEFAULT_BEDROCK_REGION};
+use crate::messages::types::{
+    AnthropicMessage, AnthropicMessagesRequest, AnthropicMessagesResponse, SystemPrompt,
+};
+use crate::providers::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
+use crate::providers::bedrock::constants::{
+    AWS_REGION, AWS_REGION_NAME, BEDROCK_ANTHROPIC_VERSION, DEFAULT_BEDROCK_REGION,
+};
+use serde::Serialize;
+use serde_json::Value;
+
+#[derive(Serialize)]
+struct BedrockInvokeAnthropicMessagesRequest {
+    anthropic_version: Value,
+    max_tokens: u64,
+    messages: Vec<AnthropicMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anthropic_beta: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<SystemPrompt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop_sequences: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_k: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_config: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_management: Option<Value>,
+}
+
+impl TryFrom<AnthropicMessagesRequest> for BedrockInvokeAnthropicMessagesRequest {
+    type Error = CoreError;
+
+    fn try_from(request: AnthropicMessagesRequest) -> CoreResult<Self> {
+        let AnthropicMessagesRequest {
+            max_tokens,
+            messages,
+            system,
+            metadata,
+            stop_sequences,
+            temperature,
+            top_p,
+            top_k,
+            tools,
+            tool_choice,
+            thinking,
+            output_config,
+            context_management,
+            mut extra,
+            ..
+        } = request;
+        let anthropic_version = extra
+            .remove("anthropic_version")
+            .unwrap_or_else(|| Value::String(BEDROCK_ANTHROPIC_VERSION.to_string()));
+
+        Ok(Self {
+            anthropic_version,
+            max_tokens: max_tokens.ok_or_else(|| {
+                CoreError::InvalidRequest("Bedrock Anthropic Messages requires `max_tokens`".to_string())
+            })?,
+            messages,
+            anthropic_beta: extra.remove("anthropic_beta"),
+            system,
+            stop_sequences,
+            temperature,
+            top_p,
+            top_k,
+            tools,
+            tool_choice,
+            thinking,
+            metadata,
+            output_config,
+            context_management,
+        })
+    }
+}
+
 pub struct BedrockMessagesConfig;
 
 pub const BEDROCK_MESSAGES_CONFIG: BedrockMessagesConfig = BedrockMessagesConfig;
@@ -55,8 +141,17 @@ impl AnthropicMessagesProviderConfig for BedrockMessagesConfig {
         &self,
         request: AnthropicMessagesRequest,
     ) -> CoreResult<AnthropicMessagesRequest> {
-        let _ = request;
-        todo!("implement Bedrock request body filtering and anthropic_version injection")
+        ANTHROPIC_MESSAGES_CONFIG.transform_request(request)
+    }
+
+    fn serialize_request(&self, request: AnthropicMessagesRequest) -> CoreResult<Value> {
+        serde_json::to_value(BedrockInvokeAnthropicMessagesRequest::try_from(request)?).map_err(
+            |err| {
+                CoreError::InvalidRequest(format!(
+                    "failed to serialize Bedrock Anthropic Messages request: {err}"
+                ))
+            },
+        )
     }
 
     fn transform_response(
@@ -76,8 +171,6 @@ mod tests {
         AWS_REGION, AWS_REGION_NAME, DEFAULT_BEDROCK_REGION,
     };
     use serde_json::{Value, json};
-
-    const ANTHROPIC_VERSION: &str = "bedrock-2023-05-31";
 
     fn request(value: Value) -> AnthropicMessagesRequest {
         serde_json::from_value(value).expect("valid request")
@@ -123,23 +216,60 @@ mod tests {
     }
 
     #[test]
-    fn request_removes_path_and_unsupported_fields() {
+    fn request_serialization_allows_only_bedrock_fields() {
         let transformed = BEDROCK_MESSAGES_CONFIG
             .transform_request(request(json!({
                 "model": "claude",
                 "stream": true,
                 "max_tokens": 10,
                 "messages": [{"role": "user", "content": "hello"}],
-                "metadata": {"user_id": "ignored"},
-                "tools": [{"name": "search"}]
+                "metadata": {"user_id": "retained"},
+                "tools": [{"name": "search"}],
+                "anthropic_beta": ["fine-grained-tool-streaming-2025-05-14"],
+                "output_config": {"effort": "high"},
+                "context_management": {"edits": []},
+                "service_tier": "auto",
+                "container": {"id": "container"},
+                "mcp_servers": [{"name": "server"}],
+                "output_format": {"type": "json_schema"},
+                "speed": "fast",
+                "inference_geo": "us",
+                "unknown_field": true
             })))
             .expect("transform");
-        let value = serde_json::to_value(transformed).expect("json");
-        assert!(value.get("model").is_none());
-        assert!(value.get("stream").is_none());
-        assert!(value.get("metadata").is_none());
-        assert_eq!(value["anthropic_version"], ANTHROPIC_VERSION);
+        let value = BEDROCK_MESSAGES_CONFIG
+            .serialize_request(transformed)
+            .expect("serialize");
+
+        assert_eq!(value["anthropic_version"], BEDROCK_ANTHROPIC_VERSION);
+        assert_eq!(value["metadata"], json!({"user_id": "retained"}));
         assert!(value.get("tools").is_some());
+        assert!(value.get("anthropic_beta").is_some());
+        assert!(value.get("output_config").is_some());
+        assert!(value.get("context_management").is_some());
+        for field in [
+            "model",
+            "stream",
+            "service_tier",
+            "container",
+            "mcp_servers",
+            "output_format",
+            "speed",
+            "inference_geo",
+            "unknown_field",
+        ] {
+            assert!(value.get(field).is_none(), "{field} must be omitted");
+        }
+    }
+
+    #[test]
+    fn request_serialization_requires_max_tokens() {
+        let err = BEDROCK_MESSAGES_CONFIG
+            .serialize_request(request(json!({
+                "messages": [{"role": "user", "content": "hello"}]
+            })))
+            .expect_err("missing max_tokens should be rejected");
+        assert!(matches!(err, CoreError::InvalidRequest(_)));
     }
 
     #[test]

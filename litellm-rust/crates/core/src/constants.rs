@@ -17,3 +17,6 @@ pub(crate) const MESSAGES_ERROR_BODY_MAX_CHARS: usize = 256;
 /// Provider name used for Anthropic Messages when a deployment's provider model
 /// does not carry an explicit provider prefix.
 pub const ANTHROPIC_MESSAGES_PROVIDER: &str = "anthropic";
+
+/// Provider name used for Anthropic Messages served through Bedrock.
+pub const BEDROCK_MESSAGES_PROVIDER: &str = "bedrock";

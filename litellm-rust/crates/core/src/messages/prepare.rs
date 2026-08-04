@@ -63,11 +63,7 @@ pub(super) fn prepare_messages_call(
         CoreError::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
     })?;
     let transformed = config.transform_request(typed_request)?;
-    let body = serde_json::to_value(transformed).map_err(|err| {
-        CoreError::InvalidRequest(format!(
-            "failed to serialize Anthropic messages request: {err}"
-        ))
-    })?;
+    let body = config.serialize_request(transformed)?;
 
     let call_id = request
         .litellm_call_id

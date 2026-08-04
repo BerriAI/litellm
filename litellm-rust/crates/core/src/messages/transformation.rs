@@ -1,4 +1,5 @@
-use crate::error::CoreResult;
+use crate::error::{CoreError, CoreResult};
+use serde_json::Value;
 
 use super::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
 
@@ -59,6 +60,12 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         request: AnthropicMessagesRequest,
     ) -> CoreResult<AnthropicMessagesRequest> {
         Ok(request)
+    }
+
+    fn serialize_request(&self, request: AnthropicMessagesRequest) -> CoreResult<Value> {
+        serde_json::to_value(request).map_err(|err| {
+            CoreError::InvalidRequest(format!("failed to serialize Anthropic messages request: {err}"))
+        })
     }
 
     fn transform_response(

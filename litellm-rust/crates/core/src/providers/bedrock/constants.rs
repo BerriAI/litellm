@@ -14,5 +14,6 @@ pub const AWS_EXTERNAL_ID: &str = "AWS_EXTERNAL_ID";
 pub const BEDROCK_SERVICE: &str = "bedrock";
 pub const DEFAULT_SESSION_NAME_PREFIX: &str = "litellm-session";
 pub const DEFAULT_BEDROCK_REGION: &str = "us-west-2";
+pub const BEDROCK_ANTHROPIC_VERSION: &str = "bedrock-2023-05-31";
 pub const BEDROCK_RUNTIME_ENDPOINT_TEMPLATE: &str =
     "https://bedrock-runtime.{region}.amazonaws.com";
