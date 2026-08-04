@@ -17,6 +17,7 @@ import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.param_utils import strip_litellm_internal_params
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -142,7 +143,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         - call chat.completions.create by default
         """
         try:
-            raw_response = azure_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
+            cleaned_data = strip_litellm_internal_params(data)
+            raw_response = azure_client.chat.completions.with_raw_response.create(**cleaned_data, timeout=timeout)
 
             headers = dict(raw_response.headers)
             response = raw_response.parse()
@@ -165,7 +167,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         """
         start_time = time.time()
         try:
-            raw_response = await azure_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
+            cleaned_data = strip_litellm_internal_params(data)
+            raw_response = await azure_client.chat.completions.with_raw_response.create(**cleaned_data, timeout=timeout)
 
             headers = dict(raw_response.headers)
             response = raw_response.parse()
@@ -664,7 +667,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if not isinstance(openai_aclient, (AsyncAzureOpenAI, AsyncOpenAI)):
                 raise ValueError("Azure client is not an instance of AsyncAzureOpenAI or AsyncOpenAI")
 
-            raw_response = await openai_aclient.embeddings.with_raw_response.create(**data, timeout=timeout)
+            cleaned_data = strip_litellm_internal_params(data)
+            raw_response = await openai_aclient.embeddings.with_raw_response.create(**cleaned_data, timeout=timeout)
             headers = dict(raw_response.headers)
 
             # Convert json.JSONDecodeError to AzureOpenAIError for two critical reasons:
@@ -790,7 +794,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )
 
             ## COMPLETION CALL
-            raw_response = azure_client.embeddings.with_raw_response.create(**data, timeout=timeout)  # type: ignore
+            cleaned_data = strip_litellm_internal_params(data)
+            raw_response = azure_client.embeddings.with_raw_response.create(**cleaned_data, timeout=timeout)  # type: ignore
             headers = dict(raw_response.headers)
             response = raw_response.parse()
             if isinstance(response, str):
