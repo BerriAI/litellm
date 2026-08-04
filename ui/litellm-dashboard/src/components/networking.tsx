@@ -7109,6 +7109,26 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   return data;
 };
 
+export type UserBannerSeverity = "info" | "warning" | "error";
+
+export interface UserBanner {
+  enabled: boolean;
+  message: string;
+  severity: UserBannerSeverity;
+}
+
+export const getUserBanner = async (accessToken: string): Promise<UserBanner> => {
+  return await apiClient.get<UserBanner>("/get/user_banner", { accessToken });
+};
+
+export const updateUserBanner = async (accessToken: string, banner: UserBanner): Promise<UserBanner> => {
+  const data = await apiClient.patch<{ message: string; banner: UserBanner }>("/update/user_banner", {
+    accessToken,
+    body: banner,
+  });
+  return data.banner;
+};
+
 // Claude Code Marketplace Networking Functions
 
 /**
