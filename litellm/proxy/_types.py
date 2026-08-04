@@ -2414,6 +2414,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
     )
+    enforce_team_model_limit_allocation: bool | None = Field(
+        None,
+        description="If True, a team key's per-model rpm/tpm limits are rejected at create/update time when they would overallocate the team's per-model limits, regardless of rpm_limit_type/tpm_limit_type. A key's own per-model limit wins over the team's at request time, so this is how the team limit becomes a true cap. Default is False.",
+    )
     maximum_spend_logs_retention_period: str | None = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",

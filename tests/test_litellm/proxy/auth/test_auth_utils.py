@@ -20,6 +20,7 @@ from litellm.proxy.auth.auth_utils import (
     get_key_mcp_rpm_limit,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
+    get_key_own_model_rate_limits,
     get_key_tag_rpm_limit,
     get_model_from_request,
     get_project_model_rpm_limit,
@@ -167,6 +168,55 @@ class TestGetKeyModelRpmLimit:
         )
         result = get_key_model_rpm_limit(user_api_key_dict)
         assert result == {}
+
+
+class TestGetKeyOwnModelRateLimits:
+    """Only limits set on the key itself, so callers can tell an override from an inherited limit."""
+
+    def test_metadata_limits_are_the_keys_own(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            metadata={"model_rpm_limit": {"gpt-4": 100}},
+            team_metadata={"model_rpm_limit": {"gpt-4": 5}},
+        )
+        assert get_key_own_model_rate_limits(user_api_key_dict, "model_rpm_limit") == {
+            "gpt-4": 100
+        }
+
+    def test_model_max_budget_limits_are_the_keys_own(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            model_max_budget={
+                "gpt-4": {"rpm_limit": 100, "tpm_limit": 2000},
+                "gpt-3.5-turbo": {"tpm_limit": 3000},
+            },
+        )
+        assert get_key_own_model_rate_limits(user_api_key_dict, "model_rpm_limit") == {
+            "gpt-4": 100
+        }
+        assert get_key_own_model_rate_limits(user_api_key_dict, "model_tpm_limit") == {
+            "gpt-4": 2000,
+            "gpt-3.5-turbo": 3000,
+        }
+
+    def test_team_metadata_is_not_the_keys_own(self):
+        team_only = UserAPIKeyAuth(
+            api_key="sk-123",
+            team_metadata={
+                "model_rpm_limit": {"gpt-4": 5},
+                "model_tpm_limit": {"gpt-4": 500},
+            },
+        )
+        assert get_key_own_model_rate_limits(team_only, "model_rpm_limit") is None
+        assert get_key_own_model_rate_limits(team_only, "model_tpm_limit") is None
+
+    def test_returns_none_when_nothing_configured_on_the_key(self):
+        assert (
+            get_key_own_model_rate_limits(
+                UserAPIKeyAuth(api_key="sk-123"), "model_rpm_limit"
+            )
+            is None
+        )
 
 
 class TestGetKeyMcpRpmLimit:

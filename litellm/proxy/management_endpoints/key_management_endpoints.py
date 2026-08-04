@@ -55,7 +55,10 @@ from litellm.proxy.auth.auth_checks import (
     get_project_object,
     get_team_object,
 )
-from litellm.proxy.auth.auth_utils import abbreviate_api_key
+from litellm.proxy.auth.auth_utils import (
+    abbreviate_api_key,
+    resolve_own_model_rate_limits,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
@@ -1158,6 +1161,44 @@ async def _common_key_generation_helper(
     return response
 
 
+def _requested_model_specific_limits(
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+) -> Mapping[str, int] | None:
+    """
+    Per-model limits this request would grant the key, from any of the shapes a
+    caller can express them in: the top-level field, the same map under
+    metadata, or per-model limits inside model_max_budget.
+    """
+    explicit_limits = data.model_rpm_limit if rate_limit_key == "model_rpm_limit" else data.model_tpm_limit
+    if explicit_limits:
+        return explicit_limits
+
+    return resolve_own_model_rate_limits(
+        metadata=data.metadata,
+        model_max_budget=data.model_max_budget,
+        rate_limit_key=rate_limit_key,
+    )
+
+
+def _allocated_model_specific_limits(
+    keys: Sequence[LiteLLM_VerificationToken],
+    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+) -> Mapping[str, int]:
+    """Per-model total already handed out across an entity's existing keys."""
+    per_key_limits = tuple(
+        resolve_own_model_rate_limits(
+            metadata=key.metadata,
+            model_max_budget=key.model_max_budget,
+            rate_limit_key=rate_limit_key,
+        )
+        or {}
+        for key in keys
+    )
+    allocated_models = frozenset(model for limits in per_key_limits for model in limits)
+    return {model: sum(limits.get(model, 0) for limits in per_key_limits) for model in allocated_models}
+
+
 def _check_key_model_specific_limits(
     keys: list[LiteLLM_VerificationToken],
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
@@ -1171,33 +1212,20 @@ def _check_key_model_specific_limits(
     Generic function to check if a key is allocating model specific limits.
     Raises an error if we're overallocating.
     """
-    model_rpm_limit = getattr(data, "model_rpm_limit", None) or (
-        data.metadata.get("model_rpm_limit", None) if data.metadata else None
-    )
-    model_tpm_limit = getattr(data, "model_tpm_limit", None) or (
-        data.metadata.get("model_tpm_limit", None) if data.metadata else None
-    )
+    model_rpm_limit = _requested_model_specific_limits(data, "model_rpm_limit")
+    model_tpm_limit = _requested_model_specific_limits(data, "model_tpm_limit")
     if model_rpm_limit is None and model_tpm_limit is None:
         return
 
-    # get total model specific tpm/rpm limit
-    model_specific_rpm_limit: dict[str, int] = {}
-    model_specific_tpm_limit: dict[str, int] = {}
-
-    for key in keys:
-        if key.metadata.get("model_rpm_limit", None) is not None:
-            for model, rpm_limit in key.metadata.get("model_rpm_limit", {}).items():
-                model_specific_rpm_limit[model] = model_specific_rpm_limit.get(model, 0) + rpm_limit
-        if key.metadata.get("model_tpm_limit", None) is not None:
-            for model, tpm_limit in key.metadata.get("model_tpm_limit", {}).items():
-                model_specific_tpm_limit[model] = model_specific_tpm_limit.get(model, 0) + tpm_limit
+    model_specific_rpm_limit = _allocated_model_specific_limits(keys, "model_rpm_limit")
+    model_specific_tpm_limit = _allocated_model_specific_limits(keys, "model_tpm_limit")
 
     if model_rpm_limit is not None:
         for model, rpm_limit in model_rpm_limit.items():
             if entity_rpm_limit is not None and model_specific_rpm_limit.get(model, 0) + rpm_limit > entity_rpm_limit:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than {entity_type} RPM limit={entity_rpm_limit}",
+                    detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than {entity_type} RPM limit={entity_rpm_limit} for model={model}",
                 )
             elif entity_model_rpm_limit_dict:
                 entity_model_specific_rpm_limit = entity_model_rpm_limit_dict.get(model)
@@ -1207,7 +1235,7 @@ def _check_key_model_specific_limits(
                 ):
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than {entity_type} RPM limit={entity_model_specific_rpm_limit}",
+                        detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than {entity_type} RPM limit={entity_model_specific_rpm_limit} for model={model}",
                     )
 
     if model_tpm_limit is not None:
@@ -1215,7 +1243,7 @@ def _check_key_model_specific_limits(
             if entity_tpm_limit is not None and model_specific_tpm_limit.get(model, 0) + tpm_limit > entity_tpm_limit:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Key TPM limit={tpm_limit} is greater than {entity_type} TPM limit={entity_tpm_limit}",
+                    detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Key TPM limit={tpm_limit} is greater than {entity_type} TPM limit={entity_tpm_limit} for model={model}",
                 )
             elif entity_model_tpm_limit_dict:
                 entity_model_specific_tpm_limit = entity_model_tpm_limit_dict.get(model)
@@ -1225,7 +1253,7 @@ def _check_key_model_specific_limits(
                 ):
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Key TPM limit={tpm_limit} is greater than {entity_type} TPM limit={entity_model_specific_tpm_limit}",
+                        detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Key TPM limit={tpm_limit} is greater than {entity_type} TPM limit={entity_model_specific_tpm_limit} for model={model}",
                     )
 
 
@@ -1309,6 +1337,21 @@ def check_team_key_rpm_tpm_limits(
     )
 
 
+def _is_team_model_limit_allocation_enforced() -> bool:
+    """
+    Whether every team key must fit inside the team's per-model limits, not just
+    keys asking for guaranteed throughput.
+
+    Off by default: at runtime a key's own per-model limit deliberately wins over
+    the team's, so without this an admin can hand one key a ceiling above the
+    team's. Operators who want the team limit to be a true cap opt in here, and
+    the rejection happens at grant time rather than silently at request time.
+    """
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("enforce_team_model_limit_allocation") is True
+
+
 async def _check_team_key_limits(
     team_table: LiteLLM_TeamTableCachedObj,
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
@@ -1317,9 +1360,16 @@ async def _check_team_key_limits(
     """
     Check if the team key is allocating guaranteed throughput limits. If so, raise an error if we're overallocating.
 
-    Only runs check if tpm_limit_type or rpm_limit_type is "guaranteed_throughput"
+    Only runs check if tpm_limit_type or rpm_limit_type is "guaranteed_throughput".
+    The model-specific half also runs for every team key when
+    general_settings.enforce_team_model_limit_allocation is on; the aggregate
+    half needs no such gate, since the team's own rpm/tpm descriptor still binds
+    every key at request time regardless of what each key was granted.
     """
-    if data.tpm_limit_type != "guaranteed_throughput" and data.rpm_limit_type != "guaranteed_throughput":
+    is_guaranteed_throughput = (
+        data.tpm_limit_type == "guaranteed_throughput" or data.rpm_limit_type == "guaranteed_throughput"
+    )
+    if not is_guaranteed_throughput and not _is_team_model_limit_allocation_enforced():
         return
     # get all team keys
     # calculate allocated tpm/rpm limit
@@ -1338,6 +1388,8 @@ async def _check_team_key_limits(
         team_table=team_table,
         data=data,
     )
+    if not is_guaranteed_throughput:
+        return
     check_team_key_rpm_tpm_limits(
         keys=keys,
         team_table=team_table,

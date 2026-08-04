@@ -15256,3 +15256,217 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
         prisma_client=mock_prisma_client,
         new_master_key="sk-new-master-key",
     )
+
+
+def _team_with_model_limits(
+    team_id: str,
+    metadata: dict,
+    tpm_limit: int | None = None,
+    rpm_limit: int | None = None,
+) -> LiteLLM_TeamTableCachedObj:
+    return LiteLLM_TeamTableCachedObj(
+        team_id=team_id,
+        team_alias="test-team",
+        tpm_limit=tpm_limit,
+        rpm_limit=rpm_limit,
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+        metadata=metadata,
+    )
+
+
+@pytest.mark.parametrize(
+    "team_metadata_key, budget_field, expected_detail",
+    [
+        (
+            "model_rpm_limit",
+            "rpm_limit",
+            "Allocated RPM limit=0 + Key RPM limit=500 is greater than team RPM limit=100",
+        ),
+        (
+            "model_tpm_limit",
+            "tpm_limit",
+            "Allocated TPM limit=0 + Key TPM limit=500 is greater than team TPM limit=100",
+        ),
+    ],
+)
+def test_check_team_key_model_specific_limits_counts_request_model_max_budget(
+    team_metadata_key, budget_field, expected_detail
+):
+    """A per-model limit granted through model_max_budget is the same override the
+    limiter enforces at runtime, so it must count against the team's allocation."""
+    team_table = _team_with_model_limits(
+        team_id="test-team-mmb-request",
+        metadata={team_metadata_key: {"gpt-4": 100}},
+    )
+    data = GenerateKeyRequest(model_max_budget={"gpt-4": {budget_field: 500}})
+
+    with pytest.raises(HTTPException) as exc_info:
+        check_team_key_model_specific_limits(
+            keys=[],
+            team_table=team_table,
+            data=data,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert expected_detail in str(exc_info.value.detail)
+
+
+def test_check_team_key_model_specific_limits_counts_existing_key_model_max_budget():
+    """Existing keys hold their per-model limits in model_max_budget just as often
+    as in metadata; both must count toward what the team has already handed out."""
+    keys = [
+        LiteLLM_VerificationToken(
+            token="test-token-mmb-1",
+            team_id="test-team-mmb-existing",
+            model_max_budget={"gpt-4": {"rpm_limit": 80}},
+        ),
+    ]
+    team_table = _team_with_model_limits(
+        team_id="test-team-mmb-existing",
+        metadata={"model_rpm_limit": {"gpt-4": 100}},
+    )
+    data = GenerateKeyRequest(model_rpm_limit={"gpt-4": 30})
+
+    with pytest.raises(HTTPException) as exc_info:
+        check_team_key_model_specific_limits(
+            keys=keys,
+            team_table=team_table,
+            data=data,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        "Allocated RPM limit=80 + Key RPM limit=30 is greater than team RPM limit=100"
+        in str(exc_info.value.detail)
+    )
+
+
+def test_check_team_key_model_specific_limits_prefers_metadata_over_model_max_budget():
+    """Mirrors runtime precedence: a metadata map wins outright, so a
+    model_max_budget entry for a model the map omits is not additionally counted."""
+    keys = [
+        LiteLLM_VerificationToken(
+            token="test-token-precedence",
+            team_id="test-team-precedence",
+            metadata={"model_rpm_limit": {"gpt-4": 40}},
+            model_max_budget={"gpt-4": {"rpm_limit": 900}},
+        ),
+    ]
+    team_table = _team_with_model_limits(
+        team_id="test-team-precedence",
+        metadata={"model_rpm_limit": {"gpt-4": 100}},
+    )
+
+    check_team_key_model_specific_limits(
+        keys=keys,
+        team_table=team_table,
+        data=GenerateKeyRequest(model_rpm_limit={"gpt-4": 60}),
+    )
+
+
+def _prisma_client_returning(keys: list) -> AsyncMock:
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=keys)
+    return mock_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_check_team_key_limits_enforces_model_allocation_when_flag_on(monkeypatch):
+    """With enforce_team_model_limit_allocation on, a plain create (no limit_type)
+    can no longer be granted a per-model limit above the team's."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"enforce_team_model_limit_allocation": True},
+    )
+    mock_prisma_client = _prisma_client_returning([])
+    team_table = _team_with_model_limits(
+        team_id="test-team-flag-on",
+        metadata={"model_rpm_limit": {"gpt-4": 100}},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_team_key_limits(
+            team_table=team_table,
+            data=GenerateKeyRequest(model_rpm_limit={"gpt-4": 500}),
+            prisma_client=mock_prisma_client,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "is greater than team RPM limit=100" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_check_team_key_limits_allows_model_overallocation_by_default(monkeypatch):
+    """Default stays permissive: without the flag and without guaranteed_throughput,
+    the same create is granted and the team's keys are never even read."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    mock_prisma_client = _prisma_client_returning([])
+    team_table = _team_with_model_limits(
+        team_id="test-team-flag-off",
+        metadata={"model_rpm_limit": {"gpt-4": 100}},
+    )
+
+    await _check_team_key_limits(
+        team_table=team_table,
+        data=GenerateKeyRequest(model_rpm_limit={"gpt-4": 500}),
+        prisma_client=mock_prisma_client,
+    )
+
+    mock_prisma_client.db.litellm_verificationtoken.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_check_team_key_limits_allows_model_limit_within_remaining_allocation(monkeypatch):
+    """The flag rejects overallocation, not allocation: a key that fits in what the
+    team has left is still granted."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"enforce_team_model_limit_allocation": True},
+    )
+    mock_prisma_client = _prisma_client_returning(
+        [
+            LiteLLM_VerificationToken(
+                token="test-token-allocated",
+                team_id="test-team-flag-within",
+                metadata={"model_rpm_limit": {"gpt-4": 60}},
+            )
+        ]
+    )
+    team_table = _team_with_model_limits(
+        team_id="test-team-flag-within",
+        metadata={"model_rpm_limit": {"gpt-4": 100}},
+    )
+
+    await _check_team_key_limits(
+        team_table=team_table,
+        data=GenerateKeyRequest(model_rpm_limit={"gpt-4": 30}),
+        prisma_client=mock_prisma_client,
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_team_key_limits_flag_does_not_gate_aggregate_limits(monkeypatch):
+    """The flag covers per-model allocation only. The team's aggregate rpm/tpm
+    descriptor still binds every key at request time, so a plain create asking for
+    more than the team's aggregate stays a runtime concern, not a grant-time one."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"enforce_team_model_limit_allocation": True},
+    )
+    mock_prisma_client = _prisma_client_returning([])
+    team_table = _team_with_model_limits(
+        team_id="test-team-flag-aggregate",
+        metadata={},
+        tpm_limit=1000,
+        rpm_limit=100,
+    )
+
+    await _check_team_key_limits(
+        team_table=team_table,
+        data=GenerateKeyRequest(tpm_limit=5000, rpm_limit=500),
+        prisma_client=mock_prisma_client,
+    )

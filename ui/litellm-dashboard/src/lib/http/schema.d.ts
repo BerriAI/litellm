@@ -22818,6 +22818,11 @@ export interface components {
              */
             enable_public_model_hub: boolean;
             /**
+             * Enforce Team Model Limit Allocation
+             * @description If True, a team key's per-model rpm/tpm limits are rejected at create/update time when they would overallocate the team's per-model limits, regardless of rpm_limit_type/tpm_limit_type. A key's own per-model limit wins over the team's at request time, so this is how the team limit becomes a true cap. Default is False.
+             */
+            enforce_team_model_limit_allocation?: boolean | null;
+            /**
              * Forward Client Headers To Llm Api
              * @description If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.
              */

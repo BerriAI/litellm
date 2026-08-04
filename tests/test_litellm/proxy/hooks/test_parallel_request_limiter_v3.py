@@ -5100,3 +5100,281 @@ async def test_reserve_tpm_tokens_never_evaluates_the_requests_dimension():
         f"reservation pass, got: {response}"
     )
     assert [s["rate_limit_type"] for s in response["statuses"]] == ["tokens"]
+
+
+def _make_team_model_limit_handler():
+    """Limiter backed only by in-memory cache, plus the descriptors it enforced."""
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    captured: List[Dict[str, Any]] = []
+
+    original_should_rate_limit = handler.should_rate_limit
+
+    async def capturing_should_rate_limit(descriptors, **kwargs):
+        captured.extend(descriptors)
+        return await original_should_rate_limit(descriptors, **kwargs)
+
+    handler.should_rate_limit = capturing_should_rate_limit
+    return handler, captured
+
+
+async def _run_pre_call_hook(handler, user_api_key_dict, model="gpt-4"):
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=DualCache(),
+        data={"model": model, "messages": [{"role": "user", "content": "hi"}]},
+        call_type="",
+    )
+
+
+def _descriptors_with_key(captured, key):
+    return [d for d in captured if d["key"] == key]
+
+
+@pytest.mark.asyncio
+async def test_key_model_rpm_override_wins_over_team_model_rpm():
+    """Key metadata model_rpm_limit beats the team's for the same model, so the
+    team counter must not also cap the key at the (lower) team value."""
+    handler, captured = _make_team_model_limit_handler()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-key-rpm-override"),
+        team_id="team-precedence",
+        metadata={"model_rpm_limit": {"gpt-4": 100}},
+        team_metadata={"model_rpm_limit": {"gpt-4": 3}},
+    )
+
+    await _run_pre_call_hook(handler, user_api_key_dict)
+
+    key_descriptors = _descriptors_with_key(captured, "model_per_key")
+    assert len(key_descriptors) == 1
+    assert key_descriptors[0]["rate_limit"]["requests_per_unit"] == 100
+
+    team_descriptors = _descriptors_with_key(captured, "model_per_team")
+    assert (
+        team_descriptors == []
+    ), f"the team's only limit is suppressed by the key override, so no team descriptor: {team_descriptors}"
+
+
+@pytest.mark.asyncio
+async def test_key_rpm_override_still_inherits_team_model_tpm():
+    """Overriding RPM on the key must not release the team's TPM ceiling."""
+    handler, captured = _make_team_model_limit_handler()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-key-rpm-only"),
+        team_id="team-precedence",
+        metadata={"model_rpm_limit": {"gpt-4": 100}},
+        team_metadata={
+            "model_rpm_limit": {"gpt-4": 3},
+            "model_tpm_limit": {"gpt-4": 500},
+        },
+    )
+
+    await _run_pre_call_hook(handler, user_api_key_dict)
+
+    team_descriptors = _descriptors_with_key(captured, "model_per_team")
+    assert len(team_descriptors) == 1, f"expected one team descriptor, got: {team_descriptors}"
+    assert team_descriptors[0]["rate_limit"]["requests_per_unit"] is None
+    assert team_descriptors[0]["rate_limit"]["tokens_per_unit"] == 500
+
+
+@pytest.mark.asyncio
+async def test_key_model_max_budget_rpm_override_wins_over_team_model_rpm():
+    """The override may be expressed as model_max_budget[model].rpm_limit."""
+    handler, captured = _make_team_model_limit_handler()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-key-budget-override"),
+        team_id="team-precedence",
+        model_max_budget={"gpt-4": {"rpm_limit": 100}},
+        team_metadata={"model_rpm_limit": {"gpt-4": 3}},
+    )
+
+    await _run_pre_call_hook(handler, user_api_key_dict)
+
+    key_descriptors = _descriptors_with_key(captured, "model_per_key")
+    assert len(key_descriptors) == 1
+    assert key_descriptors[0]["rate_limit"]["requests_per_unit"] == 100
+
+    team_descriptors = _descriptors_with_key(captured, "model_per_team")
+    assert (
+        team_descriptors == []
+    ), f"the team's only limit is suppressed by the key override, so no team descriptor: {team_descriptors}"
+
+
+@pytest.mark.asyncio
+async def test_key_override_on_one_model_leaves_team_limit_on_other_model():
+    """Suppression is per model: an override on gpt-4 must not free claude-3."""
+    handler, captured = _make_team_model_limit_handler()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-key-other-model"),
+        team_id="team-precedence",
+        metadata={"model_rpm_limit": {"gpt-4": 100}},
+        team_metadata={"model_rpm_limit": {"gpt-4": 3, "claude-3": 7}},
+    )
+
+    await _run_pre_call_hook(handler, user_api_key_dict, model="claude-3")
+
+    team_descriptors = _descriptors_with_key(captured, "model_per_team")
+    assert len(team_descriptors) == 1, f"expected one team descriptor, got: {team_descriptors}"
+    assert team_descriptors[0]["value"] == "team-precedence:claude-3"
+    assert team_descriptors[0]["rate_limit"]["requests_per_unit"] == 7
+
+
+@pytest.mark.asyncio
+async def test_team_model_descriptor_is_emitted_exactly_once():
+    """Two code paths used to emit the same model_per_team descriptor, so every
+    request burned two slots of the team's per-model budget."""
+    handler, captured = _make_team_model_limit_handler()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-team-only"),
+        team_id="team-precedence",
+        team_metadata={"model_rpm_limit": {"gpt-4": 3}},
+    )
+
+    await _run_pre_call_hook(handler, user_api_key_dict)
+
+    team_descriptors = _descriptors_with_key(captured, "model_per_team")
+    assert len(team_descriptors) == 1, f"expected one team descriptor, got: {team_descriptors}"
+    assert team_descriptors[0]["rate_limit"]["requests_per_unit"] == 3
+
+
+@pytest.mark.asyncio
+async def test_team_model_rpm_limit_admits_exactly_the_configured_requests():
+    """A team model_rpm_limit of N admits N requests, not N/2."""
+    handler, _ = _make_team_model_limit_handler()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-team-budget-burn"),
+        team_id="team-burn",
+        team_metadata={"model_rpm_limit": {"gpt-4": 4}},
+    )
+
+    for _ in range(4):
+        await _run_pre_call_hook(handler, user_api_key_dict)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _run_pre_call_hook(handler, user_api_key_dict)
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_key_model_rpm_override_admits_its_own_higher_limit():
+    """A key raising its per-model RPM above the team's gets the key's budget."""
+    handler, _ = _make_team_model_limit_handler()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-key-budget-burn"),
+        team_id="team-burn",
+        metadata={"model_rpm_limit": {"gpt-4": 5}},
+        team_metadata={"model_rpm_limit": {"gpt-4": 2}},
+    )
+
+    for _ in range(5):
+        await _run_pre_call_hook(handler, user_api_key_dict)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _run_pre_call_hook(handler, user_api_key_dict)
+    assert exc_info.value.status_code == 429
+
+
+async def _increments_for_completed_call(handler, user_api_key_dict, model="gpt-4"):
+    """Drive one full request (pre-call gate, then success logging) and return the
+    counter increments the post-call reconciliation emitted."""
+    await _run_pre_call_hook(handler, user_api_key_dict, model=model)
+
+    increments: List[Dict[str, Any]] = []
+
+    async def mock_increment(increment_list, **kwargs):
+        increments.extend(
+            {"key": op["key"], "increment": op["increment_value"]} for op in increment_list
+        )
+
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_increment
+
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": model}},
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_hash": user_api_key_dict.api_key,
+                    "user_api_key_team_id": user_api_key_dict.team_id,
+                }
+            },
+        },
+        response_obj=ModelResponse(
+            usage=Usage(prompt_tokens=40, completion_tokens=60, total_tokens=100)
+        ),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    return increments
+
+
+@pytest.mark.asyncio
+async def test_key_tpm_override_does_not_charge_the_team_token_counter():
+    """A key exempt from the team's per-model TPM ceiling must not fill it either,
+    or its traffic starves the keys that do inherit the limit."""
+    handler, _ = _make_team_model_limit_handler()
+    team_id = "team-tpm-accounting"
+    overriding_key = UserAPIKeyAuth(
+        api_key=hash_token("sk-tpm-override"),
+        team_id=team_id,
+        metadata={"model_tpm_limit": {"gpt-4": 100000}},
+        team_metadata={"model_tpm_limit": {"gpt-4": 500}},
+    )
+
+    increments = await _increments_for_completed_call(handler, overriding_key)
+
+    team_tokens_key = handler.create_rate_limit_keys("model_per_team", f"{team_id}:gpt-4", "tokens")
+    assert not [
+        i for i in increments if i["key"] == team_tokens_key
+    ], f"the team token counter must not be charged by an exempt key, got: {increments}"
+
+    key_tokens_key = handler.create_rate_limit_keys(
+        "model_per_key", f"{overriding_key.api_key}:gpt-4", "tokens"
+    )
+    assert [
+        i for i in increments if i["key"] == key_tokens_key
+    ], f"the key's own token counter must still be charged, got: {increments}"
+
+
+@pytest.mark.asyncio
+async def test_inheriting_key_still_charges_the_team_token_counter():
+    """The suppression is scoped to keys that override; an inheriting key still
+    spends the team's per-model token budget."""
+    handler, _ = _make_team_model_limit_handler()
+    team_id = "team-tpm-accounting"
+    inheriting_key = UserAPIKeyAuth(
+        api_key=hash_token("sk-tpm-inherits"),
+        team_id=team_id,
+        team_metadata={"model_tpm_limit": {"gpt-4": 500}},
+    )
+
+    increments = await _increments_for_completed_call(handler, inheriting_key)
+
+    team_tokens_key = handler.create_rate_limit_keys("model_per_team", f"{team_id}:gpt-4", "tokens")
+    assert [
+        i for i in increments if i["key"] == team_tokens_key
+    ], f"an inheriting key must charge the team token counter, got: {increments}"
+
+
+@pytest.mark.asyncio
+async def test_key_rpm_override_still_charges_the_team_token_counter():
+    """Suppression is per metric: overriding RPM leaves the team's TPM ceiling in
+    force, so its counter must keep being charged."""
+    handler, _ = _make_team_model_limit_handler()
+    team_id = "team-tpm-accounting"
+    rpm_only_override = UserAPIKeyAuth(
+        api_key=hash_token("sk-rpm-override-tpm-inherits"),
+        team_id=team_id,
+        metadata={"model_rpm_limit": {"gpt-4": 100}},
+        team_metadata={
+            "model_rpm_limit": {"gpt-4": 3},
+            "model_tpm_limit": {"gpt-4": 500},
+        },
+    )
+
+    increments = await _increments_for_completed_call(handler, rpm_only_override)
+
+    team_tokens_key = handler.create_rate_limit_keys("model_per_team", f"{team_id}:gpt-4", "tokens")
+    assert [
+        i for i in increments if i["key"] == team_tokens_key
+    ], f"an RPM-only override must still charge the team token counter, got: {increments}"
