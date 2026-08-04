@@ -120,11 +120,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
 
   const [selectedPreset, setSelectedPreset] = useState<string | undefined>(undefined);
-  // Collapsed after a preset prefills the config (nothing to fill in yet), expanded for Custom or
-  // before any template is chosen (there's nothing prefilled to hide). A caller can always toggle
-  // it manually; selecting a preset re-collapses it, offering the same "here's what got filled in"
-  // affordance for whichever preset was just applied.
-  const [detailsExpanded, setDetailsExpanded] = useState<boolean>(true);
+  // Closed by default: a caller opens it deliberately, either by clicking it or by choosing Custom
+  // (which expands it automatically, since there's nothing else to show them their config from). A
+  // preset re-collapses it after prefilling, offering the same "here's what got filled in, expand to
+  // change it" affordance. A caller can always toggle it manually at any point.
+  const [detailsExpanded, setDetailsExpanded] = useState<boolean>(false);
 
   const [isTestModalVisible, setIsTestModalVisible] = useState<boolean>(false);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);

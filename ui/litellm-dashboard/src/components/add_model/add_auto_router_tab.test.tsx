@@ -23,6 +23,12 @@ const openTemplateDropdown = (): void => {
   fireEvent.mouseDown(screen.getByTestId("template-selector").querySelector(".ant-select-selector")!);
 };
 
+// Detailed Configuration is collapsed by default, so any test reaching into it (a tier select, an
+// "Advanced: ..." sub-section) has to open it first.
+const expandDetailedConfiguration = (): void => {
+  fireEvent.click(screen.getByTestId("detailed-configuration-toggle"));
+};
+
 // The rendered antd option whose text starts with a preset label. Matching on text (not role +
 // accessible name) sidesteps antd's list re-rendering options in place on every state change.
 const optionByLabel = (label: string): HTMLElement | undefined =>
@@ -83,6 +89,18 @@ describe("AddAutoRouterTab", () => {
     // test's data instead of its own mock).
     testQueryClient.clear();
     mockFetchAvailableModels.mockResolvedValue([]);
+  });
+
+  // Detailed Configuration starts collapsed so the modal opens onto just Name + Template; a caller
+  // opts into the full tier/classifier form rather than always seeing it up front.
+  it("keeps Detailed Configuration collapsed until a caller opens it", () => {
+    renderWithProviders(<Harness />);
+
+    expect(screen.queryByText("Complexity Tier Configuration")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("detailed-configuration-toggle"));
+
+    expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
   });
 
   // Nothing is filled in, so there is nothing to submit. The button reports that itself instead of
@@ -148,6 +166,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "keyword-router");
+    expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
 
@@ -164,6 +183,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "keyword-router");
+    expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
     expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
@@ -184,6 +204,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "keyword-router");
+    expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
     await user.type(
@@ -203,6 +224,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "keyword-router");
+    expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
     const keywordsField = screen.getByText("Keywords 1").closest("div") as HTMLElement;
@@ -237,6 +259,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
+    expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Session Affinity"));
     expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
 
@@ -255,6 +278,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
+    expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Session Affinity"));
     await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
 
