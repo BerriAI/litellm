@@ -258,10 +258,10 @@ async def _fetch_batch_output_file_content(
     if is_base64_unified_file_id:
         try:
             file_id = is_base64_unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
-            verbose_logger.debug(f"Extracted LLM output file ID from unified file ID: {file_id}")
+            verbose_logger.debug("Extracted LLM output file ID from unified file ID: %s", file_id)
         except (IndexError, AttributeError) as e:
             verbose_logger.error(
-                f"Failed to extract LLM output file ID from unified file ID: {batch.output_file_id}, error: {e}"
+                "Failed to extract LLM output file ID from unified file ID: %s, error: %s", batch.output_file_id, e
             )
 
     # Build kwargs for afile_content with credentials from litellm_params

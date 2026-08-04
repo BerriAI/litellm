@@ -676,7 +676,7 @@ class Cache:
             cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {e}")
+            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
 
     async def async_add_cache(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
@@ -695,7 +695,7 @@ class Cache:
                 else:
                     await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {e}")
+            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
 
     def _convert_to_cached_embedding(
         self,
@@ -874,7 +874,7 @@ class Cache:
             else:
                 await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {e}")
+            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
 
     def should_use_cache(self, **kwargs):
         """

@@ -82,7 +82,7 @@ class StorageBackendFileService:
             file_naming_strategy="uuid",
         )
 
-        verbose_proxy_logger.debug(f"Storage backend upload complete: backend={target_storage}, url={storage_url}")
+        verbose_proxy_logger.debug("Storage backend upload complete: backend=%s, url=%s", target_storage, storage_url)
 
         # Create file object with storage metadata
         file_object = StorageBackendFileService._create_file_object_with_storage_metadata(
@@ -223,8 +223,10 @@ class StorageBackendFileService:
         file_object.id = base64_unified_file_id
 
         verbose_proxy_logger.debug(
-            f"Storing file in managed files: unified_id={base64_unified_file_id}, "
-            f"storage_backend={target_storage}, storage_url={storage_url}"
+            "Storing file in managed files: unified_id=%s, storage_backend=%s, storage_url=%s",
+            base64_unified_file_id,
+            target_storage,
+            storage_url,
         )
 
         # Store in managed files

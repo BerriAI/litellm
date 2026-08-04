@@ -170,7 +170,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         """
         status = response_data.get("status", "").upper()
 
-        verbose_logger.debug(f"RunwayML task status: {status}")
+        verbose_logger.debug("RunwayML task status: %s", status)
 
         if status == "SUCCEEDED":
             return "succeeded"
@@ -216,7 +216,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         api_base = api_base.rstrip("/")
         task_url = f"{api_base}/v1/tasks/{task_id}"
 
-        verbose_logger.debug(f"Polling RunwayML task: {task_url}")
+        verbose_logger.debug("Polling RunwayML task: %s", task_url)
 
         while True:
             self._check_timeout(start_time=start_time, timeout_secs=timeout_secs)
@@ -265,7 +265,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         api_base = api_base.rstrip("/")
         task_url = f"{api_base}/v1/tasks/{task_id}"
 
-        verbose_logger.debug(f"Polling RunwayML task (async): {task_url}")
+        verbose_logger.debug("Polling RunwayML task (async): %s", task_url)
 
         while True:
             self._check_timeout(start_time=start_time, timeout_secs=timeout_secs)

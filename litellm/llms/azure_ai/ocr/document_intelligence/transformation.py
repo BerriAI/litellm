@@ -353,7 +353,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         Returns:
             OCRRequestData with JSON data
         """
-        verbose_logger.debug(f"Azure Document Intelligence transform_ocr_request - model: {model}")
+        verbose_logger.debug("Azure Document Intelligence transform_ocr_request - model: %s", model)
 
         if not isinstance(document, dict):
             raise ValueError(f"Expected document dict, got {type(document)}")
@@ -455,7 +455,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             Retry-after duration in seconds (default: 2)
         """
         retry_after = int(response.headers.get("retry-after", "2"))
-        verbose_logger.debug(f"Retry polling after: {retry_after} seconds")
+        verbose_logger.debug("Retry polling after: %s seconds", retry_after)
         return retry_after
 
     @staticmethod
@@ -476,7 +476,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             result = response.json()
             status = result.get("status")
 
-            verbose_logger.debug(f"Azure DI operation status: {status}")
+            verbose_logger.debug("Azure DI operation status: %s", status)
 
             if status == "succeeded":
                 return "succeeded"
@@ -519,7 +519,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         client = _get_httpx_client()
         start_time = time.time()
 
-        verbose_logger.debug(f"Polling Azure DI operation: {operation_url}")
+        verbose_logger.debug("Polling Azure DI operation: %s", operation_url)
 
         while True:
             self._check_timeout(start_time=start_time, timeout_secs=timeout_secs)
@@ -560,7 +560,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         client = get_async_httpx_client(llm_provider=litellm.LlmProviders.AZURE_AI)
         start_time = time.time()
 
-        verbose_logger.debug(f"Polling Azure DI operation (async): {operation_url}")
+        verbose_logger.debug("Polling Azure DI operation (async): %s", operation_url)
 
         while True:
             self._check_timeout(start_time=start_time, timeout_secs=timeout_secs)
@@ -603,7 +603,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         """
         operation = AzureDocumentIntelligenceOperation.model_validate(raw_response.json())
 
-        verbose_logger.debug(f"Azure Document Intelligence response status: {operation.status}")
+        verbose_logger.debug("Azure Document Intelligence response status: %s", operation.status)
 
         if operation.status != "succeeded":
             raise ValueError(f"Azure Document Intelligence analysis failed with status: {operation.status}")

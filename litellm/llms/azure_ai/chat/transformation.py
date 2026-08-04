@@ -206,7 +206,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         dynamic_api_key = api_key or get_secret_str("AZURE_AI_API_KEY")
 
         if self._is_azure_openai_model(model=model, api_base=api_base):
-            verbose_logger.debug(f"Model={model} is Azure OpenAI model. Setting custom_llm_provider='azure'.")
+            verbose_logger.debug("Model=%s is Azure OpenAI model. Setting custom_llm_provider='azure'.", model)
             custom_llm_provider = "azure"
         return api_base, dynamic_api_key, custom_llm_provider
 

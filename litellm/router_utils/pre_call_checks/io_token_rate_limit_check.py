@@ -551,16 +551,20 @@ def io_token_reconcile_success(
                     )
         else:
             verbose_router_logger.debug(
-                "[IO TOKEN LIMIT] usage missing; keeping reservation "
-                f"(itpm_reserved={itpm_reserved}, otpm_reserved={otpm_reserved})"
+                "[IO TOKEN LIMIT] usage missing; keeping reservation (itpm_reserved=%s, otpm_reserved=%s)",
+                itpm_reserved,
+                otpm_reserved,
             )
     finally:
         _clear_reservation_from_kwargs(kwargs)
 
     verbose_router_logger.debug(
-        f"[IO TOKEN LIMIT] reconciled "
-        f"(usage_resolved={usage_resolved}, itpm_reserved={itpm_reserved}, "
-        f"billable_input={billable_input}, otpm_reserved={otpm_reserved}, output={completion_tokens})"
+        "[IO TOKEN LIMIT] reconciled (usage_resolved=%s, itpm_reserved=%s, billable_input=%s, otpm_reserved=%s, output=%s)",
+        usage_resolved,
+        itpm_reserved,
+        billable_input,
+        otpm_reserved,
+        completion_tokens,
     )
 
 
@@ -606,16 +610,20 @@ async def async_io_token_reconcile_success(
                     )
         else:
             verbose_router_logger.debug(
-                "[IO TOKEN LIMIT] usage missing; keeping reservation "
-                f"(itpm_reserved={itpm_reserved}, otpm_reserved={otpm_reserved})"
+                "[IO TOKEN LIMIT] usage missing; keeping reservation (itpm_reserved=%s, otpm_reserved=%s)",
+                itpm_reserved,
+                otpm_reserved,
             )
     finally:
         _clear_reservation_from_kwargs(kwargs)
 
     verbose_router_logger.debug(
-        f"[IO TOKEN LIMIT] reconciled "
-        f"(usage_resolved={usage_resolved}, itpm_reserved={itpm_reserved}, "
-        f"billable_input={billable_input}, otpm_reserved={otpm_reserved}, output={completion_tokens})"
+        "[IO TOKEN LIMIT] reconciled (usage_resolved=%s, itpm_reserved=%s, billable_input=%s, otpm_reserved=%s, output=%s)",
+        usage_resolved,
+        itpm_reserved,
+        billable_input,
+        otpm_reserved,
+        completion_tokens,
     )
 
 
@@ -639,7 +647,7 @@ def io_token_refund_failure(
             ttl=RoutingArgsTTL,
         )
     _clear_reservation_from_kwargs(kwargs)
-    verbose_router_logger.debug(f"[IO TOKEN LIMIT] refunded ITPM={itpm_reserved} OTPM={otpm_reserved}")
+    verbose_router_logger.debug("[IO TOKEN LIMIT] refunded ITPM=%s OTPM=%s", itpm_reserved, otpm_reserved)
 
 
 def refund_stale_reservation_before_retry(dual_cache: DualCache, kwargs: dict[str, Any] | None) -> None:
@@ -693,7 +701,7 @@ async def async_io_token_refund_failure(
             parent_otel_span=parent_otel_span,
         )
     _clear_reservation_from_kwargs(kwargs)
-    verbose_router_logger.debug(f"[IO TOKEN LIMIT] refunded ITPM={itpm_reserved} OTPM={otpm_reserved}")
+    verbose_router_logger.debug("[IO TOKEN LIMIT] refunded ITPM=%s OTPM=%s", itpm_reserved, otpm_reserved)
 
 
 def build_io_token_rate_limit_headers(

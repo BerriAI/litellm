@@ -259,7 +259,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
             OCRResponse in standard format
         """
         verbose_logger.debug("Vertex AI DeepSeek OCR transform_ocr_response called")
-        verbose_logger.debug(f"Raw response: {raw_response.text}")
+        verbose_logger.debug("Raw response: %s", raw_response.text)
 
         try:
             response_json = raw_response.json()
@@ -345,7 +345,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
             )
 
         except Exception as e:
-            verbose_logger.error(f"Error parsing Vertex AI DeepSeek OCR response: {e}")
+            verbose_logger.error("Error parsing Vertex AI DeepSeek OCR response: %s", e)
             raise e
 
     async def async_transform_ocr_response(

@@ -121,7 +121,7 @@ class CategoryConfig:
             try:
                 self.phrase_patterns.append((p, re.compile(p, re.IGNORECASE)))
             except re.error:
-                verbose_proxy_logger.warning(f"Invalid phrase pattern in {category_name}: {p}")
+                verbose_proxy_logger.warning("Invalid phrase pattern in %s: %s", category_name, p)
 
 
 class ContentFilterGuardrail(CustomGuardrail):
@@ -226,8 +226,8 @@ class ContentFilterGuardrail(CustomGuardrail):
             p["action"] == ContentFilterAction.MASK for p in self.compiled_patterns
         ):
             verbose_proxy_logger.warning(
-                f"ContentFilterGuardrail '{self.guardrail_name}': 'during_call' mode with 'MASK' action is unstable due to race conditions. "
-                "Use 'pre_call' mode for reliable request masking."
+                "ContentFilterGuardrail '%s': 'during_call' mode with 'MASK' action is unstable due to race conditions. Use 'pre_call' mode for reliable request masking.",
+                self.guardrail_name,
             )
 
         # Load blocked words - always initialize as dict
@@ -238,7 +238,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         # Defensive check: ensure blocked_words is a dict (not a list)
         if not isinstance(self.blocked_words, dict):
             verbose_proxy_logger.error(
-                f"blocked_words is not a dict, got {type(self.blocked_words)}. Resetting to empty dict."
+                "blocked_words is not a dict, got %s. Resetting to empty dict.", type(self.blocked_words)
             )
             self.blocked_words = {}
 
@@ -247,11 +247,12 @@ class ContentFilterGuardrail(CustomGuardrail):
             self._load_blocked_words_file(blocked_words_file)
 
         verbose_proxy_logger.debug(
-            f"ContentFilterGuardrail initialized with {len(self.compiled_patterns)} patterns "
-            f"and {len(self.blocked_words)} blocked words"
+            "ContentFilterGuardrail initialized with %s patterns and %s blocked words",
+            len(self.compiled_patterns),
+            len(self.blocked_words),
         )
         verbose_proxy_logger.debug(
-            f"Loaded {len(self.loaded_categories)} categories with {len(self.category_keywords)} keywords"
+            "Loaded %s categories with %s keywords", len(self.loaded_categories), len(self.category_keywords)
         )
 
     def _init_competitor_intent_checker(self, competitor_intent_config: dict[str, Any]) -> None:
@@ -406,7 +407,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             # Prevent path traversal via category_name (e.g. "../../etc/passwd")
             if not re.match(r"^[a-zA-Z0-9_\-]+$", category_name):
-                verbose_proxy_logger.warning(f"Category name '{category_name}' contains invalid characters, skipping")
+                verbose_proxy_logger.warning("Category name '%s' contains invalid characters, skipping", category_name)
                 continue
 
             enabled = cat_config.get("enabled", True)
@@ -417,7 +418,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             custom_file = cat_config.get("category_file")
 
             if not enabled:
-                verbose_proxy_logger.debug(f"Category {category_name} is disabled, skipping")
+                verbose_proxy_logger.debug("Category %s is disabled, skipping", category_name)
                 continue
 
             # Load category file (custom or default)
@@ -425,7 +426,9 @@ class ContentFilterGuardrail(CustomGuardrail):
                 try:
                     category_file_path = self._resolve_category_file_path(custom_file)
                 except ValueError as e:
-                    verbose_proxy_logger.warning(f"Category {category_name}: invalid category_file path, skipping. {e}")
+                    verbose_proxy_logger.warning(
+                        "Category %s: invalid category_file path, skipping. %s", category_name, e
+                    )
                     continue
             else:
                 # Try .yaml first, then .json (e.g. harm_toxic_abuse.json)
@@ -439,7 +442,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     category_file_path = yaml_path  # will trigger "not found" below
 
             if not os.path.exists(category_file_path):
-                verbose_proxy_logger.warning(f"Category file not found: {category_file_path}, skipping")
+                verbose_proxy_logger.warning("Category file not found: %s, skipping", category_file_path)
                 continue
 
             try:
@@ -487,13 +490,14 @@ class ContentFilterGuardrail(CustomGuardrail):
                         )
 
                 verbose_proxy_logger.info(
-                    f"Loaded category {category_name}: "
-                    f"{len(category_config_obj.keywords)} keywords, "
-                    f"{len(category_config_obj.always_block_keywords)} always-block keywords, "
-                    f"conditional: {bool(category_config_obj.identifier_words)}"
+                    "Loaded category %s: %s keywords, %s always-block keywords, conditional: %s",
+                    category_name,
+                    len(category_config_obj.keywords),
+                    len(category_config_obj.always_block_keywords),
+                    bool(category_config_obj.identifier_words),
                 )
             except Exception as e:
-                verbose_proxy_logger.error(f"Error loading category {category_name}: {e}")
+                verbose_proxy_logger.error("Error loading category %s: %s", category_name, e)
 
     def _load_conditional_category(
         self,
@@ -534,9 +538,12 @@ class ContentFilterGuardrail(CustomGuardrail):
                     inherit_file_path = inherit_json_path
                 else:
                     verbose_proxy_logger.warning(
-                        f"Category {category_name}: inherit_from '{inherit_from}' file not found at {categories_dir}"
+                        "Category %s: inherit_from '%s' file not found at %s",
+                        category_name,
+                        inherit_from,
+                        categories_dir,
                     )
-                    verbose_proxy_logger.debug(f"Tried paths: {inherit_yaml_path}, {inherit_json_path}")
+                    verbose_proxy_logger.debug("Tried paths: %s, %s", inherit_yaml_path, inherit_json_path)
 
                 if inherit_file_path:
                     # Load the inherited category
@@ -583,7 +590,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             verbose_proxy_logger.info(log_msg)
         except Exception as e:
-            verbose_proxy_logger.error(f"Error loading conditional category for {category_name}: {e}")
+            verbose_proxy_logger.error("Error loading conditional category for %s: %s", category_name, e)
 
     def _load_category_file(self, file_path: str) -> CategoryConfig:
         """
@@ -708,9 +715,9 @@ class ContentFilterGuardrail(CustomGuardrail):
                     "allow_word_numbers": bool(extra_config.get("allow_word_numbers")),
                 }
             )
-            verbose_proxy_logger.debug(f"Added pattern: {pattern_name} with action {pattern_config.action}")
+            verbose_proxy_logger.debug("Added pattern: %s with action %s", pattern_name, pattern_config.action)
         except Exception as e:
-            verbose_proxy_logger.error(f"Error adding pattern {pattern_config}: {e}")
+            verbose_proxy_logger.error("Error adding pattern %s: %s", pattern_config, e)
             raise
 
     def _load_blocked_words_file(self, file_path: str) -> None:
@@ -737,7 +744,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             for word_data in data["blocked_words"]:
                 if not isinstance(word_data, dict) or "keyword" not in word_data or "action" not in word_data:
-                    verbose_proxy_logger.warning(f"Skipping invalid word entry: {word_data}")
+                    verbose_proxy_logger.warning("Skipping invalid word entry: %s", word_data)
                     continue
 
                 keyword = word_data["keyword"].lower()
@@ -746,7 +753,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                 self.blocked_words[keyword] = (action, description)
 
-            verbose_proxy_logger.info(f"Loaded {len(data['blocked_words'])} blocked words from {file_path}")
+            verbose_proxy_logger.info("Loaded %s blocked words from %s", len(data["blocked_words"]), file_path)
         except FileNotFoundError:
             raise FileNotFoundError(f"Blocked words file not found: {file_path}")
         except Exception as e:
@@ -889,7 +896,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 matched_text = text[start:end]
                 pattern_name = pattern_entry["pattern_name"]
                 action = pattern_entry["action"]
-                verbose_proxy_logger.debug(f"Pattern '{pattern_name}' matched: {matched_text[:20]}...")
+                verbose_proxy_logger.debug("Pattern '%s' matched: %s...", pattern_name, matched_text[:20])
                 return (matched_text, pattern_name, action)
         return None
 
@@ -933,7 +940,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 for exception in category_obj.exceptions:
                     if exception in text_lower:
                         verbose_proxy_logger.debug(
-                            f"Category exception '{exception}' found for {category_name}, skipping"
+                            "Category exception '%s' found for %s, skipping", exception, category_name
                         )
                         exception_found = True
                         break
@@ -975,7 +982,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 if block_word_found:
                     matched_phrase = f"{identifier_found} + {block_word_found}"
                     verbose_proxy_logger.warning(
-                        f"Conditional match in {category_name}: '{matched_phrase}' in sentence"
+                        "Conditional match in %s: '%s' in sentence", category_name, matched_phrase
                     )
                     return (matched_phrase, category_name, severity, action)
 
@@ -1020,7 +1027,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                 for pattern_str, pattern in config.phrase_patterns:
                     if pattern.search(text):
-                        verbose_proxy_logger.warning(f"Phrase pattern match in {category_name}: '{pattern_str}'")
+                        verbose_proxy_logger.warning("Phrase pattern match in %s: '%s'", category_name, pattern_str)
                         return (
                             f"phrase: {pattern_str}",
                             category_name,
@@ -1048,7 +1055,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         # Check exceptions first — they take precedence over always-block keywords too.
         for exception in exceptions:
             if exception in text_lower:
-                verbose_proxy_logger.debug(f"Exception phrase '{exception}' found, skipping category keyword check")
+                verbose_proxy_logger.debug("Exception phrase '%s' found, skipping category keyword check", exception)
                 return None
 
         # Always-block keywords are checked after exceptions.
@@ -1064,7 +1071,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 keyword_pattern = r"\b" + keyword_pattern_str + r"\b"
                 keyword_found = bool(re.search(keyword_pattern, text_lower))
             if keyword_found:
-                verbose_proxy_logger.debug(f"Always-block keyword '{keyword}' found in category '{category}'")
+                verbose_proxy_logger.debug("Always-block keyword '%s' found in category '%s'", keyword, category)
                 return (keyword, category, severity, action)
 
         # Check category keywords
@@ -1095,7 +1102,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     for exception in category_obj.exceptions:
                         if exception in text_lower:
                             verbose_proxy_logger.debug(
-                                f"Category exception '{exception}' found for keyword '{keyword}', skipping"
+                                "Category exception '%s' found for keyword '%s', skipping", exception, keyword
                             )
                             exception_found = True
                             break
@@ -1103,7 +1110,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                         continue
 
                 verbose_proxy_logger.debug(
-                    f"Category keyword '{keyword}' found in category '{category}' with severity {severity}"
+                    "Category keyword '%s' found in category '%s' with severity %s", keyword, category, severity
                 )
                 return (keyword, category, severity, action)
         return None
@@ -1140,7 +1147,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         text_lower = text.lower()
         for keyword, (action, description) in self.blocked_words.items():
             if keyword in text_lower:
-                verbose_proxy_logger.debug(f"Blocked word '{keyword}' found with action {action}")
+                verbose_proxy_logger.debug("Blocked word '%s' found with action %s", keyword, action)
                 return (keyword, action, description)
         return None
 
@@ -1179,7 +1186,9 @@ class ContentFilterGuardrail(CustomGuardrail):
             )
         elif action == ContentFilterAction.MASK:
             verbose_proxy_logger.warning(
-                f"Conditional match '{matched_phrase}' from {category_name} detected but MASK action not supported for conditional categories"
+                "Conditional match '%s' from %s detected but MASK action not supported for conditional categories",
+                matched_phrase,
+                category_name,
             )
 
     def _handle_category_keyword_match(
@@ -1223,7 +1232,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 flags=re.IGNORECASE,
             )
             verbose_proxy_logger.info(
-                f"Masked category keyword '{keyword}' from {category_name} (severity: {severity})"
+                "Masked category keyword '%s' from %s (severity: %s)", keyword, category_name, severity
             )
 
         return text
@@ -1255,7 +1264,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         elif action == ContentFilterAction.MASK:
             redaction_tag = self.pattern_redaction_format.format(pattern_name=pattern_name.upper())
             text = self._mask_spans(text, spans, redaction_tag)
-            verbose_proxy_logger.info(f"Masked all {pattern_name} matches in content")
+            verbose_proxy_logger.info("Masked all %s matches in content", pattern_name)
 
         return text
 
@@ -1268,7 +1277,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         detections: list[ContentFilterDetection] | None,
     ) -> str:
         """Handle blocked word match detection and action."""
-        verbose_proxy_logger.debug(f"Blocked word '{keyword}' found with action {action}")
+        verbose_proxy_logger.debug("Blocked word '%s' found with action %s", keyword, action)
 
         if detections is not None:
             blocked_word_detection: BlockedWordDetection = {
@@ -1300,7 +1309,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 text,
                 flags=re.IGNORECASE,
             )
-            verbose_proxy_logger.info(f"Masked keyword '{keyword}' in content")
+            verbose_proxy_logger.info("Masked keyword '%s' in content", keyword)
 
         return text
 
@@ -1427,14 +1436,14 @@ class ContentFilterGuardrail(CustomGuardrail):
             message = getattr(choice, "message", None)
             if message and getattr(message, "content", None):
                 image_description = message.content
-                verbose_proxy_logger.debug(f"Image description: {image_description}")
+                verbose_proxy_logger.debug("Image description: %s", image_description)
                 descriptions.append(image_description)
             else:
                 verbose_proxy_logger.warning("No image description found")
 
         # Apply content filtering to image descriptions
         verbose_proxy_logger.debug(
-            f"ContentFilterGuardrail: Applying guardrail to {len(descriptions)} image description(s)"
+            "ContentFilterGuardrail: Applying guardrail to %s image description(s)", len(descriptions)
         )
         for description in descriptions:
             # This will raise HTTPException if BLOCK action is triggered
@@ -1780,7 +1789,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             await self._process_images(images, detections)
 
             # Process texts
-            verbose_proxy_logger.debug(f"ContentFilterGuardrail: Applying guardrail to {len(texts)} text(s)")
+            verbose_proxy_logger.debug("ContentFilterGuardrail: Applying guardrail to %s text(s)", len(texts))
 
             processed_texts = []
             for text in texts:
@@ -1852,7 +1861,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         exception_str: str = ""
 
         verbose_proxy_logger.info(
-            f"ContentFilterGuardrail: Starting robust streaming masking for model {request_data.get('model')}"
+            "ContentFilterGuardrail: Starting robust streaming masking for model %s", request_data.get("model")
         )
 
         try:
@@ -1897,7 +1906,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                             latest_detections_by_choice[choice_index] = choice_detections
                             raise
                         except Exception as e:
-                            verbose_proxy_logger.error(f"ContentFilterGuardrail: Error in masking: {e}")
+                            verbose_proxy_logger.error("ContentFilterGuardrail: Error in masking: %s", e)
                             masked_text = text_to_scan  # Fallback to current text
 
                         # Determine how much can be safely yielded

@@ -281,7 +281,7 @@ def _set_cooldown_deployments(
         return False
 
     exception_status_int = cast_exception_status_to_int(exception_status)
-    verbose_router_logger.debug(f"Attempting to add {deployment} to cooldown list")
+    verbose_router_logger.debug("Attempting to add %s to cooldown list", deployment)
 
     if _should_cooldown_deployment(
         litellm_router_instance=litellm_router_instance,
@@ -331,7 +331,7 @@ async def _async_get_cooldown_deployments(
     ):
         cached_value_deployment_ids = [cv[0] for cv in cooldown_models]
 
-    verbose_router_logger.debug(f"retrieve cooldown models: {cooldown_models}")
+    verbose_router_logger.debug("retrieve cooldown models: %s", cooldown_models)
     return cached_value_deployment_ids
 
 
@@ -347,7 +347,7 @@ async def _async_get_cooldown_deployments_with_debug_info(
         model_ids=model_ids, parent_otel_span=parent_otel_span
     )
 
-    verbose_router_logger.debug(f"retrieve cooldown models: {cooldown_models}")
+    verbose_router_logger.debug("retrieve cooldown models: %s", cooldown_models)
     return cooldown_models
 
 
@@ -432,7 +432,7 @@ def cast_exception_status_to_int(exception_status: str | int) -> int:
             exception_status = int(exception_status)
         except Exception:
             verbose_router_logger.debug(
-                f"Unable to cast exception status to int {exception_status}. Defaulting to status=500."
+                "Unable to cast exception status to int %s. Defaulting to status=500.", exception_status
             )
             exception_status = 500
     return exception_status

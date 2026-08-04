@@ -3,7 +3,7 @@ import json
 import re
 import time
 import traceback
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Literal, cast
 
 import litellm
@@ -20,6 +20,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     ChatCompletionRedactedThinkingBlock,
     Choices,
@@ -41,6 +42,7 @@ from litellm.types.utils import (
     TranscriptionUsageDurationObject,
     TranscriptionUsageTokensObject,
     Usage,
+    chat_completion_tool_call_from_dict,
 )
 from litellm.types.utils import Logprobs as TextCompletionLogprobs
 
@@ -368,7 +370,9 @@ from collections import defaultdict
 
 
 def _handle_invalid_parallel_tool_calls(
-    tool_calls: list[ChatCompletionMessageToolCall],
+    tool_calls: list[
+        ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
+    ],  # mutable-ok: patched in place via slice assignment
 ):
     """
     Handle hallucinated parallel tool call from openai - https://community.openai.com/t/model-tries-to-call-unknown-function-multi-tool-use-parallel/490653
@@ -381,6 +385,8 @@ def _handle_invalid_parallel_tool_calls(
     try:
         replacements: dict[int, list[ChatCompletionMessageToolCall]] = defaultdict(list)
         for i, tool_call in enumerate(tool_calls):
+            if isinstance(tool_call, ChatCompletionMessageCustomToolCall):
+                continue
             current_function = tool_call.function.name
             function_args = json.loads(tool_call.function.arguments)
             if current_function == "multi_tool_use.parallel":
@@ -525,19 +531,17 @@ class LiteLLMResponseObjectHandler:
 
 
 def _should_convert_tool_call_to_json_mode(
-    tool_calls: list[ChatCompletionMessageToolCall] | list[DatabricksTool] | None = None,
+    tool_calls: (
+        Sequence[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | Sequence[DatabricksTool] | None
+    ) = None,
     convert_tool_call_to_json_mode: bool | None = None,
 ) -> bool:
     """
     Determine if tool calls should be converted to JSON mode
     """
-    if (
-        convert_tool_call_to_json_mode
-        and tool_calls is not None
-        and len(tool_calls) == 1
-        and tool_calls[0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME
-    ):
-        return True
+    if convert_tool_call_to_json_mode and tool_calls is not None and len(tool_calls) == 1:
+        function = tool_calls[0].get("function")
+        return function is not None and function["name"] == RESPONSE_FORMAT_TOOL_NAME
     return False
 
 
@@ -642,7 +646,7 @@ def convert_to_model_response_object(
                 if tool_calls is not None:
                     _openai_tool_calls = []
                     for _tc in tool_calls:
-                        _openai_tc = ChatCompletionMessageToolCall(**_tc)
+                        _openai_tc = chat_completion_tool_call_from_dict(_tc)
                         _openai_tool_calls.append(_openai_tc)
                     fixed_tool_calls = _handle_invalid_parallel_tool_calls(_openai_tool_calls)
 
