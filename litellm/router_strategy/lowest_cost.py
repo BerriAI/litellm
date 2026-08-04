@@ -1,7 +1,9 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
 from datetime import datetime, timedelta
-from typing import Final, TypedDict, cast
+from typing import Final, cast
+
+from typing_extensions import TypedDict
 
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
@@ -13,6 +15,7 @@ from litellm.integrations.custom_logger import CustomLogger
 class _ModelCostInfo(TypedDict, total=False):
     input_cost_per_token: float | None
     output_cost_per_token: float | None
+    litellm_provider: str | None
 
 
 def _get_model_cost_info(model_name: str | None) -> _ModelCostInfo:
@@ -26,12 +29,14 @@ def _get_model_cost_info(model_name: str | None) -> _ModelCostInfo:
     if exact_model_cost is not None:
         return exact_model_cost
 
-    try:
-        return cast(  # cast-ok: only the two declared numeric fields are read below
-            _ModelCostInfo, litellm.get_model_info(model_name)
-        )
-    except Exception:
+    provider_name, separator, unprefixed_model_name = model_name.partition("/")
+    if separator == "":
         return {}  # mutable-ok: each unresolved model gets an independent cost map
+
+    unprefixed_model_cost = model_cost.get(unprefixed_model_name)
+    if unprefixed_model_cost is None or unprefixed_model_cost.get("litellm_provider") != provider_name:
+        return {}
+    return unprefixed_model_cost
 
 
 class LowestCostLoggingHandler(CustomLogger):
