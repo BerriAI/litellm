@@ -358,6 +358,54 @@ class TestHandleContentBlockDelta:
         )
         assert 99 not in blocks
 
+    def test_should_ignore_thinking_delta_on_text_block(self):
+        """Phase 2 reconstruction only: a thinking_delta targeting a text block
+        must be dropped so the rebuilt block stays pure text. Promoting it would
+        inject an unsigned ``thinking`` field the client never sent. This does
+        not touch Phase 1 raw pass-through forwarding."""
+        blocks = {0: {"type": "text", "text": "answer"}}
+        _handle_content_block_delta(
+            {"index": 0, "delta": {"type": "thinking_delta", "thinking": "leaked"}},
+            blocks,
+        )
+        assert blocks[0] == {"type": "text", "text": "answer"}
+        assert "thinking" not in blocks[0]
+
+    def test_should_ignore_signature_delta_on_text_block(self):
+        """A signature_delta targeting a reconstructed text block must not add a
+        ``signature`` field to it."""
+        blocks = {0: {"type": "text", "text": "answer"}}
+        _handle_content_block_delta(
+            {"index": 0, "delta": {"type": "signature_delta", "signature": "sig"}},
+            blocks,
+        )
+        assert blocks[0] == {"type": "text", "text": "answer"}
+        assert "signature" not in blocks[0]
+
+    def test_should_still_accumulate_text_delta_on_text_block(self):
+        """The guard must not disturb legitimate text_delta accumulation."""
+        blocks = {0: {"type": "text", "text": "Hello"}}
+        _handle_content_block_delta(
+            {"index": 0, "delta": {"type": "text_delta", "text": " World"}},
+            blocks,
+        )
+        assert blocks[0]["text"] == "Hello World"
+
+    def test_should_still_write_thinking_and_signature_on_thinking_block(self):
+        """Valid thinking/signature deltas targeting a thinking block are still
+        written."""
+        blocks = {0: {"type": "thinking", "thinking": "", "signature": ""}}
+        _handle_content_block_delta(
+            {"index": 0, "delta": {"type": "thinking_delta", "thinking": "step 1"}},
+            blocks,
+        )
+        _handle_content_block_delta(
+            {"index": 0, "delta": {"type": "signature_delta", "signature": "sig_ok"}},
+            blocks,
+        )
+        assert blocks[0]["thinking"] == "step 1"
+        assert blocks[0]["signature"] == "sig_ok"
+
 
 class TestHandleContentBlockStop:
     def test_should_parse_tool_input_json(self):
