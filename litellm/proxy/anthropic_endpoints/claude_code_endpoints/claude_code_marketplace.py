@@ -18,7 +18,7 @@ Endpoints:
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -33,7 +33,7 @@ from litellm.types.proxy.claude_code_endpoints import (
     RegisterPluginRequest,
 )
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 async def _get_prisma_client():
@@ -70,11 +70,11 @@ async def get_marketplace():
         ```
     """
     try:
-        prisma_client = await _get_prisma_client()
+        prisma_client: Final = await _get_prisma_client()
 
-        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(where={"enabled": True})
+        plugins: Final = await ClaudeCodePluginRepository(prisma_client).table.find_many(where={"enabled": True})
 
-        plugin_list = []
+        plugin_list: Final = []
         for plugin in plugins:
             try:
                 manifest = json.loads(plugin.manifest_json)
@@ -107,7 +107,7 @@ async def get_marketplace():
 
             plugin_list.append(entry)
 
-        marketplace = {
+        marketplace: Final = {
             "name": "litellm",
             "owner": {"name": "LiteLLM", "email": "support@litellm.ai"},
             "plugins": plugin_list,
@@ -129,12 +129,12 @@ async def get_marketplace():
 # Each segment must start with an alphanumeric character and contain only
 # alphanumeric characters, dots, hyphens, and underscores.
 # This implicitly blocks '..', leading '/', backslashes, and percent-encoded sequences.
-_VALID_GIT_SUBDIR_PATH_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$")
+_VALID_GIT_SUBDIR_PATH_RE: Final = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$")
 
 
 def _validate_plugin_source(source: dict[str, Any]) -> None:
     """Validate plugin source format, raising HTTPException on invalid input."""
-    source_type = source.get("source")
+    source_type: Final = source.get("source")
     if source_type == "github":
         if "repo" not in source:
             raise HTTPException(
@@ -217,7 +217,7 @@ async def register_plugin(
         ```
     """
     try:
-        prisma_client = await _get_prisma_client()
+        prisma_client: Final = await _get_prisma_client()
 
         # Validate name format
         if not re.match(r"^[a-z0-9-]+$", request.name):
@@ -227,11 +227,11 @@ async def register_plugin(
             )
 
         # Validate source format
-        source = request.source
+        source: Final = request.source
         _validate_plugin_source(source)
 
         # Build manifest for storage
-        manifest: dict[str, Any] = {
+        manifest: Final[dict[str, Any]] = {
             "name": request.name,
             "source": request.source,
         }
@@ -328,12 +328,12 @@ async def list_plugins(
         List of plugins with their metadata.
     """
     try:
-        prisma_client = await _get_prisma_client()
+        prisma_client: Final = await _get_prisma_client()
 
-        where = {"enabled": True} if enabled_only else {}
-        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(where=where)
+        where: Final = {"enabled": True} if enabled_only else {}
+        plugins: Final = await ClaudeCodePluginRepository(prisma_client).table.find_many(where=where)
 
-        plugin_list = []
+        plugin_list: Final = []
         for p in plugins:
             # Parse manifest to get additional fields
             manifest = json.loads(p.manifest_json) if p.manifest_json else {}
@@ -394,9 +394,9 @@ async def get_plugin(
         Plugin details including source and metadata.
     """
     try:
-        prisma_client = await _get_prisma_client()
+        prisma_client: Final = await _get_prisma_client()
 
-        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
+        plugin: Final = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
 
         if not plugin:
             raise HTTPException(
@@ -404,7 +404,7 @@ async def get_plugin(
                 detail={"error": f"Plugin '{plugin_name}' not found"},
             )
 
-        manifest = json.loads(plugin.manifest_json) if plugin.manifest_json else {}
+        manifest: Final = json.loads(plugin.manifest_json) if plugin.manifest_json else {}
 
         return {
             "id": plugin.id,
@@ -448,9 +448,9 @@ async def enable_plugin(
         - plugin_name: The name of the plugin to enable
     """
     try:
-        prisma_client = await _get_prisma_client()
+        prisma_client: Final = await _get_prisma_client()
 
-        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
+        plugin: Final = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
         if not plugin:
             raise HTTPException(
                 status_code=404,
@@ -491,9 +491,9 @@ async def disable_plugin(
         - plugin_name: The name of the plugin to disable
     """
     try:
-        prisma_client = await _get_prisma_client()
+        prisma_client: Final = await _get_prisma_client()
 
-        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
+        plugin: Final = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
         if not plugin:
             raise HTTPException(
                 status_code=404,
@@ -534,9 +534,9 @@ async def delete_plugin(
         - plugin_name: The name of the plugin to delete
     """
     try:
-        prisma_client = await _get_prisma_client()
+        prisma_client: Final = await _get_prisma_client()
 
-        plugin = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
+        plugin: Final = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
         if not plugin:
             raise HTTPException(
                 status_code=404,

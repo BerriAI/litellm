@@ -5,6 +5,7 @@ Class to handle llm wildcard routing and regex pattern matching
 import copy
 import re
 from re import Match
+from typing import Final
 
 from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -22,8 +23,8 @@ class PatternUtils:
         Returns:
             Tuple of (length, complexity) for sorting
         """
-        complexity_chars = ["*", "+", "?", "\\", "^", "$", "|", "(", ")"]
-        ret_val = (
+        complexity_chars: Final = ["*", "+", "?", "\\", "^", "$", "|", "(", ")"]
+        ret_val: Final = (
             len(pattern),  # Longer patterns more specific
             sum(pattern.count(char) for char in complexity_chars),  # More regex complexity
         )
@@ -67,7 +68,7 @@ class PatternMatchRouter:
             llm_deployment: str or List[str]
         """
         # Convert the pattern to a regex
-        regex = self._pattern_to_regex(pattern)
+        regex: Final = self._pattern_to_regex(pattern)
         if regex not in self.patterns:
             self.patterns[regex] = []
         self.patterns[regex].append(llm_deployment)
@@ -108,7 +109,7 @@ class PatternMatchRouter:
         return re.escape(pattern).replace(r"\*", "(.*)")
 
     def _return_pattern_matched_deployments(self, matched_pattern: Match, deployments: list[dict]) -> list[dict]:
-        new_deployments = []
+        new_deployments: Final = []
         for deployment in deployments:
             new_deployment = copy.deepcopy(deployment)
             new_deployment["litellm_params"]["model"] = PatternMatchRouter.set_deployment_model_name(
@@ -137,8 +138,8 @@ class PatternMatchRouter:
             if request is None:
                 return None
 
-            sorted_patterns = PatternUtils.sorted_patterns(self.patterns)
-            regex_filtered_model_names = (
+            sorted_patterns: Final = PatternUtils.sorted_patterns(self.patterns)
+            regex_filtered_model_names: Final = (
                 [self._pattern_to_regex(m) for m in filtered_model_names] if filtered_model_names is not None else []
             )
             for pattern, llm_deployments in sorted_patterns:
@@ -190,10 +191,10 @@ class PatternMatchRouter:
         if "*" not in litellm_deployment_litellm_model:
             return litellm_deployment_litellm_model
 
-        wildcard_count = litellm_deployment_litellm_model.count("*")
+        wildcard_count: Final = litellm_deployment_litellm_model.count("*")
 
         # Extract all dynamic segments from the request
-        dynamic_segments = matched_pattern.groups()
+        dynamic_segments: Final = matched_pattern.groups()
 
         if len(dynamic_segments) > wildcard_count:
             return matched_pattern.string  # default to the user input, if unable to map based on wildcards.
@@ -238,7 +239,7 @@ class PatternMatchRouter:
         Returns:
             List[Dict]: llm deployments matching the pattern
         """
-        pattern_match = self.get_pattern(model, custom_llm_provider)
+        pattern_match: Final = self.get_pattern(model, custom_llm_provider)
         if pattern_match:
             return pattern_match
         return []

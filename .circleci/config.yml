@@ -2592,14 +2592,14 @@ jobs:
             bundle exec rspec
           no_output_timeout: 30m
       # Install Node.js directly from nodejs.org with SHA256 verification,
-      # instead of piping NodeSource's setup_18.x apt-repo installer into
+      # instead of piping NodeSource's setup_24.x apt-repo installer into
       # sudo bash (which runs a mutable upstream script unattended).
       - run:
-          name: Install Node.js 18.20.8
+          name: Install Node.js 24.19.0
           command: |
-            NODE_VERSION="18.20.8"
+            NODE_VERSION="24.19.0"
             NODE_TARBALL="node-v${NODE_VERSION}-linux-x64.tar.xz"
-            NODE_EXPECTED_SHA="5467ee62d6af1411d46b6a10e3fb5cacc92734dbcef465fea14e7b90993001c9"
+            NODE_EXPECTED_SHA="14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647"
             curl -sSLf -o "/tmp/${NODE_TARBALL}" "https://nodejs.org/dist/v${NODE_VERSION}/${NODE_TARBALL}"
             echo "${NODE_EXPECTED_SHA}  /tmp/${NODE_TARBALL}" | sha256sum -c -
             sudo tar -xJf "/tmp/${NODE_TARBALL}" -C /usr/local --strip-components=1
@@ -2734,7 +2734,7 @@ jobs:
 
   ui_build:
     docker:
-      - image: cimg/node:20.19@sha256:35e64883e8d21bc345b0a7b04c35ee46442c127607ed1d8d7d37d8a1ed76db81
+      - image: cimg/node:24.19@sha256:8966565f07189a67d64d6808a2b127f31dafae566508e3547f55640e1070bfad
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -2778,7 +2778,7 @@ jobs:
 
   ui_unit_tests:
     docker:
-      - image: cimg/node:20.19@sha256:35e64883e8d21bc345b0a7b04c35ee46442c127607ed1d8d7d37d8a1ed76db81
+      - image: cimg/node:24.19@sha256:8966565f07189a67d64d6808a2b127f31dafae566508e3547f55640e1070bfad
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}

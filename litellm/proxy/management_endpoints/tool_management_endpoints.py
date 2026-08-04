@@ -11,7 +11,7 @@ POST /v1/tool/policy            - Update the input_policy / output_policy for a 
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, TypeAdapter
@@ -49,9 +49,9 @@ from litellm.types.tool_management import (
     ToolUsageLogsResponse,
 )
 
-router = APIRouter()
+router: Final = APIRouter()
 
-TOOL_POLICY_OPTIONS = ToolPolicyOptionsResponse(
+TOOL_POLICY_OPTIONS: Final = ToolPolicyOptionsResponse(
     input_policies=[
         ToolPolicyOption(
             value="untrusted",
@@ -123,7 +123,7 @@ async def list_tools(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
-        tools = await db_list_tools(prisma_client=prisma_client, input_policy=input_policy)
+        tools: Final = await db_list_tools(prisma_client=prisma_client, input_policy=input_policy)
         return ToolListResponse(tools=tools, total=len(tools))
     except Exception as e:
         verbose_proxy_logger.exception("Error listing tools: %s", e)
@@ -153,7 +153,7 @@ class _TopToolRow(BaseModel):
     sums: _ToolSpendSums = Field(alias="_sum")
 
 
-_TOP_TOOL_ROWS = TypeAdapter(list[_TopToolRow])
+_TOP_TOOL_ROWS: Final = TypeAdapter(list[_TopToolRow])
 
 
 @router.get(
@@ -195,14 +195,14 @@ async def get_tool_spend(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    end_day = _parse_day_start(end_date) or datetime.now(timezone.utc)
-    start_day = _parse_day_start(start_date) or end_day - timedelta(days=30)
-    start_str = start_day.strftime("%Y-%m-%d")
-    end_str = end_day.strftime("%Y-%m-%d")
-    date_window = {"date": {"gte": start_str, "lte": end_str}}
+    end_day: Final = _parse_day_start(end_date) or datetime.now(timezone.utc)
+    start_day: Final = _parse_day_start(start_date) or end_day - timedelta(days=30)
+    start_str: Final = start_day.strftime("%Y-%m-%d")
+    end_str: Final = end_day.strftime("%Y-%m-%d")
+    date_window: Final = {"date": {"gte": start_str, "lte": end_str}}
 
-    table = DailyToolSpendRepository(prisma_client).table
-    top_tools = _TOP_TOOL_ROWS.validate_python(
+    table: Final = DailyToolSpendRepository(prisma_client).table
+    top_tools: Final = _TOP_TOOL_ROWS.validate_python(
         await table.group_by(
             by=["tool_name"],
             sum={"spend": True, "total_tokens": True, "request_count": True},
@@ -212,7 +212,7 @@ async def get_tool_spend(
         )
         or []
     )
-    by_tool = [
+    by_tool: Final = [
         ToolSpendEntry(
             tool_name=row.tool_name,
             spend=row.sums.spend,
@@ -222,7 +222,7 @@ async def get_tool_spend(
         for row in top_tools
     ]
 
-    daily_rows = (
+    daily_rows: Final = (
         await table.find_many(
             where={**date_window, "tool_name": {"in": [row.tool_name for row in top_tools]}},
             order=[{"date": "asc"}, {"spend": "desc"}],
@@ -230,7 +230,7 @@ async def get_tool_spend(
         if top_tools
         else []
     )
-    daily = [
+    daily: Final = [
         ToolSpendDailyEntry(date=row.date, tool_name=row.tool_name, spend=row.spend, call_count=row.request_count)
         for row in daily_rows
     ]
@@ -258,10 +258,10 @@ async def get_tool_detail(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
-        tool = await db_get_tool(prisma_client=prisma_client, tool_name=tool_name)
+        tool: Final = await db_get_tool(prisma_client=prisma_client, tool_name=tool_name)
         if tool is None:
             raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
-        overrides = await list_overrides_for_tool(prisma_client=prisma_client, tool_name=tool_name)
+        overrides: Final = await list_overrides_for_tool(prisma_client=prisma_client, tool_name=tool_name)
         return ToolDetailResponse(tool=tool, overrides=overrides)
     except HTTPException:
         raise
@@ -274,7 +274,7 @@ def _input_snippet_for_tool_log(sl: Any, max_len: int = 200) -> str | None:
     """Short snippet from messages or proxy_server_request for tool usage log row."""
     if sl is None:
         return None
-    messages = getattr(sl, "messages", None)
+    messages: Final = getattr(sl, "messages", None)
     if messages is not None:
         s = _snippet_str(messages, max_len)
         if s:
@@ -305,7 +305,7 @@ def _snippet_str(text: Any, max_len: int = 200) -> str | None:
     if isinstance(text, str):
         s = text
     elif isinstance(text, list):
-        parts = []
+        parts: Final = []
         for item in text:
             if isinstance(item, dict) and "content" in item:
                 c = item["content"]
@@ -344,7 +344,7 @@ async def get_tool_usage_logs(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
-        where: dict = {"tool_name": tool_name}
+        where: Final[dict] = {"tool_name": tool_name}
         if start_date or end_date:
             start_time_filter: datetime | None = None
             end_time_filter: datetime | None = None
@@ -369,21 +369,21 @@ async def get_tool_usage_logs(
                 if end_time_filter is not None:
                     where["start_time"]["lte"] = end_time_filter
 
-        total = await SpendLogToolIndexRepository(prisma_client).table.count(where=where)
-        index_rows = await SpendLogToolIndexRepository(prisma_client).table.find_many(
+        total: Final = await SpendLogToolIndexRepository(prisma_client).table.count(where=where)
+        index_rows: Final = await SpendLogToolIndexRepository(prisma_client).table.find_many(
             where=where,
             order={"start_time": "desc"},
             skip=(page - 1) * page_size,
             take=page_size,
         )
-        request_ids = [r.request_id for r in index_rows]
+        request_ids: Final = [r.request_id for r in index_rows]
         if not request_ids:
             return ToolUsageLogsResponse(logs=[], total=total, page=page, page_size=page_size)
 
         spend_logs = await SpendLogsRepository(prisma_client).table.find_many(where={"request_id": {"in": request_ids}})
-        log_by_id = {s.request_id: s for s in spend_logs}
+        log_by_id: Final = {s.request_id: s for s in spend_logs}
 
-        logs_out: list[ToolUsageLogEntry] = []
+        logs_out: Final[list[ToolUsageLogEntry]] = []
         for r in index_rows:
             sl = log_by_id.get(r.request_id)
             if not sl:
@@ -428,7 +428,7 @@ async def get_tool(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
-        tool = await db_get_tool(prisma_client=prisma_client, tool_name=tool_name)
+        tool: Final = await db_get_tool(prisma_client=prisma_client, tool_name=tool_name)
         if tool is None:
             raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
         return tool
@@ -446,20 +446,20 @@ async def _resolve_key_hash_to_object_permission_id(
     """Resolve key (hash or raw) to object_permission_id; create permission if key has none."""
     from litellm.proxy.proxy_server import hash_token
 
-    hashed = key_hash if "sk-" not in (key_hash or "") else hash_token(key_hash)
+    hashed: Final = key_hash if "sk-" not in (key_hash or "") else hash_token(key_hash)
     if not hashed:
         return None
     row = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": hashed})
     if row is None:
         return None
-    op_id = getattr(row, "object_permission_id", None)
+    op_id: Final = getattr(row, "object_permission_id", None)
     if op_id:
         return op_id
-    new_id = str(uuid.uuid4())
+    new_id: Final = str(uuid.uuid4())
     await ObjectPermissionRepository(prisma_client).table.create(
         data={"object_permission_id": new_id, "blocked_tools": []}
     )
-    updated_count = await VerificationTokenRepository(prisma_client).table.update_many(
+    updated_count: Final = await VerificationTokenRepository(prisma_client).table.update_many(
         where={"token": hashed, "object_permission_id": None},
         data={"object_permission_id": new_id},
     )
@@ -477,18 +477,18 @@ async def _resolve_team_id_to_object_permission_id(
     """Resolve team_id to object_permission_id; create permission if team has none."""
     if not team_id or not team_id.strip():
         return None
-    team_id_clean = team_id.strip()
+    team_id_clean: Final = team_id.strip()
     row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id_clean})
     if row is None:
         return None
-    op_id = getattr(row, "object_permission_id", None)
+    op_id: Final = getattr(row, "object_permission_id", None)
     if op_id:
         return op_id
-    new_id = str(uuid.uuid4())
+    new_id: Final = str(uuid.uuid4())
     await ObjectPermissionRepository(prisma_client).table.create(
         data={"object_permission_id": new_id, "blocked_tools": []}
     )
-    updated_count = await TeamRepository(prisma_client).table.update_many(
+    updated_count: Final = await TeamRepository(prisma_client).table.update_many(
         where={"team_id": team_id_clean, "object_permission_id": None},
         data={"object_permission_id": new_id},
     )
@@ -548,7 +548,7 @@ async def update_tool_policy(
                     status_code=404,
                     detail="Key or team not found for the given identifier",
                 )
-            is_blocking = data.input_policy == "blocked"
+            is_blocking: Final = data.input_policy == "blocked"
             if is_blocking:
                 ok = await add_tool_to_object_permission_blocked(
                     prisma_client=prisma_client,
@@ -584,7 +584,7 @@ async def update_tool_policy(
                 detail="At least one of input_policy or output_policy must be provided",
             )
 
-        updated = await db_update_tool_policy(
+        updated: Final = await db_update_tool_policy(
             prisma_client=prisma_client,
             tool_name=data.tool_name,
             updated_by=user_api_key_dict.user_id,
@@ -655,7 +655,7 @@ async def delete_tool_policy_override(
                 status_code=404,
                 detail="Key or team not found for the given identifier",
             )
-        deleted = await remove_tool_from_object_permission_blocked(
+        deleted: Final = await remove_tool_from_object_permission_blocked(
             prisma_client=prisma_client,
             object_permission_id=op_id,
             tool_name=tool_name,
@@ -665,7 +665,7 @@ async def delete_tool_policy_override(
                 status_code=404,
                 detail=f"No override found for tool '{tool_name}' with the given scope",
             )
-        registry = get_tool_policy_registry()
+        registry: Final = get_tool_policy_registry()
         if registry.is_initialized():
             await registry.sync_tool_policy_from_db(prisma_client)
         return {"deleted": True, "tool_name": tool_name}
