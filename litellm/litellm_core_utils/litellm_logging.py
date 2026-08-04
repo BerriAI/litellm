@@ -10,12 +10,10 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime as dt_object
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
-
-from collections.abc import Mapping
 
 from httpx import Response
 from pydantic import BaseModel
