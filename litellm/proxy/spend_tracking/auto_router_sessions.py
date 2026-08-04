@@ -302,17 +302,19 @@ def auto_router_kind(router: "Router", model_group: str) -> StrategyRouterKind |
     classifier sub-calls share the session but carry the judge model's group, so
     keying on it folds one turn per routed request and no classifier noise.
 
-    A complexity router with ``adaptive`` enabled owns an entry in both
-    registries, so complexity is answered first; that is the kind
-    ``auto_router_group_kinds`` reports for the same deployment, and the two have
-    to agree or the dashboard would label the group one way and the rows another.
+    One deployment can own an entry in more than one registry; a complexity
+    router with ``adaptive`` enabled is in both. The order below is therefore the
+    order ``classify_strategy_router_model`` resolves its prefixes in, which is
+    what ``auto_router_group_kinds`` labels the same group with on the read side.
+    The two have to agree, or the dashboard would label a group one way and the
+    rows it aggregates another.
     """
     if model_group in router.complexity_routers:
         return "complexity"
-    if model_group in router.quality_routers:
-        return "quality"
     if model_group in router.adaptive_routers:
         return "adaptive"
+    if model_group in router.quality_routers:
+        return "quality"
     if model_group in router.auto_routers:
         return "semantic"
     return None
