@@ -6487,11 +6487,18 @@ class ProxyConfig:
             if should_reload:
                 # Perform the reload
                 from litellm.litellm_core_utils.get_model_cost_map import (
-                    get_model_cost_map,
+                    ModelCostMapReloadUnavailable,
+                    refetch_model_cost_map,
                 )
 
                 model_cost_map_url = litellm.model_cost_map_url
-                new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
+                reload_result = await refetch_model_cost_map(url=model_cost_map_url)
+                if isinstance(reload_result, ModelCostMapReloadUnavailable):
+                    verbose_proxy_logger.warning(
+                        f"Model cost map reload failed ({reload_result.reason}); keeping current pricing data, will retry on the next config poll"
+                    )
+                    return
+                new_model_cost_map = reload_result.model_cost_map
                 litellm.model_cost = new_model_cost_map
                 # Invalidate case-insensitive lookup map since model_cost was replaced
                 _invalidate_model_cost_lowercase_map()
@@ -15772,10 +15779,19 @@ async def reload_model_cost_map(
             raise HTTPException(status_code=500, detail="Database connection not available")
 
         # Immediately reload the model cost map in the current pod
-        from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+        from litellm.litellm_core_utils.get_model_cost_map import (
+            ModelCostMapReloadUnavailable,
+            refetch_model_cost_map,
+        )
 
         model_cost_map_url = litellm.model_cost_map_url
-        new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
+        reload_result = await refetch_model_cost_map(url=model_cost_map_url)
+        if isinstance(reload_result, ModelCostMapReloadUnavailable):
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to reload model cost map: {reload_result.reason}. Current pricing data was kept.",
+            )
+        new_model_cost_map = reload_result.model_cost_map
         litellm.model_cost = new_model_cost_map
         # Invalidate case-insensitive lookup map since model_cost was replaced
         _invalidate_model_cost_lowercase_map()
@@ -15817,6 +15833,8 @@ async def reload_model_cost_map(
             "models_count": models_count,
             "timestamp": current_time.isoformat(),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Failed to reload model cost map: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to reload model cost map: {e}")
