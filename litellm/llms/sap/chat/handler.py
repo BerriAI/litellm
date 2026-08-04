@@ -59,7 +59,7 @@ class _StreamParser:
             model_dump() calls in the streaming handler don't raise
             "'MockValSer' object is not an instance of 'SchemaSerializer'"
         """
-        for choice in payload.get("choices") or []:
+        for choice in payload.get("choices") or []:  # mutable-ok: only iterated, never mutated
             if isinstance(choice, dict) and not choice.get("logprobs"):
                 choice.pop("logprobs", None)
         chunk = OpenAIChatCompletionChunk.model_validate(payload)
