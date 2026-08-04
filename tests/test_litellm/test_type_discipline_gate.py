@@ -8,6 +8,8 @@ drift-safe breach check). Both are pinned here.
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 _MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "type_discipline_gate.py"
 _spec = importlib.util.spec_from_file_location("type_discipline_gate", _MODULE_PATH)
 gate = importlib.util.module_from_spec(_spec)
@@ -50,3 +52,73 @@ def test_update_ratchets_limit_down_by_what_the_branch_fixed_never_up():
         "LIT001": {"limit": 85},
         "LIT006": {"limit": 10},
     }
+
+
+def test_no_violations_against_a_nonempty_budget_is_vacuous():
+    assert gate.is_vacuous_run({}, _budget(12)) is True
+
+
+def test_genuine_zero_counts_are_not_vacuous():
+    assert gate.is_vacuous_run({}, {}) is False
+    assert gate.is_vacuous_run({}, _budget(0)) is False
+    assert gate.is_vacuous_run({"LIT006": 1}, _budget(12)) is False
+
+
+def _violations(code, count):
+    return [gate.Violation("litellm/a.py", line, code) for line in range(1, count + 1)]
+
+
+def _raise_if_called(*args):
+    raise AssertionError("must not be called")
+
+
+def _budget_file(tmp_path, limit):
+    path = tmp_path / "budget.json"
+    path.write_text(f'{{"LIT006": {{"limit": {limit}}}}}')
+    return path
+
+
+def test_check_rejects_a_vacuous_head_pass(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        gate.cmd_check(
+            "origin/main",
+            violations=lambda: [],
+            base_counts_for=_raise_if_called,
+            merge_base=_raise_if_called,
+            budget_path=_budget_file(tmp_path, 12),
+        )
+    assert "vacuous" in capsys.readouterr().out
+
+
+def test_check_within_ceiling_skips_the_base_pass(tmp_path, capsys):
+    gate.cmd_check(
+        "origin/main",
+        violations=lambda: _violations("LIT006", 3),
+        base_counts_for=_raise_if_called,
+        merge_base=_raise_if_called,
+        budget_path=_budget_file(tmp_path, 12),
+    )
+    assert capsys.readouterr().out.startswith("OK")
+
+
+def test_check_refuses_to_blame_the_change_for_a_vacuous_base_pass(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        gate.cmd_check(
+            "origin/main",
+            violations=lambda: _violations("LIT006", 3),
+            base_counts_for=lambda ref: {},
+            merge_base=lambda base: "a" * 40,
+            budget_path=_budget_file(tmp_path, 2),
+        )
+    assert "refusing to blame" in capsys.readouterr().out
+
+
+def test_check_spares_a_bystander_whose_base_matches_head(tmp_path, capsys):
+    gate.cmd_check(
+        "origin/main",
+        violations=lambda: _violations("LIT006", 3),
+        base_counts_for=lambda ref: {"LIT006": 3},
+        merge_base=lambda base: "a" * 40,
+        budget_path=_budget_file(tmp_path, 2),
+    )
+    assert capsys.readouterr().out.startswith("OK")
