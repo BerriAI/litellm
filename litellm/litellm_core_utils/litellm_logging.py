@@ -3406,6 +3406,7 @@ def _get_masked_values(
         "credentials",
         "password",
         "passwd",
+        "otel_headers",
     ]
 
     def _mask_value(v: Any) -> Any:
