@@ -443,3 +443,103 @@ async def test_store_unified_file_id_is_idempotent_via_upsert():
         assert upsert_data["create"]["unified_file_id"] == file_id
         assert json.loads(upsert_data["create"]["model_mappings"]) == model_mappings
         assert json.loads(upsert_data["update"]["model_mappings"]) == model_mappings
+
+
+def _make_managed_file_row(
+    *,
+    unified_file_id: str,
+    provider_ids: list[str],
+    file_object: object,
+    created_by: str = "test-user",
+    team_id: str | None = None,
+):
+    row = MagicMock()
+    row.unified_file_id = unified_file_id
+    row.flat_model_file_ids = provider_ids
+    row.file_object = file_object
+    row.created_by = created_by
+    row.team_id = team_id
+    return row
+
+
+@pytest.mark.asyncio
+async def test_get_user_created_file_ids_skips_rows_without_file_object():
+    """A managed row with file_object=None must not take down GET /v1/files."""
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _PROXY_LiteLLMManagedFiles,
+    )
+
+    valid = _make_managed_file_row(
+        unified_file_id="unified-ok",
+        provider_ids=["file-ok"],
+        file_object=_make_file_object("file-ok").model_dump(),
+    )
+    null_row = _make_managed_file_row(
+        unified_file_id="unified-null",
+        provider_ids=["file-null"],
+        file_object=None,
+    )
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedfiletable.find_many = AsyncMock(
+        return_value=[valid, null_row]
+    )
+    managed = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=MagicMock(), prisma_client=mock_prisma
+    )
+
+    result = await managed.get_user_created_file_ids(
+        user_api_key_dict=_make_user_api_key_dict(),
+        model_object_ids=["file-ok", "file-null"],
+    )
+
+    assert [f.id for f in result] == ["file-ok"]
+
+
+@pytest.mark.asyncio
+async def test_filter_listed_provider_files_keeps_untracked_uploads():
+    """LIT-4820: provider-scoped uploads that never entered the managed table
+    must still appear on GET /v1/files. The old filter replaced the page with
+    only managed rows owned by the caller, so raw uploads vanished."""
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _PROXY_LiteLLMManagedFiles,
+    )
+
+    raw_upload = _make_file_object("file-raw-new")
+    other_user_managed = _make_file_object("file-other-user")
+    own_managed_provider = _make_file_object("file-own-managed")
+    own_managed_unified = _make_file_object("unified-own")
+
+    other_row = _make_managed_file_row(
+        unified_file_id="unified-other",
+        provider_ids=["file-other-user"],
+        file_object=other_user_managed.model_dump(),
+        created_by="other-user",
+    )
+    own_row = _make_managed_file_row(
+        unified_file_id="unified-own",
+        provider_ids=["file-own-managed"],
+        file_object=own_managed_unified.model_dump(),
+        created_by="test-user",
+    )
+
+    mock_prisma = MagicMock()
+
+    async def _find_many(*, where):
+        if "created_by" in where or "OR" in where:
+            return [own_row]
+        return [other_row, own_row]
+
+    mock_prisma.db.litellm_managedfiletable.find_many = AsyncMock(side_effect=_find_many)
+    managed = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=MagicMock(), prisma_client=mock_prisma
+    )
+
+    kept = await managed._filter_listed_provider_files(
+        provider_files=[raw_upload, other_user_managed, own_managed_provider],
+        user_api_key_dict=_make_user_api_key_dict(),
+    )
+
+    kept_ids = [f.id for f in kept]
+    assert "file-raw-new" in kept_ids
+    assert "file-other-user" not in kept_ids
+    assert "unified-own" in kept_ids
