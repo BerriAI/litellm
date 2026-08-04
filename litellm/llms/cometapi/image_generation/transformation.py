@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -43,7 +43,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
         for k in non_default_params:
             if k not in optional_params:
@@ -114,7 +114,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         https://api.cometapi.com/v1/images/generations
         """
         # CometAPI uses OpenAI-compatible format
-        request_body = {
+        request_body: Final = {
             "prompt": prompt,
             "model": model,
             **optional_params,
@@ -140,7 +140,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         https://api.cometapi.com/v1/images/generations
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",

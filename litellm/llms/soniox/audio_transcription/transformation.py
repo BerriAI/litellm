@@ -9,7 +9,7 @@ async API requires multiple HTTP calls and does not fit the single-request
 contract of `base_llm_http_handler.audio_transcriptions`.
 """
 
-from typing import Any
+from typing import Any, Final
 
 from httpx import Headers, Response
 
@@ -34,7 +34,7 @@ from litellm.types.utils import FileTypes, TranscriptionResponse
 
 # Soniox-native kwargs the user can pass through `litellm.transcription(..., **kwargs)`
 # in addition to the standard OpenAI params.
-SONIOX_PASSTHROUGH_PARAMS: list[str] = [
+SONIOX_PASSTHROUGH_PARAMS: Final[list[str]] = [
     "language_hints",
     "language_hints_strict",
     "enable_language_identification",
@@ -50,7 +50,7 @@ SONIOX_PASSTHROUGH_PARAMS: list[str] = [
 ]
 
 # Handler-only kwargs (consumed by the handler, not sent to Soniox).
-SONIOX_HANDLER_ONLY_PARAMS: list[str] = [
+SONIOX_HANDLER_ONLY_PARAMS: Final[list[str]] = [
     "soniox_polling_interval",
     "soniox_max_polling_attempts",
     "soniox_cleanup",
@@ -76,8 +76,8 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> dict:
         # Translate the OpenAI `language` param into Soniox `language_hints`.
         if "language" in non_default_params and non_default_params["language"]:
-            language = non_default_params["language"]
-            existing_hints = optional_params.get("language_hints")
+            language: Final = non_default_params["language"]
+            existing_hints: Final = optional_params.get("language_hints")
             if not existing_hints:
                 optional_params["language_hints"] = [language]
             elif language not in existing_hints:
@@ -107,7 +107,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        resolved_key = get_soniox_api_key(api_key)
+        resolved_key: Final = get_soniox_api_key(api_key)
         if not resolved_key:
             raise SonioxException(
                 message=(
@@ -118,7 +118,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 headers=None,
             )
 
-        merged_headers: dict[str, str] = {
+        merged_headers: Final[dict[str, str]] = {
             "Authorization": f"Bearer {resolved_key}",
         }
         if headers:
@@ -152,7 +152,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         and for filling in `file_id`/`audio_url`. This method exists so the
         config can be exercised in isolation by unit tests.
         """
-        body: dict[str, Any] = {"model": model}
+        body: Final[dict[str, Any]] = {"model": model}
 
         for key in SONIOX_PASSTHROUGH_PARAMS:
             value = optional_params.get(key)
@@ -175,7 +175,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             produced by the handler so transcription metadata is also available.
         """
         try:
-            payload = raw_response.json()
+            payload: Final = raw_response.json()
         except Exception as exc:
             raise SonioxException(
                 message=f"Failed to parse Soniox response: {exc}",
@@ -201,7 +201,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         else:
             transcript = payload if isinstance(payload, dict) else {}
 
-        tokens: list[dict[str, Any]] = transcript.get("tokens") or []
+        tokens: Final[list[dict[str, Any]]] = transcript.get("tokens") or []
 
         # Decide what to put in `text` based on response_format:
         #   - "srt": render tokens as SRT subtitles (synthesized from timestamps)
@@ -215,7 +215,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         else:
             # Default text rendering (also used for "json", "text",
             # "verbose_json")
-            has_speaker = any(t.get("speaker") is not None for t in tokens)
+            has_speaker: Final = any(t.get("speaker") is not None for t in tokens)
             has_language = any(t.get("language") is not None for t in tokens)
 
             if (has_speaker or has_language) and tokens:
@@ -227,7 +227,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             else:
                 text = ""
 
-        response = model_response or TranscriptionResponse(text=text)
+        response: Final = model_response or TranscriptionResponse(text=text)
         response.text = text
         response["task"] = "transcribe"
 
@@ -241,13 +241,13 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         # Surface a representative language if all tokens agree.
         has_language = any(t.get("language") is not None for t in tokens)
         if has_language:
-            languages = {t.get("language") for t in tokens if t.get("language")}
+            languages: Final = {t.get("language") for t in tokens if t.get("language")}
             if len(languages) == 1:
                 response["language"] = next(iter(languages))
 
         # For verbose_json, include word-level timing from tokens.
         if response_format == "verbose_json" and tokens:
-            words: list[dict[str, Any]] = []
+            words: Final[list[dict[str, Any]]] = []
             for token in tokens:
                 word_entry: dict[str, Any] = {"word": token.get("text", "")}
                 if token.get("start_ms") is not None:

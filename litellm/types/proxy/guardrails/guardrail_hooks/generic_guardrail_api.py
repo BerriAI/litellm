@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
@@ -189,8 +189,8 @@ class GenericGuardrailAPIResponse:
 
     @classmethod
     def from_dict(cls, data: dict) -> "GenericGuardrailAPIResponse":
-        raw_holdback = data.get("stream_holdback_chars")
-        stream_holdback_chars = (
+        raw_holdback: Final = data.get("stream_holdback_chars")
+        stream_holdback_chars: Final = (
             [coerce_stream_holdback_value(value) for value in raw_holdback] if isinstance(raw_holdback, list) else None
         )
         return cls(

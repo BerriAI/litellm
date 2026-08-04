@@ -1,17 +1,6 @@
 from enum import Enum
 from os import PathLike
-from typing import (
-    IO,
-    Any,
-    Dict,
-    Iterable,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Tuple,
-    Union,
-)
+from typing import Any, Dict, Final, IO, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 
 import httpx
 from openai import Omit
@@ -145,7 +134,7 @@ class NotGiven:
         return "NOT_GIVEN"
 
 
-NOT_GIVEN = NotGiven()
+NOT_GIVEN: Final = NotGiven()
 
 
 class ToolResourcesCodeInterpreter(TypedDict, total=False):
@@ -840,7 +829,7 @@ ValidAssistantMessageContentTypesLiteral = Literal[
     "image_url",
 ]
 
-ValidAssistantMessageContentTypes = [
+ValidAssistantMessageContentTypes: Final = [
     "text",
     "thinking",
     "redacted_thinking",
@@ -863,7 +852,7 @@ ValidChatCompletionMessageContentTypesLiteral = Literal[
     "redacted_thinking",
 ]
 
-ValidChatCompletionMessageContentTypes = [
+ValidChatCompletionMessageContentTypes: Final = [
     "text",
     "image_url",
     "input_audio",
@@ -1318,7 +1307,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
 
         Issue: https://github.com/BerriAI/litellm/issues/16824
         """
-        serialized = handler(value)
+        serialized: Final = handler(value)
         if not isinstance(serialized, list):
             return serialized
         return [
@@ -1339,7 +1328,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
 
         This matches the OpenAI SDK's Response.output_text behavior.
         """
-        texts: List[str] = []
+        texts: Final[List[str]] = []
         for output_item in self.output:
             # Handle both dict and object access patterns
             if isinstance(output_item, dict):

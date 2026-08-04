@@ -3,7 +3,7 @@ Anthropic Token Counter implementation using the CountTokens API.
 """
 
 import os
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
@@ -11,7 +11,7 @@ from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.types.utils import LlmProviders, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
-anthropic_count_tokens_handler = AnthropicCountTokensHandler()
+anthropic_count_tokens_handler: Final = AnthropicCountTokensHandler()
 
 
 class AnthropicTokenCounter(BaseTokenCounter):
@@ -52,7 +52,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
             return None
 
         deployment = deployment or {}
-        litellm_params = deployment.get("litellm_params", {})
+        litellm_params: Final = deployment.get("litellm_params", {})
 
         # Get Anthropic API key from deployment config or environment
         api_key = litellm_params.get("api_key")
@@ -64,7 +64,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
             return None
 
         try:
-            result = await anthropic_count_tokens_handler.handle_count_tokens_request(
+            result: Final = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 messages=messages,
                 api_key=api_key,

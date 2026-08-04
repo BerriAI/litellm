@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to Amazon Nova's `/v1/chat/completions`
 """
 
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -35,7 +35,7 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
         tools: list | None = None,
         reasoning_effort: list | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -55,7 +55,7 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
         api_base = api_base or get_secret_str("AMAZON_NOVA_API_BASE") or "https://api.nova.amazon.com/v1"  # type: ignore
 
         # Get API key from multiple sources
-        key = api_key or litellm.amazon_nova_api_key or get_secret_str("AMAZON_NOVA_API_KEY") or litellm.api_key
+        key: Final = api_key or litellm.amazon_nova_api_key or get_secret_str("AMAZON_NOVA_API_KEY") or litellm.api_key
         return api_base, key
 
     def get_supported_openai_params(self, model: str) -> list:

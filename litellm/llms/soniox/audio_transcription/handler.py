@@ -19,10 +19,7 @@ import asyncio
 import math
 import time
 from collections.abc import Coroutine
-from typing import (
-    TYPE_CHECKING,
-    Any,
-)
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -92,7 +89,7 @@ class SonioxAudioTranscriptionHandler:
         or fetch will surface immediately. Wrap calls with the standard
         ``litellm.Router`` / ``num_retries`` mechanism for retry behaviour.
         """
-        config = provider_config or SonioxAudioTranscriptionConfig()
+        config: Final = provider_config or SonioxAudioTranscriptionConfig()
 
         if atranscription is True:
             return self._async_audio_transcriptions(
@@ -145,7 +142,7 @@ class SonioxAudioTranscriptionHandler:
         dict[str, Any],  # handler-only options (poll interval, cleanup, ...)
     ]:
         # Validate env -> auth headers.
-        auth_headers = provider_config.validate_environment(
+        auth_headers: Final = provider_config.validate_environment(
             headers=headers,
             model="",  # unused
             messages=[],
@@ -155,11 +152,11 @@ class SonioxAudioTranscriptionHandler:
             api_base=api_base,
         )
 
-        base_url = get_soniox_api_base(api_base)
+        base_url: Final = get_soniox_api_base(api_base)
 
         # Operate on a local copy so we don't mutate the caller's dict
         # (the caller may reuse `optional_params` for retries or logging).
-        params = dict(optional_params)
+        params: Final = dict(optional_params)
 
         # Pull handler-only kwargs out of params so they aren't sent
         # to Soniox.
@@ -168,14 +165,14 @@ class SonioxAudioTranscriptionHandler:
             max_attempts = int(params.pop("soniox_max_polling_attempts", SONIOX_DEFAULT_MAX_POLL_ATTEMPTS))
         except (ValueError, OverflowError):
             max_attempts = SONIOX_DEFAULT_MAX_POLL_ATTEMPTS
-        cleanup_raw = params.pop("soniox_cleanup", SONIOX_DEFAULT_CLEANUP)
+        cleanup_raw: Final = params.pop("soniox_cleanup", SONIOX_DEFAULT_CLEANUP)
         if cleanup_raw is None:
             cleanup: list[str] = []
         elif isinstance(cleanup_raw, str):
             cleanup = [cleanup_raw]
         else:
             cleanup = list(cleanup_raw)
-        filename_override = params.pop("filename", None)
+        filename_override: Final = params.pop("filename", None)
 
         # Server-side clamps. Caller-supplied poll settings (from request kwargs)
         # are bounded so an authenticated caller cannot force a worker into a
@@ -184,10 +181,10 @@ class SonioxAudioTranscriptionHandler:
         #   SONIOX_MAX_POLL_ATTEMPTS * SONIOX_MAX_POLL_INTERVAL.
         if not math.isfinite(poll_interval):
             poll_interval = SONIOX_DEFAULT_POLL_INTERVAL
-        clamped_poll_interval = max(SONIOX_MIN_POLL_INTERVAL, min(poll_interval, SONIOX_MAX_POLL_INTERVAL))
-        clamped_max_attempts = max(1, min(max_attempts, SONIOX_MAX_POLL_ATTEMPTS))
+        clamped_poll_interval: Final = max(SONIOX_MIN_POLL_INTERVAL, min(poll_interval, SONIOX_MAX_POLL_INTERVAL))
+        clamped_max_attempts: Final = max(1, min(max_attempts, SONIOX_MAX_POLL_ATTEMPTS))
 
-        handler_opts: dict[str, Any] = {
+        handler_opts: Final[dict[str, Any]] = {
             "poll_interval": clamped_poll_interval,
             "max_attempts": clamped_max_attempts,
             "cleanup": cleanup,
@@ -212,7 +209,7 @@ class SonioxAudioTranscriptionHandler:
         handler_opts: dict[str, Any],
         file_id: str | None,
     ) -> dict[str, Any]:
-        body: dict[str, Any] = {"model": model}
+        body: Final[dict[str, Any]] = {"model": model}
         # Soniox-native passthrough fields
         for key, value in optional_params.items():
             if value is None:
@@ -240,7 +237,7 @@ class SonioxAudioTranscriptionHandler:
         """
         if not body:
             return body
-        redacted = dict(body)
+        redacted: Final = dict(body)
         for field in SONIOX_SECRET_FIELDS:
             if field in redacted and redacted[field] is not None:
                 redacted[field] = "[REDACTED]"
@@ -296,7 +293,7 @@ class SonioxAudioTranscriptionHandler:
     ) -> None:
         if response.status_code >= 400:
             try:
-                payload = response.json()
+                payload: Final = response.json()
                 message = payload.get("error_message") or payload.get("error") or response.text
             except Exception:
                 message = response.text
@@ -335,7 +332,7 @@ class SonioxAudioTranscriptionHandler:
             headers=headers,
         )
 
-        http_client = (
+        http_client: Final = (
             client
             if isinstance(client, HTTPHandler)
             else (
@@ -371,10 +368,10 @@ class SonioxAudioTranscriptionHandler:
                 )
                 file_id = uploaded_file_id
 
-            body = self._build_create_body(model, opt_params, handler_opts, file_id)
+            body: Final = self._build_create_body(model, opt_params, handler_opts, file_id)
             self._safe_log_pre_call(logging_obj, api_key, base_url, body)
 
-            create_resp = http_client.post(
+            create_resp: Final = http_client.post(
                 url=f"{base_url}/v1/transcriptions",
                 headers=auth_headers,
                 json=body,
@@ -383,7 +380,7 @@ class SonioxAudioTranscriptionHandler:
             self._raise_for_response(create_resp, provider_config, "create transcription")
             transcription_id = create_resp.json()["id"]
 
-            transcription_meta = self._sync_poll_until_completed(
+            transcription_meta: Final = self._sync_poll_until_completed(
                 http_client=http_client,
                 base_url=base_url,
                 auth_headers=auth_headers,
@@ -394,16 +391,16 @@ class SonioxAudioTranscriptionHandler:
                 provider_config=provider_config,
             )
 
-            transcript_resp = http_client.get(
+            transcript_resp: Final = http_client.get(
                 url=f"{base_url}/v1/transcriptions/{transcription_id}/transcript",
                 headers=auth_headers,
                 timeout=timeout,
             )
             self._raise_for_response(transcript_resp, provider_config, "fetch transcript")
-            transcript = transcript_resp.json()
+            transcript: Final = transcript_resp.json()
 
-            payload = {"transcription": transcription_meta, "transcript": transcript}
-            response = provider_config._build_response_from_payload(
+            payload: Final = {"transcription": transcription_meta, "transcript": transcript}
+            response: Final = provider_config._build_response_from_payload(
                 payload,
                 model_response=model_response,
                 response_format=handler_opts.get("response_format"),
@@ -411,7 +408,7 @@ class SonioxAudioTranscriptionHandler:
 
             self._safe_log_post_call(logging_obj, audio_file, api_key, body, payload)
 
-            audio_duration_ms = transcription_meta.get("audio_duration_ms")
+            audio_duration_ms: Final = transcription_meta.get("audio_duration_ms")
             response._hidden_params.update(
                 {
                     "model": model,
@@ -443,14 +440,14 @@ class SonioxAudioTranscriptionHandler:
         timeout: float,
         provider_config: SonioxAudioTranscriptionConfig,
     ) -> str:
-        processed = process_audio_file(audio_file)
-        filename = filename_override or processed.filename
-        files = {
+        processed: Final = process_audio_file(audio_file)
+        filename: Final = filename_override or processed.filename
+        files: Final = {
             "file": (filename, processed.file_content, processed.content_type),
         }
         # `Authorization` header is fine; httpx sets multipart Content-Type.
-        upload_headers = {"Authorization": auth_headers["Authorization"]}
-        resp = http_client.post(
+        upload_headers: Final = {"Authorization": auth_headers["Authorization"]}
+        resp: Final = http_client.post(
             url=f"{base_url}/v1/files",
             headers=upload_headers,
             files=files,
@@ -566,7 +563,7 @@ class SonioxAudioTranscriptionHandler:
             headers=headers,
         )
 
-        http_client = (
+        http_client: Final = (
             client
             if isinstance(client, AsyncHTTPHandler)
             else (
@@ -603,10 +600,10 @@ class SonioxAudioTranscriptionHandler:
                 )
                 file_id = uploaded_file_id
 
-            body = self._build_create_body(model, opt_params, handler_opts, file_id)
+            body: Final = self._build_create_body(model, opt_params, handler_opts, file_id)
             self._safe_log_pre_call(logging_obj, api_key, base_url, body)
 
-            create_resp = await http_client.post(
+            create_resp: Final = await http_client.post(
                 url=f"{base_url}/v1/transcriptions",
                 headers=auth_headers,
                 json=body,
@@ -615,7 +612,7 @@ class SonioxAudioTranscriptionHandler:
             self._raise_for_response(create_resp, provider_config, "create transcription")
             transcription_id = create_resp.json()["id"]
 
-            transcription_meta = await self._async_poll_until_completed(
+            transcription_meta: Final = await self._async_poll_until_completed(
                 http_client=http_client,
                 base_url=base_url,
                 auth_headers=auth_headers,
@@ -626,16 +623,16 @@ class SonioxAudioTranscriptionHandler:
                 provider_config=provider_config,
             )
 
-            transcript_resp = await http_client.get(
+            transcript_resp: Final = await http_client.get(
                 url=f"{base_url}/v1/transcriptions/{transcription_id}/transcript",
                 headers=auth_headers,
                 timeout=timeout,
             )
             self._raise_for_response(transcript_resp, provider_config, "fetch transcript")
-            transcript = transcript_resp.json()
+            transcript: Final = transcript_resp.json()
 
-            payload = {"transcription": transcription_meta, "transcript": transcript}
-            response = provider_config._build_response_from_payload(
+            payload: Final = {"transcription": transcription_meta, "transcript": transcript}
+            response: Final = provider_config._build_response_from_payload(
                 payload,
                 model_response=model_response,
                 response_format=handler_opts.get("response_format"),
@@ -643,7 +640,7 @@ class SonioxAudioTranscriptionHandler:
 
             self._safe_log_post_call(logging_obj, audio_file, api_key, body, payload)
 
-            audio_duration_ms = transcription_meta.get("audio_duration_ms")
+            audio_duration_ms: Final = transcription_meta.get("audio_duration_ms")
             response._hidden_params.update(
                 {
                     "model": model,
@@ -675,13 +672,13 @@ class SonioxAudioTranscriptionHandler:
         timeout: float,
         provider_config: SonioxAudioTranscriptionConfig,
     ) -> str:
-        processed = process_audio_file(audio_file)
-        filename = filename_override or processed.filename
-        files = {
+        processed: Final = process_audio_file(audio_file)
+        filename: Final = filename_override or processed.filename
+        files: Final = {
             "file": (filename, processed.file_content, processed.content_type),
         }
-        upload_headers = {"Authorization": auth_headers["Authorization"]}
-        resp = await http_client.post(
+        upload_headers: Final = {"Authorization": auth_headers["Authorization"]}
+        resp: Final = await http_client.post(
             url=f"{base_url}/v1/files",
             headers=upload_headers,
             files=files,

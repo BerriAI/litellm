@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 
@@ -20,7 +20,7 @@ class SpeechToCompletionBridgeTransformationHandler:
         litellm_logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str,
     ) -> dict:
-        passed_optional_params = {}
+        passed_optional_params: Final = {}
         for op in optional_params:
             if op in OPENAI_CHAT_COMPLETION_PARAMS:
                 passed_optional_params[op] = optional_params[op]
@@ -66,13 +66,13 @@ class SpeechToCompletionBridgeTransformationHandler:
         import struct
 
         # WAV header parameters
-        byte_rate = sample_rate * channels * 2  # 2 bytes per sample (16-bit)
-        block_align = channels * 2
-        data_size = len(pcm_data)
-        file_size = 36 + data_size
+        byte_rate: Final = sample_rate * channels * 2  # 2 bytes per sample (16-bit)
+        block_align: Final = channels * 2
+        data_size: Final = len(pcm_data)
+        file_size: Final = 36 + data_size
 
         # Create WAV header
-        wav_header = struct.pack(
+        wav_header: Final = struct.pack(
             "<4sI4s4sIHHIIHH4sI",
             b"RIFF",  # Chunk ID
             file_size,  # Chunk Size
@@ -103,17 +103,17 @@ class SpeechToCompletionBridgeTransformationHandler:
         from litellm.types.llms.openai import HttpxBinaryResponseContent
         from litellm.types.utils import Choices
 
-        audio_part = cast(Choices, model_response.choices[0]).message.audio
+        audio_part: Final = cast(Choices, model_response.choices[0]).message.audio
         if audio_part is None:
             raise ValueError("No audio part found in the response")
-        audio_content = audio_part.data
+        audio_content: Final = audio_part.data
 
         # Decode base64 to get binary content
         binary_data = base64.b64decode(audio_content)
 
         # Check if this is a Gemini TTS model that returns raw PCM16 data
-        model = getattr(model_response, "model", "")
-        headers = {}
+        model: Final = getattr(model_response, "model", "")
+        headers: Final = {}
         if self._is_gemini_tts_model(model):
             # Convert PCM16 to WAV format for proper audio file playback
             binary_data = self._convert_pcm16_to_wav(binary_data)
@@ -122,5 +122,5 @@ class SpeechToCompletionBridgeTransformationHandler:
             headers["Content-Type"] = "audio/mpeg"
 
         # Create an httpx.Response object
-        response = httpx.Response(status_code=200, content=binary_data, headers=headers)
+        response: Final = httpx.Response(status_code=200, content=binary_data, headers=headers)
         return HttpxBinaryResponseContent(response)

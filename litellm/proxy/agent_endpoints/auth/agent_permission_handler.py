@@ -5,6 +5,8 @@ Handles agent permission checking for keys and teams using object_permission_id.
 Follows the same pattern as MCP permission handling.
 """
 
+from typing import Final
+
 from litellm._logging import verbose_logger
 from litellm.proxy._types import (
     UI_TEAM_ID,
@@ -41,8 +43,8 @@ class AgentRequestHandler:
         """
         try:
             allowed_agents: list[str] = []
-            allowed_agents_for_key = await AgentRequestHandler._get_allowed_agents_for_key(user_api_key_auth)
-            allowed_agents_for_team = await AgentRequestHandler._get_allowed_agents_for_team(user_api_key_auth)
+            allowed_agents_for_key: Final = await AgentRequestHandler._get_allowed_agents_for_key(user_api_key_auth)
+            allowed_agents_for_team: Final = await AgentRequestHandler._get_allowed_agents_for_team(user_api_key_auth)
 
             # If team has agent restrictions, handle inheritance and intersection logic
             if len(allowed_agents_for_team) > 0:
@@ -77,7 +79,7 @@ class AgentRequestHandler:
         Returns:
             bool: True if agent is allowed, False otherwise
         """
-        allowed_agents = await AgentRequestHandler.get_allowed_agents(user_api_key_auth)
+        allowed_agents: Final = await AgentRequestHandler.get_allowed_agents(user_api_key_auth)
 
         # Empty list means no restrictions - allow all
         if len(allowed_agents) == 0:
@@ -121,7 +123,7 @@ class AgentRequestHandler:
             return None
 
         # Get the team object (which has object_permission already loaded)
-        team_obj: LiteLLM_TeamTable | None = await get_team_object(
+        team_obj: Final[LiteLLM_TeamTable | None] = await get_team_object(
             team_id=user_api_key_auth.team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -153,26 +155,26 @@ class AgentRequestHandler:
             all_agents: list[str] = []
 
             # 1. Get agents from object_permission (native permissions)
-            key_object_permission = AgentRequestHandler._get_key_object_permission(user_api_key_auth)
+            key_object_permission: Final = AgentRequestHandler._get_key_object_permission(user_api_key_auth)
             if key_object_permission is not None:
                 # Get direct agents
-                direct_agents = key_object_permission.agents or []
+                direct_agents: Final = key_object_permission.agents or []
 
                 # Get agents from access groups
-                access_group_agents = await AgentRequestHandler._get_agents_from_access_groups(
+                access_group_agents: Final = await AgentRequestHandler._get_agents_from_access_groups(
                     key_object_permission.agent_access_groups or []
                 )
 
                 all_agents = direct_agents + access_group_agents
 
             # 2. Fallback: get agent IDs from key's access_group_ids (unified access groups)
-            key_access_group_ids = user_api_key_auth.access_group_ids or []
+            key_access_group_ids: Final = user_api_key_auth.access_group_ids or []
             if key_access_group_ids:
                 from litellm.proxy.auth.auth_checks import (
                     _get_agent_ids_from_access_groups,
                 )
 
-                unified_agents = await _get_agent_ids_from_access_groups(
+                unified_agents: Final = await _get_agent_ids_from_access_groups(
                     access_group_ids=key_access_group_ids,
                 )
                 all_agents.extend(unified_agents)
@@ -212,7 +214,7 @@ class AgentRequestHandler:
                 return []
 
             # Fetch the team object once for both permission sources
-            team_obj = await get_team_object(
+            team_obj: Final = await get_team_object(
                 team_id=user_api_key_auth.team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -226,26 +228,26 @@ class AgentRequestHandler:
             all_agents: list[str] = []
 
             # 1. Get agents from object_permission (native permissions)
-            object_permissions = team_obj.object_permission
+            object_permissions: Final = team_obj.object_permission
             if object_permissions is not None:
                 # Get direct agents
-                direct_agents = object_permissions.agents or []
+                direct_agents: Final = object_permissions.agents or []
 
                 # Get agents from access groups
-                access_group_agents = await AgentRequestHandler._get_agents_from_access_groups(
+                access_group_agents: Final = await AgentRequestHandler._get_agents_from_access_groups(
                     object_permissions.agent_access_groups or []
                 )
 
                 all_agents = direct_agents + access_group_agents
 
             # 2. Also include agents from team's access_group_ids (unified access groups)
-            team_access_group_ids = team_obj.access_group_ids or []
+            team_access_group_ids: Final = team_obj.access_group_ids or []
             if team_access_group_ids:
                 from litellm.proxy.auth.auth_checks import (
                     _get_agent_ids_from_access_groups,
                 )
 
-                unified_agents = await _get_agent_ids_from_access_groups(
+                unified_agents: Final = await _get_agent_ids_from_access_groups(
                     access_group_ids=team_access_group_ids,
                 )
                 all_agents.extend(unified_agents)
@@ -263,7 +265,7 @@ class AgentRequestHandler:
         """
         Helper to get agent_ids from config-loaded agents that match any of the given access groups.
         """
-        server_ids: set[str] = set()
+        server_ids: Final[set[str]] = set()
         for agent in config_agents:
             agent_access_groups = getattr(agent, "agent_access_groups", None)
             if agent_access_groups:
@@ -276,10 +278,10 @@ class AgentRequestHandler:
         """
         Helper to get agent_ids from DB agents that match any of the given access groups.
         """
-        agent_ids: set[str] = set()
+        agent_ids: Final[set[str]] = set()
         if access_groups and prisma_client is not None:
             try:
-                agents = await AgentsRepository(prisma_client).table.find_many(
+                agents: Final = await AgentsRepository(prisma_client).table.find_many(
                     where={"agent_access_groups": {"hasSome": access_groups}}
                 )
                 for agent in agents:
@@ -300,7 +302,7 @@ class AgentRequestHandler:
 
         try:
             # Use the helper for config-loaded agents
-            agent_ids = AgentRequestHandler._get_config_agent_ids_for_access_groups(
+            agent_ids: Final = AgentRequestHandler._get_config_agent_ids_for_access_groups(
                 global_agent_registry.agent_list, access_groups
             )
 
@@ -321,8 +323,8 @@ class AgentRequestHandler:
         Get list of agent access groups for the given user/key based on permissions.
         """
         access_groups: list[str] = []
-        access_groups_for_key = await AgentRequestHandler._get_agent_access_groups_for_key(user_api_key_auth)
-        access_groups_for_team = await AgentRequestHandler._get_agent_access_groups_for_team(user_api_key_auth)
+        access_groups_for_key: Final = await AgentRequestHandler._get_agent_access_groups_for_key(user_api_key_auth)
+        access_groups_for_team: Final = await AgentRequestHandler._get_agent_access_groups_for_team(user_api_key_auth)
 
         # If team has access groups, then key must have a subset of the team's access groups
         if len(access_groups_for_team) > 0:
@@ -357,7 +359,7 @@ class AgentRequestHandler:
             return []
 
         try:
-            key_object_permission = await get_object_permission(
+            key_object_permission: Final = await get_object_permission(
                 object_permission_id=user_api_key_auth.object_permission_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -395,7 +397,7 @@ class AgentRequestHandler:
             return []
 
         try:
-            team_obj: LiteLLM_TeamTable | None = await get_team_object(
+            team_obj: Final[LiteLLM_TeamTable | None] = await get_team_object(
                 team_id=user_api_key_auth.team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -406,7 +408,7 @@ class AgentRequestHandler:
                 verbose_logger.debug("team_obj is None")
                 return []
 
-            object_permissions = team_obj.object_permission
+            object_permissions: Final = team_obj.object_permission
             if object_permissions is None:
                 return []
 

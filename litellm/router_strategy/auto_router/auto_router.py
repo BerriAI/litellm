@@ -2,7 +2,7 @@
 Auto-Routing Strategy that works with a Semantic Router Config
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -69,8 +69,8 @@ class AutoRouter(CustomLogger):
 
         if self.auto_router_config is None:
             raise ValueError("No auto router config provided")
-        auto_router_routes: list[Route] = []
-        loaded_config = json.loads(self.auto_router_config)
+        auto_router_routes: Final[list[Route]] = []
+        loaded_config: Final = json.loads(self.auto_router_config)
         for route in loaded_config.get("routes", []):
             auto_router_routes.append(
                 Route(
@@ -145,8 +145,8 @@ class AutoRouter(CustomLogger):
             )
             self.routelayer = routelayer
 
-        message_content = self._extract_text_from_messages(messages)
-        route_choice: RouteChoice | list[RouteChoice] | None = routelayer(text=message_content)
+        message_content: Final = self._extract_text_from_messages(messages)
+        route_choice: Final[RouteChoice | list[RouteChoice] | None] = routelayer(text=message_content)
         verbose_router_logger.debug("route_choice: %s", route_choice)
         if isinstance(route_choice, RouteChoice):
             model = route_choice.name or self.default_model

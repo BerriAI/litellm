@@ -13,7 +13,7 @@ import contextvars
 import os
 from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import httpx
 
@@ -29,9 +29,9 @@ from litellm.types.utils import LiteLLMFineTuningJob
 from litellm.utils import client, supports_httpx_timeout
 
 ####### ENVIRONMENT VARIABLES ###################
-openai_fine_tuning_apis_instance = OpenAIFineTuningAPI()
-azure_fine_tuning_apis_instance = AzureOpenAIFineTuningAPI()
-vertex_fine_tuning_apis_instance = VertexFineTuningAPI()
+openai_fine_tuning_apis_instance: Final = OpenAIFineTuningAPI()
+azure_fine_tuning_apis_instance: Final = AzureOpenAIFineTuningAPI()
+vertex_fine_tuning_apis_instance: Final = VertexFineTuningAPI()
 #################################################
 
 
@@ -61,7 +61,7 @@ def _prepare_azure_extra_body(
         extra_body = {}
 
     # Azure-specific root-level parameters
-    azure_specific_params = ["trainingType"]
+    azure_specific_params: Final = ["trainingType"]
     for param in azure_specific_params:
         if param in kwargs:
             extra_body[param] = kwargs[param]
@@ -93,11 +93,11 @@ async def acreate_fine_tuning_job(
     """
     verbose_logger.debug("inside acreate_fine_tuning_job model=%s and kwargs=%s", model, kwargs)
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["acreate_fine_tuning_job"] = True
 
         # Use a partial function to pass your keyword arguments
-        func = partial(
+        func: Final = partial(
             create_fine_tuning_job,
             model,
             training_file,
@@ -113,9 +113,9 @@ async def acreate_fine_tuning_job(
         )
 
         # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
@@ -171,24 +171,24 @@ def create_fine_tuning_job(
 
     """
     try:
-        _is_async = kwargs.pop("acreate_fine_tuning_job", False) is True
-        optional_params = GenericLiteLLMParams(**kwargs)
+        _is_async: Final = kwargs.pop("acreate_fine_tuning_job", False) is True
+        optional_params: Final = GenericLiteLLMParams(**kwargs)
 
         # handle hyperparameters
         hyperparameters = hyperparameters or {}  # original hyperparameters
 
         # For Azure, extract Azure-specific hyperparameters before creating OpenAI-spec hyperparameters
-        azure_specific_hyperparams = {}
+        azure_specific_hyperparams: Final = {}
         if custom_llm_provider == "azure":
-            azure_hyperparameter_keys = ["prompt_loss_weight"]
+            azure_hyperparameter_keys: Final = ["prompt_loss_weight"]
             for key in azure_hyperparameter_keys:
                 if key in hyperparameters:
                     azure_specific_hyperparams[key] = hyperparameters.pop(key)
 
-        _oai_hyperparameters: Hyperparameters = Hyperparameters(
+        _oai_hyperparameters: Final[Hyperparameters] = Hyperparameters(
             **hyperparameters
         )  # Typed Hyperparameters for OpenAI Spec
-        timeout = _resolve_fine_tuning_timeout(
+        timeout: Final = _resolve_fine_tuning_timeout(
             optional_params.timeout or kwargs.get("request_timeout", 600),
             custom_llm_provider,
         )
@@ -203,7 +203,7 @@ def create_fine_tuning_job(
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
-            organization = (
+            organization: Final = (
                 optional_params.organization
                 or litellm.organization
                 or os.getenv("OPENAI_ORGANIZATION", None)
@@ -287,13 +287,13 @@ def create_fine_tuning_job(
             )
         elif custom_llm_provider == "vertex_ai":
             api_base = optional_params.api_base or ""
-            vertex_ai_project = (
+            vertex_ai_project: Final = (
                 optional_params.vertex_project or litellm.vertex_project or get_secret_str("VERTEXAI_PROJECT")
             )
-            vertex_ai_location = (
+            vertex_ai_location: Final = (
                 optional_params.vertex_location or litellm.vertex_location or get_secret_str("VERTEXAI_LOCATION")
             )
-            vertex_credentials = optional_params.vertex_credentials or get_secret_str("VERTEXAI_CREDENTIALS")
+            vertex_credentials: Final = optional_params.vertex_credentials or get_secret_str("VERTEXAI_CREDENTIALS")
             response = vertex_fine_tuning_apis_instance.create_fine_tuning_job(
                 _is_async=_is_async,
                 create_fine_tuning_job_data=_build_fine_tuning_job_data(
@@ -342,11 +342,11 @@ async def acancel_fine_tuning_job(
     Async: Immediately cancel a fine-tune job.
     """
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["acancel_fine_tuning_job"] = True
 
         # Use a partial function to pass your keyword arguments
-        func = partial(
+        func: Final = partial(
             cancel_fine_tuning_job,
             fine_tuning_job_id,
             custom_llm_provider,
@@ -356,9 +356,9 @@ async def acancel_fine_tuning_job(
         )
 
         # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
@@ -383,7 +383,7 @@ def cancel_fine_tuning_job(
 
     """
     try:
-        optional_params = GenericLiteLLMParams(**kwargs)
+        optional_params: Final = GenericLiteLLMParams(**kwargs)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         # set timeout for 10 minutes by default
@@ -393,14 +393,14 @@ def cancel_fine_tuning_job(
             and isinstance(timeout, httpx.Timeout)
             and supports_httpx_timeout(custom_llm_provider) is False
         ):
-            read_timeout = timeout.read or 600
+            read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
             timeout = float(timeout)  # type: ignore
         elif timeout is None:
             timeout = 600.0
 
-        _is_async = kwargs.pop("acancel_fine_tuning_job", False) is True
+        _is_async: Final = kwargs.pop("acancel_fine_tuning_job", False) is True
 
         # OpenAI
         if custom_llm_provider == "openai":
@@ -412,7 +412,7 @@ def cancel_fine_tuning_job(
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
-            organization = (
+            organization: Final = (
                 optional_params.organization
                 or litellm.organization
                 or os.getenv("OPENAI_ORGANIZATION", None)
@@ -493,11 +493,11 @@ async def alist_fine_tuning_jobs(
     Async: List your organization's fine-tuning jobs
     """
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["alist_fine_tuning_jobs"] = True
 
         # Use a partial function to pass your keyword arguments
-        func = partial(
+        func: Final = partial(
             list_fine_tuning_jobs,
             after,
             limit,
@@ -508,9 +508,9 @@ async def alist_fine_tuning_jobs(
         )
 
         # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
@@ -537,7 +537,7 @@ def list_fine_tuning_jobs(
     - limit: Optional[int] = None, Number of fine-tuning jobs to retrieve. Defaults to 20
     """
     try:
-        optional_params = GenericLiteLLMParams(**kwargs)
+        optional_params: Final = GenericLiteLLMParams(**kwargs)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         # set timeout for 10 minutes by default
@@ -547,14 +547,14 @@ def list_fine_tuning_jobs(
             and isinstance(timeout, httpx.Timeout)
             and supports_httpx_timeout(custom_llm_provider) is False
         ):
-            read_timeout = timeout.read or 600
+            read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
             timeout = float(timeout)  # type: ignore
         elif timeout is None:
             timeout = 600.0
 
-        _is_async = kwargs.pop("alist_fine_tuning_jobs", False) is True
+        _is_async: Final = kwargs.pop("alist_fine_tuning_jobs", False) is True
 
         # OpenAI
         if custom_llm_provider == "openai":
@@ -566,7 +566,7 @@ def list_fine_tuning_jobs(
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
-            organization = (
+            organization: Final = (
                 optional_params.organization
                 or litellm.organization
                 or os.getenv("OPENAI_ORGANIZATION", None)
@@ -649,11 +649,11 @@ async def aretrieve_fine_tuning_job(
     Async: Get info about a fine-tuning job.
     """
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["aretrieve_fine_tuning_job"] = True
 
         # Use a partial function to pass your keyword arguments
-        func = partial(
+        func: Final = partial(
             retrieve_fine_tuning_job,
             fine_tuning_job_id,
             custom_llm_provider,
@@ -663,9 +663,9 @@ async def aretrieve_fine_tuning_job(
         )
 
         # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
@@ -687,7 +687,7 @@ def retrieve_fine_tuning_job(
     Get info about a fine-tuning job.
     """
     try:
-        optional_params = GenericLiteLLMParams(**kwargs)
+        optional_params: Final = GenericLiteLLMParams(**kwargs)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         # set timeout for 10 minutes by default
@@ -697,14 +697,14 @@ def retrieve_fine_tuning_job(
             and isinstance(timeout, httpx.Timeout)
             and supports_httpx_timeout(custom_llm_provider) is False
         ):
-            read_timeout = timeout.read or 600
+            read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
             timeout = float(timeout)  # type: ignore
         elif timeout is None:
             timeout = 600.0
 
-        _is_async = kwargs.pop("aretrieve_fine_tuning_job", False) is True
+        _is_async: Final = kwargs.pop("aretrieve_fine_tuning_job", False) is True
 
         # OpenAI
         if custom_llm_provider == "openai":
@@ -715,7 +715,7 @@ def retrieve_fine_tuning_job(
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
-            organization = (
+            organization: Final = (
                 optional_params.organization or litellm.organization or os.getenv("OPENAI_ORGANIZATION", None) or None
             )
             api_key = optional_params.api_key or litellm.api_key or litellm.openai_key or os.getenv("OPENAI_API_KEY")

@@ -23,13 +23,14 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
     TeamMetadataValidationResult,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
+from typing import Final
 
-ALLOWED_COST_CENTERS = frozenset({"CC-1001", "CC-1002"})
-CLOSED_PORT_URL = "http://127.0.0.1:9/validate"
+ALLOWED_COST_CENTERS: Final = frozenset({"CC-1001", "CC-1002"})
+CLOSED_PORT_URL: Final = "http://127.0.0.1:9/validate"
 
 
 async def _validate_allowlist(payload: TeamMetadataValidationPayload) -> TeamMetadataValidationResult:
-    cost_center = payload.metadata.get("cost_center")
+    cost_center: Final = payload.metadata.get("cost_center")
     if cost_center is None:
         return TeamMetadataValidationResult(
             valid=False,
@@ -44,8 +45,8 @@ async def _validate_allowlist(payload: TeamMetadataValidationPayload) -> TeamMet
 
 
 async def _validate_via_http(payload: TeamMetadataValidationPayload, service_url: str) -> TeamMetadataValidationResult:
-    client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
-    response = await client.post(
+    client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+    response: Final = await client.post(
         service_url,
         json={  # mutable-ok: httpx serializes the request body from a plain dict
             "operation": payload.operation,
@@ -53,7 +54,7 @@ async def _validate_via_http(payload: TeamMetadataValidationPayload, service_url
         },
         timeout=2.0,
     )
-    body = response.json()
+    body: Final = response.json()
     if body.get("ok") is True:
         return TeamMetadataValidationResult(valid=True)
     return TeamMetadataValidationResult(
@@ -67,14 +68,14 @@ class _ImmutableCostCenterValidator:
         self.immutable_key = immutable_key
 
     async def __call__(self, payload: TeamMetadataValidationPayload) -> TeamMetadataValidationResult:
-        current = payload.metadata.get(self.immutable_key)
+        current: Final = payload.metadata.get(self.immutable_key)
         if current is None:
             return TeamMetadataValidationResult(
                 valid=False,
                 error_message=f"{self.immutable_key} is required in team metadata. Contact the FinOps team.",
             )
         if payload.operation == "update" and payload.existing_metadata is not None:
-            prior = payload.existing_metadata.get(self.immutable_key)
+            prior: Final = payload.existing_metadata.get(self.immutable_key)
             if prior is not None and prior != current:
                 return TeamMetadataValidationResult(
                     valid=False,
@@ -86,19 +87,19 @@ class _ImmutableCostCenterValidator:
         return TeamMetadataValidationResult(valid=True)
 
 
-_IMMUTABLE_VALIDATOR = _ImmutableCostCenterValidator()
+_IMMUTABLE_VALIDATOR: Final = _ImmutableCostCenterValidator()
 
 
 async def validate_team_metadata(
     payload: TeamMetadataValidationPayload,
 ) -> TeamMetadataValidationResult:
-    impl = payload.metadata.get("_e2e_validator_impl")
+    impl: Final = payload.metadata.get("_e2e_validator_impl")
     if impl is None:
         return TeamMetadataValidationResult(valid=True)
     if impl == "allowlist":
         return await _validate_allowlist(payload)
     if impl == "http":
-        service_url = os.environ.get("TEAM_METADATA_VALIDATION_SERVICE_URL", "http://localhost:9414/validate")
+        service_url: Final = os.environ.get("TEAM_METADATA_VALIDATION_SERVICE_URL", "http://localhost:9414/validate")
         return await _validate_via_http(payload, service_url)
     if impl == "http_down":
         return await _validate_via_http(payload, CLOSED_PORT_URL)

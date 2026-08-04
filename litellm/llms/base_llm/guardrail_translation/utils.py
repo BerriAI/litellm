@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Final
 
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues
@@ -17,7 +17,7 @@ def _anthropic_stream_chunk_events(item: Any) -> list[dict]:
     else:
         return []
 
-    events: list[dict] = []
+    events: Final[list[dict]] = []
     for block in chunk.split("\n\n"):
         for line in block.splitlines():
             stripped = line.strip()
@@ -76,7 +76,7 @@ def blocked_response_usage(original_response: Any | None) -> AnthropicUsage:
     """
     usage_obj: Any = None
     if isinstance(original_response, list):
-        stream_usage = _usage_from_anthropic_stream_chunks(original_response)
+        stream_usage: Final = _usage_from_anthropic_stream_chunks(original_response)
         if stream_usage is not None:
             return stream_usage
     elif isinstance(original_response, dict):
@@ -96,7 +96,7 @@ def blocked_response_usage(original_response: Any | None) -> AnthropicUsage:
 
 
 def effective_skip_system_message_for_guardrail(guardrail_to_apply: Any) -> bool:
-    per = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
+    per: Final = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
     if per is not None:
         return bool(per)
     import litellm
@@ -105,7 +105,7 @@ def effective_skip_system_message_for_guardrail(guardrail_to_apply: Any) -> bool
 
 
 def effective_skip_tool_message_for_guardrail(guardrail_to_apply: Any) -> bool:
-    per = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
+    per: Final = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
     if per is not None:
         return bool(per)
     import litellm
