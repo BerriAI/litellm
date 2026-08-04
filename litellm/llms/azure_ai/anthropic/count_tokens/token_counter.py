@@ -3,7 +3,7 @@ Azure AI Anthropic Token Counter implementation using the CountTokens API.
 """
 
 import os
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
@@ -13,7 +13,7 @@ from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.types.utils import LlmProviders, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
-azure_ai_anthropic_count_tokens_handler = AzureAIAnthropicCountTokensHandler()
+azure_ai_anthropic_count_tokens_handler: Final = AzureAIAnthropicCountTokensHandler()
 
 
 class AzureAIAnthropicTokenCounter(BaseTokenCounter):
@@ -54,7 +54,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
             return None
 
         deployment = deployment or {}
-        litellm_params = deployment.get("litellm_params", {})
+        litellm_params: Final = deployment.get("litellm_params", {})
 
         # Get Azure AI API key from deployment config or environment
         api_key = litellm_params.get("api_key")
@@ -75,7 +75,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
             return None
 
         try:
-            result = await azure_ai_anthropic_count_tokens_handler.handle_count_tokens_request(
+            result: Final = await azure_ai_anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 messages=messages,
                 api_key=api_key,

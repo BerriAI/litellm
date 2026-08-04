@@ -5,18 +5,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 import datetime
 import enum
 from dataclasses import dataclass
-from typing import (
-    Any,
-    Dict,
-    Generic,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    TypeVar,
-    Union,
-    get_type_hints,
-)
+from typing import Any, Dict, Final, Generic, get_type_hints, List, Literal, Optional, Tuple, TypeVar, Union
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -215,7 +204,7 @@ class CredentialLiteLLMParams(BaseModel):
     watsonx_region_name: Optional[str] = None
 
 
-_RESERVED_INIT_KEYS = frozenset({"self", "params", "__class__"})
+_RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
 
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
@@ -305,7 +294,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         2. Convert max_retries from string to int if needed.
         """
         if isinstance(data, dict):
-            filtered = {k: v for k, v in data.items() if k not in _RESERVED_INIT_KEYS}
+            filtered: Final = {k: v for k, v in data.items() if k not in _RESERVED_INIT_KEYS}
             if "max_retries" in filtered and isinstance(filtered["max_retries"], str):
                 filtered["max_retries"] = int(filtered["max_retries"])
             return filtered
@@ -723,7 +712,7 @@ class RouterRateLimitErrorBasic(ValueError):
         model: str,
     ):
         self.model = model
-        _message = f"{RouterErrors.no_deployments_available.value}."
+        _message: Final = f"{RouterErrors.no_deployments_available.value}."
         super().__init__(_message)
 
 
@@ -814,7 +803,7 @@ class MockRouterTestingParams:
         from litellm.secret_managers.main import str_to_bool
 
         def extract_bool_param(name: str) -> Optional[bool]:
-            value = kwargs.pop(name, None)
+            value: Final = kwargs.pop(name, None)
             return str_to_bool(value) if isinstance(value, str) else value
 
         return cls(
@@ -916,7 +905,7 @@ class AdaptiveRouterWeights(BaseModel):
     @field_validator("cost")
     @classmethod
     def _weights_sum_to_one(cls, v, info):
-        q = info.data.get("quality", 0.7)
+        q: Final = info.data.get("quality", 0.7)
         if abs(q + v - 1.0) > 0.001:
             raise ValueError(f"weights must sum to 1.0, got quality={q} + cost={v} = {q + v}")
         return v

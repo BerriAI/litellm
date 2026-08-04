@@ -4,6 +4,8 @@ Helper functions for appending A2A agents to model lists.
 Used by proxy model endpoints to make agents appear in UI alongside models.
 """
 
+from typing import Final
+
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -27,7 +29,7 @@ async def append_agents_to_model_group(
             AgentRequestHandler,
         )
 
-        allowed_agent_ids = await AgentRequestHandler.get_allowed_agents(user_api_key_auth=user_api_key_dict)
+        allowed_agent_ids: Final = await AgentRequestHandler.get_allowed_agents(user_api_key_auth=user_api_key_dict)
 
         for agent_id in allowed_agent_ids:
             agent = global_agent_registry.get_agent_by_id(agent_id)
@@ -61,7 +63,7 @@ async def append_agents_to_model_info(
             AgentRequestHandler,
         )
 
-        allowed_agent_ids = await AgentRequestHandler.get_allowed_agents(user_api_key_auth=user_api_key_dict)
+        allowed_agent_ids: Final = await AgentRequestHandler.get_allowed_agents(user_api_key_auth=user_api_key_dict)
 
         for agent_id in allowed_agent_ids:
             agent = global_agent_registry.get_agent_by_id(agent_id)

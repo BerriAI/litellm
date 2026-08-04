@@ -10,6 +10,7 @@ Usage:
 
 import os
 import time
+from typing import Final
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_logger
@@ -22,7 +23,7 @@ from litellm.integrations.mock_client_factory import (
 # Use factory for should_use_mock and MockResponse
 # Braintrust uses both HTTPHandler (sync) and AsyncHTTPHandler (async)
 # Braintrust needs endpoint-specific responses, so we use custom HTTPHandler.post patching
-_config = MockClientConfig(
+_config: Final = MockClientConfig(
     "BRAINTRUST",
     "BRAINTRUST_MOCK",
     default_latency_ms=100,
@@ -51,7 +52,7 @@ _original_http_handler_post = None
 _mocks_initialized = False
 
 # Default mock latency in seconds
-_MOCK_LATENCY_SECONDS = float(os.getenv("BRAINTRUST_MOCK_LATENCY_MS", "100")) / 1000.0
+_MOCK_LATENCY_SECONDS: Final = float(os.getenv("BRAINTRUST_MOCK_LATENCY_MS", "100")) / 1000.0
 
 
 def _is_braintrust_url(url: str) -> bool:
@@ -59,8 +60,8 @@ def _is_braintrust_url(url: str) -> bool:
     if not isinstance(url, str):
         return False
 
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
+    parsed: Final = urlparse(url)
+    host: Final = (parsed.hostname or "").lower()
 
     if not host:
         return False
@@ -94,7 +95,7 @@ def _mock_http_handler_post(
         # Return appropriate mock response based on endpoint
         if "/project" in url:
             # Project creation/retrieval/register endpoint
-            project_name = json.get("name", "litellm") if json else "litellm"
+            project_name: Final = json.get("name", "litellm") if json else "litellm"
             mock_data = {"id": f"mock-project-id-{project_name}", "name": project_name}
         elif "/project_logs" in url:
             # Log insertion endpoint

@@ -7,7 +7,7 @@ It follows the same TokenCredential protocol used by Azure SDK.
 
 import time
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 
 
 @dataclass
@@ -106,7 +106,7 @@ class AzureADCredential:
                     "azure-identity is required for AzureADCredential. Install it with: pip install azure-identity"
                 )
 
-        result = self._credential.get_token(scope)
+        result: Final = self._credential.get_token(scope)
         return AccessToken(token=result.token, expires_on=result.expires_on)
 
 
@@ -157,7 +157,7 @@ class GenericOAuth2Credential:
 
         import httpx
 
-        response = httpx.post(
+        response: Final = httpx.post(
             self.token_url,
             data={
                 "grant_type": "client_credentials",
@@ -167,7 +167,7 @@ class GenericOAuth2Credential:
             },
         )
         response.raise_for_status()
-        data = response.json()
+        data: Final = response.json()
 
         self._cached_token = AccessToken(
             token=data["access_token"],
@@ -235,5 +235,5 @@ class ProxyAuthHandler:
         Returns:
             Dict with Authorization header containing Bearer token.
         """
-        token = self.get_token()
+        token: Final = self.get_token()
         return {"Authorization": f"Bearer {token.token}"}

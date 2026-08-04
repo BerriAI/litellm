@@ -4,7 +4,7 @@ Streaming utilities for ChatGPT provider.
 Normalizes non-spec-compliant tool_call chunks from the ChatGPT backend API.
 """
 
-from typing import Any
+from typing import Any, Final
 
 
 class ChatGPTToolCallNormalizer:
@@ -54,11 +54,11 @@ class ChatGPTToolCallNormalizer:
         if not chunk.choices:
             return chunk
 
-        delta = chunk.choices[0].delta
+        delta: Final = chunk.choices[0].delta
         if delta is None or not delta.tool_calls:
             return chunk
 
-        normalized = []
+        normalized: Final = []
         for tc in delta.tool_calls:
             if tc.id and tc.id not in self._seen_ids:
                 # New tool call — assign correct index

@@ -2,19 +2,19 @@ import os
 import time
 from datetime import datetime as dt
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Set, Union
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
-DEFAULT_DIGEST_INTERVAL = 86400  # 24 hours in seconds
+DEFAULT_DIGEST_INTERVAL: Final = 86400  # 24 hours in seconds
 
-SLACK_ALERTING_THRESHOLD_5_PERCENT = 0.05
-SLACK_ALERTING_THRESHOLD_15_PERCENT = 0.15
-MAX_OLDEST_HANGING_REQUESTS_TO_CHECK = 20
-HANGING_ALERT_BUFFER_TIME_SECONDS = 60
+SLACK_ALERTING_THRESHOLD_5_PERCENT: Final = 0.05
+SLACK_ALERTING_THRESHOLD_15_PERCENT: Final = 0.15
+MAX_OLDEST_HANGING_REQUESTS_TO_CHECK: Final = 20
+HANGING_ALERT_BUFFER_TIME_SECONDS: Final = 60
 
 
 class BaseOutageModel(TypedDict):
@@ -34,8 +34,8 @@ class ProviderRegionOutageModel(BaseOutageModel):
 
 
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
-LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-LITELLM_SUPPORT_CONTACT = "support@berri.ai"
+LITELLM_LOGO_URL: Final = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+LITELLM_SUPPORT_CONTACT: Final = "support@berri.ai"
 
 
 class SlackAlertingArgsEnum(Enum):
@@ -171,7 +171,7 @@ class AlertType(str, Enum):
     internal_user_deleted = "internal_user_deleted"
 
 
-DEFAULT_ALERT_TYPES: List[AlertType] = [
+DEFAULT_ALERT_TYPES: Final[List[AlertType]] = [
     # LLM related alerts
     AlertType.llm_exceptions,
     AlertType.llm_too_slow,

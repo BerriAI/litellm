@@ -5,7 +5,7 @@ Utility functions for base LLM classes.
 import copy
 import json
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Final
 
 from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel
@@ -111,10 +111,10 @@ def _convert_tool_response_to_message(
 
     """
     ## HANDLE JSON MODE - anthropic returns single function call
-    json_mode_content_str: str | None = tool_calls[0]["function"].get("arguments")
+    json_mode_content_str: Final[str | None] = tool_calls[0]["function"].get("arguments")
     try:
         if json_mode_content_str is not None:
-            args = json.loads(json_mode_content_str)
+            args: Final = json.loads(json_mode_content_str)
             if isinstance(args, dict) and (values := args.get("values")) is not None:
                 _message = Message(content=json.dumps(values))
                 return _message
@@ -132,13 +132,13 @@ def _convert_tool_response_to_message(
 def _dict_to_response_format_helper(response_format: dict, ref_template: str | None = None) -> dict:
     if ref_template is not None and response_format.get("type") == "json_schema":
         # Deep copy to avoid modifying original
-        modified_format = copy.deepcopy(response_format)
-        schema = modified_format["json_schema"]["schema"]
+        modified_format: Final = copy.deepcopy(response_format)
+        schema: Final = modified_format["json_schema"]["schema"]
 
         # Update all $ref values in the schema
         def update_refs(schema):
-            stack = [(schema, [])]
-            visited = set()
+            stack: Final = [(schema, [])]
+            visited: Final = set()
 
             while stack:
                 obj, path = stack.pop()
@@ -210,7 +210,7 @@ def map_developer_role_to_system_role(
     """
     Translate `developer` role to `system` role for non-OpenAI providers.
     """
-    new_messages: list[AllMessageValues] = []
+    new_messages: Final[list[AllMessageValues]] = []
     for m in messages:
         if m["role"] == "developer":
             verbose_logger.debug(

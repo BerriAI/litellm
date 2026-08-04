@@ -1,12 +1,12 @@
 import re
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
 from litellm import verbose_logger
 
-_UNSAFE_SECRET_NAME_PATTERN = re.compile(r"(^|/)\.\.(/|$)|[\x00-\x1f\x7f-\x9f  ]")
+_UNSAFE_SECRET_NAME_PATTERN: Final = re.compile(r"(^|/)\.\.(/|$)|[\x00-\x1f\x7f-\x9f  ]")
 
 
 def raise_if_unsafe_secret_name(secret_name: str) -> None:
@@ -138,7 +138,7 @@ class BaseSecretManager(ABC):
         """
         try:
             # First verify the old secret exists
-            old_secret = await self.async_read_secret(
+            old_secret: Final = await self.async_read_secret(
                 secret_name=current_secret_name,
                 optional_params=optional_params,
                 timeout=timeout,
@@ -148,7 +148,7 @@ class BaseSecretManager(ABC):
                 raise ValueError(f"Current secret {current_secret_name} not found")
 
             # Create new secret with new name and value
-            create_response = await self.async_write_secret(
+            create_response: Final = await self.async_write_secret(
                 secret_name=new_secret_name,
                 secret_value=new_secret_value,
                 description=f"Rotated from {current_secret_name}",
@@ -157,7 +157,7 @@ class BaseSecretManager(ABC):
             )
 
             # Verify new secret was created successfully
-            new_secret = await self.async_read_secret(
+            new_secret: Final = await self.async_read_secret(
                 secret_name=new_secret_name,
                 optional_params=optional_params,
                 timeout=timeout,

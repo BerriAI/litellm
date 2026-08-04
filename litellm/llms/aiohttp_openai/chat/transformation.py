@@ -7,7 +7,7 @@ https://github.com/BerriAI/litellm/issues/6592
 New config to ensure we introduce this without causing breaking changes for users
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from aiohttp import ClientResponse
 
@@ -70,7 +70,7 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        _json_response = await raw_response.json()
+        _json_response: Final = await raw_response.json()
         model_response.id = _json_response.get("id")
         model_response.choices = [Choices(**choice) for choice in _json_response.get("choices")]
         model_response.created = _json_response.get("created")

@@ -1,6 +1,6 @@
 """Types for the Block Code Execution guardrail."""
 
-from typing import Any, List, Literal, Optional, TypedDict, cast
+from typing import Any, cast, Final, List, Literal, Optional, TypedDict
 
 from pydantic import Field
 
@@ -11,7 +11,7 @@ CodeBlockActionTaken = Literal["block", "allow", "log_only"]
 # Supported language tags for the blocked_languages multiselect dropdown.
 # Only canonical names are listed; LANGUAGE_ALIASES in the guardrail normalizes
 # aliases (e.g. js→javascript, sh→bash) when matching.
-BLOCKED_LANGUAGES_OPTIONS = [
+BLOCKED_LANGUAGES_OPTIONS: Final = [
     "python",
     "javascript",
     "typescript",

@@ -1,6 +1,7 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
 from datetime import datetime, timedelta
+from typing import Final
 
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
@@ -25,7 +26,7 @@ class LowestCostLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
 
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
@@ -45,20 +46,20 @@ class LowestCostLoggingHandler(CustomLogger):
                     }
                 }
                 """
-                current_date = datetime.now().strftime("%Y-%m-%d")
-                current_hour = datetime.now().strftime("%H")
-                current_minute = datetime.now().strftime("%M")
-                precise_minute = f"{current_date}-{current_hour}-{current_minute}"
-                cost_key = f"{model_group}_map"
+                current_date: Final = datetime.now().strftime("%Y-%m-%d")
+                current_hour: Final = datetime.now().strftime("%H")
+                current_minute: Final = datetime.now().strftime("%M")
+                precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
+                cost_key: Final = f"{model_group}_map"
 
-                response_ms: timedelta = end_time - start_time
+                response_ms: Final[timedelta] = end_time - start_time
 
                 total_tokens = 0
 
                 if isinstance(response_obj, ModelResponse):
-                    _usage = getattr(response_obj, "usage", None)
+                    _usage: Final = getattr(response_obj, "usage", None)
                     if _usage is not None and isinstance(_usage, litellm.Usage):
-                        completion_tokens = _usage.completion_tokens
+                        completion_tokens: Final = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
                         float(response_ms.total_seconds() / completion_tokens)
 
@@ -66,7 +67,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 # Update usage
                 # ------------
 
-                request_count_dict = self.router_cache.get_cache(key=cost_key) or {}
+                request_count_dict: Final = self.router_cache.get_cache(key=cost_key) or {}
 
                 # check local result first
 
@@ -102,7 +103,7 @@ class LowestCostLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
 
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
@@ -123,21 +124,21 @@ class LowestCostLoggingHandler(CustomLogger):
                     }
                 }
                 """
-                cost_key = f"{model_group}_map"
+                cost_key: Final = f"{model_group}_map"
 
-                current_date = datetime.now().strftime("%Y-%m-%d")
-                current_hour = datetime.now().strftime("%H")
-                current_minute = datetime.now().strftime("%M")
-                precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+                current_date: Final = datetime.now().strftime("%Y-%m-%d")
+                current_hour: Final = datetime.now().strftime("%H")
+                current_minute: Final = datetime.now().strftime("%M")
+                precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
 
-                response_ms: timedelta = end_time - start_time
+                response_ms: Final[timedelta] = end_time - start_time
 
                 total_tokens = 0
 
                 if isinstance(response_obj, ModelResponse):
-                    _usage = getattr(response_obj, "usage", None)
+                    _usage: Final = getattr(response_obj, "usage", None)
                     if _usage is not None and isinstance(_usage, litellm.Usage):
-                        completion_tokens = _usage.completion_tokens
+                        completion_tokens: Final = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
 
                         float(response_ms.total_seconds() / completion_tokens)
@@ -146,7 +147,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 # Update usage
                 # ------------
 
-                request_count_dict = await self.router_cache.async_get_cache(key=cost_key) or {}
+                request_count_dict: Final = await self.router_cache.async_get_cache(key=cost_key) or {}
 
                 if id not in request_count_dict:
                     request_count_dict[id] = {}
@@ -184,24 +185,24 @@ class LowestCostLoggingHandler(CustomLogger):
         """
         Returns a deployment with the lowest cost
         """
-        cost_key = f"{model_group}_map"
+        cost_key: Final = f"{model_group}_map"
 
-        request_count_dict = await self.router_cache.async_get_cache(key=cost_key) or {}
+        request_count_dict: Final = await self.router_cache.async_get_cache(key=cost_key) or {}
 
         # -----------------------
         # Find lowest used model
         # ----------------------
         float("inf")
 
-        current_date = datetime.now().strftime("%Y-%m-%d")
-        current_hour = datetime.now().strftime("%H")
-        current_minute = datetime.now().strftime("%M")
-        precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+        current_date: Final = datetime.now().strftime("%Y-%m-%d")
+        current_hour: Final = datetime.now().strftime("%H")
+        current_minute: Final = datetime.now().strftime("%M")
+        precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
 
         if request_count_dict is None:  # base case
             return
 
-        all_deployments = request_count_dict
+        all_deployments: Final = request_count_dict
         for d in healthy_deployments:
             ## if healthy deployment not yet used
             if d["model_info"]["id"] not in all_deployments:
@@ -215,11 +216,11 @@ class LowestCostLoggingHandler(CustomLogger):
             input_tokens = 0
 
         # randomly sample from all_deployments, incase all deployments have latency=0.0
-        _items = all_deployments.items()
+        _items: Final = all_deployments.items()
 
         ### GET AVAILABLE DEPLOYMENTS ### filter out any deployments > tpm/rpm limits
         potential_deployments = []
-        _cost_per_deployment = {}
+        _cost_per_deployment: Final = {}
         for item, item_map in all_deployments.items():
             ## get the item from model list
             _deployment = None
@@ -300,5 +301,5 @@ class LowestCostLoggingHandler(CustomLogger):
 
         potential_deployments = sorted(potential_deployments, key=lambda x: x[1])
 
-        selected_deployment = potential_deployments[0][0]
+        selected_deployment: Final = potential_deployments[0][0]
         return selected_deployment

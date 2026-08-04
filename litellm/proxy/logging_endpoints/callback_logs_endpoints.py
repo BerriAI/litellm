@@ -16,7 +16,7 @@ self-describing `StandardLoggingPayload`, so completions/responses can use it to
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -34,7 +34,7 @@ from litellm.types.proxy.callback_logs_endpoints import (
 # Routes the Python proxy exposes for the Rust data-plane gateway to call into
 # (logging today; auth/budgets later). Namespaced under /v1/rust_control_plane so
 # they're clearly distinct from the proxy's own control-plane/management routes.
-rust_control_plane_router = APIRouter(prefix="/v1/rust_control_plane", tags=["rust control plane"])
+rust_control_plane_router: Final = APIRouter(prefix="/v1/rust_control_plane", tags=["rust control plane"])
 
 
 class CallbackLogsReplayer:
@@ -66,12 +66,12 @@ class CallbackLogsReplayer:
         attribution. Setting `standard_logging_object` up front makes the handler
         skip rebuilding it.
         """
-        model = payload.get("model") or ""
-        call_type = payload.get("call_type") or "acompletion"
-        start_time = CallbackLogsReplayer._epoch_to_datetime(payload.get("startTime"))
-        call_id = payload.get("litellm_call_id") or payload.get("id") or str(uuid.uuid4())
+        model: Final = payload.get("model") or ""
+        call_type: Final = payload.get("call_type") or "acompletion"
+        start_time: Final = CallbackLogsReplayer._epoch_to_datetime(payload.get("startTime"))
+        call_id: Final = payload.get("litellm_call_id") or payload.get("id") or str(uuid.uuid4())
 
-        logging_obj = LiteLLMLogging(
+        logging_obj: Final = LiteLLMLogging(
             model=model,
             messages=payload.get("messages") or [],
             # A replayed payload is always a *terminal*, fully-aggregated event —
@@ -87,8 +87,8 @@ class CallbackLogsReplayer:
             function_id="",
         )
 
-        metadata: dict[str, Any] = payload.get("metadata") or {}
-        litellm_metadata: dict[str, Any] = {
+        metadata: Final[dict[str, Any]] = payload.get("metadata") or {}
+        litellm_metadata: Final[dict[str, Any]] = {
             "user_api_key": metadata.get("user_api_key_hash"),
             "user_api_key_alias": metadata.get("user_api_key_alias"),
             "user_api_key_user_id": metadata.get("user_api_key_user_id"),
@@ -125,7 +125,7 @@ class CallbackLogsReplayer:
 
     async def replay(self, record: CallbackLogRecord) -> None:
         """Replay one record through the matching success/failure handler."""
-        payload = record.standard_logging_payload
+        payload: Final = record.standard_logging_payload
         verbose_proxy_logger.debug(
             "CallbackLogsReplayer: replaying %s record id=%s model=%s call_type=%s",
             record.status,
@@ -134,9 +134,9 @@ class CallbackLogsReplayer:
             payload.get("call_type"),
         )
 
-        logging_obj = self._build_logging_obj(payload)
-        start_time = self._epoch_to_datetime(payload.get("startTime"))
-        end_time = self._epoch_to_datetime(payload.get("endTime"))
+        logging_obj: Final = self._build_logging_obj(payload)
+        start_time: Final = self._epoch_to_datetime(payload.get("startTime"))
+        end_time: Final = self._epoch_to_datetime(payload.get("endTime"))
 
         if record.status == "success":
             await logging_obj.async_success_handler(
@@ -145,7 +145,7 @@ class CallbackLogsReplayer:
                 end_time=end_time,
             )
         else:
-            error_str = record.error or payload.get("error_str") or "replayed failure"
+            error_str: Final = record.error or payload.get("error_str") or "replayed failure"
             await logging_obj.async_failure_handler(
                 Exception(error_str),
                 traceback_exception="",
@@ -157,7 +157,7 @@ class CallbackLogsReplayer:
         """Replay a batch; a single bad record never sinks the rest. Each failure
         is reported back with its batch index so the caller can retry/triage it."""
         processed = 0
-        failures: list[CallbackLogFailure] = []
+        failures: Final[list[CallbackLogFailure]] = []
         for index, record in enumerate(records):
             try:
                 await self.replay(record)

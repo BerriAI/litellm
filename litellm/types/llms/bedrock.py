@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 from typing_extensions import TYPE_CHECKING, Required, TypedDict, override
 
@@ -287,16 +287,16 @@ class BedrockToolSpec(dict):
         strict: Optional[bool],
         supports_strict_tools: bool,
     ) -> None:
-        json_schema: ToolJsonSchemaBlock = {
+        json_schema: Final[ToolJsonSchemaBlock] = {
             "type": parameters["type"],
             "properties": parameters.get("properties", {}),
             "required": parameters.get("required", []),
         }
-        additional_properties = parameters.get("additionalProperties")
+        additional_properties: Final = parameters.get("additionalProperties")
         if supports_strict_tools and additional_properties is not None:
             json_schema["additionalProperties"] = additional_properties
 
-        tool_spec: ToolSpecBlock = {
+        tool_spec: Final[ToolSpecBlock] = {
             "inputSchema": {"json": json_schema},
             "name": name,
             "description": description,
