@@ -5,8 +5,10 @@ Covers actual execution of redaction in:
 - WebSocket close reasons in realtime handlers (openai, azure, bedrock)
 - Gemini RAG ingestion x-goog-api-key header usage
 - Traceback redaction pattern used in proxy streaming
+- Router fallback-failure traceback redaction
 """
 
+import logging
 import os
 import sys
 import traceback
@@ -188,6 +190,55 @@ class TestProxyStreamingDataGeneratorRedaction:
         assert "sk-1234567890abcdefghij" not in redacted_tb
         assert "Traceback" in redacted_tb
         assert "RuntimeError" in redacted_tb
+
+
+class TestRouterFallbackFailureTracebackRedaction:
+    """Test the fallback-failure error log in router.py's
+    async_function_with_fallbacks_common_utils. A prior version passed exc_info=True
+    alongside an already-redacted message, which bypasses redact_string() entirely
+    since the stdlib logging module renders exc_info separately from the message."""
+
+    @pytest.mark.asyncio
+    async def test_fallback_failure_does_not_leak_secret_via_exc_info(self, caplog):
+        import litellm
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
+                },
+                {
+                    "model_name": "claude-3-haiku",
+                    "litellm_params": {"model": "anthropic/claude-3-haiku-20240307", "api_key": "fake-key"},
+                },
+            ],
+        )
+
+        secret = "sk-testsecretvalue1234567890abcdef"
+
+        with patch(
+            "litellm.router.run_async_fallback",
+            new=AsyncMock(side_effect=RuntimeError(f"boom api_key={secret}")),
+        ):
+            with caplog.at_level(logging.ERROR, logger="LiteLLM Router"):
+                with pytest.raises(Exception):
+                    await router.async_function_with_fallbacks_common_utils(
+                        e=Exception("original failure"),
+                        disable_fallbacks=False,
+                        fallbacks=[{"gpt-3.5-turbo": ["claude-3-haiku"]}],
+                        context_window_fallbacks=None,
+                        content_policy_fallbacks=None,
+                        model_group="gpt-3.5-turbo",
+                        args=(),
+                        kwargs={"model": "gpt-3.5-turbo"},
+                    )
+
+        error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert error_records, "expected an error log for the fallback failure"
+        for record in error_records:
+            assert secret not in record.getMessage()
+            assert secret not in (record.exc_text or "")
 
 
 def _make_mock_ingest_options():

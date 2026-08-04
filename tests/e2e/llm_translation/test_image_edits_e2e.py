@@ -52,3 +52,57 @@ class TestImageEdit:
         assert first.b64_json or first.url, (
             f"edited image has neither b64_json nor url: {first}"
         )
+
+    @pytest.mark.covers("llm.images_edits.openai.input_validation.nonstream.works")
+    def test_empty_prompt_returns_error(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        from e2e_http import Success, UnknownApiError
+
+        model = f"e2e-image-edit-empty-{unique_marker()}"
+        model_id = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(model="openai/gpt-image-1", api_key="os.environ/OPENAI_API_KEY"),
+        )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+        result = endpoints_client.image_edit(key, model, "", _TEST_PNG)
+        match result:
+            case Success():
+                pytest.fail("empty prompt on image edit must not succeed")
+            case UnknownApiError(status_code=status):
+                assert status in range(400, 600), f"unexpected {status}"
+            case _:
+                return
+
+    @pytest.mark.covers("llm.images_edits.openai.input_validation.nonstream.works")
+    def test_missing_image_returns_error(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        from e2e_http import Success, UnknownApiError
+        from endpoints_client import ImageEditForm, ImagesResult
+
+        model = f"e2e-image-edit-noimg-{unique_marker()}"
+        model_id = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(model="openai/gpt-image-1", api_key="os.environ/OPENAI_API_KEY"),
+        )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+        result = endpoints_client.proxy.transport.upload(
+            "/v1/images/edits",
+            headers=endpoints_client.proxy.transport.bearer(key),
+            form=ImageEditForm(model=model, prompt="add a red circle"),
+            filename="image.png",
+            content=b"",
+            file_content_type="image/png",
+            file_field="image",
+            response_type=ImagesResult,
+        )
+        match result:
+            case Success():
+                pytest.fail("empty image bytes must not succeed")
+            case UnknownApiError(status_code=status):
+                assert status in range(400, 600), f"unexpected {status}"
+            case _:
+                return

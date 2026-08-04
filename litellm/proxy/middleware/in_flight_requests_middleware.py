@@ -6,7 +6,7 @@ Prometheus gauge `litellm_in_flight_requests`.
 """
 
 import os
-from typing import Any
+from typing import Any, Final
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -39,7 +39,7 @@ class InFlightRequestsMiddleware:
             return
 
         InFlightRequestsMiddleware._in_flight += 1
-        gauge = InFlightRequestsMiddleware._get_gauge()
+        gauge: Final = InFlightRequestsMiddleware._get_gauge()
         if gauge is not None:
             gauge.inc()  # type: ignore
         try:

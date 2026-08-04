@@ -15,13 +15,13 @@
     "limit": 123
   },
   "reportConstantRedefinition": {
-    "limit": 59
+    "limit": 40
   },
   "reportDeprecated": {
     "limit": 325
   },
   "reportDuplicateImport": {
-    "limit": 42
+    "limit": 24
   },
   "reportExplicitAny": {
     "limit": 9473
@@ -30,7 +30,7 @@
     "limit": 11
   },
   "reportGeneralTypeIssues": {
-    "limit": 227
+    "limit": 157
   },
   "reportIncompatibleMethodOverride": {
     "limit": 77
@@ -42,7 +42,7 @@
     "limit": 18
   },
   "reportIndexIssue": {
-    "limit": 37
+    "limit": 35
   },
   "reportInvalidTypeForm": {
     "limit": 35
@@ -57,7 +57,7 @@
     "limit": 5855
   },
   "reportMissingTypeArgument": {
-    "limit": 15852
+    "limit": 15849
   },
   "reportMissingTypeStubs": {
     "limit": 41
@@ -81,13 +81,13 @@
     "limit": 0
   },
   "reportPossiblyUnboundVariable": {
-    "limit": 77
+    "limit": 56
   },
   "reportPrivateUsage": {
-    "limit": 2437
+    "limit": 2436
   },
   "reportRedeclaration": {
-    "limit": 12
+    "limit": 8
   },
   "reportReturnType": {
     "limit": 219
@@ -99,7 +99,7 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 45324
+    "limit": 45269
   },
   "reportUnknownLambdaType": {
     "limit": 113
@@ -114,16 +114,16 @@
     "limit": 31978
   },
   "reportUnnecessaryCast": {
-    "limit": 177
+    "limit": 124
   },
   "reportUnnecessaryComparison": {
-    "limit": 1021
+    "limit": 703
   },
   "reportUnnecessaryContains": {
-    "limit": 7
+    "limit": 5
   },
   "reportUnnecessaryIsInstance": {
-    "limit": 1204
+    "limit": 866
   },
   "reportUntypedBaseClass": {
     "limit": 165
@@ -132,15 +132,15 @@
     "limit": 33
   },
   "reportUnusedClass": {
-    "limit": 33
+    "limit": 23
   },
   "reportUnusedFunction": {
-    "limit": 204
+    "limit": 139
   },
   "reportUnusedImport": {
-    "limit": 1003
+    "limit": 588
   },
   "reportUnusedVariable": {
-    "limit": 1297
+    "limit": 147
   }
 }
