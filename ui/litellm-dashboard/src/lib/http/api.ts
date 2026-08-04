@@ -3,11 +3,14 @@ import createQueryClient from "openapi-react-query";
 import type { paths } from "./schema";
 import { ApiError, deriveErrorMessage } from "./client";
 import { getAuthHeaderName, getAuthToken, getRequestBaseUrl, reportError } from "./runtime";
-
-const resolveRequestBase = (): string => (getRequestBaseUrl() || globalThis.location?.origin || "").replace(/\/+$/, "");
+import { resolveRequestUrl } from "./resolveApiBase";
 
 const BaseAwareRequest = function (url: string, init?: RequestInit): Request {
-  return new globalThis.Request(`${resolveRequestBase()}${url}`, init);
+  const target = resolveRequestUrl(url, {
+    registeredBase: getRequestBaseUrl(),
+    pageOrigin: globalThis.location?.origin,
+  });
+  return new globalThis.Request(target, init);
 } as unknown as typeof Request;
 
 const middleware: Middleware = {
