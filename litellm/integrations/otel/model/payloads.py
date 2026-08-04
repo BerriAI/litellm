@@ -364,6 +364,23 @@ class LLMCallSpanData:
 # --- the MCP tool-call model ------------------------------------------------- #
 
 
+def _upstream_address_port(resource: str | None) -> tuple[str | None, int | None]:
+    """Split a redacted MCP server origin into ``server.address`` / ``server.port``.
+
+    ``mcp_server_resource`` is a scheme + host + port origin with userinfo, path,
+    query and fragment already stripped. The port falls back to the scheme default
+    when the origin omits it, because a consumer that keys a downstream dependency
+    off the address renders a missing port as ``0``.
+    """
+    if not resource:
+        return None, None
+    parsed: Final = urlsplit(resource)
+    if not parsed.hostname:
+        return None, None
+    default_port: Final = {"https": 443, "http": 80}.get(parsed.scheme)
+    return parsed.hostname, parsed.port or default_port
+
+
 @dataclass(frozen=True)
 class MCPToolCallSpanData:
     """One MCP ``tools/call`` execution, parsed from a closed request's payload.
@@ -378,6 +395,8 @@ class MCPToolCallSpanData:
     method: str
     tool_name: str
     server_name: str | None
+    server_address: str | None
+    server_port: int | None
     session_id: str | None
     arguments_json: str | None
     result_json: str | None
@@ -390,11 +409,14 @@ class MCPToolCallSpanData:
         cls, payload: StandardLoggingPayload, capture_content: bool = False
     ) -> MCPToolCallSpanData:
         meta: Final = _mcp_tool_call_metadata(cast(Mapping[str, object], payload))
+        address, port = _upstream_address_port(as_str(meta.get("mcp_server_resource")) or None)
         return cls(
             operation=resolve_operation(as_str(payload.get("call_type"))),
             method=MCPMethod.TOOLS_CALL.value,
             tool_name=as_str(meta.get("name")) or "",
             server_name=as_str(meta.get("mcp_server_name")),
+            server_address=address,
+            server_port=port,
             session_id=as_str(meta.get("mcp_session_id")),
             arguments_json=(
                 _json_or_none(meta.get("arguments")) if capture_content and meta.get("arguments") is not None else None

@@ -356,6 +356,7 @@ def _mcp_payload(**overrides):
                 "arguments": {"city": "Paris"},
                 "result": {"temp_c": 21},
                 "mcp_server_name": "weather-mcp",
+                "mcp_server_resource": "https://weather.example.com",
                 "mcp_session_id": "sess-abc123",
             },
         },
@@ -452,6 +453,8 @@ def test_mcp_tool_call_failure_marks_error():
     assert span.name == "tools/call get_weather"
     assert span.status.status_code is StatusCode.ERROR
     assert span.attributes["error.type"] == "MCPError"
+    assert span.attributes["rpc.system"] == "jsonrpc"
+    assert span.attributes["server.address"] == "weather.example.com"
 
 
 def test_mcp_tool_call_deduped_on_repeat():
@@ -529,6 +532,51 @@ _MCP_SPAN_CASES = [
     (_mcp_payload, "tools/call get_weather"),
     (_mcp_list_payload, "tools/list"),
 ]
+
+
+def test_mcp_tool_call_names_its_rpc_system_and_upstream():
+    """A tool-call span names the RPC system, and always alongside the upstream it called.
+
+    A CLIENT span holding none of the ``rpc.*``/``http.*``/``db.*``/``messaging.*``
+    families is unclassifiable, so a backend deriving a span type from them has nothing
+    to derive from: Elastic APM indexed these spans as ``span.type=unknown`` with no
+    ``span.subtype`` at all, and its span-links API then rejected the whole trace with
+    ``Missing required fields (span.subtype)``.
+
+    The two assertions are one invariant, not two. Naming the RPC system makes a
+    consumer treat the span as a downstream dependency and key that dependency off
+    ``server.address``/``server.port``; emitting the first without the second names the
+    dependency ``:0``, which is worse than leaving the span unclassified.
+    """
+    logger, exporter = _logger()
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": _mcp_payload()}, None, None, None
+        )
+    )
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["rpc.system"] == "jsonrpc"
+    assert span.attributes["server.address"] == "weather.example.com"
+    assert span.attributes["server.port"] == 443
+
+
+def test_mcp_list_tools_omits_rpc_system_without_an_upstream():
+    """The discovery span carries no upstream identity, so it must not claim to be RPC.
+
+    ``tools/list`` reaches the callbacks with no ``mcp_tool_call_metadata``, so there is
+    no ``server.address`` to attach and a listing can span several upstreams anyway.
+    Naming ``rpc.system`` here would buy a ``span.subtype`` at the cost of a bogus ``:0``
+    dependency node in every consumer that aggregates on it.
+    """
+    logger, exporter = _logger()
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": _mcp_list_payload()}, None, None, None
+        )
+    )
+    (span,) = exporter.get_finished_spans()
+    assert "rpc.system" not in span.attributes
+    assert "server.address" not in span.attributes
 
 
 @pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)

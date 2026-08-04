@@ -177,6 +177,7 @@ def test_mcp_attribute_vocabulary_is_complete():
         "mcp.resource.uri",
         "jsonrpc.request.id",
         "jsonrpc.protocol.version",
+        "rpc.system",
         "rpc.response.status_code",
         "gen_ai.operation.name",
         "gen_ai.tool.name",
