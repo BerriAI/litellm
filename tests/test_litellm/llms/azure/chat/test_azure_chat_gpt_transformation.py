@@ -5,6 +5,7 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 
 
@@ -86,4 +87,7 @@ def test_transform_request_hoists_tool_message_image():
     transformed = request["messages"]
     assert [m.get("role") for m in transformed] == ["user", "assistant", "tool", "user"]
     assert isinstance(transformed[2]["content"], str)
-    assert transformed[3]["content"] == [{"type": "image_url", "image_url": {"url": data_uri}}]
+    assert transformed[3]["content"] == [
+        {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+        {"type": "image_url", "image_url": {"url": data_uri}},
+    ]

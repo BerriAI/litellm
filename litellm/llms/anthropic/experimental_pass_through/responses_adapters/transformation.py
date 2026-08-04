@@ -9,6 +9,7 @@ import json
 from typing import Any, cast
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
@@ -90,6 +91,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     )
                 elif isinstance(content, list):
                     user_parts: list[dict[str, Any]] = []
+                    tool_image_parts: list[dict[str, Any]] = []  # mutable-ok: json content parts
                     for block in content:
                         if not isinstance(block, dict):
                             continue
@@ -124,7 +126,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                         if output_text
                                         else TOOL_RESULT_IMAGE_PLACEHOLDER
                                     )
-                                    user_parts.extend(
+                                    tool_image_parts.extend(
                                         {"type": "input_image", "image_url": url}  # mutable-ok: json content part
                                         for url in image_urls
                                     )
@@ -138,6 +140,18 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     "output": output_text,
                                 }
                             )
+                    if tool_image_parts:
+                        boundary_part = {  # mutable-ok: json content part
+                            "type": "input_text",
+                            "text": TOOL_RESULT_IMAGE_BOUNDARY,
+                        }
+                        input_items.append(
+                            {  # mutable-ok: json input item
+                                "type": "message",
+                                "role": "user",
+                                "content": [boundary_part, *tool_image_parts],  # mutable-ok: json content list
+                            }
+                        )
                     if user_parts:
                         input_items.append(
                             {

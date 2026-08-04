@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.types.llms.openai import AllMessageValues
 
 sys.path.insert(
@@ -844,4 +845,7 @@ def test_mistral_transform_request_hoists_tool_message_image():
     tool_message = result[2]
     assert tool_message.get("tool_call_id") == "call_1"
     assert isinstance(tool_message.get("content"), str)
-    assert result[3].get("content") == [{"type": "image_url", "image_url": {"url": data_uri}}]
+    assert result[3].get("content") == [
+        {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+        {"type": "image_url", "image_url": {"url": data_uri}},
+    ]

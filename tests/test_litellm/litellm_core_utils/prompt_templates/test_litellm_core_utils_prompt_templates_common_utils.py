@@ -10,6 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     add_system_prompt_to_messages,
     get_file_ids_from_messages,
@@ -726,6 +727,7 @@ class TestUnpackLegacyDefs:
 
 
 DATA_URI_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+BOUNDARY_PART = {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY}
 
 
 def _tool_msg(content, tool_call_id="call_1"):
@@ -766,7 +768,7 @@ def test_hoist_images_from_tool_messages_structured_image_part():
     assert len(result) == 3
     assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
     assert result[2]["role"] == "user"
-    assert result[2]["content"] == [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+    assert result[2]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
 
 
 def test_hoist_images_from_tool_messages_keeps_text_parts_in_tool_message():
@@ -783,7 +785,7 @@ def test_hoist_images_from_tool_messages_keeps_text_parts_in_tool_message():
     result = hoist_images_from_tool_messages(messages)
 
     assert result[1]["content"] == [{"type": "text", "text": "screenshot follows"}]
-    assert result[2]["content"] == [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+    assert result[2]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
 
 
 def test_hoist_images_from_tool_messages_parallel_tool_calls_insert_after_run():
@@ -801,6 +803,7 @@ def test_hoist_images_from_tool_messages_parallel_tool_calls_insert_after_run():
     assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
     assert result[2]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
     assert result[3]["content"] == [
+        BOUNDARY_PART,
         {"type": "image_url", "image_url": {"url": DATA_URI_PNG}},
         {"type": "image_url", "image_url": {"url": "https://example.com/pic.png"}},
     ]
@@ -857,7 +860,7 @@ def test_hoist_images_from_tool_messages_imageless_sibling_in_image_run_unchange
     assert [m["role"] for m in result] == ["assistant", "tool", "tool", "user"]
     assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
     assert result[2] is imageless_tool_msg
-    assert result[3]["content"] == [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+    assert result[3]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
 
 
 def test_hoist_images_from_tool_messages_earlier_tool_run_without_images_unchanged():
@@ -873,6 +876,6 @@ def test_hoist_images_from_tool_messages_earlier_tool_run_without_images_unchang
     assert [m["role"] for m in result] == ["assistant", "tool", "assistant", "tool", "user"]
     assert result[1]["content"] == "plain text result"
     assert result[3]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
-    assert result[4]["content"] == [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+    assert result[4]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
 
 

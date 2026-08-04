@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
@@ -816,6 +817,10 @@ class TestToolMessageImageHoisting:
     (OpenAI-compatible APIs only accept text in role:"tool" messages)."""
 
     DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    HOISTED_USER_CONTENT = [
+        {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+        {"type": "image_url", "image_url": {"url": DATA_URI}},
+    ]
 
     def setup_method(self):
         self.config = OpenAIGPTConfig()
@@ -851,9 +856,7 @@ class TestToolMessageImageHoisting:
         tool_message = result[2]
         assert isinstance(tool_message["content"], str)
         assert "image" in tool_message["content"]
-        assert result[3]["content"] == [
-            {"type": "image_url", "image_url": {"url": self.DATA_URI}}
-        ]
+        assert result[3]["content"] == self.HOISTED_USER_CONTENT
 
     @pytest.mark.asyncio
     async def test_async_transform_request_hoists_image_part_from_tool_message(self):
@@ -867,6 +870,4 @@ class TestToolMessageImageHoisting:
 
         result = request["messages"]
         assert [m.get("role") for m in result] == ["user", "assistant", "tool", "user"]
-        assert result[3]["content"] == [
-            {"type": "image_url", "image_url": {"url": self.DATA_URI}}
-        ]
+        assert result[3]["content"] == self.HOISTED_USER_CONTENT

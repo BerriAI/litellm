@@ -16,6 +16,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -1073,6 +1074,15 @@ class TestToolResultImages:
             if part.get("type") == "input_image"
         ]
 
+    @staticmethod
+    def _image_message(items):
+        return next(
+            item
+            for item in items
+            if item.get("type") == "message"
+            and any(part.get("type") == "input_image" for part in item.get("content", []))
+        )
+
     def test_base64_image_survives(self):
         items = self._translate(
             [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}}]
@@ -1123,13 +1133,36 @@ class TestToolResultImages:
         )
 
         fco_index = next(i for i, item in enumerate(items) if item.get("type") == "function_call_output")
-        image_index = next(
-            i
-            for i, item in enumerate(items)
-            if item.get("type") == "message"
-            and any(part.get("type") == "input_image" for part in item.get("content", []))
+        assert fco_index < items.index(self._image_message(items))
+
+    def test_boundary_text_precedes_hoisted_images(self):
+        items = self._translate(
+            [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}}]
         )
-        assert fco_index < image_index
+
+        assert self._image_message(items)["content"] == [
+            {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+            {"type": "input_image", "image_url": self.DATA_URI},
+        ]
+
+    def test_sibling_user_blocks_stay_out_of_boundary_message(self):
+        messages = self._messages(
+            [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": self.B64_DATA}}]
+        )
+        messages[-1]["content"].append({"type": "text", "text": "what changed?"})
+
+        items = _ADAPTER.translate_messages_to_responses_input(messages)
+
+        assert self._image_message(items)["content"] == [
+            {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+            {"type": "input_image", "image_url": self.DATA_URI},
+        ]
+        assert any(
+            part == {"type": "input_text", "text": "what changed?"}
+            for item in items
+            if item.get("type") == "message"
+            for part in item.get("content", [])
+        )
 
     def test_text_only_tool_result_unchanged(self):
         items = self._translate([{"type": "text", "text": "plain result"}])
