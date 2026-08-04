@@ -20,7 +20,7 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
     TeamMetadataValidationResult,
 )
 
-VALID_COST_CENTERS = {"CC-1001", "CC-1002", "CC-2001"}
+VALID_COST_CENTERS = frozenset({"CC-1001", "CC-1002", "CC-2001"})
 
 
 async def validate_team_metadata(

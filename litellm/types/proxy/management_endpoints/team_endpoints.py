@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -142,4 +142,4 @@ class TeamMetadataFieldSchema(BaseModel):
 class TeamMetadataSchemaResponse(BaseModel):
     """Response for GET /team/metadata_schema; ``fields`` is empty when no schema is configured."""
 
-    fields: Tuple[TeamMetadataFieldSchema, ...]
+    fields: tuple[TeamMetadataFieldSchema, ...]

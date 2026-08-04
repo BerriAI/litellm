@@ -47,7 +47,10 @@ async def _validate_via_http(payload: TeamMetadataValidationPayload, service_url
     client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
     response = await client.post(
         service_url,
-        json={"operation": payload.operation, "metadata": payload.metadata},
+        json={  # mutable-ok: httpx serializes the request body from a plain dict
+            "operation": payload.operation,
+            "metadata": payload.metadata,
+        },
         timeout=2.0,
     )
     body = response.json()

@@ -1980,8 +1980,15 @@ async def update_team(
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(updated_kv["metadata"])
 
         if "metadata" in updated_kv:
-            stored_metadata = dict(existing_team_row.metadata) if isinstance(existing_team_row.metadata, dict) else None
-            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(stored_metadata)
+            stored_metadata = (
+                {  # mutable-ok: the validator payload's isinstance guard requires a plain dict
+                    key: value
+                    for key, value in existing_team_row.metadata.items()
+                    if key not in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS
+                }
+                if isinstance(existing_team_row.metadata, dict)
+                else None
+            )
             await validate_team_metadata_if_configured(
                 operation="update",
                 metadata=updated_kv.get("metadata"),
@@ -4207,8 +4214,8 @@ async def unblock_team(
 
 @router.get(
     "/team/metadata_schema",
-    tags=["team management"],
-    dependencies=[Depends(user_api_key_auth)],
+    tags=["team management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    dependencies=(Depends(user_api_key_auth),),
     response_model=TeamMetadataSchemaResponse,
 )
 async def get_team_metadata_schema():
