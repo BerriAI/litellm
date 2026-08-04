@@ -3759,7 +3759,7 @@ class TestDirectorySearchConfiguredSafe:
 
         response = await get_ui_settings(mock_request)
 
-        assert response["MICROSOFT_DIRECTORY_SEARCH_ENABLED"] is False
+        assert response["DIRECTORY_SEARCH_ENABLED"] is False
         assert "PROXY_BASE_URL" in response
 
 

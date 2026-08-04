@@ -225,7 +225,7 @@ async def directory_user_search(
         # The provider's response body wasn't valid JSON - every other
         # failure mode (auth, transport, deliberate HTTPException) is
         # already handled above.
-        verbose_proxy_logger.exception(f"directory_user_search(): failed to parse Graph response - {e}")
+        verbose_proxy_logger.exception(f"directory_user_search(): failed to parse provider response - {e}")
         raise handle_exception_on_proxy(e)
 
 

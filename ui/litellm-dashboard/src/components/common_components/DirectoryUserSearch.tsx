@@ -7,16 +7,16 @@ import type { SearchSelectOption } from "@/components/shared/SearchSelect";
 import { deriveErrorMessage, directoryUsersSearchCall } from "../networking";
 
 const MIN_QUERY_LENGTH = 2;
-const INPUT_ID = "ad-directory-user-search";
+const INPUT_ID = "directory-user-search";
 
-interface AdDirectoryUserSearchProps {
+interface DirectoryUserSearchProps {
   accessToken: string;
   value?: string;
   onChange?: (email: string) => void;
   id?: string;
 }
 
-export function AdDirectoryUserSearch({ accessToken, value, onChange, id }: AdDirectoryUserSearchProps) {
+export function DirectoryUserSearch({ accessToken, value, onChange, id }: DirectoryUserSearchProps) {
   const [options, setOptions] = useState<SearchSelectOption[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

@@ -54,6 +54,16 @@ function renderWithProviders(ui: React.ReactElement) {
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 }
 
+function uiSettingsWithDirectorySearch(directorySearchEnabled: boolean, ssoEnabled = true) {
+  return {
+    PROXY_BASE_URL: null,
+    PROXY_LOGOUT_URL: null,
+    DEFAULT_TEAM_DISABLED: false,
+    SSO_ENABLED: ssoEnabled,
+    DIRECTORY_SEARCH_ENABLED: directorySearchEnabled,
+  };
+}
+
 describe("CreateUserButton", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -235,13 +245,7 @@ describe("CreateUserButton", () => {
   describe("standalone mode submission", () => {
     it("should search directory users and populate the merged user email field when a result is selected", async () => {
       const user = userEvent.setup();
-      mockGetProxyUISettings.mockResolvedValue({
-        PROXY_BASE_URL: null,
-        PROXY_LOGOUT_URL: null,
-        DEFAULT_TEAM_DISABLED: false,
-        SSO_ENABLED: true,
-        MICROSOFT_DIRECTORY_SEARCH_ENABLED: true,
-      });
+      mockGetProxyUISettings.mockResolvedValue(uiSettingsWithDirectorySearch(true));
       mockDirectoryUsersSearchCall.mockResolvedValue([
         {
           id: "aad-user-id",
@@ -289,13 +293,7 @@ describe("CreateUserButton", () => {
 
     it("should block submit with an inline error when no directory user is selected", async () => {
       const user = userEvent.setup();
-      mockGetProxyUISettings.mockResolvedValue({
-        PROXY_BASE_URL: null,
-        PROXY_LOGOUT_URL: null,
-        DEFAULT_TEAM_DISABLED: false,
-        SSO_ENABLED: false,
-        MICROSOFT_DIRECTORY_SEARCH_ENABLED: true,
-      });
+      mockGetProxyUISettings.mockResolvedValue(uiSettingsWithDirectorySearch(true, false));
 
       renderWithProviders(
         <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} />,
@@ -317,13 +315,7 @@ describe("CreateUserButton", () => {
 
     it("should not show a stale selected directory user after the modal is reopened", async () => {
       const user = userEvent.setup();
-      mockGetProxyUISettings.mockResolvedValue({
-        PROXY_BASE_URL: null,
-        PROXY_LOGOUT_URL: null,
-        DEFAULT_TEAM_DISABLED: false,
-        SSO_ENABLED: false,
-        MICROSOFT_DIRECTORY_SEARCH_ENABLED: true,
-      });
+      mockGetProxyUISettings.mockResolvedValue(uiSettingsWithDirectorySearch(true, false));
       mockDirectoryUsersSearchCall.mockResolvedValue([
         { id: "aad-user-id", display_name: "Alice Example", email: "alice@example.com" },
       ]);
@@ -352,19 +344,13 @@ describe("CreateUserButton", () => {
 
     it("should render a plain email input with no required validation when directory search is disabled", async () => {
       const user = userEvent.setup();
-      mockGetProxyUISettings.mockResolvedValue({
-        PROXY_BASE_URL: null,
-        PROXY_LOGOUT_URL: null,
-        DEFAULT_TEAM_DISABLED: false,
-        SSO_ENABLED: false,
-        MICROSOFT_DIRECTORY_SEARCH_ENABLED: false,
-      });
+      mockGetProxyUISettings.mockResolvedValue(uiSettingsWithDirectorySearch(false, false));
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "manual-user" } });
       mockInvitationCreateCall.mockResolvedValue({
         id: "inv-manual",
         user_id: "manual-user",
         has_user_setup_sso: false,
-      } as any);
+      });
 
       renderWithProviders(
         <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} />,

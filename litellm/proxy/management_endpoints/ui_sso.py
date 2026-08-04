@@ -2484,7 +2484,7 @@ async def get_ui_settings(request: Request):
         "LITELLM_UI_API_DOC_BASE_URL": _api_doc_base_url,
         "DEFAULT_TEAM_DISABLED": default_team_disabled,
         "SSO_ENABLED": _is_sso_enabled,
-        "MICROSOFT_DIRECTORY_SEARCH_ENABLED": _is_directory_search_configured_safe(),
+        "DIRECTORY_SEARCH_ENABLED": _is_directory_search_configured_safe(),
         "NUM_SPEND_LOGS_ROWS": proxy_state.get_proxy_state_variable("spend_logs_row_count"),
         "DISABLE_EXPENSIVE_DB_QUERIES": disable_expensive_db_queries,
     }

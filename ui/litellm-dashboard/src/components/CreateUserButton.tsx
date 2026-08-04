@@ -17,7 +17,7 @@ import {
 } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import BulkCreateUsers from "./bulk_create_users_button";
-import { AdDirectoryUserSearch } from "./common_components/AdDirectoryUserSearch";
+import { DirectoryUserSearch } from "./common_components/DirectoryUserSearch";
 import TeamDropdown from "./common_components/team_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import NotificationsManager from "./molecules/notifications_manager";
@@ -59,7 +59,7 @@ interface UISettings {
   PROXY_LOGOUT_URL: string | null;
   DEFAULT_TEAM_DISABLED: boolean;
   SSO_ENABLED: boolean;
-  MICROSOFT_DIRECTORY_SEARCH_ENABLED?: boolean;
+  DIRECTORY_SEARCH_ENABLED?: boolean;
 }
 
 export const CreateUserButton: React.FC<CreateuserProps> = ({
@@ -126,8 +126,8 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   };
 
   const userEmailInput = () => {
-    if (uiSettings?.MICROSOFT_DIRECTORY_SEARCH_ENABLED) {
-      return <AdDirectoryUserSearch key={directorySearchResetSignal} accessToken={accessToken} />;
+    if (uiSettings?.DIRECTORY_SEARCH_ENABLED) {
+      return <DirectoryUserSearch key={directorySearchResetSignal} accessToken={accessToken} />;
     }
     return isEmbedded ? <TextInput placeholder="" /> : <Input />;
   };
@@ -137,7 +137,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
       label="User Email"
       name="user_email"
       rules={
-        uiSettings?.MICROSOFT_DIRECTORY_SEARCH_ENABLED
+        uiSettings?.DIRECTORY_SEARCH_ENABLED
           ? [{ required: true, message: "Select a user from the directory search results" }]
           : []
       }

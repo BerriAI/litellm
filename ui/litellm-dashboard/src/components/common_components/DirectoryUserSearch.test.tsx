@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { AdDirectoryUserSearch } from "./AdDirectoryUserSearch";
+import { DirectoryUserSearch } from "./DirectoryUserSearch";
 import * as networking from "../networking";
 
 vi.mock("../networking", async (importOriginal) => {
@@ -15,26 +15,26 @@ vi.mock("../networking", async (importOriginal) => {
 
 const mockDirectoryUsersSearchCall = vi.mocked(networking.directoryUsersSearchCall);
 
-describe("AdDirectoryUserSearch", () => {
+describe("DirectoryUserSearch", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDirectoryUsersSearchCall.mockResolvedValue([]);
   });
 
   it("should render a single search combobox", () => {
-    render(<AdDirectoryUserSearch accessToken="token" />);
+    render(<DirectoryUserSearch accessToken="token" />);
     expect(screen.getByRole("combobox")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/search by name or email/i)).toBeInTheDocument();
   });
 
   it("should forward the id prop to the underlying input so a Form label can target it", () => {
-    render(<AdDirectoryUserSearch accessToken="token" id="user_email" />);
+    render(<DirectoryUserSearch accessToken="token" id="user_email" />);
     expect(screen.getByRole("combobox")).toHaveAttribute("id", "user_email");
   });
 
   it("should not call directoryUsersSearchCall for a single-character query", async () => {
     const user = userEvent.setup();
-    render(<AdDirectoryUserSearch accessToken="token" />);
+    render(<DirectoryUserSearch accessToken="token" />);
 
     await user.type(screen.getByRole("combobox"), "a");
 
@@ -46,7 +46,7 @@ describe("AdDirectoryUserSearch", () => {
 
   it("should collapse rapid keystrokes into a single debounced search call", async () => {
     const user = userEvent.setup({ delay: 1 });
-    render(<AdDirectoryUserSearch accessToken="token" />);
+    render(<DirectoryUserSearch accessToken="token" />);
 
     await user.type(screen.getByRole("combobox"), "ali");
 
@@ -63,7 +63,7 @@ describe("AdDirectoryUserSearch", () => {
       { id: "aad-user-id", display_name: "Alice Example", email: "alice@example.com" },
     ]);
 
-    render(<AdDirectoryUserSearch accessToken="token" onChange={onChange} />);
+    render(<DirectoryUserSearch accessToken="token" onChange={onChange} />);
 
     await user.type(screen.getByRole("combobox"), "ali");
     await user.click(await screen.findByText("Alice Example"));
@@ -79,7 +79,7 @@ describe("AdDirectoryUserSearch", () => {
 
     function Controlled() {
       const [value, setValue] = useState("");
-      return <AdDirectoryUserSearch accessToken="token" value={value} onChange={setValue} />;
+      return <DirectoryUserSearch accessToken="token" value={value} onChange={setValue} />;
     }
     render(<Controlled />);
 
@@ -90,22 +90,20 @@ describe("AdDirectoryUserSearch", () => {
   });
 
   it("should show the controlled value in the input", () => {
-    render(<AdDirectoryUserSearch accessToken="token" value="bob@example.com" />);
+    render(<DirectoryUserSearch accessToken="token" value="bob@example.com" />);
     expect(screen.getByRole("combobox")).toHaveValue("bob@example.com");
   });
 
   it("should show an error message instead of 'No users found' when the search call fails", async () => {
     const user = userEvent.setup();
-    mockDirectoryUsersSearchCall.mockRejectedValue(new Error("Microsoft directory search is not configured."));
+    mockDirectoryUsersSearchCall.mockRejectedValue(new Error("Directory search is not configured."));
 
-    render(<AdDirectoryUserSearch accessToken="token" />);
+    render(<DirectoryUserSearch accessToken="token" />);
 
     await user.type(screen.getByRole("combobox"), "ali");
 
     await waitFor(() => {
-      expect(
-        screen.getByText(/directory search failed: microsoft directory search is not configured/i),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/directory search failed: directory search is not configured/i)).toBeInTheDocument();
     });
   });
 
@@ -119,7 +117,7 @@ describe("AdDirectoryUserSearch", () => {
       .mockImplementationOnce(() => firstSearch)
       .mockResolvedValueOnce([{ id: "bob-id", display_name: "Bob Example", email: "bob@example.com" }]);
 
-    render(<AdDirectoryUserSearch accessToken="token" />);
+    render(<DirectoryUserSearch accessToken="token" />);
 
     const searchBox = screen.getByRole("combobox");
     await user.type(searchBox, "ali");
@@ -148,12 +146,12 @@ describe("AdDirectoryUserSearch", () => {
       { id: "aad-user-id", display_name: "Alice Example", email: "alice@example.com" },
     ]);
 
-    const { rerender } = render(<AdDirectoryUserSearch key={0} accessToken="token" />);
+    const { rerender } = render(<DirectoryUserSearch key={0} accessToken="token" />);
 
     await user.type(screen.getByRole("combobox"), "ali");
     await user.click(await screen.findByText("Alice Example"));
 
-    rerender(<AdDirectoryUserSearch key={1} accessToken="token" />);
+    rerender(<DirectoryUserSearch key={1} accessToken="token" />);
 
     expect(screen.queryByText("Alice Example")).not.toBeInTheDocument();
   });
