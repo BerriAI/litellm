@@ -194,6 +194,7 @@ class TestResponseCompliance:
             "cancelled",
             "incomplete",
             "budget_exceeded",
+            "queued",
         ]
         assert status_prop["enum"] == expected_statuses
         print(f"✓ Status enum values: {expected_statuses}")
