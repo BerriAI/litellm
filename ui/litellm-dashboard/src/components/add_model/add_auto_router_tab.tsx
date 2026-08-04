@@ -201,12 +201,16 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   // Checks the config actually being built, not which preset (if any) it came from: a model that
   // was available when it entered a tier, whether via a preset or picked by hand, can have gone
-  // missing since (the caller's access narrowed, or a background refetch never caught it).
+  // missing since (the caller's access narrowed, or a background refetch never caught it). Only
+  // includes classifier_llm_config/embedding_model when buildComplexityRouterConfig would actually
+  // emit them (classifierType === "llm", semanticMatchingEnabled) - otherwise a dormant selection
+  // left over from a toggle no longer in effect would block submit for a model that never ships.
   const missingReferencedModels = getMissingModels(
     {
       tiers: complexityRouterConfig.tiers,
-      classifier_llm_config: complexityRouterConfig.classifier_llm_config,
-      embedding_model: embeddingModel,
+      classifier_llm_config:
+        complexityRouterConfig.classifier_type === "llm" ? complexityRouterConfig.classifier_llm_config : undefined,
+      embedding_model: semanticMatchingEnabled ? embeddingModel : undefined,
     },
     availableModelSet,
   );

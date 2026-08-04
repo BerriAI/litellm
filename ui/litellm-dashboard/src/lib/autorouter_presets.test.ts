@@ -4,6 +4,7 @@ import {
   getPresetByKey,
   getRequiredModelsInPreset,
   getMissingModelsInPreset,
+  getRequiredModels,
 } from "./autorouter_presets";
 
 describe("autorouter_presets", () => {
@@ -48,5 +49,16 @@ describe("autorouter_presets", () => {
       required.filter((m) => m !== "gpt-5-nano").sort(),
     );
     expect(getMissingModelsInPreset(preset, new Set(required))).toEqual([]);
+  });
+
+  // A classifier_llm_config placeholder is seeded with model: "" before a caller picks one; an
+  // empty string is not a real model reference and must not be reported as an unavailable model.
+  it("does not treat an empty-string classifier or embedding model as a required model", () => {
+    const required = getRequiredModels({
+      tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+      classifier_llm_config: { model: "" },
+      embedding_model: "",
+    });
+    expect(required).toEqual(new Set(["gpt-5-nano"]));
   });
 });

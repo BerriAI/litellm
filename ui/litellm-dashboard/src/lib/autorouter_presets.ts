@@ -30,7 +30,9 @@ export const getRequiredModels = (
 ): Set<string> => {
   const { tiers, classifier_llm_config: classifier, embedding_model: embedding } = config;
   const models = [...tiers.SIMPLE, ...tiers.MEDIUM, ...tiers.COMPLEX, ...tiers.REASONING, classifier?.model, embedding];
-  return new Set(models.filter((model): model is string => model != null));
+  // Boolean(), not != null: an empty-string placeholder (e.g. classifier_llm_config seeded before a
+  // model is chosen) is never a real model reference either.
+  return new Set(models.filter((model): model is string => Boolean(model)));
 };
 
 export const getMissingModels = (
