@@ -651,7 +651,9 @@ def get_redis_async_client(
             if arg in args:
                 url_kwargs[arg] = redis_kwargs[arg]
             else:
-                verbose_logger.debug(f"REDIS: ignoring argument: {arg}. Not an allowed async_redis.Redis.from_url arg.")
+                verbose_logger.debug(
+                    "REDIS: ignoring argument: %s. Not an allowed async_redis.Redis.from_url arg.", arg
+                )
         return async_redis.Redis.from_url(**url_kwargs)
 
     # Check for Redis Sentinel
@@ -805,6 +807,6 @@ def _pretty_print_redis_config(redis_kwargs: dict) -> None:
         # Fallback to simple logging if rich is not available
         masker = SensitiveDataMasker()
         masked_redis_kwargs = masker.mask_dict(redis_kwargs)
-        verbose_logger.info(f"Redis configuration: {masked_redis_kwargs}")
+        verbose_logger.info("Redis configuration: %s", masked_redis_kwargs)
     except Exception as e:
-        verbose_logger.error(f"Error pretty printing Redis configuration: {e}")
+        verbose_logger.error("Error pretty printing Redis configuration: %s", e)

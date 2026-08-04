@@ -214,4 +214,4 @@ class WatsonxOrchestrateTransformation:
             },
         }
 
-        verbose_logger.debug(f"WXO: Fake streaming completed for request_id={request_id}")
+        verbose_logger.debug("WXO: Fake streaming completed for request_id=%s", request_id)

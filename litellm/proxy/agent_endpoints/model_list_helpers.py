@@ -40,7 +40,7 @@ async def append_agents_to_model_group(
                     )
                 )
     except Exception as e:
-        verbose_proxy_logger.debug(f"Error appending agents to model_group/info: {e}")
+        verbose_proxy_logger.debug("Error appending agents to model_group/info: %s", e)
 
     return model_groups
 
@@ -84,6 +84,6 @@ async def append_agents_to_model_info(
                     }
                 )
     except Exception as e:
-        verbose_proxy_logger.debug(f"Error appending agents to v2/model/info: {e}")
+        verbose_proxy_logger.debug("Error appending agents to v2/model/info: %s", e)
 
     return models

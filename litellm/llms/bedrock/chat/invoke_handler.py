@@ -530,7 +530,7 @@ class AWSEventStreamDecoder:
             # and use it as the consistent ID for all subsequent chunks.
             self._initialize_converse_response_id(chunk_data)
 
-            verbose_logger.debug(f"\n\nRaw Chunk: {chunk_data}\n\n")
+            verbose_logger.debug("\n\nRaw Chunk: %s\n\n", chunk_data)
             text = ""
             tool_use: ChatCompletionToolCallChunk | None = None
             finish_reason = ""

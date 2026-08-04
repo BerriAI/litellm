@@ -98,7 +98,7 @@ class SemanticMCPToolFilter:
                     tools = await global_mcp_server_manager.get_tools_for_server(server_id)
                     all_tools.extend(tools)
                 except Exception as e:
-                    verbose_logger.warning(f"Failed to fetch tools from server {server_id}: {e}")
+                    verbose_logger.warning("Failed to fetch tools from server %s: %s", server_id, e)
                     continue
 
             if not all_tools:
@@ -106,11 +106,11 @@ class SemanticMCPToolFilter:
                 self.tool_router = None
                 return
 
-            verbose_logger.info(f"Fetched {len(all_tools)} tools from {len(registry)} MCP servers")
+            verbose_logger.info("Fetched %s tools from %s MCP servers", len(all_tools), len(registry))
             self._build_router(all_tools)
 
         except Exception as e:
-            verbose_logger.error(f"Failed to build router from MCP registry: {e}")
+            verbose_logger.error("Failed to build router from MCP registry: %s", e)
             self.tool_router = None
             raise
 
@@ -172,10 +172,10 @@ class SemanticMCPToolFilter:
                 auto_sync="local",
             )
 
-            verbose_logger.info(f"Built semantic router with {len(routes)} tools")
+            verbose_logger.info("Built semantic router with %s tools", len(routes))
 
         except Exception as e:
-            verbose_logger.error(f"Failed to build semantic router: {e}")
+            verbose_logger.error("Failed to build semantic router: %s", e)
             self.tool_router = None
             if _is_context_window_error(e):
                 self.context_window_error = str(e)
@@ -254,7 +254,7 @@ class SemanticMCPToolFilter:
 
             self._tool_map.update(missing)
             verbose_logger.info(
-                f"Semantic tool filter indexed {len(routes)} request-time tools missing from the startup index"
+                "Semantic tool filter indexed %s request-time tools missing from the startup index", len(routes)
             )
 
     async def filter_tools(
@@ -321,7 +321,8 @@ class SemanticMCPToolFilter:
         except Exception as e:
             if _is_context_window_error(e):
                 verbose_logger.error(
-                    f"Semantic tool filter embedding exceeded its context window: {e}",
+                    "Semantic tool filter embedding exceeded its context window: %s",
+                    e,
                     exc_info=True,
                 )
                 raise SemanticToolFilterContextWindowError(
@@ -329,7 +330,7 @@ class SemanticMCPToolFilter:
                     stage="the user query or the MCP tool descriptions being indexed",
                     original_error=str(e),
                 ) from e
-            verbose_logger.error(f"Semantic tool filter failed: {e}", exc_info=True)
+            verbose_logger.error("Semantic tool filter failed: %s", e, exc_info=True)
             return available_tools
 
     def _extract_tool_names_from_matches(self, matches) -> list[str]:

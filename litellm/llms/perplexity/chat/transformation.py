@@ -52,13 +52,13 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
                 base_openai_params.append("reasoning_effort")
         except Exception as e:
-            verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
+            verbose_logger.debug("Error checking if model supports reasoning: %s", e)
 
         try:
             if litellm.supports_web_search(model=model, custom_llm_provider=self.custom_llm_provider):
                 base_openai_params.append("web_search_options")
         except Exception as e:
-            verbose_logger.debug(f"Error checking if model supports web search: {e}")
+            verbose_logger.debug("Error checking if model supports web search: %s", e)
 
         return base_openai_params
 
@@ -97,7 +97,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             self._enhance_usage_with_perplexity_fields(model_response, raw_response_json)
             self._add_citations_as_annotations(model_response, raw_response_json)
         except Exception as e:
-            verbose_logger.debug(f"Error extracting Perplexity-specific usage fields: {e}")
+            verbose_logger.debug("Error extracting Perplexity-specific usage fields: %s", e)
 
         return model_response
 

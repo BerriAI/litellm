@@ -425,7 +425,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             endpoint = "http://localhost:6006/v1/traces"
             protocol = "otlp_http"
             verbose_logger.debug(
-                f"No PHOENIX_COLLECTOR_ENDPOINT found, using default local Phoenix endpoint: {endpoint}"
+                "No PHOENIX_COLLECTOR_ENDPOINT found, using default local Phoenix endpoint: %s", endpoint
             )
 
         otlp_auth_headers = None

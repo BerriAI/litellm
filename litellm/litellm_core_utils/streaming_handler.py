@@ -618,7 +618,7 @@ class CustomStreamWrapper:
             else:
                 return ""
         except Exception as e:
-            verbose_logger.exception(f"litellm.CustomStreamWrapper.handle_baseten_chunk(): Exception occured - {e}")
+            verbose_logger.exception("litellm.CustomStreamWrapper.handle_baseten_chunk(): Exception occured - %s", e)
             return ""
 
     def handle_triton_stream(self, chunk):
@@ -1430,7 +1430,7 @@ class CustomStreamWrapper:
                             model_response.choices[0].delta = Delta(**_json_delta)
                         except Exception as e:
                             verbose_logger.exception(
-                                f"litellm.CustomStreamWrapper.chunk_creator(): Exception occured - {e}"
+                                "litellm.CustomStreamWrapper.chunk_creator(): Exception occured - %s", e
                             )
                             model_response.choices[0].delta = Delta()
                     elif self._has_any_special_delta_attributes(delta):
@@ -1538,7 +1538,7 @@ class CustomStreamWrapper:
         except Exception as e:
             from litellm._logging import verbose_logger
 
-            verbose_logger.exception(f"Error in post-call streaming deployment hook: {e}")
+            verbose_logger.exception("Error in post-call streaming deployment hook: %s", e)
             return chunk
 
     def _add_mcp_list_tools_to_first_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
@@ -1578,7 +1578,7 @@ class CustomStreamWrapper:
         except Exception as e:
             from litellm._logging import verbose_logger
 
-            verbose_logger.exception(f"Error adding MCP list tools to first chunk: {e}")
+            verbose_logger.exception("Error adding MCP list tools to first chunk: %s", e)
 
         return chunk
 
@@ -1615,7 +1615,7 @@ class CustomStreamWrapper:
         except Exception as e:
             from litellm._logging import verbose_logger
 
-            verbose_logger.exception(f"Error adding MCP metadata to final chunk: {e}")
+            verbose_logger.exception("Error adding MCP metadata to final chunk: %s", e)
 
         return chunk
 

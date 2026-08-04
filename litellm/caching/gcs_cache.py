@@ -71,12 +71,15 @@ class GCSCache(BaseCache):
             if response.status_code == 200:
                 cached_response = json.loads(response.text)
                 verbose_logger.debug(
-                    f"Got GCS Cache: key: {key}, cached_response {cached_response}. Type Response {type(cached_response)}"
+                    "Got GCS Cache: key: %s, cached_response %s. Type Response %s",
+                    key,
+                    cached_response,
+                    type(cached_response),
                 )
                 return cached_response
             return None
         except Exception as e:
-            verbose_logger.error(f"GCS Caching: get_cache() - Got exception from GCS: {e}")
+            verbose_logger.error("GCS Caching: get_cache() - Got exception from GCS: %s", e)
 
     async def async_get_cache(self, key, **kwargs):
         try:
@@ -89,7 +92,7 @@ class GCSCache(BaseCache):
                 return json.loads(response.text)
             return None
         except Exception as e:
-            verbose_logger.error(f"GCS Caching: async_get_cache() - Got exception from GCS: {e}")
+            verbose_logger.error("GCS Caching: async_get_cache() - Got exception from GCS: %s", e)
 
     def flush_cache(self):
         pass

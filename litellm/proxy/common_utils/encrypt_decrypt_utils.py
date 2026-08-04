@@ -108,7 +108,7 @@ def encrypt_value_helper(value: str, new_encryption_key: str | None = None):
             return encrypted_value
 
         verbose_proxy_logger.debug(
-            f"Invalid value type passed to encrypt_value: {type(value)} for Value: {value}\n Value must be a string"
+            "Invalid value type passed to encrypt_value: %s for Value: %s\n Value must be a string", type(value), value
         )
         # if it's not a string - do not encrypt it and return the value
         return value
@@ -150,7 +150,7 @@ def decrypt_value_helper(
             verbose_proxy_logger.debug(error_message)
             return value if return_original_value else None
 
-        verbose_proxy_logger.debug(f"Unable to decrypt value for key: {key}, returning None")
+        verbose_proxy_logger.debug("Unable to decrypt value for key: %s, returning None", key)
         if return_original_value:
             return value
         else:

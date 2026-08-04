@@ -138,7 +138,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
     def _auto_detect_config(self):
         """Auto-detect data source ID and S3 bucket from existing Knowledge Base."""
-        verbose_logger.debug(f"Auto-detecting data source and S3 bucket for KB={self.knowledge_base_id}")
+        verbose_logger.debug("Auto-detecting data source and S3 bucket for KB=%s", self.knowledge_base_id)
 
         bedrock_agent = self._get_boto3_client("bedrock-agent")
 
@@ -157,7 +157,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             self.data_source_id = self._data_source_id
         else:
             self.data_source_id = data_sources[0]["dataSourceId"]
-            verbose_logger.info(f"Auto-detected data source: {self.data_source_id}")
+            verbose_logger.info("Auto-detected data source: %s", self.data_source_id)
 
         # Get data source details for S3 bucket
         ds_details = bedrock_agent.get_data_source(
@@ -171,7 +171,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         if bucket_arn:
             # Extract bucket name from ARN: arn:aws:s3:::bucket-name
             self.s3_bucket = self._s3_bucket or bucket_arn.split(":")[-1]
-            verbose_logger.info(f"Auto-detected S3 bucket: {self.s3_bucket}")
+            verbose_logger.info("Auto-detected S3 bucket: %s", self.s3_bucket)
 
             # Use inclusion prefix if available
             prefixes = s3_config.get("inclusionPrefixes", [])
@@ -218,8 +218,10 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         self.data_source_id = self._create_data_source(kb_name)
 
         verbose_logger.info(
-            f"Created KB infrastructure: kb_id={self.knowledge_base_id}, "
-            f"ds_id={self.data_source_id}, bucket={self.s3_bucket}"
+            "Created KB infrastructure: kb_id=%s, ds_id=%s, bucket=%s",
+            self.knowledge_base_id,
+            self.data_source_id,
+            self.s3_bucket,
         )
 
     def _create_s3_bucket(self, unique_id: str) -> str:
@@ -227,7 +229,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         s3 = self._get_boto3_client("s3")
         bucket_name = f"litellm-kb-{unique_id}"
 
-        verbose_logger.debug(f"Creating S3 bucket: {bucket_name}")
+        verbose_logger.debug("Creating S3 bucket: %s", bucket_name)
 
         create_params: dict[str, Any] = {"Bucket": bucket_name}
         if self.aws_region_name != "us-east-1":
@@ -236,7 +238,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         s3.create_bucket(**create_params)
         self._created_resources["s3_bucket"] = bucket_name
 
-        verbose_logger.info(f"Created S3 bucket: {bucket_name}")
+        verbose_logger.info("Created S3 bucket: %s", bucket_name)
         return bucket_name
 
     async def _create_opensearch_collection(self, unique_id: str, account_id: str, caller_arn: str) -> tuple[str, str]:
@@ -244,7 +246,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         oss = self._get_boto3_client("opensearchserverless")
         collection_name = f"litellm-kb-{unique_id}"
 
-        verbose_logger.debug(f"Creating OpenSearch Serverless collection: {collection_name}")
+        verbose_logger.debug("Creating OpenSearch Serverless collection: %s", collection_name)
 
         # Create encryption policy
         oss.create_security_policy(
@@ -290,7 +292,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         # This ensures the credentials being used have access to the collection
         # Normalize the caller ARN (convert assumed-role ARN to IAM role ARN if needed)
         normalized_caller_arn = _normalize_principal_arn(caller_arn, account_id)
-        verbose_logger.debug(f"Caller ARN: {caller_arn}, Normalized: {normalized_caller_arn}")
+        verbose_logger.debug("Caller ARN: %s, Normalized: %s", caller_arn, normalized_caller_arn)
 
         principals = [f"arn:aws:iam::{account_id}:root", normalized_caller_arn]
         # Deduplicate in case caller is root
@@ -340,7 +342,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             raise TimeoutError("OpenSearch collection did not become active in time")
 
         collection_arn = status_response["collectionDetails"][0]["arn"]
-        verbose_logger.info(f"Created OpenSearch collection: {collection_name}")
+        verbose_logger.info("Created OpenSearch collection: %s", collection_name)
 
         # Wait for data access policy to propagate before returning
         # AWS recommends waiting 60+ seconds for policy propagation
@@ -412,15 +414,17 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         for attempt in range(max_retries):
             try:
                 client.indices.create(index=index_name, body=index_body)
-                verbose_logger.info(f"Created OpenSearch index: {index_name}")
+                verbose_logger.info("Created OpenSearch index: %s", index_name)
                 return
             except Exception as e:
                 last_error = e
                 error_str = str(e)
                 if "authorization_exception" in error_str.lower() or "security_exception" in error_str.lower():
                     verbose_logger.warning(
-                        f"OpenSearch index creation attempt {attempt + 1}/{max_retries} failed due to authorization. "
-                        f"Waiting {retry_delay}s for policy propagation..."
+                        "OpenSearch index creation attempt %s/%s failed due to authorization. Waiting %ss for policy propagation...",
+                        attempt + 1,
+                        max_retries,
+                        retry_delay,
                     )
                     await asyncio.sleep(retry_delay)
                 else:
@@ -438,7 +442,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         iam = self._get_boto3_client("iam")
         role_name = f"litellm-bedrock-kb-{unique_id}"
 
-        verbose_logger.debug(f"Creating IAM role: {role_name}")
+        verbose_logger.debug("Creating IAM role: %s", role_name)
 
         trust_policy = {
             "Version": "2012-10-17",
@@ -498,14 +502,14 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         # Wait for role to propagate (use asyncio.sleep to avoid blocking)
         await asyncio.sleep(10)
 
-        verbose_logger.info(f"Created IAM role: {role_arn}")
+        verbose_logger.info("Created IAM role: %s", role_arn)
         return role_arn
 
     async def _create_knowledge_base(self, kb_name: str, role_arn: str, collection_arn: str) -> str:
         """Create Bedrock Knowledge Base."""
         bedrock_agent = self._get_boto3_client("bedrock-agent")
 
-        verbose_logger.debug(f"Creating Knowledge Base: {kb_name}")
+        verbose_logger.debug("Creating Knowledge Base: %s", kb_name)
 
         response = bedrock_agent.create_knowledge_base(
             name=kb_name,
@@ -543,14 +547,14 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         else:
             raise TimeoutError("Knowledge Base did not become active in time")
 
-        verbose_logger.info(f"Created Knowledge Base: {kb_id}")
+        verbose_logger.info("Created Knowledge Base: %s", kb_id)
         return kb_id
 
     def _create_data_source(self, kb_name: str) -> str:
         """Create Data Source for the Knowledge Base."""
         bedrock_agent = self._get_boto3_client("bedrock-agent")
 
-        verbose_logger.debug(f"Creating Data Source for KB: {self.knowledge_base_id}")
+        verbose_logger.debug("Creating Data Source for KB: %s", self.knowledge_base_id)
 
         response = bedrock_agent.create_data_source(
             knowledgeBaseId=self.knowledge_base_id,
@@ -566,7 +570,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         ds_id = response["dataSource"]["dataSourceId"]
         self._created_resources["data_source"] = ds_id
 
-        verbose_logger.info(f"Created Data Source: {ds_id}")
+        verbose_logger.info("Created Data Source: %s", ds_id)
         return ds_id
 
     def _get_boto3_client(self, service_name: str):
@@ -652,25 +656,25 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         s3_client = self._get_boto3_client("s3")
         s3_key = f"{self.s3_prefix.rstrip('/')}/{filename}"
 
-        verbose_logger.debug(f"Uploading file to s3://{self.s3_bucket}/{s3_key}")
+        verbose_logger.debug("Uploading file to s3://%s/%s", self.s3_bucket, s3_key)
         s3_client.put_object(
             Bucket=self.s3_bucket,
             Key=s3_key,
             Body=file_content,
             ContentType=content_type or "application/octet-stream",
         )
-        verbose_logger.info(f"Uploaded file to s3://{self.s3_bucket}/{s3_key}")
+        verbose_logger.info("Uploaded file to s3://%s/%s", self.s3_bucket, s3_key)
 
         # Step 2: Start ingestion job
         bedrock_agent = self._get_boto3_client("bedrock-agent")
 
-        verbose_logger.debug(f"Starting ingestion job for KB={self.knowledge_base_id}, DS={self.data_source_id}")
+        verbose_logger.debug("Starting ingestion job for KB=%s, DS=%s", self.knowledge_base_id, self.data_source_id)
         ingestion_response = bedrock_agent.start_ingestion_job(
             knowledgeBaseId=self.knowledge_base_id,
             dataSourceId=self.data_source_id,
         )
         job_id = ingestion_response["ingestionJob"]["ingestionJobId"]
-        verbose_logger.info(f"Started ingestion job: {job_id}")
+        verbose_logger.info("Started ingestion job: %s", job_id)
 
         # Step 3: Wait for ingestion (optional) - use asyncio.sleep to avoid blocking
         if self.wait_for_ingestion:
@@ -684,22 +688,22 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                     ingestionJobId=job_id,
                 )
                 status = job_status["ingestionJob"]["status"]
-                verbose_logger.debug(f"Ingestion job {job_id} status: {status}")
+                verbose_logger.debug("Ingestion job %s status: %s", job_id, status)
 
                 if status == "COMPLETE":
                     stats = job_status["ingestionJob"].get("statistics", {})
                     verbose_logger.info(
-                        f"Ingestion complete: {stats.get('numberOfNewDocumentsIndexed', 0)} docs indexed"
+                        "Ingestion complete: %s docs indexed", stats.get("numberOfNewDocumentsIndexed", 0)
                     )
                     break
                 elif status == "FAILED":
                     failure_reasons = job_status["ingestionJob"].get("failureReasons", [])
-                    verbose_logger.error(f"Ingestion failed: {failure_reasons}")
+                    verbose_logger.error("Ingestion failed: %s", failure_reasons)
                     break
                 elif status in ("STARTING", "IN_PROGRESS"):
                     await asyncio.sleep(2)
                 else:
-                    verbose_logger.warning(f"Unknown ingestion status: {status}")
+                    verbose_logger.warning("Unknown ingestion status: %s", status)
                     break
 
         return str(self.knowledge_base_id) if self.knowledge_base_id else None, s3_key

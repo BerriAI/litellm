@@ -142,7 +142,7 @@ async def list_policies(version_status: str | None = None):
         policies = db_policies + config_policies
         return PolicyListDBResponse(policies=policies, total_count=len(policies))
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error listing policies: {e}")
+        verbose_proxy_logger.exception("Error listing policies: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -201,7 +201,7 @@ async def create_policy(
         )
         return result
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error creating policy: {e}")
+        verbose_proxy_logger.exception("Error creating policy: %s", e)
         if "unique constraint" in str(e).lower():
             raise HTTPException(
                 status_code=400,
@@ -236,7 +236,7 @@ async def list_policy_versions(policy_name: str):
             prisma_client=prisma_client,
         )
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error listing policy versions: {e}")
+        verbose_proxy_logger.exception("Error listing policy versions: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -269,7 +269,7 @@ async def create_policy_version(
             created_by=created_by,
         )
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error creating policy version: {e}")
+        verbose_proxy_logger.exception("Error creating policy version: %s", e)
         if "not found" in str(e).lower() or "no production" in str(e).lower():
             raise HTTPException(status_code=404, detail=str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -308,7 +308,7 @@ async def update_policy_version_status(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating version status: {e}")
+        verbose_proxy_logger.exception("Error updating version status: %s", e)
         if "invalid status" in str(e).lower() or "only draft" in str(e).lower() or "cannot promote" in str(e).lower():
             raise HTTPException(status_code=400, detail=str(e))
         if "not found" in str(e).lower():
@@ -341,7 +341,7 @@ async def compare_policy_versions(
             prisma_client=prisma_client,
         )
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error comparing versions: {e}")
+        verbose_proxy_logger.exception("Error comparing versions: %s", e)
         if "not found" in str(e).lower():
             raise HTTPException(status_code=404, detail=str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -367,7 +367,7 @@ async def delete_all_policy_versions(policy_name: str):
             prisma_client=prisma_client,
         )
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error deleting all versions: {e}")
+        verbose_proxy_logger.exception("Error deleting all versions: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -408,7 +408,7 @@ async def get_policy(policy_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting policy: {e}")
+        verbose_proxy_logger.exception("Error getting policy: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -467,7 +467,7 @@ async def update_policy(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating policy: {e}")
+        verbose_proxy_logger.exception("Error updating policy: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -516,7 +516,7 @@ async def delete_policy(policy_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error deleting policy: {e}")
+        verbose_proxy_logger.exception("Error deleting policy: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -577,7 +577,7 @@ async def get_resolved_guardrails(policy_id: str):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error resolving guardrails: {e}")
+        verbose_proxy_logger.exception("Error resolving guardrails: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -640,7 +640,7 @@ async def test_pipeline(
         )
         return result.model_dump()
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error testing pipeline: {e}")
+        verbose_proxy_logger.exception("Error testing pipeline: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -699,7 +699,7 @@ async def list_policy_attachments():
         attachments = db_attachments + config_attachments
         return PolicyAttachmentListResponse(attachments=attachments, total_count=len(attachments))
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error listing policy attachments: {e}")
+        verbose_proxy_logger.exception("Error listing policy attachments: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -791,7 +791,7 @@ async def create_policy_attachment(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error creating policy attachment: {e}")
+        verbose_proxy_logger.exception("Error creating policy attachment: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -830,7 +830,7 @@ async def get_policy_attachment(attachment_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting policy attachment: {e}")
+        verbose_proxy_logger.exception("Error getting policy attachment: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -881,5 +881,5 @@ async def delete_policy_attachment(attachment_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error deleting policy attachment: {e}")
+        verbose_proxy_logger.exception("Error deleting policy attachment: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

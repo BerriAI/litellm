@@ -162,7 +162,7 @@ def _request_token_sync(
     }
     data = {"scope": scope}
 
-    verbose_logger.debug(f"Requesting GigaChat access token from {auth_url}")
+    verbose_logger.debug("Requesting GigaChat access token from %s", auth_url)
 
     try:
         client = _get_http_client()
@@ -194,7 +194,7 @@ async def _request_token_async(
     }
     data = {"scope": scope}
 
-    verbose_logger.debug(f"Requesting GigaChat access token from {auth_url}")
+    verbose_logger.debug("Requesting GigaChat access token from %s", auth_url)
 
     try:
         client = get_async_httpx_client(

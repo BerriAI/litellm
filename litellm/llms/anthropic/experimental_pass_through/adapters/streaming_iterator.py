@@ -669,7 +669,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return {"type": "message_stop"}
             raise StopIteration
         except Exception as e:
-            verbose_logger.error(f"Anthropic Adapter - {e}\n{traceback.format_exc()}")
+            verbose_logger.error("Anthropic Adapter - %s\n%s", e, traceback.format_exc())
             raise StopIteration
 
     async def __anext__(self):

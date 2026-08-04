@@ -132,7 +132,7 @@ def get_key_models(
     # deduplicate while preserving order
     all_models = list(dict.fromkeys(all_models))
 
-    verbose_proxy_logger.debug(f"ALL KEY MODELS - {len(all_models)}")
+    verbose_proxy_logger.debug("ALL KEY MODELS - %s", len(all_models))
     return all_models
 
 
@@ -173,7 +173,7 @@ def get_team_models(
     # deduplicate while preserving order
     all_models = list(dict.fromkeys(all_models))
 
-    verbose_proxy_logger.debug(f"ALL TEAM MODELS - {len(all_models)}")
+    verbose_proxy_logger.debug("ALL TEAM MODELS - %s", len(all_models))
     return all_models
 
 
@@ -448,7 +448,7 @@ def get_all_fallbacks(
     elif fallback_type == "content_policy":
         fallbacks_config = getattr(llm_router, "content_policy_fallbacks", [])
     else:
-        verbose_proxy_logger.warning(f"Unknown fallback_type: {fallback_type}")
+        verbose_proxy_logger.warning("Unknown fallback_type: %s", fallback_type)
         return []
 
     if not fallbacks_config:
@@ -463,5 +463,5 @@ def get_all_fallbacks(
 
         return fallback_model_group
     except Exception as e:
-        verbose_proxy_logger.error(f"Error getting fallbacks for model {model}: {e}")
+        verbose_proxy_logger.error("Error getting fallbacks for model %s: %s", model, e)
         return []

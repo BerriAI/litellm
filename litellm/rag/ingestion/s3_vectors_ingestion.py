@@ -105,7 +105,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         try:
             model_name = self.embedding_config["model"]
-            verbose_logger.debug(f"Auto-detecting dimension by making test embedding request to {model_name}")
+            verbose_logger.debug("Auto-detecting dimension by making test embedding request to %s", model_name)
 
             # Make a test embedding request
             test_input = "test"
@@ -117,12 +117,13 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             # Get dimension from the response
             if response.data and len(response.data) > 0:
                 dimension = len(response.data[0]["embedding"])
-                verbose_logger.debug(f"Auto-detected dimension {dimension} for embedding model {model_name}")
+                verbose_logger.debug("Auto-detected dimension %s for embedding model %s", dimension, model_name)
                 return dimension
         except Exception as e:
             verbose_logger.warning(
-                f"Could not auto-detect dimension from embedding model: {e}. "
-                f"Using default dimension of {S3_VECTORS_DEFAULT_DIMENSION}."
+                "Could not auto-detect dimension from embedding model: %s. Using default dimension of %s.",
+                e,
+                S3_VECTORS_DEFAULT_DIMENSION,
             )
 
         return S3_VECTORS_DEFAULT_DIMENSION
@@ -236,7 +237,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
     async def _ensure_vector_bucket_exists(self):
         """Create vector bucket if it doesn't exist using GetVectorBucket and CreateVectorBucket APIs."""
-        verbose_logger.debug(f"Ensuring S3 vector bucket exists: {self.vector_bucket_name}")
+        verbose_logger.debug("Ensuring S3 vector bucket exists: %s", self.vector_bucket_name)
 
         # Validate bucket name (AWS S3 naming rules)
         if len(self.vector_bucket_name) < 3:
@@ -259,34 +260,34 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         try:
             response = await self._sign_and_execute_request("POST", get_url, data=get_body)
             if response.status_code == 200:
-                verbose_logger.debug(f"Vector bucket {self.vector_bucket_name} exists")
+                verbose_logger.debug("Vector bucket %s exists", self.vector_bucket_name)
                 return
         except Exception as e:
-            verbose_logger.debug(f"Bucket check failed (may not exist): {e}, attempting to create")
+            verbose_logger.debug("Bucket check failed (may not exist): %s, attempting to create", e)
 
         # Create vector bucket using CreateVectorBucket API
         try:
-            verbose_logger.debug(f"Creating vector bucket: {self.vector_bucket_name}")
+            verbose_logger.debug("Creating vector bucket: %s", self.vector_bucket_name)
             create_url = f"https://s3vectors.{self.aws_region_name}.api.aws/CreateVectorBucket"
             create_body = safe_dumps({"vectorBucketName": self.vector_bucket_name})
 
             response = await self._sign_and_execute_request("POST", create_url, data=create_body)
 
             if response.status_code in (200, 201):
-                verbose_logger.info(f"Created vector bucket: {self.vector_bucket_name}")
+                verbose_logger.info("Created vector bucket: %s", self.vector_bucket_name)
             elif response.status_code == 409:
                 # Bucket already exists (ConflictException)
-                verbose_logger.debug(f"Vector bucket {self.vector_bucket_name} already exists")
+                verbose_logger.debug("Vector bucket %s already exists", self.vector_bucket_name)
             else:
-                verbose_logger.error(f"CreateVectorBucket failed: {response.status_code} - {response.text}")
+                verbose_logger.error("CreateVectorBucket failed: %s - %s", response.status_code, response.text)
                 response.raise_for_status()
         except Exception as e:
-            verbose_logger.exception(f"Error creating vector bucket: {e}")
+            verbose_logger.exception("Error creating vector bucket: %s", e)
             raise
 
     async def _ensure_vector_index_exists(self):
         """Create vector index if it doesn't exist using GetIndex and CreateIndex APIs."""
-        verbose_logger.debug(f"Ensuring vector index exists: {self.vector_bucket_name}/{self.index_name}")
+        verbose_logger.debug("Ensuring vector index exists: %s/%s", self.vector_bucket_name, self.index_name)
 
         # Try to get index info using GetIndex API
         get_url = f"https://s3vectors.{self.aws_region_name}.api.aws/GetIndex"
@@ -295,15 +296,18 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         try:
             response = await self._sign_and_execute_request("POST", get_url, data=get_body)
             if response.status_code == 200:
-                verbose_logger.debug(f"Vector index {self.index_name} exists")
+                verbose_logger.debug("Vector index %s exists", self.index_name)
                 return
         except Exception as e:
-            verbose_logger.debug(f"Index check failed (may not exist): {e}, attempting to create")
+            verbose_logger.debug("Index check failed (may not exist): %s, attempting to create", e)
 
         # Create vector index using CreateIndex API
         try:
             verbose_logger.debug(
-                f"Creating vector index: {self.index_name} with dimension={self.dimension}, metric={self.distance_metric}"
+                "Creating vector index: %s with dimension=%s, metric=%s",
+                self.index_name,
+                self.dimension,
+                self.distance_metric,
             )
 
             # Prepare index configuration per AWS API docs
@@ -322,14 +326,14 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             response = await self._sign_and_execute_request("POST", create_url, data=safe_dumps(index_config))
 
             if response.status_code in (200, 201):
-                verbose_logger.info(f"Created vector index: {self.index_name}")
+                verbose_logger.info("Created vector index: %s", self.index_name)
             elif response.status_code == 409:
-                verbose_logger.debug(f"Vector index {self.index_name} already exists")
+                verbose_logger.debug("Vector index %s already exists", self.index_name)
             else:
-                verbose_logger.error(f"CreateIndex failed: {response.status_code} - {response.text}")
+                verbose_logger.error("CreateIndex failed: %s - %s", response.status_code, response.text)
                 response.raise_for_status()
         except Exception as e:
-            verbose_logger.exception(f"Error creating vector index: {e}")
+            verbose_logger.exception("Error creating vector index: %s", e)
             raise
 
     async def _put_vectors(self, vectors: list[dict[str, Any]]):
@@ -339,7 +343,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         Args:
             vectors: List of vector objects with keys: "key", "data", "metadata"
         """
-        verbose_logger.debug(f"Storing {len(vectors)} vectors in {self.vector_bucket_name}/{self.index_name}")
+        verbose_logger.debug("Storing %s vectors in %s/%s", len(vectors), self.vector_bucket_name, self.index_name)
 
         url = f"https://s3vectors.{self.aws_region_name}.api.aws/PutVectors"
 
@@ -354,12 +358,12 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             response = await self._sign_and_execute_request("POST", url, data=safe_dumps(request_body))
 
             if response.status_code in (200, 201):
-                verbose_logger.info(f"Successfully stored {len(vectors)} vectors in index {self.index_name}")
+                verbose_logger.info("Successfully stored %s vectors in index %s", len(vectors), self.index_name)
             else:
-                verbose_logger.error(f"PutVectors failed with status {response.status_code}: {response.text}")
+                verbose_logger.error("PutVectors failed with status %s: %s", response.status_code, response.text)
                 response.raise_for_status()
         except Exception as e:
-            verbose_logger.exception(f"Error storing vectors: {e}")
+            verbose_logger.exception("Error storing vectors: %s", e)
             raise
 
     async def embed(
@@ -381,7 +385,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         embedding_model = self.embedding_config.get("model", "text-embedding-3-small")
 
-        verbose_logger.debug(f"Generating embeddings for {len(chunks)} chunks using {embedding_model}")
+        verbose_logger.debug("Generating embeddings for %s chunks using %s", len(chunks), embedding_model)
 
         # Convert to list to ensure type compatibility
         input_chunks: list[str] = list(chunks)
@@ -476,7 +480,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         Returns:
             Query results with vectors and metadata
         """
-        verbose_logger.debug(f"Querying index {vector_store_id} with query: {query}")
+        verbose_logger.debug("Querying index %s with query: %s", vector_store_id, query)
 
         # Generate query embedding
         if not self.embedding_config:
@@ -504,7 +508,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
             if response.status_code == 200:
                 results = response.json()
-                verbose_logger.debug(f"Query returned {len(results.get('vectors', []))} results")
+                verbose_logger.debug("Query returned %s results", len(results.get("vectors", [])))
 
                 # Check if query terms appear in results
                 if results.get("vectors"):
@@ -517,8 +521,8 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                 # Return results even if exact match not found
                 return results
             else:
-                verbose_logger.error(f"QueryVectors failed with status {response.status_code}: {response.text}")
+                verbose_logger.error("QueryVectors failed with status %s: %s", response.status_code, response.text)
                 return None
         except Exception as e:
-            verbose_logger.exception(f"Error querying vectors: {e}")
+            verbose_logger.exception("Error querying vectors: %s", e)
             return None

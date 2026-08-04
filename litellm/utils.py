@@ -513,7 +513,9 @@ def _add_custom_logger_callback_to_specific_event(callback: str, logging_event: 
 
     if callback not in litellm._known_custom_logger_compatible_callbacks:
         verbose_logger.debug(
-            f"Callback {callback} is not a valid custom logger compatible callback. Known list - {litellm._known_custom_logger_compatible_callbacks}"
+            "Callback %s is not a valid custom logger compatible callback. Known list - %s",
+            callback,
+            litellm._known_custom_logger_compatible_callbacks,
         )
         return
 
@@ -947,7 +949,7 @@ def function_setup(
 
                 except Exception as e:
                     # Log the error but don't fail the request
-                    verbose_logger.warning(f"Error removing thought signatures from tool call IDs: {e}")
+                    verbose_logger.warning("Error removing thought signatures from tool call IDs: %s", e)
         elif call_type == CallTypes.embedding.value or call_type == CallTypes.aembedding.value:
             messages = args[1] if len(args) > 1 else kwargs.get("input", None)
         elif call_type == CallTypes.image_generation.value or call_type == CallTypes.aimage_generation.value:
@@ -1004,7 +1006,7 @@ def function_setup(
                 else:
                     messages = "default-message-value"
             except Exception as e:
-                verbose_logger.debug(f"Error extracting messages from Google contents: {e}")
+                verbose_logger.debug("Error extracting messages from Google contents: %s", e)
                 messages = "default-message-value"
         else:
             messages = "default-message-value"
@@ -1951,7 +1953,7 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
         if result is not None:
             return result
     except Exception as e:
-        verbose_logger.debug(f"Error selecting tokenizer: {e}")
+        verbose_logger.debug("Error selecting tokenizer: %s", e)
 
     # default - tiktoken
     return _return_openai_tokenizer(model)
@@ -2064,7 +2066,7 @@ def create_pretrained_tokenizer(identifier: str, revision="main", auth_token: st
             auth_token=auth_token,  # type: ignore
         )
     except Exception as e:
-        verbose_logger.error(f"Error creating pretrained tokenizer: {e}. Defaulting to version without 'auth_token'.")
+        verbose_logger.error("Error creating pretrained tokenizer: %s. Defaulting to version without 'auth_token'.", e)
         tokenizer = Tokenizer.from_pretrained(identifier, revision=revision)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
@@ -2224,7 +2226,10 @@ def supports_native_streaming(model: str, custom_llm_provider: str | None) -> bo
         return supports_native_streaming
     except Exception as e:
         verbose_logger.debug(
-            f"Model not found or error in checking supports_native_streaming support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {e}"
+            "Model not found or error in checking supports_native_streaming support. You passed model=%s, custom_llm_provider=%s. Error: %s",
+            model,
+            custom_llm_provider,
+            e,
         )
         return False
 
@@ -2248,7 +2253,10 @@ def supports_response_schema(model: str, custom_llm_provider: str | None = None)
         model, custom_llm_provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
     except Exception as e:
         verbose_logger.debug(
-            f"Model not found or error in checking response schema support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {e}"
+            "Model not found or error in checking response schema support. You passed model=%s, custom_llm_provider=%s. Error: %s",
+            model,
+            custom_llm_provider,
+            e,
         )
         return False
 
@@ -2362,7 +2370,11 @@ def _supports_factory(model: str, custom_llm_provider: str | None, key: str) -> 
         return False
     except Exception as e:
         verbose_logger.debug(
-            f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {e}"
+            "Model not found or error in checking %s support. You passed model=%s, custom_llm_provider=%s. Error: %s",
+            key,
+            model,
+            custom_llm_provider,
+            e,
         )
 
         supported_by_provider = _supports_provider_info_factory(model, custom_llm_provider, key)
@@ -2402,9 +2414,11 @@ def _is_explicitly_disabled_factory(model: str, custom_llm_provider: str | None,
         return False
     except Exception as e:
         verbose_logger.debug(
-            f"Model not found or error in checking {key} disabled state. "
-            f"You passed model={model}, custom_llm_provider={custom_llm_provider}. "
-            f"Error: {e}"
+            "Model not found or error in checking %s disabled state. You passed model=%s, custom_llm_provider=%s. Error: %s",
+            key,
+            model,
+            custom_llm_provider,
+            e,
         )
         return False
 
@@ -2537,7 +2551,10 @@ def get_supported_regions(model: str, custom_llm_provider: str | None = None) ->
             return None
     except Exception as e:
         verbose_logger.debug(
-            f"Model not found or error in checking supported_regions support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {e}"
+            "Model not found or error in checking supported_regions support. You passed model=%s, custom_llm_provider=%s. Error: %s",
+            model,
+            custom_llm_provider,
+            e,
         )
         return None
 
@@ -2720,10 +2737,8 @@ def register_model(model_cost: str | dict):
                     and value.get("cache_read_input_token_cost") is None
                 ):
                     verbose_logger.warning(
-                        f"register_model: model={key} not in built-in cost map and no "
-                        "prefix/region variant matched; cache cost fields will default "
-                        "to 0. To track cache cost, add cache_creation_input_token_cost "
-                        "and cache_read_input_token_cost to model_info"
+                        "register_model: model=%s not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info",
+                        key,
                     )
         # ``get_model_info`` returns ``litellm_provider: None`` when the
         # provider is unknown (e.g. custom deployments registered via
@@ -2754,7 +2769,7 @@ def register_model(model_cost: str | dict):
         # Invalidate case-insensitive lookup map since model_cost was modified
         _invalidate_model_cost_lowercase_map()
 
-        verbose_logger.debug(f"added/updated model={model_cost_key} in litellm.model_cost: {model_cost_key}")
+        verbose_logger.debug("added/updated model=%s in litellm.model_cost: %s", model_cost_key, model_cost_key)
         # add new model names to provider lists
         if value.get("litellm_provider") == "openai":
             if key not in litellm.open_ai_chat_completion_models:
@@ -3828,9 +3843,9 @@ def get_optional_params(
         Args:
             supported_params: List[str] - supported params from the litellm config
         """
-        verbose_logger.info(f"\nLiteLLM completion() model= {model}; provider = {custom_llm_provider}")
-        verbose_logger.debug(f"\nLiteLLM: Params passed to completion() {passed_params}")
-        verbose_logger.debug(f"\nLiteLLM: Non-Default params passed to completion() {non_default_params}")
+        verbose_logger.info("\nLiteLLM completion() model= %s; provider = %s", model, custom_llm_provider)
+        verbose_logger.debug("\nLiteLLM: Params passed to completion() %s", passed_params)
+        verbose_logger.debug("\nLiteLLM: Non-Default params passed to completion() %s", non_default_params)
         unsupported_params = {}
         for k in non_default_params.keys():
             if k not in supported_params:
@@ -4571,7 +4586,7 @@ def _infer_model_region(litellm_params: LiteLLM_Params) -> AllowedModelRegion | 
     model_region = _get_model_region(custom_llm_provider=custom_llm_provider, litellm_params=litellm_params)
 
     if model_region is None:
-        verbose_logger.debug(f"Cannot infer model region for model: {litellm_params.model}")
+        verbose_logger.debug("Cannot infer model region for model: %s", litellm_params.model)
         return None
 
     if custom_llm_provider == "azure":
@@ -5238,7 +5253,7 @@ def _get_model_info_helper(
         ##########################
         potential_model_names = _get_potential_model_names(model=model, custom_llm_provider=custom_llm_provider)
 
-        verbose_logger.debug(f"checking potential_model_names in litellm.model_cost: {potential_model_names}")
+        verbose_logger.debug("checking potential_model_names in litellm.model_cost: %s", potential_model_names)
 
         combined_model_name = potential_model_names["combined_model_name"]
         stripped_model_name = potential_model_names["stripped_model_name"]
@@ -5373,7 +5388,9 @@ def _get_model_info_helper(
             if _input_cost_per_token is None:
                 # default value to 0, be noisy about this
                 verbose_logger.debug(
-                    f"model={model}, custom_llm_provider={custom_llm_provider} has no input_cost_per_token in model_cost_map. Defaulting to 0."
+                    "model=%s, custom_llm_provider=%s has no input_cost_per_token in model_cost_map. Defaulting to 0.",
+                    model,
+                    custom_llm_provider,
                 )
                 _input_cost_per_token = 0
 
@@ -5381,7 +5398,9 @@ def _get_model_info_helper(
             if _output_cost_per_token is None:
                 # default value to 0, be noisy about this
                 verbose_logger.debug(
-                    f"model={model}, custom_llm_provider={custom_llm_provider} has no output_cost_per_token in model_cost_map. Defaulting to 0."
+                    "model=%s, custom_llm_provider=%s has no output_cost_per_token in model_cost_map. Defaulting to 0.",
+                    model,
+                    custom_llm_provider,
                 )
                 _output_cost_per_token = 0
 
@@ -5548,7 +5567,7 @@ def _get_model_info_helper(
                     returned_model_info[cost_key] = cost_value  # type: ignore[literal-required]
             return returned_model_info
     except Exception as e:
-        verbose_logger.debug(f"Error getting model info: {e}")
+        verbose_logger.debug("Error getting model info: %s", e)
         raise Exception(
             f"This model isn't mapped yet. model={model}, custom_llm_provider={custom_llm_provider}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json."
         )
@@ -6663,13 +6682,13 @@ def process_messages(messages, max_tokens, model):
     messages = messages[::-1]
     final_messages = []
     verbose_logger.debug(
-        f"calling process_messages with messages: {messages}, max_tokens: {max_tokens}, model: {model}"
+        "calling process_messages with messages: %s, max_tokens: %s, model: %s", messages, max_tokens, model
     )
     for message in messages:
-        verbose_logger.debug(f"processing final_messages: {final_messages}")
+        verbose_logger.debug("processing final_messages: %s", final_messages)
         used_tokens = get_token_count(final_messages, model)
         available_tokens = max_tokens - used_tokens
-        verbose_logger.debug(f"used_tokens: {used_tokens}, available_tokens: {available_tokens}")
+        verbose_logger.debug("used_tokens: %s, available_tokens: %s", used_tokens, available_tokens)
         if available_tokens <= 3:
             break
 
@@ -6680,15 +6699,15 @@ def process_messages(messages, max_tokens, model):
             max_tokens=max_tokens,
             model=model,
         )
-        verbose_logger.debug(f"final_messages after attempt_message_addition: {final_messages}")
-    verbose_logger.debug(f"Final messages: {final_messages}")
+        verbose_logger.debug("final_messages after attempt_message_addition: %s", final_messages)
+    verbose_logger.debug("Final messages: %s", final_messages)
     return final_messages
 
 
 def attempt_message_addition(final_messages, message, available_tokens, max_tokens, model):
     temp_messages = [message] + final_messages
     temp_message_tokens = get_token_count(messages=temp_messages, model=model)
-    verbose_logger.debug(f"temp_message_tokens: {temp_message_tokens}, max_tokens: {max_tokens}")
+    verbose_logger.debug("temp_message_tokens: %s, max_tokens: %s", temp_message_tokens, max_tokens)
     if temp_message_tokens <= max_tokens:
         return temp_messages
 
@@ -6735,12 +6754,12 @@ def shorten_message_to_fit_limit(message, tokens_needed, model: str | None, rais
     content = message["content"]
     attempts = 0
 
-    verbose_logger.debug(f"content: {content}")
+    verbose_logger.debug("content: %s", content)
 
     while attempts < MAX_TOKEN_TRIMMING_ATTEMPTS:
-        verbose_logger.debug(f"getting token count for message: {message}")
+        verbose_logger.debug("getting token count for message: %s", message)
         total_tokens = get_token_count([message], model)
-        verbose_logger.debug(f"total_tokens: {total_tokens}, tokens_needed: {tokens_needed}")
+        verbose_logger.debug("total_tokens: %s, tokens_needed: %s", total_tokens, tokens_needed)
 
         if total_tokens <= tokens_needed:
             break
@@ -6756,7 +6775,7 @@ def shorten_message_to_fit_limit(message, tokens_needed, model: str | None, rais
 
         trimmed_content = left_half + ".." + right_half
         message["content"] = trimmed_content
-        verbose_logger.debug(f"trimmed_content: {trimmed_content}")
+        verbose_logger.debug("trimmed_content: %s", trimmed_content)
         content = trimmed_content
         attempts += 1
 
@@ -6851,9 +6870,9 @@ def trim_messages(
             # we remove all system messages from the messages list
             messages = [message for message in messages if message["role"] != "system"]
 
-        verbose_logger.debug(f"Processed system message: {system_message_event}")
+        verbose_logger.debug("Processed system message: %s", system_message_event)
         final_messages = process_messages(messages=messages, max_tokens=max_tokens, model=model)
-        verbose_logger.debug(f"Processed messages: {final_messages}")
+        verbose_logger.debug("Processed messages: %s", final_messages)
 
         # Add system message to the beginning of the final messages
         if system_message_event:
@@ -6862,13 +6881,13 @@ def trim_messages(
         if len(tool_messages) > 0:
             final_messages.extend(tool_messages)
 
-        verbose_logger.debug(f"Final messages: {final_messages}, return_response_tokens: {return_response_tokens}")
+        verbose_logger.debug("Final messages: %s, return_response_tokens: %s", final_messages, return_response_tokens)
         if return_response_tokens:  # if user wants token count with new trimmed messages
             response_tokens = max_tokens - get_token_count(final_messages, model)
             return final_messages, response_tokens
         return final_messages
     except Exception as e:  # [NON-Blocking, if error occurs just return final_messages
-        verbose_logger.exception(f"Got exception while token trimming - {e}")
+        verbose_logger.exception("Got exception while token trimming - %s", e)
         return original_messages
 
 
@@ -6982,7 +7001,7 @@ def _get_valid_models_from_provider_api(
         _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
         return models
     except Exception as e:
-        verbose_logger.warning(f"Error getting valid models: {e}")
+        verbose_logger.warning("Error getting valid models: %s", e)
         return []
 
 
@@ -7056,7 +7075,7 @@ def get_valid_models(
 
         return valid_models
     except Exception as e:
-        verbose_logger.warning(f"Error getting valid models: {e}")
+        verbose_logger.warning("Error getting valid models: %s", e)
         return []  # NON-Blocking
 
 
@@ -9112,7 +9131,7 @@ def is_prompt_caching_valid_prompt(
             min_token_count = get_prompt_cache_min_tokens(model=model)
         return token_count >= min_token_count
     except Exception as e:
-        verbose_logger.error(f"Error in is_prompt_caching_valid_prompt: {e}")
+        verbose_logger.error("Error in is_prompt_caching_valid_prompt: %s", e)
         return False
 
 

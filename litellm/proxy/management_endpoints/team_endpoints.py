@@ -465,7 +465,11 @@ class TeamMemberBudgetHandler:
                 user_api_key_dict=user_api_key_dict,
             )
             verbose_proxy_logger.info(
-                f"Updated team member budget table: {budget_row.budget_id}, with team_member_budget={team_member_budget}, team_member_rpm_limit={team_member_rpm_limit}, team_member_tpm_limit={team_member_tpm_limit}"
+                "Updated team member budget table: %s, with team_member_budget=%s, team_member_rpm_limit=%s, team_member_tpm_limit=%s",
+                budget_row.budget_id,
+                team_member_budget,
+                team_member_rpm_limit,
+                team_member_tpm_limit,
             )
             if updated_kv.get("metadata") is None:
                 updated_kv["metadata"] = {}
@@ -2241,7 +2245,7 @@ async def handle_update_object_permission(data_json: dict, existing_team_row: Li
     # Add the object_permission_id to data_json if one was created/updated
     if object_permission_id is not None:
         data_json["object_permission_id"] = object_permission_id
-        verbose_proxy_logger.debug(f"updated object_permission_id: {object_permission_id}")
+        verbose_proxy_logger.debug("updated object_permission_id: %s", object_permission_id)
 
     return data_json
 
@@ -2333,7 +2337,9 @@ def team_member_add_duplication_check(
         )
     elif len(invalid_team_members) > 0:
         verbose_proxy_logger.info(
-            f"Some users are already in team. Existing members={existing_team_row.members_with_roles}. Duplicate members={invalid_team_members}",
+            "Some users are already in team. Existing members=%s. Duplicate members=%s",
+            existing_team_row.members_with_roles,
+            invalid_team_members,
         )
 
 
@@ -3837,7 +3843,7 @@ async def _add_team_member_budget_table(
         team_info_response_object.team_member_budget_table = team_budget
     except Exception:
         verbose_proxy_logger.info(
-            f"Team member budget table not found, passed team_member_budget_id={team_member_budget_id}"
+            "Team member budget table not found, passed team_member_budget_id=%s", team_member_budget_id
         )
 
     return team_info_response_object
@@ -3975,7 +3981,9 @@ async def team_info(
 
     except Exception as e:
         verbose_proxy_logger.error(
-            f"litellm.proxy.management_endpoints.team_endpoints.py::team_info - Exception occurred - {e}\n{traceback.format_exc()}"
+            "litellm.proxy.management_endpoints.team_endpoints.py::team_info - Exception occurred - %s\n%s",
+            e,
+            traceback.format_exc(),
         )
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -4915,7 +4923,7 @@ async def get_paginated_teams(
         )
         return teams, total_count
     except Exception as e:
-        verbose_proxy_logger.exception(f"[Non-Blocking] Error getting paginated teams: {e}")
+        verbose_proxy_logger.exception("[Non-Blocking] Error getting paginated teams: %s", e)
         return [], 0
 
 

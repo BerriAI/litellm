@@ -141,4 +141,4 @@ async def acode_interpreter_tool(
         try:
             await config.adelete_sandbox(container=container, api_key=api_key, api_base=api_base, **forwarded)
         except Exception as e:
-            litellm._logging.verbose_logger.debug(f"sandbox: failed to delete ephemeral container: {e}")
+            litellm._logging.verbose_logger.debug("sandbox: failed to delete ephemeral container: %s", e)

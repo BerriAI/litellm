@@ -31,7 +31,7 @@ class S3Logger:
         import boto3
 
         try:
-            verbose_logger.debug(f"in init s3 logger - s3_callback_params {litellm.s3_callback_params}")
+            verbose_logger.debug("in init s3 logger - s3_callback_params %s", litellm.s3_callback_params)
 
             s3_use_team_prefix = False
 
@@ -62,7 +62,7 @@ class S3Logger:
             self.s3_server_side_encryption, self.s3_sse_kms_key_id = resolve_sse_params(
                 s3_server_side_encryption, s3_sse_kms_key_id
             )
-            verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
+            verbose_logger.debug("s3 logger using endpoint url %s", s3_endpoint_url)
             # Create an S3 client with custom endpoint URL
             self.s3_client = boto3.client(
                 "s3",
@@ -86,7 +86,7 @@ class S3Logger:
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         try:
-            verbose_logger.debug(f"s3 Logging - Enters logging function for model {kwargs}")
+            verbose_logger.debug("s3 Logging - Enters logging function for model %s", kwargs)
 
             # construct payload to send to s3
             # follows the same params as langfuse.py
@@ -168,14 +168,14 @@ class S3Logger:
             print_verbose(f"s3 Layer Logging - final response object: {response_obj}")
             return response
         except Exception as e:
-            verbose_logger.exception(f"s3 Layer Error - {e}")
+            verbose_logger.exception("s3 Layer Error - %s", e)
 
 
 def _validated_sse_value(name: str, value: str | None) -> str | None:
     if value is None or isinstance(value, str):
         return value
     verbose_logger.warning(
-        f"s3 logging: ignoring {name} because it has invalid type {type(value).__name__}; expected a string"
+        "s3 logging: ignoring %s because it has invalid type %s; expected a string", name, type(value).__name__
     )
     return None
 
@@ -191,8 +191,8 @@ def resolve_sse_params(
         return None, None
     if valid_key_id and not algorithm.startswith("aws:kms"):
         verbose_logger.warning(
-            f"s3 logging: ignoring s3_sse_kms_key_id because s3_server_side_encryption is {algorithm}; "
-            "set it to aws:kms to encrypt with the KMS key"
+            "s3 logging: ignoring s3_sse_kms_key_id because s3_server_side_encryption is %s; set it to aws:kms to encrypt with the KMS key",
+            algorithm,
         )
         return algorithm, None
     return algorithm, valid_key_id

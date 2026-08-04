@@ -138,13 +138,13 @@ class VertexAIOCRConfig(MistralOCRConfig):
         Returns:
             Base64 data URI string
         """
-        verbose_logger.debug(f"Vertex AI OCR: Converting URL to base64 data URI (sync): {url}")
+        verbose_logger.debug("Vertex AI OCR: Converting URL to base64 data URI (sync): %s", url)
 
         # Fetch and convert to base64 data URI
         # convert_url_to_base64 already returns a full data URI like "data:image/jpeg;base64,..."
         data_uri = convert_url_to_base64(url=url)
 
-        verbose_logger.debug(f"Vertex AI OCR: Converted URL to data URI (length: {len(data_uri)})")
+        verbose_logger.debug("Vertex AI OCR: Converted URL to data URI (length: %s)", len(data_uri))
 
         return data_uri
 
@@ -161,13 +161,13 @@ class VertexAIOCRConfig(MistralOCRConfig):
         Returns:
             Base64 data URI string
         """
-        verbose_logger.debug(f"Vertex AI OCR: Converting URL to base64 data URI (async): {url}")
+        verbose_logger.debug("Vertex AI OCR: Converting URL to base64 data URI (async): %s", url)
 
         # Fetch and convert to base64 data URI asynchronously
         # async_convert_url_to_base64 already returns a full data URI like "data:image/jpeg;base64,..."
         data_uri = await async_convert_url_to_base64(url=url)
 
-        verbose_logger.debug(f"Vertex AI OCR: Converted URL to data URI (length: {len(data_uri)})")
+        verbose_logger.debug("Vertex AI OCR: Converted URL to data URI (length: %s)", len(data_uri))
 
         return data_uri
 
@@ -252,7 +252,7 @@ class VertexAIOCRConfig(MistralOCRConfig):
         Returns:
             OCRRequestData with JSON data
         """
-        verbose_logger.debug(f"Vertex AI OCR async_transform_ocr_request - model: {model}")
+        verbose_logger.debug("Vertex AI OCR async_transform_ocr_request - model: %s", model)
 
         if not isinstance(document, dict):
             raise ValueError(f"Expected document dict, got {type(document)}")

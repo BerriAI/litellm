@@ -365,7 +365,7 @@ class BaseRAGIngestion(ABC):
             )
 
         except Exception as e:
-            verbose_logger.exception(f"RAG Pipeline failed: {e}")
+            verbose_logger.exception("RAG Pipeline failed: %s", e)
             return RAGIngestResponse(
                 id=self.ingest_id,
                 status="failed",

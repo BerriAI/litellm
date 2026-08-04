@@ -376,7 +376,7 @@ async def acompletion_with_mcp(
                         chunk = await self.follow_up_iterator.__anext__()
                         from litellm._logging import verbose_logger
 
-                        verbose_logger.debug(f"Follow-up chunk yielded: {chunk}")
+                        verbose_logger.debug("Follow-up chunk yielded: %s", chunk)
                         return chunk
                     except StopAsyncIteration:
                         self.follow_up_exhausted = True
@@ -476,7 +476,7 @@ async def acompletion_with_mcp(
                     from litellm._logging import verbose_logger
 
                     verbose_logger.warning(
-                        f"Follow-up response is not a CustomStreamWrapper: {type(follow_up_response)}"
+                        "Follow-up response is not a CustomStreamWrapper: %s", type(follow_up_response)
                     )
                     self.follow_up_stream = None
 

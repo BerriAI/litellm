@@ -138,7 +138,7 @@ class RedisSemanticCache(BaseCache):
                 cache_vectorizer=cache_vectorizer,
             )
         except Exception as e:
-            verbose_logger.error(f"Redis semantic-cache index build failed: {e}")
+            verbose_logger.error("Redis semantic-cache index build failed: %s", e)
             raise
 
     @classmethod

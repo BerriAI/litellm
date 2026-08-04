@@ -107,7 +107,7 @@ def cost_per_token(
             # Re-raise for non-router models - they should have pricing defined
             raise
         verbose_logger.debug(
-            f"Azure AI Model Router: model '{model}' not in cost map, calculating routing flat cost only. Error: {e}"
+            "Azure AI Model Router: model '%s' not in cost map, calculating routing flat cost only. Error: %s", model, e
         )
 
     # Add flat cost for Azure Model Router

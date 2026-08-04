@@ -136,8 +136,10 @@ def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
     if any(x in err_str for x in ("column", "schema", "does not exist", "prisma", "migrate")):
         hint = " Run `prisma db push` or `prisma migrate deploy` to fix schema mismatches."
     verbose_proxy_logger.error(
-        f"Budget lookup failed for {entity}; cache will not be populated. "
-        f"Each request will hit the database. Error: {error}.{hint}"
+        "Budget lookup failed for %s; cache will not be populated. Each request will hit the database. Error: %s.%s",
+        entity,
+        error,
+        hint,
     )
 
 
@@ -192,7 +194,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
             if model_group_info is None:
                 # Model not found or no pricing info available
                 # Conservative approach: assume it has cost
-                verbose_proxy_logger.debug(f"No model group info found for {model_name}, assuming it has cost")
+                verbose_proxy_logger.debug("No model group info found for %s, assuming it has cost", model_name)
                 if zero_cost_cache is not None:
                     zero_cost_cache[model_name] = False
                 return False
@@ -205,7 +207,10 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
             # If costs are not explicitly configured (None), assume it has cost
             if input_cost is None or output_cost is None:
                 verbose_proxy_logger.debug(
-                    f"Model {model_name} has undefined cost (input: {input_cost}, output: {output_cost}), assuming it has cost"
+                    "Model %s has undefined cost (input: %s, output: %s), assuming it has cost",
+                    model_name,
+                    input_cost,
+                    output_cost,
                 )
                 if zero_cost_cache is not None:
                     zero_cost_cache[model_name] = False
@@ -214,7 +219,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
             # If either cost is non-zero, return False
             if input_cost > 0 or output_cost > 0:
                 verbose_proxy_logger.debug(
-                    f"Model {model_name} has non-zero cost (input: {input_cost}, output: {output_cost})"
+                    "Model %s has non-zero cost (input: %s, output: %s)", model_name, input_cost, output_cost
                 )
                 if zero_cost_cache is not None:
                     zero_cost_cache[model_name] = False
@@ -246,7 +251,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
 
         except Exception as e:
             # If we can't determine the cost, assume it has cost (conservative approach)
-            verbose_proxy_logger.debug(f"Error checking cost for model {model_name}: {e}, assuming it has cost")
+            verbose_proxy_logger.debug("Error checking cost for model %s: %s, assuming it has cost", model_name, e)
             return False
 
     # All models checked have zero cost
@@ -957,7 +962,7 @@ async def get_default_end_user_budget(
 
         if budget_record is None:
             verbose_proxy_logger.warning(
-                f"Default end user budget not found in database: {litellm.max_end_user_budget_id}"
+                "Default end user budget not found in database: %s", litellm.max_end_user_budget_id
             )
             return None
 
@@ -973,7 +978,7 @@ async def get_default_end_user_budget(
         return _budget_obj
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error fetching default end user budget: {e}")
+        verbose_proxy_logger.error("Error fetching default end user budget: %s", e)
         return None
 
 
@@ -1013,7 +1018,7 @@ async def get_team_member_default_budget(
         budget_record = await BudgetRepository(prisma_client).table.find_unique(where={"budget_id": budget_id})
 
         if budget_record is None:
-            verbose_proxy_logger.warning(f"Team-default member budget not found in database: {budget_id}")
+            verbose_proxy_logger.warning("Team-default member budget not found in database: %s", budget_id)
             return None
 
         await user_api_key_cache.async_set_cache(
@@ -1025,7 +1030,7 @@ async def get_team_member_default_budget(
         return LiteLLM_BudgetTable.model_validate(budget_record.dict())
 
     except Exception:
-        verbose_proxy_logger.exception(f"Error fetching team-default member budget {budget_id}")
+        verbose_proxy_logger.exception("Error fetching team-default member budget %s", budget_id)
         return None
 
 
@@ -1066,7 +1071,7 @@ async def _apply_default_budget_to_end_user(
         # Apply default budget to end user object
         end_user_obj.litellm_budget_table = default_budget
         verbose_proxy_logger.debug(
-            f"Applied default budget {litellm.max_end_user_budget_id} to end user {end_user_obj.user_id}"
+            "Applied default budget %s to end user %s", litellm.max_end_user_budget_id, end_user_obj.user_id
         )
 
     return end_user_obj
@@ -1289,7 +1294,7 @@ async def _end_user_id_exists_in_db(
         if end_user_obj is not None:
             return True
     except Exception as e:
-        verbose_proxy_logger.debug(f"end_user validation: get_end_user_object lookup failed: {e}")
+        verbose_proxy_logger.debug("end_user validation: get_end_user_object lookup failed: %s", e)
 
     try:
         user_obj = await get_user_object(
@@ -1305,7 +1310,7 @@ async def _end_user_id_exists_in_db(
         if user_obj is not None:
             return True
     except Exception as e:
-        verbose_proxy_logger.debug(f"end_user validation: get_user_object lookup failed: {e}")
+        verbose_proxy_logger.debug("end_user validation: get_user_object lookup failed: %s", e)
 
     return False
 
@@ -1376,7 +1381,7 @@ async def get_tag_objects_batch(
                 )
                 tag_objects[tag_name] = _tag_obj
         except Exception as e:
-            verbose_proxy_logger.debug(f"Error batch fetching tags from database: {e}")
+            verbose_proxy_logger.debug("Error batch fetching tags from database: %s", e)
 
     return tag_objects
 
@@ -1974,7 +1979,10 @@ async def _get_team_object_from_user_api_key_cache(
             )
         except Exception as e:
             verbose_proxy_logger.debug(
-                f"Failed to load object_permission for team {team_id} with object_permission_id={_response.object_permission_id}: {e}"
+                "Failed to load object_permission for team %s with object_permission_id=%s: %s",
+                team_id,
+                _response.object_permission_id,
+                e,
             )
 
     # save the team object to cache
@@ -2250,7 +2258,10 @@ async def get_team_object_by_alias(
                 )
             except Exception as e:
                 verbose_proxy_logger.debug(
-                    f"Failed to load object_permission for team {team_obj.team_id} with object_permission_id={team_obj.object_permission_id}: {e}"
+                    "Failed to load object_permission for team %s with object_permission_id=%s: %s",
+                    team_obj.team_id,
+                    team_obj.object_permission_id,
+                    e,
                 )
 
         # Cache the result by both alias and team_id
@@ -2610,7 +2621,9 @@ async def get_key_object(
             )
         except Exception as e:
             verbose_proxy_logger.debug(
-                f"Failed to load object_permission for key with object_permission_id={_response.object_permission_id}: {e}"
+                "Failed to load object_permission for key with object_permission_id=%s: %s",
+                _response.object_permission_id,
+                e,
             )
 
     # save the key object to cache

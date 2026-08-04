@@ -105,7 +105,7 @@ def decode_video_id_with_provider(encoded_video_id: str) -> DecodedVideoId:
             video_id=decoded_video_id,
         )
     except Exception as e:
-        verbose_logger.debug(f"Error decoding video_id '{encoded_video_id}': {e}")
+        verbose_logger.debug("Error decoding video_id '%s': %s", encoded_video_id, e)
         return DecodedVideoId(
             custom_llm_provider=None,
             model_id=None,
@@ -182,7 +182,7 @@ def decode_character_id_with_provider(encoded_character_id: str) -> DecodedChara
             character_id=decoded_character_id,
         )
     except Exception as e:
-        verbose_logger.debug(f"Error decoding character_id '{encoded_character_id}': {e}")
+        verbose_logger.debug("Error decoding character_id '%s': %s", encoded_character_id, e)
         return DecodedCharacterId(
             custom_llm_provider=None,
             model_id=None,

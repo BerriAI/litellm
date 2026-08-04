@@ -164,8 +164,9 @@ async def anthropic_messages_with_mcp(
         response = await litellm.anthropic_messages(messages=list(working_messages), stream=False, **base_call_args)
     else:
         verbose_logger.warning(
-            f"MCP tool loop hit its {MAX_MCP_TOOL_USE_ITERATIONS} iteration cap for model {model}; "
-            "returning the last response"
+            "MCP tool loop hit its %s iteration cap for model %s; returning the last response",
+            MAX_MCP_TOOL_USE_ITERATIONS,
+            model,
         )
 
     if stream:

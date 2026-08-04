@@ -315,10 +315,10 @@ class LangfuseOtelLogger(OpenTelemetry):
         if langfuse_host:
             normalized_host = langfuse_host if langfuse_host.startswith("http") else f"https://{langfuse_host}"
             endpoint = f"{normalized_host.rstrip('/')}/api/public/otel"
-            verbose_logger.debug(f"Using Langfuse OTEL endpoint from host: {endpoint}")
+            verbose_logger.debug("Using Langfuse OTEL endpoint from host: %s", endpoint)
         else:
             endpoint = LANGFUSE_CLOUD_US_ENDPOINT
-            verbose_logger.debug(f"Using Langfuse US cloud endpoint: {endpoint}")
+            verbose_logger.debug("Using Langfuse US cloud endpoint: %s", endpoint)
 
         auth_header = LangfuseOtelLogger._get_langfuse_authorization_header(
             public_key=public_key, secret_key=secret_key

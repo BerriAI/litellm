@@ -326,7 +326,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 except HTTPException:
                     raise
                 except Exception as e:
-                    verbose_proxy_logger.error(f"Error processing image: {e}")
+                    verbose_proxy_logger.error("Error processing image: %s", e)
 
     @staticmethod
     def _resolve_key_alias_from_request_data(request_data: dict) -> str | None:
@@ -481,7 +481,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         except HTTPException:
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"Error sanitizing image file: {e}")
+            verbose_proxy_logger.error("Error sanitizing image file: %s", e)
             raise HTTPException(status_code=500, detail=f"File sanitization failed: {e}")
 
     async def _process_document_item(self, item: dict, user_api_key_alias: str | None) -> dict:
@@ -520,7 +520,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 extension = mime_type.split("/")[-1]
                 filename = f"document.{extension}"
 
-            verbose_proxy_logger.info(f"Sanitizing document: {filename}")
+            verbose_proxy_logger.info("Sanitizing document: %s", filename)
 
             sanitization_result = await self.sanitize_file_content(
                 file_data, filename, user_api_key_alias=user_api_key_alias
@@ -554,7 +554,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         except HTTPException:
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"Error sanitizing document: {e}")
+            verbose_proxy_logger.error("Error sanitizing document: %s", e)
             raise HTTPException(status_code=500, detail=f"Document sanitization failed: {e}")
 
     async def process_message_files(self, messages: list, user_api_key_alias: str | None = None) -> list:

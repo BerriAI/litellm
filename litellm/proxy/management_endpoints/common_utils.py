@@ -222,7 +222,7 @@ async def _user_has_admin_privileges(
 
     except Exception as e:
         # If there's an error checking, default to False for security
-        verbose_proxy_logger.debug(f"Error checking admin privileges for user {user_api_key_dict.user_id}: {e}")
+        verbose_proxy_logger.debug("Error checking admin privileges for user %s: %s", user_api_key_dict.user_id, e)
         return False
 
     return False
@@ -366,7 +366,7 @@ async def admin_can_invite_user(
 
         return False
     except Exception as e:
-        verbose_proxy_logger.debug(f"Error checking invite permission for user {user_api_key_dict.user_id}: {e}")
+        verbose_proxy_logger.debug("Error checking invite permission for user %s: %s", user_api_key_dict.user_id, e)
         return False
 
 

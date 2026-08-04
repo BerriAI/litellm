@@ -157,7 +157,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if extra_body:
             base_request.update(extra_body)
 
-        verbose_logger.debug(f"Manus: Using agent_profile={agent_profile}, task_mode=agent")
+        verbose_logger.debug("Manus: Using agent_profile=%s, task_mode=agent", agent_profile)
 
         return base_request
 
@@ -219,7 +219,9 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         try:
             response = ResponsesAPIResponse.model_validate(raw_response_json)
         except Exception:
-            verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
+            verbose_logger.debug(
+                "Error constructing ResponsesAPIResponse: %s, using model_construct", raw_response_json
+            )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         # Store processed headers in additional_headers so they get returned to the client
@@ -307,7 +309,9 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         try:
             response = ResponsesAPIResponse.model_validate(raw_response_json)
         except Exception:
-            verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
+            verbose_logger.debug(
+                "Error constructing ResponsesAPIResponse: %s, using model_construct", raw_response_json
+            )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         # Store processed headers in additional_headers so they get returned to the client

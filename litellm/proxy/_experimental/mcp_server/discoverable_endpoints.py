@@ -2159,8 +2159,9 @@ async def _build_oauth_protected_resource_response(
             upstream_metadata = await fetch_upstream_oauth_protected_resource(mcp_server)
         except Exception as exc:
             verbose_logger.warning(
-                "Failed to fetch upstream oauth-protected-resource metadata "
-                f"for pass-through MCP server {mcp_server.name!r}: {exc}"
+                "Failed to fetch upstream oauth-protected-resource metadata for pass-through MCP server %r: %s",
+                mcp_server.name,
+                exc,
             )
             raise HTTPException(
                 status_code=502,
@@ -2179,7 +2180,7 @@ async def _build_oauth_protected_resource_response(
         # so we must not fall through to the default gateway metadata —
         # that would point clients at the wrong IdP.
         verbose_logger.warning(
-            f"Upstream oauth-protected-resource metadata unavailable for pass-through MCP server {mcp_server.name!r}"
+            "Upstream oauth-protected-resource metadata unavailable for pass-through MCP server %r", mcp_server.name
         )
         raise HTTPException(
             status_code=502,

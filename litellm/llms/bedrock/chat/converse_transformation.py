@@ -352,8 +352,8 @@ class AmazonConverseConfig(BaseConfig):
         # Model strings can be like: "amazon.nova-pro-v1:0", "us.amazon.nova-pro-v1:0", etc.
         if "nova" not in model.lower():
             verbose_logger.debug(
-                f"web_search_options passed but model {model} is not a Nova model. "
-                "Nova grounding is only supported on Amazon Nova models."
+                "web_search_options passed but model %s is not a Nova model. Nova grounding is only supported on Amazon Nova models.",
+                model,
             )
             return None
 
@@ -950,8 +950,8 @@ class AmazonConverseConfig(BaseConfig):
             if isinstance(tool_choice_block, dict):
                 if "any" in tool_choice_block or "tool" in tool_choice_block:
                     verbose_logger.info(
-                        f"{model} does not support forced tool use (tool_choice='required' or specific tool) "
-                        f"when reasoning is enabled. Changing tool_choice to 'auto'."
+                        "%s does not support forced tool use (tool_choice='required' or specific tool) when reasoning is enabled. Changing tool_choice to 'auto'.",
+                        model,
                     )
                     optional_params["tool_choice"] = ToolChoiceValuesBlock(auto={})
 

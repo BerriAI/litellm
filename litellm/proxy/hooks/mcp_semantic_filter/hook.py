@@ -62,8 +62,9 @@ class SemanticToolFilterHook(CustomLogger):
         self.filter = semantic_filter
 
         verbose_proxy_logger.debug(
-            f"Initialized SemanticToolFilterHook with filter: "
-            f"enabled={semantic_filter.enabled}, top_k={semantic_filter.top_k}"
+            "Initialized SemanticToolFilterHook with filter: enabled=%s, top_k=%s",
+            semantic_filter.enabled,
+            semantic_filter.top_k,
         )
 
     def _should_expand_mcp_tools(self, tools: list[Any]) -> bool:
@@ -114,22 +115,24 @@ class SemanticToolFilterHook(CustomLogger):
             if hasattr(tool, "model_dump"):
                 tool_dict = tool.model_dump(exclude_none=True)
                 verbose_proxy_logger.debug(
-                    f"Converted Pydantic tool to dict: {type(tool).__name__} -> dict with keys: {list(tool_dict.keys())}"
+                    "Converted Pydantic tool to dict: %s -> dict with keys: %s",
+                    type(tool).__name__,
+                    list(tool_dict.keys()),
                 )
                 openai_tools_as_dicts.append(tool_dict)
             elif hasattr(tool, "dict"):
                 tool_dict = tool.dict(exclude_none=True)
-                verbose_proxy_logger.debug(f"Converted Pydantic tool (v1) to dict: {type(tool).__name__} -> dict")
+                verbose_proxy_logger.debug("Converted Pydantic tool (v1) to dict: %s -> dict", type(tool).__name__)
                 openai_tools_as_dicts.append(tool_dict)
             elif isinstance(tool, dict):
-                verbose_proxy_logger.debug(f"Tool is already a dict with keys: {list(tool.keys())}")
+                verbose_proxy_logger.debug("Tool is already a dict with keys: %s", list(tool.keys()))
                 openai_tools_as_dicts.append(tool)
             else:
-                verbose_proxy_logger.warning(f"Tool is unknown type: {type(tool)}, passing as-is")
+                verbose_proxy_logger.warning("Tool is unknown type: %s, passing as-is", type(tool))
                 openai_tools_as_dicts.append(tool)
 
         verbose_proxy_logger.debug(
-            f"Expanded {len(mcp_tools)} MCP reference(s) to {len(openai_tools_as_dicts)} tools (all as dicts)"
+            "Expanded %s MCP reference(s) to %s tools (all as dicts)", len(mcp_tools), len(openai_tools_as_dicts)
         )
 
         return openai_tools_as_dicts
@@ -235,13 +238,14 @@ class SemanticToolFilterHook(CustomLogger):
             metadata["litellm_semantic_filter_tools"] = tool_names_csv
 
             verbose_proxy_logger.info(
-                f"Semantic tool filter: {filter_stats} MCP tools "
-                f"({len(native_tools)} native preserved, "
-                f"{len(filtered_tools)} total)"
+                "Semantic tool filter: %s MCP tools (%s native preserved, %s total)",
+                filter_stats,
+                len(native_tools),
+                len(filtered_tools),
             )
         else:
             verbose_proxy_logger.info(
-                f"Semantic tool filter: all {len(native_tools)} tools are native, no MCP filtering applied"
+                "Semantic tool filter: all %s tools are native, no MCP filtering applied", len(native_tools)
             )
 
     def _emit_filter_metadata_safe(
@@ -266,7 +270,8 @@ class SemanticToolFilterHook(CustomLogger):
             )
         except Exception as e:
             verbose_proxy_logger.warning(
-                f"Failed to emit semantic filter metadata: {e}",
+                "Failed to emit semantic filter metadata: %s",
+                e,
                 exc_info=True,
             )
 
@@ -284,7 +289,7 @@ class SemanticToolFilterHook(CustomLogger):
         tools list to only include semantically relevant tools.
         """
         if call_type not in ("completion", "acompletion", "aresponses"):
-            verbose_proxy_logger.debug(f"Skipping semantic filter for call_type={call_type}")
+            verbose_proxy_logger.debug("Skipping semantic filter for call_type=%s", call_type)
             return None
 
         tools = data.get("tools")
@@ -321,16 +326,17 @@ class SemanticToolFilterHook(CustomLogger):
                     filtered_tools=narrowed_tools,
                 )
                 verbose_proxy_logger.info(
-                    f"Expanded MCP references to {len(expanded_tools)} tools "
-                    f"({len(native_tools_before_expand)} native preserved), "
-                    f"semantic filter selected {len(filtered_expanded_tools)}"
+                    "Expanded MCP references to %s tools (%s native preserved), semantic filter selected %s",
+                    len(expanded_tools),
+                    len(native_tools_before_expand),
+                    len(filtered_expanded_tools),
                 )
                 return data
 
             except SemanticToolFilterContextWindowError as e:
                 raise HTTPException(status_code=400, detail={"error": str(e)}) from e
             except Exception as e:
-                verbose_proxy_logger.error(f"Failed to expand MCP references: {e}", exc_info=True)
+                verbose_proxy_logger.error("Failed to expand MCP references: %s", e, exc_info=True)
                 return None
 
         messages = data.get("messages", [])
@@ -361,9 +367,10 @@ class SemanticToolFilterHook(CustomLogger):
                     native_tools.append(t)
 
             verbose_proxy_logger.debug(
-                f"Applying semantic filter: {len(mcp_tools)} MCP tools, "
-                f"{len(native_tools)} native tools, "
-                f"query: '{user_query[:50]}...'"
+                "Applying semantic filter: %s MCP tools, %s native tools, query: '%s...'",
+                len(mcp_tools),
+                len(native_tools),
+                user_query[:50],
             )
 
             if mcp_tools:
@@ -404,7 +411,7 @@ class SemanticToolFilterHook(CustomLogger):
         except SemanticToolFilterContextWindowError as e:
             raise HTTPException(status_code=400, detail={"error": str(e)}) from e
         except Exception as e:
-            verbose_proxy_logger.warning(f"Semantic tool filter hook failed: {e}. Proceeding with all tools.")
+            verbose_proxy_logger.warning("Semantic tool filter hook failed: %s. Proceeding with all tools.", e)
             return None
 
     async def async_post_call_response_headers_hook(
@@ -497,18 +504,19 @@ class SemanticToolFilterHook(CustomLogger):
             hook = SemanticToolFilterHook(semantic_filter)
 
             verbose_proxy_logger.info(
-                f"✅ MCP Semantic Tool Filter enabled: "
-                f"embedding_model={embedding_model}, top_k={top_k}, "
-                f"similarity_threshold={similarity_threshold}"
+                "✅ MCP Semantic Tool Filter enabled: embedding_model=%s, top_k=%s, similarity_threshold=%s",
+                embedding_model,
+                top_k,
+                similarity_threshold,
             )
 
             return hook
 
         except ImportError as e:
             verbose_proxy_logger.warning(
-                f"semantic-router not installed. Install with: pip install 'litellm[semantic-router]'. Error: {e}"
+                "semantic-router not installed. Install with: pip install 'litellm[semantic-router]'. Error: %s", e
             )
             return None
         except Exception as e:
-            verbose_proxy_logger.exception(f"Failed to initialize MCP semantic tool filter: {e}")
+            verbose_proxy_logger.exception("Failed to initialize MCP semantic tool filter: %s", e)
             return None

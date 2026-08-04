@@ -133,7 +133,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
             file_tuple = (filename, file_content, content_type)
 
             verbose_logger.debug(
-                f"Uploading file to GCS via litellm.files.acreate_file: {filename} (bucket: {self.gcs_bucket})"
+                "Uploading file to GCS via litellm.files.acreate_file: %s (bucket: %s)", filename, self.gcs_bucket
             )
 
             # Upload to GCS using LiteLLM's file upload
@@ -148,7 +148,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
 
             # The response.id should be the GCS URI
             gcs_uri = response.id
-            verbose_logger.info(f"Uploaded file to GCS: {gcs_uri}")
+            verbose_logger.info("Uploaded file to GCS: %s", gcs_uri)
 
             return gcs_uri
         finally:
@@ -185,7 +185,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
         transformation_config = self._build_transformation_config()
 
         corpus_name = self._get_corpus_name()
-        verbose_logger.debug(f"Importing {gcs_uri} into corpus {self.corpus_id}")
+        verbose_logger.debug("Importing %s into corpus %s", gcs_uri, self.corpus_id)
 
         if self.wait_for_import:
             # Synchronous import - wait for completion
@@ -195,7 +195,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
                 transformation_config=transformation_config,
                 timeout=self.import_timeout,
             )
-            verbose_logger.info(f"Import complete: {response.imported_rag_files_count} files imported")
+            verbose_logger.info("Import complete: %s files imported", response.imported_rag_files_count)
         else:
             # Async import - don't wait
             _ = rag.import_files_async(
@@ -293,7 +293,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
         try:
             await self._import_file_to_corpus_via_sdk(gcs_uri=gcs_uri)
         except Exception as e:
-            verbose_logger.error(f"Failed to import file into RAG corpus: {e}")
+            verbose_logger.error("Failed to import file into RAG corpus: %s", e)
             raise RuntimeError(f"Failed to import file into RAG corpus: {e}") from e
 
         return str(self.corpus_id), gcs_uri

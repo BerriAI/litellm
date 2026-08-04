@@ -231,4 +231,4 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
         )
     except Exception as e:
         # [Non-Blocking Exception. Do not allow blocking LLM API call]
-        verbose_proxy_logger.error(f"Failed Creating audit log {e}")
+        verbose_proxy_logger.error("Failed Creating audit log %s", e)

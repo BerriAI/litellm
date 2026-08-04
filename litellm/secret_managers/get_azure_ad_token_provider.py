@@ -69,7 +69,7 @@ def get_azure_ad_token_provider(
         if azure_credential
         else None or os.environ.get("AZURE_CREDENTIAL") or infer_credential_type_from_environment()
     )
-    verbose_logger.info(f"For Azure AD Token Provider, choosing credential type: {cred}")
+    verbose_logger.info("For Azure AD Token Provider, choosing credential type: %s", cred)
     credential: (
         ClientSecretCredential | ManagedIdentityCredential | CertificateCredential | DefaultAzureCredential | Any | None
     ) = None

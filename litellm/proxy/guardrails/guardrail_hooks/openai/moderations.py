@@ -87,7 +87,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             )
 
         verbose_proxy_logger.debug(
-            f"Initialized OpenAI Moderation Guardrail: {guardrail_name} with model: {self.model}"
+            "Initialized OpenAI Moderation Guardrail: %s with model: %s", guardrail_name, self.model
         )
 
     def _get_api_key(self) -> str | None:

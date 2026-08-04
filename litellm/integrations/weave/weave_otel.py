@@ -148,10 +148,10 @@ def get_weave_otel_config() -> WeaveOtelConfig:
             host = "https://" + host
         # Self-managed instances use a different path
         endpoint = host.rstrip("/") + WEAVE_OTEL_ENDPOINT
-        verbose_logger.debug(f"Using Weave OTEL endpoint from host: {endpoint}")
+        verbose_logger.debug("Using Weave OTEL endpoint from host: %s", endpoint)
     else:
         endpoint = WEAVE_BASE_URL + WEAVE_OTEL_ENDPOINT
-        verbose_logger.debug(f"Using Weave cloud endpoint: {endpoint}")
+        verbose_logger.debug("Using Weave cloud endpoint: %s", endpoint)
 
     # Weave uses Basic auth with format: api:<WANDB_API_KEY>
     auth_header = _get_weave_authorization_header(api_key=api_key)

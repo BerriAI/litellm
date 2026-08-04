@@ -262,7 +262,7 @@ async def add_shared_session_to_data(data: dict) -> None:
 
         if session is not None and not session.closed:
             data["shared_session"] = session
-            verbose_proxy_logger.info(f"SESSION REUSE: Attached shared aiohttp session to request (ID: {id(session)})")
+            verbose_proxy_logger.info("SESSION REUSE: Attached shared aiohttp session to request (ID: %s)", id(session))
         elif session is not None and session.closed:
             # Session was created at startup but has since closed — recreate it
             # Use lock to prevent concurrent recreation (avoids session/connector leak)
@@ -278,7 +278,7 @@ async def add_shared_session_to_data(data: dict) -> None:
                 # or closed — either way we need to recreate
                 if session is not None:
                     verbose_proxy_logger.warning(
-                        f"SESSION REUSE: Shared aiohttp session is closed (ID: {id(session)}), recreating..."
+                        "SESSION REUSE: Shared aiohttp session is closed (ID: %s), recreating...", id(session)
                     )
                 else:
                     verbose_proxy_logger.warning(

@@ -557,7 +557,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
             except Exception as e:
                 verbose_logger.exception(
-                    f"LiteLLM.AgenticHookError: Exception in agentic completion hooks for OpenAI: {e}"
+                    "LiteLLM.AgenticHookError: Exception in agentic completion hooks for OpenAI: %s", e
                 )
 
         return None

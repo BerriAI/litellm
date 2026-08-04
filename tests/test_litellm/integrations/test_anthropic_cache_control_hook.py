@@ -20,6 +20,12 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
+def _rendered_log_message(call):
+    message = str(call.args[0])
+    values = call.args[1:]
+    return message % values if values else message
+
+
 @pytest.mark.asyncio
 async def test_anthropic_cache_control_hook_system_message():
     # Use patch.dict to mock environment variables instead of setting them directly
@@ -339,7 +345,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds_logging():
 
                 # Verify that warning was called with the expected message
                 mock_logger.warning.assert_called_once()
-                warning_call = mock_logger.warning.call_args[0][0]
+                warning_call = _rendered_log_message(mock_logger.warning.call_args)
 
                 # Check that the warning message contains the expected information
                 assert "AnthropicCacheControlHook: Provided index 10 is out of bounds" in warning_call
@@ -405,7 +411,7 @@ async def test_anthropic_cache_control_hook_negative_out_of_bounds_logging():
 
                 # Verify that warning was called with the expected message
                 mock_logger.warning.assert_called_once()
-                warning_call = mock_logger.warning.call_args[0][0]
+                warning_call = _rendered_log_message(mock_logger.warning.call_args)
 
                 # Check that the warning message contains the original negative index
                 assert "AnthropicCacheControlHook: Provided index -5 is out of bounds" in warning_call

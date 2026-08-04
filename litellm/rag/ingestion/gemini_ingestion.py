@@ -162,7 +162,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         response_data = response.json()
         store_name = response_data.get("name", "")
 
-        verbose_logger.debug(f"Created File Search store: {store_name}")
+        verbose_logger.debug("Created File Search store: %s", store_name)
         return store_name
 
     async def _upload_to_file_search_store(
@@ -259,7 +259,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             "x-goog-api-key": api_key,
         }
 
-        verbose_logger.debug(f"Initiating resumable upload: {url}")
+        verbose_logger.debug("Initiating resumable upload: %s", url)
 
         client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
@@ -275,13 +275,13 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             error_msg = f"Failed to initiate upload: {response.text}"
             verbose_logger.error(error_msg)
             raise Exception(error_msg)
-        verbose_logger.debug(f"Initiate resumable upload response: {response.headers}")
+        verbose_logger.debug("Initiate resumable upload response: %s", response.headers)
         # Extract upload URL from response headers
         upload_url = response.headers.get("x-goog-upload-url")
         if not upload_url:
             raise Exception("No upload URL returned in response headers")
 
-        verbose_logger.debug(f"Got upload URL: {upload_url}")
+        verbose_logger.debug("Got upload URL: %s", upload_url)
         return upload_url
 
     async def _upload_file_content(
@@ -301,7 +301,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             "X-Goog-Upload-Command": "upload, finalize",
         }
 
-        verbose_logger.debug(f"Uploading file content ({len(file_content)} bytes)")
+        verbose_logger.debug("Uploading file content (%s bytes)", len(file_content))
 
         client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
@@ -323,9 +323,9 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             response_data = response.json()
             # The response should contain the document name or file reference
             file_id = response_data.get("name", "") or response_data.get("file", {}).get("name", "")
-            verbose_logger.debug(f"Upload complete. File ID: {file_id}")
+            verbose_logger.debug("Upload complete. File ID: %s", file_id)
             return file_id
         except Exception as e:
-            verbose_logger.warning(f"Could not parse upload response: {e}")
+            verbose_logger.warning("Could not parse upload response: %s", e)
             # Return a placeholder if we can't get the ID
             return "uploaded"

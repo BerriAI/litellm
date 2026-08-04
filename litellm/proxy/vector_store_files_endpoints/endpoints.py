@@ -71,7 +71,7 @@ def _update_request_data_with_managed_file_id(
 
     if decoded_id:
         # This is a unified managed file ID
-        verbose_logger.debug(f"Processing unified managed file ID: {file_id}")
+        verbose_logger.debug("Processing unified managed file ID: %s", file_id)
 
         # Parse the unified ID to extract components
         parsed_id = parse_unified_id(file_id)
@@ -90,7 +90,9 @@ def _update_request_data_with_managed_file_id(
                 pass
 
             verbose_logger.debug(
-                f"Decoded unified file ID - target_model_names: {target_model_names}, llm_output_file_id: {llm_output_file_id}"
+                "Decoded unified file ID - target_model_names: %s, llm_output_file_id: %s",
+                target_model_names,
+                llm_output_file_id,
             )
 
             # Set the model for routing
@@ -108,14 +110,17 @@ def _update_request_data_with_managed_file_id(
                             file_id=llm_output_file_id,  # Use the actual provider file ID
                         )
                         verbose_logger.info(
-                            f"Routing vector store file operation to model: {routing_model}, file_id: {file_id} -> {llm_output_file_id}"
+                            "Routing vector store file operation to model: %s, file_id: %s -> %s",
+                            routing_model,
+                            file_id,
+                            llm_output_file_id,
                         )
                         return data, file_id  # Return original managed file ID
 
             # If we extracted the provider file ID but no routing, still use it
             if llm_output_file_id:
                 data["file_id"] = llm_output_file_id
-                verbose_logger.debug(f"Replaced unified file ID with provider file ID: {llm_output_file_id}")
+                verbose_logger.debug("Replaced unified file ID with provider file ID: %s", llm_output_file_id)
                 return data, file_id  # Return original managed file ID
 
         return data, file_id if decoded_id else None
@@ -361,7 +366,7 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
     if decoded_id:
         # This is a managed vector store - decode and extract routing information
-        verbose_logger.debug(f"Processing managed vector store ID: {vector_store_id}")
+        verbose_logger.debug("Processing managed vector store ID: %s", vector_store_id)
 
         parsed_id = parse_unified_id(vector_store_id)
 
@@ -371,7 +376,10 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
             target_model_names = parsed_id.get("target_model_names", [])
 
             verbose_logger.debug(
-                f"Decoded vector store - model_id: {model_id}, provider_resource_id: {provider_resource_id}, target_model_names: {target_model_names}"
+                "Decoded vector store - model_id: %s, provider_resource_id: %s, target_model_names: %s",
+                model_id,
+                provider_resource_id,
+                target_model_names,
             )
 
             # Set the model for routing - this tells the router which deployment to use
@@ -384,13 +392,13 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
             if routing_model:
                 data["model"] = routing_model
-                verbose_logger.info(f"Routing vector store files operation to model: {routing_model}")
+                verbose_logger.info("Routing vector store files operation to model: %s", routing_model)
 
             # Replace unified vector store ID with provider resource ID
             if provider_resource_id:
                 data["vector_store_id"] = provider_resource_id
                 verbose_logger.debug(
-                    f"Replaced unified vector store ID with provider resource ID: {provider_resource_id}"
+                    "Replaced unified vector store ID with provider resource ID: %s", provider_resource_id
                 )
 
         return data

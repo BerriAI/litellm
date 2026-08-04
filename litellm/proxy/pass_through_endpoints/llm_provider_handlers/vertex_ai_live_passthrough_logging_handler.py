@@ -148,11 +148,11 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             # Get model pricing information
             model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
-            verbose_proxy_logger.debug(f"Vertex AI Live API model info for '{model}': {model_info}")
+            verbose_proxy_logger.debug("Vertex AI Live API model info for '%s': %s", model, model_info)
 
             # Check if pricing info is available
             if not model_info or not model_info.get("input_cost_per_token"):
-                verbose_proxy_logger.error(f"No pricing info found for {model} in local model pricing database")
+                verbose_proxy_logger.error("No pricing info found for %s in local model pricing database", model)
                 return 0.0
 
             total_cost = 0.0
@@ -221,7 +221,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             return total_cost
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error calculating Vertex AI Live API cost: {e}")
+            verbose_proxy_logger.error("Error calculating Vertex AI Live API cost: %s", e)
             return 0.0
 
     @staticmethod
@@ -302,7 +302,9 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             # Extract model from request body or kwargs
             model = kwargs.get("model", "gemini-2.0-flash-live-preview-04-09")
             custom_llm_provider = kwargs.get("custom_llm_provider", "vertex_ai")
-            verbose_proxy_logger.debug(f"Vertex AI Live API model: {model}, custom_llm_provider: {custom_llm_provider}")
+            verbose_proxy_logger.debug(
+                "Vertex AI Live API model: %s, custom_llm_provider: %s", model, custom_llm_provider
+            )
 
             # Extract usage metadata from WebSocket messages
             usage_metadata = self._extract_usage_metadata_from_websocket_messages(websocket_messages)
@@ -360,7 +362,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             }
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in Vertex AI Live API passthrough handler: {e}")
+            verbose_proxy_logger.error("Error in Vertex AI Live API passthrough handler: %s", e)
             return {
                 "result": None,
                 "kwargs": kwargs,

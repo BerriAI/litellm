@@ -135,7 +135,7 @@ class HashicorpSecretManager(BaseSecretManager):
             _lease_duration = auth_data["lease_duration"]
 
             verbose_logger.debug(
-                f"Successfully obtained Vault token via AppRole auth. Lease duration: {_lease_duration}s"
+                "Successfully obtained Vault token via AppRole auth. Lease duration: %ss", _lease_duration
             )
 
             # Cache the token with its lease duration
@@ -337,7 +337,7 @@ class HashicorpSecretManager(BaseSecretManager):
             return _value
 
         except Exception as e:
-            verbose_logger.exception(f"Error reading secret from Hashicorp Vault: {e}")
+            verbose_logger.exception("Error reading secret from Hashicorp Vault: %s", e)
             return None
 
     def sync_read_secret(
@@ -368,7 +368,7 @@ class HashicorpSecretManager(BaseSecretManager):
             return _value
 
         except Exception as e:
-            verbose_logger.exception(f"Error reading secret from Hashicorp Vault: {e}")
+            verbose_logger.exception("Error reading secret from Hashicorp Vault: %s", e)
             return None
 
     async def async_write_secret(
@@ -415,7 +415,7 @@ class HashicorpSecretManager(BaseSecretManager):
             response.raise_for_status()
             return response.json()
         except Exception as e:
-            verbose_logger.exception(f"Error writing secret to Hashicorp Vault: {e}")
+            verbose_logger.exception("Error writing secret to Hashicorp Vault: %s", e)
             return {"status": "error", "message": str(e)}
 
     async def async_rotate_secret(
@@ -459,20 +459,20 @@ class HashicorpSecretManager(BaseSecretManager):
                 # Secret exists, we can proceed
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
-                    verbose_logger.exception(f"Current secret {current_secret_name} not found")
+                    verbose_logger.exception("Current secret %s not found", current_secret_name)
                     return {
                         "status": "error",
                         "message": f"Current secret {current_secret_name} not found",
                     }
                 verbose_logger.exception(
-                    f"Error checking current secret existence: {e.response.text if hasattr(e, 'response') else str(e)}"
+                    "Error checking current secret existence: %s", e.response.text if hasattr(e, "response") else str(e)
                 )
                 return {
                     "status": "error",
                     "message": f"HTTP error occurred while checking current secret: {e.response.text if hasattr(e, 'response') else str(e)}",
                 }
             except Exception as e:
-                verbose_logger.exception(f"Error checking current secret existence: {e}")
+                verbose_logger.exception("Error checking current secret existence: %s", e)
                 return {
                     "status": "error",
                     "message": f"Error checking current secret: {e}",
@@ -506,7 +506,9 @@ class HashicorpSecretManager(BaseSecretManager):
                 new_secret_value_from_vault = json_resp.get("data", {}).get("data", {}).get(data_key, None)
                 if new_secret_value_from_vault != new_secret_value:
                     verbose_logger.exception(
-                        f"New secret value mismatch. Expected: {new_secret_value}, Got: {new_secret_value_from_vault}"
+                        "New secret value mismatch. Expected: %s, Got: %s",
+                        new_secret_value,
+                        new_secret_value_from_vault,
                     )
                     return {
                         "status": "error",
@@ -514,20 +516,20 @@ class HashicorpSecretManager(BaseSecretManager):
                     }
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
-                    verbose_logger.exception(f"Failed to verify new secret {new_secret_name}")
+                    verbose_logger.exception("Failed to verify new secret %s", new_secret_name)
                     return {
                         "status": "error",
                         "message": f"Failed to verify new secret {new_secret_name}",
                     }
                 verbose_logger.exception(
-                    f"Error verifying new secret: {e.response.text if hasattr(e, 'response') else str(e)}"
+                    "Error verifying new secret: %s", e.response.text if hasattr(e, "response") else str(e)
                 )
                 return {
                     "status": "error",
                     "message": f"HTTP error occurred while verifying new secret: {e.response.text if hasattr(e, 'response') else str(e)}",
                 }
             except Exception as e:
-                verbose_logger.exception(f"Error verifying new secret: {e}")
+                verbose_logger.exception("Error verifying new secret: %s", e)
                 return {
                     "status": "error",
                     "message": f"Error verifying new secret: {e}",
@@ -546,7 +548,9 @@ class HashicorpSecretManager(BaseSecretManager):
                 if isinstance(delete_response, dict) and delete_response.get("status") == "error":
                     # Log the error but don't fail the rotation since new secret was created successfully
                     verbose_logger.warning(
-                        f"Failed to delete old secret {current_secret_name} after rotation: {delete_response.get('message')}"
+                        "Failed to delete old secret %s after rotation: %s",
+                        current_secret_name,
+                        delete_response.get("message"),
                     )
                 else:
                     # Clear cache for the old secret only if deletion was successful
@@ -561,7 +565,7 @@ class HashicorpSecretManager(BaseSecretManager):
             verbose_logger.exception("Timeout error occurred during secret rotation")
             return {"status": "error", "message": "Timeout error occurred"}
         except Exception as e:
-            verbose_logger.exception(f"Error rotating secret in Hashicorp Vault: {e}")
+            verbose_logger.exception("Error rotating secret in Hashicorp Vault: %s", e)
             return {"status": "error", "message": str(e)}
 
     async def async_delete_secret(
@@ -604,7 +608,7 @@ class HashicorpSecretManager(BaseSecretManager):
                 "message": f"Secret {target['secret_name']} deleted successfully",
             }
         except Exception as e:
-            verbose_logger.exception(f"Error deleting secret from Hashicorp Vault: {e}")
+            verbose_logger.exception("Error deleting secret from Hashicorp Vault: %s", e)
             return {"status": "error", "message": str(e)}
 
     def _get_secret_value_from_json_response(self, json_resp: dict | None) -> str | None:

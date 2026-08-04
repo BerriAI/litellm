@@ -103,7 +103,7 @@ class WebSearchTransformation:
                     parsed_input = json.loads(arguments) if arguments else {}
                 except json.JSONDecodeError:
                     verbose_logger.warning(
-                        f"WebSearchInterception: Failed to parse function_call arguments: {arguments}"
+                        "WebSearchInterception: Failed to parse function_call arguments: %s", arguments
                     )
                     parsed_input = {}
             elif isinstance(arguments, dict):
@@ -122,7 +122,7 @@ class WebSearchTransformation:
                     "input": parsed_input,
                 }
             )
-            verbose_logger.debug(f"WebSearchInterception: Found {item_name} function_call with call_id={call_id}")
+            verbose_logger.debug("WebSearchInterception: Found %s function_call with call_id=%s", item_name, call_id)
 
         return len(tool_calls) > 0, tool_calls
 
@@ -178,7 +178,7 @@ class WebSearchTransformation:
                     "input": block_input,
                 }
                 tool_calls.append(tool_call)
-                verbose_logger.debug(f"WebSearchInterception: Found {block_name} tool_use with id={tool_call['id']}")
+                verbose_logger.debug("WebSearchInterception: Found %s tool_use with id=%s", block_name, tool_call["id"])
 
         return len(tool_calls) > 0, tool_calls
 
@@ -255,7 +255,7 @@ class WebSearchTransformation:
                         arguments = json.loads(function_arguments)
                     except json.JSONDecodeError:
                         verbose_logger.warning(
-                            f"WebSearchInterception: Failed to parse function arguments: {function_arguments}"
+                            "WebSearchInterception: Failed to parse function arguments: %s", function_arguments
                         )
                         arguments = {}
                 else:
@@ -273,7 +273,7 @@ class WebSearchTransformation:
                     "input": arguments,  # For compatibility with Anthropic format
                 }
                 tool_calls.append(tool_call_dict)
-                verbose_logger.debug(f"WebSearchInterception: Found {function_name} tool_call with id={tool_id}")
+                verbose_logger.debug("WebSearchInterception: Found %s tool_call with id=%s", function_name, tool_id)
 
         return len(tool_calls) > 0, tool_calls
 

@@ -752,7 +752,7 @@ async def handle_bedrock_passthrough_router_model(
     is_streaming = any(action in endpoint for action in BEDROCK_STREAMING_ACTIONS)
 
     verbose_proxy_logger.debug(
-        f"Bedrock router passthrough: model='{model}', endpoint='{endpoint}', streaming={is_streaming}"
+        "Bedrock router passthrough: model='%s', endpoint='%s', streaming=%s", model, endpoint, is_streaming
     )
 
     # Use the common processing path (same as non-router models)
@@ -843,8 +843,8 @@ async def handle_bedrock_count_tokens(
                     if key != "user_api_key_dict":  # Don't overwrite user_api_key_dict
                         litellm_params[key] = value  # type: ignore
 
-        verbose_proxy_logger.debug(f"Count tokens litellm_params: {litellm_params}")
-        verbose_proxy_logger.debug(f"Resolved model: {resolved_model}")
+        verbose_proxy_logger.debug("Count tokens litellm_params: %s", litellm_params)
+        verbose_proxy_logger.debug("Resolved model: %s", resolved_model)
 
         # Handle the count tokens request
         result = await handler.handle_count_tokens_request(
@@ -857,13 +857,13 @@ async def handle_bedrock_count_tokens(
 
     except BedrockError as e:
         # Convert BedrockError to HTTPException for FastAPI
-        verbose_proxy_logger.error(f"BedrockError in handle_bedrock_count_tokens: {e}")
+        verbose_proxy_logger.error("BedrockError in handle_bedrock_count_tokens: %s", e)
         raise HTTPException(status_code=e.status_code, detail={"error": e.message})
     except HTTPException:
         # Re-raise HTTP exceptions as-is
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error in handle_bedrock_count_tokens: {e}")
+        verbose_proxy_logger.error("Error in handle_bedrock_count_tokens: %s", e)
         raise HTTPException(status_code=500, detail={"error": f"CountTokens processing error: {e}"})
 
 
@@ -947,7 +947,9 @@ async def bedrock_llm_proxy_route(
         )
 
     # Fall back to existing implementation for direct Bedrock models
-    verbose_proxy_logger.debug(f"Bedrock passthrough: Using direct Bedrock model '{model}' for endpoint '{endpoint}'")
+    verbose_proxy_logger.debug(
+        "Bedrock passthrough: Using direct Bedrock model '%s' for endpoint '%s'", model, endpoint
+    )
 
     data: dict[str, Any] = {}
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -1148,7 +1150,7 @@ def _resolve_vertex_model_from_router(
                 endpoint = endpoint.replace(model_id, actual_model)
 
     except Exception as e:
-        verbose_proxy_logger.debug(f"Error resolving vertex model from router for model {model_id}: {e}")
+        verbose_proxy_logger.debug("Error resolving vertex model from router for model %s: %s", model_id, e)
 
     return encoded_endpoint, endpoint, vertex_project, vertex_location
 

@@ -192,9 +192,11 @@ async def handle_a2a_localhost_retry(
 
     request_type = "streaming " if is_streaming else ""
     verbose_logger.warning(
-        f"A2A {request_type}request to '{error.localhost_url}' failed: {error.original_error}. "
-        f"Agent card contains localhost/internal URL. "
-        f"Retrying with base_url '{error.base_url}'."
+        "A2A %srequest to '%s' failed: %s. Agent card contains localhost/internal URL. Retrying with base_url '%s'.",
+        request_type,
+        error.localhost_url,
+        error.original_error,
+        error.base_url,
     )
 
     # Fix the agent card URL

@@ -91,7 +91,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
                 ):  # allow user to override default with model_info={"supports_native_streaming": true}
                     return False
             except Exception as e:
-                verbose_logger.debug(f"Error getting model info in AzureOpenAIO1Config: {e}")
+                verbose_logger.debug("Error getting model info in AzureOpenAIO1Config: %s", e)
         return True
 
     def is_o_series_model(self, model: str) -> bool:

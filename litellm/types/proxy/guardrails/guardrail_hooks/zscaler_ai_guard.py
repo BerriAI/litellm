@@ -102,7 +102,7 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
                     policy_id = int(env_policy)
                 except ValueError:
                     verbose_proxy_logger.warning(
-                        f"ZSCALER_AI_GUARD_POLICY_ID env var is not a valid integer: {env_policy}"
+                        "ZSCALER_AI_GUARD_POLICY_ID env var is not a valid integer: %s", env_policy
                     )
 
         # Check for configuration issues

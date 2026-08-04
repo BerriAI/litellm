@@ -222,14 +222,14 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             if input_param is not None:
                 initiator = self._get_initiator(input_param)
                 merged_headers["X-Initiator"] = initiator
-                verbose_logger.debug(f"GitHub Copilot Responses API: Set X-Initiator={initiator}")
+                verbose_logger.debug("GitHub Copilot Responses API: Set X-Initiator=%s", initiator)
 
                 # Add vision header if input contains images
                 if self._has_vision_input(input_param):
                     merged_headers["copilot-vision-request"] = "true"
                     verbose_logger.debug("GitHub Copilot Responses API: Enabled vision request")
 
-            verbose_logger.debug(f"GitHub Copilot Responses API: Successfully configured headers for model {model}")
+            verbose_logger.debug("GitHub Copilot Responses API: Successfully configured headers for model %s", model)
 
             return merged_headers
 
@@ -295,7 +295,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     filtered_item[k] = v
 
             verbose_logger.debug(
-                f"GitHub Copilot reasoning item processed, encrypted_content preserved: {encrypted_content is not None}"
+                "GitHub Copilot reasoning item processed, encrypted_content preserved: %s",
+                encrypted_content is not None,
             )
             return filtered_item
         return item
@@ -379,7 +380,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         if depth > max_depth:
             verbose_logger.warning(
-                f"[GitHub Copilot] Max recursion depth {max_depth} reached while checking for vision content"
+                "[GitHub Copilot] Max recursion depth %s reached while checking for vision content", max_depth
             )
             return False
 

@@ -132,7 +132,9 @@ class IdentityStore:
                 )
             except Exception as e:
                 verbose_proxy_logger.debug(
-                    f"Failed to load object_permission for key with object_permission_id={key.object_permission_id}: {e}"
+                    "Failed to load object_permission for key with object_permission_id=%s: %s",
+                    key.object_permission_id,
+                    e,
                 )
 
         await _cache_key_object(

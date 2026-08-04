@@ -163,9 +163,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 parsed_rate = float(rbrk_sampling_rate.strip())
                 self.sampling_rate = max(0.0, min(1.0, parsed_rate))
                 if parsed_rate != self.sampling_rate:
-                    verbose_logger.warning(f"RUBRIK_SAMPLING_RATE={parsed_rate} clamped to {self.sampling_rate}")
+                    verbose_logger.warning("RUBRIK_SAMPLING_RATE=%s clamped to %s", parsed_rate, self.sampling_rate)
             except ValueError:
-                verbose_logger.warning(f"Invalid RUBRIK_SAMPLING_RATE: {rbrk_sampling_rate!r}, using 1.0")
+                verbose_logger.warning("Invalid RUBRIK_SAMPLING_RATE: %r, using 1.0", rbrk_sampling_rate)
 
     def _parse_batch_size(self) -> None:
         _batch_size = os.getenv("RUBRIK_BATCH_SIZE")
@@ -173,11 +173,11 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             try:
                 parsed_size = int(_batch_size)
                 if parsed_size <= 0:
-                    verbose_logger.warning(f"RUBRIK_BATCH_SIZE={_batch_size!r} must be > 0, using default")
+                    verbose_logger.warning("RUBRIK_BATCH_SIZE=%r must be > 0, using default", _batch_size)
                 else:
                     self.batch_size = parsed_size
             except ValueError:
-                verbose_logger.warning(f"Invalid RUBRIK_BATCH_SIZE: {_batch_size!r}, using default")
+                verbose_logger.warning("Invalid RUBRIK_BATCH_SIZE: %r, using default", _batch_size)
 
     def _setup_clients(self, webhook_url: str) -> None:
         self.response_moderation_endpoint = f"{webhook_url}{_WEBHOOK_PATH_RESPONSE_MODERATION}"
@@ -279,7 +279,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             return inputs
         except Exception as e:
             verbose_logger.error(
-                f"{label} hook failed: {e}. Returning original inputs unchanged.",
+                "%s hook failed: %s. Returning original inputs unchanged.",
+                label,
+                e,
                 exc_info=True,
             )
             return inputs
@@ -388,8 +390,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         if logging_obj is None:
             verbose_logger.error(
                 "Rubrik: moderation block fired with logging_obj=None for "
-                f"litellm_call_id={request_data.get('litellm_call_id')}; "
-                "cannot suppress success event or attach failure payload."
+                "litellm_call_id=%s; "
+                "cannot suppress success event or attach failure payload.",
+                request_data.get("litellm_call_id"),
             )
             request_data["_rubrik_logging_obj"] = None
             return
@@ -650,14 +653,15 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 payload["messages"] = (system_scaffold, messages)
         except Exception as e:
             verbose_logger.warning(
-                f"Rubrik: failed to prepend system prompt: {e}",
+                "Rubrik: failed to prepend system prompt: %s",
+                e,
                 exc_info=True,
             )
 
     async def _prepare_log_payload(self, kwargs: Mapping[str, Any], event_type: str) -> StandardLoggingPayload | None:
         """Shared logic for success logging (sampled)."""
         if random.random() > self.sampling_rate:
-            verbose_logger.debug(f"Skipping Rubrik {event_type} logging (sampling_rate={self.sampling_rate})")
+            verbose_logger.debug("Skipping Rubrik %s logging (sampling_rate=%s)", event_type, self.sampling_rate)
             return None
 
         # Deep-copy so mutations don't affect other callbacks sharing this object
@@ -701,7 +705,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             await self._append_and_maybe_flush(payload)
         except Exception as e:
             verbose_logger.error(
-                f"Rubrik {event_type} logging hook failed: {e}. Skipping logging for this event.",
+                "Rubrik %s logging hook failed: %s. Skipping logging for this event.",
+                event_type,
+                e,
                 exc_info=True,
             )
 
@@ -710,7 +716,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # skip here to avoid double-logging the pre-block response.
         if kwargs.get("_rubrik_blocked"):
             verbose_logger.debug(
-                f"Rubrik: skipping success event for blocked request litellm_call_id={kwargs.get('litellm_call_id')}"
+                "Rubrik: skipping success event for blocked request litellm_call_id=%s",
+                kwargs.get("litellm_call_id"),
             )
             return
         await self._enqueue_log_event(kwargs, "success")
@@ -755,11 +762,14 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             # way we cannot build the payload.
             verbose_logger.warning(
                 "Rubrik: block exception without stashed logging_obj. "
-                f"litellm_call_id={request_data.get('litellm_call_id')}, "
-                f"model={request_data.get('model')}, "
-                f"user_id={user_api_key_dict.user_id}, "
-                f"raising_guardrail="
-                f"{getattr(original_exception, 'guardrail_name', None)}"
+                "litellm_call_id=%s, "
+                "model=%s, "
+                "user_id=%s, "
+                "raising_guardrail=%s",
+                request_data.get("litellm_call_id"),
+                request_data.get("model"),
+                user_api_key_dict.user_id,
+                getattr(original_exception, "guardrail_name", None),
             )
             return
 
@@ -786,8 +796,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             payload = self._prepare_block_failure_payload(logging_obj, exception, user_api_key_dict)
         except (AttributeError, ImportError, KeyError, TypeError) as e:
             verbose_logger.error(
-                f"Rubrik: failed to build blocked-tool payload for "
-                f"litellm_call_id={call_id}: {e}. Event will NOT be logged.",
+                "Rubrik: failed to build blocked-tool payload for litellm_call_id=%s: %s. Event will NOT be logged.",
+                call_id,
+                e,
                 exc_info=True,
             )
             return
@@ -796,7 +807,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             await self._append_and_maybe_flush(payload)
         except Exception as e:
             verbose_logger.error(
-                f"Rubrik: failed to enqueue blocked-tool event for litellm_call_id={call_id}: {e}.",
+                "Rubrik: failed to enqueue blocked-tool event for litellm_call_id=%s: %s.",
+                call_id,
+                e,
                 exc_info=True,
             )
 
@@ -853,8 +866,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         else:
             verbose_logger.debug(
                 "Rubrik: standard_logging_object not yet on model_call_details "
-                f"for litellm_call_id={call_details.get('litellm_call_id')}; "
-                "using best-effort fallback payload."
+                "for litellm_call_id=%s; "
+                "using best-effort fallback payload.",
+                call_details.get("litellm_call_id"),
             )
             payload = self._build_fallback_payload(call_details, user_api_key_dict)
 
@@ -932,7 +946,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
-            verbose_logger.exception(f"Rubrik HTTP Error: {e.response.status_code} - {e.response.text}")
+            verbose_logger.exception("Rubrik HTTP Error: %s - %s", e.response.status_code, e.response.text)
             raise
         except Exception:
             verbose_logger.exception("Rubrik Layer Error")
@@ -989,7 +1003,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             Exception: If the service is unavailable or returns an error.
             TypeError: If the response JSON is not a dict.
         """
-        verbose_logger.debug(f"Sending request to {service_name}: {endpoint}")
+        verbose_logger.debug("Sending request to %s: %s", service_name, endpoint)
         http_response = await self.moderation_client.post(
             endpoint,
             json=payload,

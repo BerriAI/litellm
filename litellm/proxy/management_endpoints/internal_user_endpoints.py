@@ -330,7 +330,8 @@ async def _add_user_to_team(
     except HTTPException as e:
         if e.status_code == 400 and ("already exists" in str(e) or "doesn't exist" in str(e)):
             verbose_proxy_logger.debug(
-                f"litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {e}"
+                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - %s",
+                e,
             )
         else:
             verbose_proxy_logger.error(
@@ -348,7 +349,8 @@ async def _add_user_to_team(
             and ProxyErrorTypes.team_member_already_in_team in e.type
         ):
             verbose_proxy_logger.debug(
-                f"litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {e}"
+                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - %s",
+                e,
             )
         else:
             verbose_proxy_logger.error(
@@ -605,7 +607,7 @@ async def new_user(
 
         return new_user_response
     except Exception as e:
-        verbose_proxy_logger.exception(f"/user/new: Exception occured - {e}")
+        verbose_proxy_logger.exception("/user/new: Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -900,7 +902,7 @@ async def user_info(
 
         return response_data
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.user_info(): Exception occured - {e}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_info(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -1050,7 +1052,7 @@ async def user_info_v2(
             object_permission=user_data.get("object_permission"),
         )
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.user_info_v2(): Exception occured - {e}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_info_v2(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -1233,7 +1235,7 @@ async def _schedule_user_update_audit_log(
                 )
             )
     except Exception as audit_error:
-        verbose_proxy_logger.warning(f"Failed to create audit log for user {response.get('user_id')}: {audit_error}")
+        verbose_proxy_logger.warning("Failed to create audit log for user %s: %s", response.get("user_id"), audit_error)
 
 
 def _check_user_update_authz(
@@ -1320,7 +1322,7 @@ async def _invalidate_cached_user_entitlement(user_id: str | None, object_permis
         try:
             await user_api_key_cache.async_delete_cache(key=key)
         except Exception as e:  # noqa: BLE001  # a cache we cannot clear still expires; never fail the write
-            verbose_proxy_logger.warning(f"Failed to invalidate cached entitlement key {key!r}: {e}")
+            verbose_proxy_logger.warning("Failed to invalidate cached entitlement key %r: %s", key, e)
 
 
 async def _update_single_user_helper(
@@ -1569,7 +1571,7 @@ async def user_update(
         )
         return response
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.user_update(): Exception occured - {e}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_update(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -1618,12 +1620,12 @@ async def bulk_update_processed_users(
                 successful_updates += 1
             except Exception as e:
                 verbose_proxy_logger.exception(
-                    f"Failed to update user {user_request.user_id or user_request.user_email}: {e}"
+                    "Failed to update user %s: %s", user_request.user_id or user_request.user_email, e
                 )
                 # Record failure
                 error_message = str(e)
                 verbose_proxy_logger.error(
-                    f"Failed to update user {user_request.user_id or user_request.user_email}: {error_message}"
+                    "Failed to update user %s: %s", user_request.user_id or user_request.user_email, error_message
                 )
 
                 results.append(
@@ -1643,7 +1645,7 @@ async def bulk_update_processed_users(
             failed_updates=failed_updates,
         )
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to update users: {e}")
+        verbose_proxy_logger.exception("Failed to update users: %s", e)
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -1806,10 +1808,10 @@ async def bulk_user_update(
                     )
                 )
             except Exception as audit_error:
-                verbose_proxy_logger.warning(f"Failed to create bulk audit log: {audit_error}")
+                verbose_proxy_logger.warning("Failed to create bulk audit log: %s", audit_error)
 
         except Exception as e:
-            verbose_proxy_logger.exception(f"Failed to perform bulk update: {e}")
+            verbose_proxy_logger.exception("Failed to perform bulk update: %s", e)
             # Fall back to individual updates if bulk update fails
             for user in all_users_in_db:
                 user_update_request = data.user_updates.model_copy()
@@ -2133,7 +2135,7 @@ async def get_users(
     else:
         user_key_counts = {}
 
-    verbose_proxy_logger.debug(f"Total count of users: {total_count}")
+    verbose_proxy_logger.debug("Total count of users: %s", total_count)
 
     # Calculate total pages
     total_pages = -(-total_count // page_size)  # Ceiling division
@@ -2593,7 +2595,7 @@ async def ui_view_users(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error searching users: {e}")
+        verbose_proxy_logger.exception("Error searching users: %s", e)
         raise HTTPException(status_code=500, detail=f"Error searching users: {e}")
 
 
@@ -2716,7 +2718,7 @@ async def get_user_daily_activity(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"/spend/daily/analytics: Exception occured - {e}")
+        verbose_proxy_logger.exception("/spend/daily/analytics: Exception occured - %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {e}"},
@@ -2808,7 +2810,7 @@ async def get_user_daily_activity_aggregated(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"/user/daily/activity/aggregated: Exception occured - {e}")
+        verbose_proxy_logger.exception("/user/daily/activity/aggregated: Exception occured - %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {e}"},

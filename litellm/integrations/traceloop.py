@@ -15,7 +15,9 @@ class TraceloopLogger:
             from traceloop.sdk.tracing.tracing import TracerWrapper
         except ModuleNotFoundError as e:
             verbose_logger.error(
-                f"Traceloop not installed, try running 'pip install traceloop-sdk' to fix this error: {e}\n{traceback.format_exc()}"
+                "Traceloop not installed, try running 'pip install traceloop-sdk' to fix this error: %s\n%s",
+                e,
+                traceback.format_exc(),
             )
             raise e
 

@@ -984,7 +984,8 @@ async def test_add_team_member_budget_table_exception_handling():
 
         # Verify the error was logged
         mock_logger.info.assert_called_once_with(
-            "Team member budget table not found, passed team_member_budget_id=nonexistent-budget-456"
+            "Team member budget table not found, passed team_member_budget_id=%s",
+            "nonexistent-budget-456",
         )
 
         # Verify database call was attempted

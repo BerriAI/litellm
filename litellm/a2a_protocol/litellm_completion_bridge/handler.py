@@ -76,7 +76,7 @@ class A2ACompletionBridgeHandler:
             )
 
             if a2a_provider_config is not None:
-                verbose_logger.info(f"A2A: Using provider config for {custom_llm_provider}")
+                verbose_logger.info("A2A: Using provider config for %s", custom_llm_provider)
 
                 return await a2a_provider_config.handle_non_streaming(
                     request_id=request_id,
@@ -103,7 +103,7 @@ class A2ACompletionBridgeHandler:
         else:
             full_model = model
 
-        verbose_logger.info(f"A2A completion bridge: model={full_model}, api_base={api_base}")
+        verbose_logger.info("A2A completion bridge: model=%s, api_base=%s", full_model, api_base)
 
         # Build completion params dict
         completion_params: dict[str, Any] = {
@@ -143,7 +143,7 @@ class A2ACompletionBridgeHandler:
             request_id=request_id,
         )
 
-        verbose_logger.info(f"A2A completion bridge completed: request_id={request_id}")
+        verbose_logger.info("A2A completion bridge completed: request_id=%s", request_id)
 
         return a2a_response
 
@@ -185,7 +185,7 @@ class A2ACompletionBridgeHandler:
             )
 
             if a2a_provider_config is not None:
-                verbose_logger.info(f"A2A: Using provider config for {custom_llm_provider} (streaming)")
+                verbose_logger.info("A2A: Using provider config for %s (streaming)", custom_llm_provider)
 
                 async for chunk in a2a_provider_config.handle_streaming(
                     request_id=request_id,
@@ -221,7 +221,7 @@ class A2ACompletionBridgeHandler:
         else:
             full_model = model
 
-        verbose_logger.info(f"A2A completion bridge streaming: model={full_model}, api_base={api_base}")
+        verbose_logger.info("A2A completion bridge streaming: model=%s, api_base=%s", full_model, api_base)
 
         # Build completion params dict
         completion_params: dict[str, Any] = {
@@ -300,7 +300,9 @@ class A2ACompletionBridgeHandler:
         )
         yield completed_event
 
-        verbose_logger.info(f"A2A completion bridge streaming completed: request_id={request_id}, chunks={chunk_count}")
+        verbose_logger.info(
+            "A2A completion bridge streaming completed: request_id=%s, chunks=%s", request_id, chunk_count
+        )
 
 
 # Convenience functions that delegate to the class methods

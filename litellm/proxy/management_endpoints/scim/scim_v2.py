@@ -365,7 +365,7 @@ async def _get_scim_upsert_user_setting() -> bool:
         # Default to True if not set (backward compatibility)
         return bool(scim_upsert_user)
     except Exception as e:
-        verbose_proxy_logger.warning(f"Error reading scim_upsert_user setting, defaulting to True: {e}")
+        verbose_proxy_logger.warning("Error reading scim_upsert_user setting, defaulting to True: %s", e)
         # Default to True for backward compatibility
         return True
 
@@ -401,7 +401,7 @@ async def _get_scim_admin_group() -> str | None:
         litellm_settings = config.get("litellm_settings", {}) or {}
         return litellm_settings.get("scim_admin_group") or None
     except Exception as e:
-        verbose_proxy_logger.warning(f"Error reading scim_admin_group setting, defaulting to None: {e}")
+        verbose_proxy_logger.warning("Error reading scim_admin_group setting, defaulting to None: %s", e)
         return None
 
 
@@ -882,11 +882,11 @@ async def _create_user_if_not_exists(user_id: str, created_via: str = "scim_grou
         )
 
         created_user = await new_user(data=new_user_request)
-        verbose_proxy_logger.info(f"Created user {user_id} via {created_via}")
+        verbose_proxy_logger.info("Created user %s via %s", user_id, created_via)
         return created_user
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to create user {user_id}: {e}")
+        verbose_proxy_logger.exception("Failed to create user %s: %s", user_id, e)
         return None
 
 
@@ -1886,15 +1886,15 @@ async def patch_team_membership(
         except ProxyException as e:
             # Handle duplicate membership gracefully - this is idempotent
             if e.type == ProxyErrorTypes.team_member_already_in_team:
-                verbose_proxy_logger.debug(f"User {user_id} is already in team {_team_id}, skipping add")
+                verbose_proxy_logger.debug("User %s is already in team %s, skipping add", user_id, _team_id)
             elif raise_on_error:
                 raise
             else:
-                verbose_proxy_logger.exception(f"Error adding user to team {_team_id}: {e}")
+                verbose_proxy_logger.exception("Error adding user to team %s: %s", _team_id, e)
         except Exception as e:
             if raise_on_error:
                 raise
-            verbose_proxy_logger.exception(f"Error adding user to team {_team_id}: {e}")
+            verbose_proxy_logger.exception("Error adding user to team %s: %s", _team_id, e)
 
     for _team_id in teams_ids_to_remove_user_from:
         try:
@@ -1904,15 +1904,15 @@ async def patch_team_membership(
             )
         except HTTPException as e:
             if _is_user_not_in_team_error(e):
-                verbose_proxy_logger.debug(f"User {user_id} is not in team {_team_id}, skipping remove")
+                verbose_proxy_logger.debug("User %s is not in team %s, skipping remove", user_id, _team_id)
             elif raise_on_error:
                 raise
             else:
-                verbose_proxy_logger.exception(f"Error removing user from team {_team_id}: {e}")
+                verbose_proxy_logger.exception("Error removing user from team %s: %s", _team_id, e)
         except Exception as e:
             if raise_on_error:
                 raise
-            verbose_proxy_logger.exception(f"Error removing user from team {_team_id}: {e}")
+            verbose_proxy_logger.exception("Error removing user from team %s: %s", _team_id, e)
 
     return True
 
@@ -2045,7 +2045,7 @@ async def get_groups(
             # team creation, so reading it here would report an empty member
             # list to the IdP and trigger repeated re-provisioning.
             members = await _get_team_members_display(await _get_team_member_user_ids_from_team(team))
-            verbose_proxy_logger.debug(f"SCIM GET GROUPS members: {members}")
+            verbose_proxy_logger.debug("SCIM GET GROUPS members: %s", members)
             team_alias = getattr(team, "team_alias", team.team_id)
             team_created_at = team.created_at.isoformat() if team.created_at else None
             team_updated_at = team.updated_at.isoformat() if team.updated_at else None
@@ -2063,7 +2063,7 @@ async def get_groups(
             )
             scim_groups.append(scim_group)
 
-        verbose_proxy_logger.debug(f"SCIM GET GROUPS response: {scim_groups}")
+        verbose_proxy_logger.debug("SCIM GET GROUPS response: %s", scim_groups)
         return SCIMListResponse(
             totalResults=total_count,
             startIndex=startIndex,
@@ -2092,7 +2092,7 @@ async def get_group(
         team = await _check_team_exists(group_id)
 
         scim_group = await ScimTransformations.transform_litellm_team_to_scim_group(team)
-        verbose_proxy_logger.debug(f"SCIM GET GROUP response: {scim_group}")
+        verbose_proxy_logger.debug("SCIM GET GROUP response: %s", scim_group)
         return scim_group
 
     except Exception as e:
@@ -2178,8 +2178,8 @@ async def update_group(
 
         # Extract and validate group members (all users must exist)
         member_result = await _extract_group_member_ids(group)
-        verbose_proxy_logger.debug(f"SCIM PUT GROUP all_member_ids: {member_result.all_member_ids}")
-        verbose_proxy_logger.debug(f"SCIM PUT GROUP created_users: {len(member_result.created_users)}")
+        verbose_proxy_logger.debug("SCIM PUT GROUP all_member_ids: %s", member_result.all_member_ids)
+        verbose_proxy_logger.debug("SCIM PUT GROUP created_users: %s", len(member_result.created_users))
 
         # Prepare update data
         existing_metadata = existing_team.metadata if existing_team.metadata else {}
@@ -2202,9 +2202,9 @@ async def update_group(
 
         # Handle user-team relationship changes
         current_members = set(await _get_team_member_user_ids_from_team(existing_team))
-        verbose_proxy_logger.debug(f"SCIM PUT GROUP current_members: {current_members}")
+        verbose_proxy_logger.debug("SCIM PUT GROUP current_members: %s", current_members)
         final_members = set(member_result.all_member_ids)
-        verbose_proxy_logger.debug(f"SCIM PUT GROUP final_members: {final_members}")
+        verbose_proxy_logger.debug("SCIM PUT GROUP final_members: %s", final_members)
 
         await _handle_group_membership_changes(
             group_id=group_id,
@@ -2380,8 +2380,8 @@ async def _handle_group_membership_changes(group_id: str, current_members: set[s
     members_to_add = final_members - current_members
     members_to_remove = current_members - final_members
 
-    verbose_proxy_logger.debug(f"members_to_add: {members_to_add}")
-    verbose_proxy_logger.debug(f"members_to_remove: {members_to_remove}")
+    verbose_proxy_logger.debug("members_to_add: %s", members_to_add)
+    verbose_proxy_logger.debug("members_to_remove: %s", members_to_remove)
 
     # Use existing helper functions for team membership changes
     for member_id in members_to_add:

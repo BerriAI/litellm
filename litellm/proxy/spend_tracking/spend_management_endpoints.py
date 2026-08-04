@@ -1648,7 +1648,7 @@ async def _get_spend_report_for_time_range(
 
         return response, spend_per_tag
     except Exception as e:
-        verbose_proxy_logger.error(f"Exception in _get_daily_spend_reports {e}")
+        verbose_proxy_logger.error("Exception in _get_daily_spend_reports %s", e)
 
 
 @router.post(
@@ -2261,7 +2261,7 @@ async def ui_view_spend_logs(
             total_is_capped=total_is_capped,
         )
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error in ui_view_spend_logs: {e}")
+        verbose_proxy_logger.exception("Error in ui_view_spend_logs: %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -2789,7 +2789,7 @@ async def global_spend_refresh():
             }
 
         except Exception as e:
-            verbose_proxy_logger.exception(f"Failed to refresh materialized view - {e}")
+            verbose_proxy_logger.exception("Failed to refresh materialized view - %s", e)
             return {
                 "message": "Failed to refresh materialized view",
                 "status": "failure",
@@ -2830,7 +2830,7 @@ async def global_spend_for_internal_user(
 
         return response
     except Exception as e:
-        verbose_proxy_logger.error(f"/global/spend/logs Error: {e}")
+        verbose_proxy_logger.error("/global/spend/logs Error: %s", e)
         raise e
 
 
@@ -2906,7 +2906,7 @@ async def global_spend_logs(
     except Exception as e:
         error_trace = traceback.format_exc()
         error_str = str(e) + "\n" + error_trace
-        verbose_proxy_logger.error(f"/global/spend/logs Error: {error_str}")
+        verbose_proxy_logger.error("/global/spend/logs Error: %s", error_str)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"/global/spend/logs Error({error_str})"),
@@ -3387,7 +3387,7 @@ async def provider_budgets() -> ProviderBudgetResponse:
             provider_budget_response_dict[_provider] = provider_budget_response_object
         return ProviderBudgetResponse(providers=provider_budget_response_dict)
     except Exception as e:
-        verbose_proxy_logger.exception(f"/provider/budgets: Exception occured - {e}")
+        verbose_proxy_logger.exception("/provider/budgets: Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 
