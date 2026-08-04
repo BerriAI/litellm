@@ -97,8 +97,13 @@ test.describe("Proxy Admin - Keys", () => {
     await navigateToPage(page, Page.ApiKeys);
     await dismissFeedbackPopup(page);
 
+    const search = page.getByPlaceholder(/search/i).first();
+    if (await search.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await search.fill(E2E_DELETE_KEY_ALIAS);
+    }
+
     const keyRow = page.locator("tr", { hasText: E2E_DELETE_KEY_ALIAS });
-    await expect(keyRow).toBeVisible({ timeout: 10_000 });
+    await expect(keyRow).toBeVisible({ timeout: 15_000 });
     await keyRow.locator("button").first().click();
 
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
@@ -163,16 +168,14 @@ test.describe("Proxy Admin - Keys", () => {
     const keyName = `e2e-admin-specific-${Date.now()}`;
     await page.getByTestId("base-input").fill(keyName);
 
-    // Open the model multi-select and pick a single specific model. Use
-    // getByRole("option", ...) to avoid the strict-mode collision between
-    // the option container and its inner text node.
+    // Open the model multi-select and pick a single specific model. Type to
+    // filter first: on a stage gateway with many model groups the unfiltered
+    // list never materialises every option as a DOM node.
     const modelName = "fake-openai-gpt-4";
     await page.locator(".ant-select-selection-overflow").click();
+    await page.keyboard.type(modelName);
     const option = page.locator(".ant-select-dropdown:visible").getByRole("option", { name: modelName, exact: true });
-    await option.waitFor({ state: "attached" });
-    // Dispatch the click via the DOM — antd's dropdown can render the option
-    // off-viewport during the open animation, which trips Playwright's
-    // visibility/stability checks. The click handler fires regardless.
+    await option.waitFor({ state: "attached", timeout: 15_000 });
     await option.evaluate((el: HTMLElement) => el.click());
     await page.keyboard.press("Escape");
 

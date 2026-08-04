@@ -59,16 +59,11 @@ test.describe("Add Model", () => {
     const createdModelId = (await createResponse.json()).model_info?.id;
     expect(createdModelId, "model id from /model/new").toBeTruthy();
 
-    // Navigate to Models + Endpoints
-    await page.goto("/ui");
-    await page.getByText("Models + Endpoints").click();
-
-    // The Model ID cell is the drill-in control; the row itself is not clickable.
-    const modelIdCell = page.getByTestId(`model-id-${createdModelId}`);
-    await expect(modelIdCell).toBeVisible({ timeout: 10_000 });
-    await modelIdCell.click();
-
-    await expect(page.getByText("Back to Models").first()).toBeVisible({ timeout: 10_000 });
+    // Deep-link into the detail view. Searching the paginated All Models table is
+    // flaky on a shared stage DB with many deployments, and team-scoped models are
+    // rewritten to model_name_{team_id}_{uuid} so a name search is also unreliable.
+    await page.goto(`/ui?page=models&model=${createdModelId}`);
+    await expect(page.getByText("Back to Models").first()).toBeVisible({ timeout: 15_000 });
 
     // Edit Settings → change TPM/RPM → Save
     await page.getByRole("button", { name: "Edit Settings" }).click();

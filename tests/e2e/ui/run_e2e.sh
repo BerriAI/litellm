@@ -3,7 +3,8 @@ set -euo pipefail
 
 # ================================================================
 # UI E2E Test Runner (Consolidated)
-# Starts postgres, seeds DB, starts mock + proxy, runs Playwright.
+# Starts postgres, starts mock + proxy, runs Playwright (which seeds
+# its fixtures over the management API in globalSetup).
 # All tests target the proxy on port 4000 (which serves both API
 # and UI from the built Next.js static export).
 #
@@ -56,7 +57,7 @@ done
 
 # --- Database setup ---
 if [ "$IS_CI" = "false" ]; then
-  for cmd in docker psql; do
+  for cmd in docker pg_isready; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "Error: $cmd not found."; exit 1; }
   done
   for port in 4000 5432 8090; do
@@ -173,17 +174,6 @@ if [ "$PROXY_READY" -ne 1 ]; then
   exit 1
 fi
 echo "Proxy is ready."
-
-# --- Seed database ---
-echo "=== Seeding database ==="
-DB_USER=$(echo "$DATABASE_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
-DB_PASS=$(echo "$DATABASE_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
-DB_HOST=$(echo "$DATABASE_URL" | sed -n 's|.*@\([^:]*\):.*|\1|p')
-DB_PORT=$(echo "$DATABASE_URL" | sed -n 's|.*:\([0-9]*\)/.*|\1|p')
-DB_NAME=$(echo "$DATABASE_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
-
-PGPASSWORD="$DB_PASS" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
-  -f "$SCRIPT_DIR/fixtures/seed.sql"
 
 # --- Playwright ---
 echo "=== Installing Playwright dependencies ==="

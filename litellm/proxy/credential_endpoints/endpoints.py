@@ -10,7 +10,7 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CreateCredentialItem, CredentialItem
@@ -31,6 +31,22 @@ class CredentialHelperUtils:
         return CredentialItem(
             credential_name=credential.credential_name,
             credential_values=encrypted_credential_values,
+            credential_info=credential.credential_info or {},
+        )
+
+    @staticmethod
+    def decrypt_credential_values(credential: CredentialItem) -> CredentialItem:
+        decrypted_values = {
+            key: (
+                decrypt_value_helper(value=value, key=key, return_original_value=True) or value
+                if isinstance(value, str)
+                else value
+            )
+            for key, value in (credential.credential_values or {}).items()
+        }
+        return CredentialItem(
+            credential_name=credential.credential_name,
+            credential_values=decrypted_values,
             credential_info=credential.credential_info or {},
         )
 
@@ -146,7 +162,23 @@ async def get_credential_by_name(
     """
     [BETA] endpoint. This might change unexpectedly.
     """
+    from litellm.proxy.proxy_server import prisma_client
+
     try:
+        if prisma_client is not None:
+            db_credential = await CredentialsRepository(prisma_client).find_by_name(credential_name)
+            if db_credential is not None:
+                plaintext = CredentialHelperUtils.decrypt_credential_values(db_credential)
+                return CredentialItem(
+                    credential_name=plaintext.credential_name,
+                    credential_values=_get_masked_values(
+                        plaintext.credential_values,
+                        unmasked_length=4,
+                        number_of_asterisks=4,
+                    ),
+                    credential_info=plaintext.credential_info,
+                )
+
         for credential in litellm.credential_list:
             if credential.credential_name == credential_name:
                 masked_credential = CredentialItem(
@@ -317,7 +349,6 @@ async def update_credential(
             },
         )
 
-        # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
         new_name = merged_credential.credential_name
         existing_in_memory: CredentialItem | None = None
         for cred in litellm.credential_list:
@@ -327,21 +358,24 @@ async def update_credential(
 
         if existing_in_memory is not None:
             in_memory_values = dict(existing_in_memory.credential_values or {})
-            if credential.credential_values:
-                in_memory_values.update(credential.credential_values)
             in_memory_info = dict(existing_in_memory.credential_info or {})
-            if credential.credential_info:
-                in_memory_info.update(credential.credential_info)
-            updated_in_memory = CredentialItem(
-                credential_name=new_name,
-                credential_values=in_memory_values,
-                credential_info=in_memory_info,
-            )
-            # Remove old entry if renamed, then use upsert_credentials to handle duplicates
-            if new_name != credential_name:
-                litellm.credential_list = [c for c in litellm.credential_list if c.credential_name != credential_name]
-            CredentialAccessor.upsert_credentials([updated_in_memory])
+        else:
+            plaintext_db = CredentialHelperUtils.decrypt_credential_values(db_credential)
+            in_memory_values = dict(plaintext_db.credential_values or {})
+            in_memory_info = dict(plaintext_db.credential_info or {})
+        if credential.credential_values:
+            in_memory_values.update(credential.credential_values)
+        if credential.credential_info:
+            in_memory_info.update(credential.credential_info)
+        updated_in_memory = CredentialItem(
+            credential_name=new_name,
+            credential_values=in_memory_values,
+            credential_info=in_memory_info,
+        )
+        if new_name != credential_name:
+            litellm.credential_list = [c for c in litellm.credential_list if c.credential_name != credential_name]
+        CredentialAccessor.upsert_credentials([updated_in_memory])
 
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:
-        return handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(e)
