@@ -374,17 +374,27 @@ async def test_aresponses_client_header_conflict_is_case_insensitive():
     assert request_headers["x-shared"] == "from-caller"
 
 
+_BY_RESPONSE_ID = {"response_id": "resp_123", "custom_llm_provider": "openai"}
+
 _MANAGEMENT_ROUTES = (
-    (litellm.aget_responses, "get", _minimal_responses_api_payload("resp_123", "gpt-4o")),
-    (litellm.adelete_responses, "delete", {"id": "resp_123", "object": "response", "deleted": True}),
-    (litellm.acancel_responses, "post", _minimal_responses_api_payload("resp_123", "gpt-4o")),
-    (litellm.alist_input_items, "get", {"object": "list", "data": [], "has_more": False}),
+    (litellm.aget_responses, "get", _minimal_responses_api_payload("resp_123", "gpt-4o"), _BY_RESPONSE_ID),
+    (litellm.adelete_responses, "delete", {"id": "resp_123", "object": "response", "deleted": True}, _BY_RESPONSE_ID),
+    (litellm.acancel_responses, "post", _minimal_responses_api_payload("resp_123", "gpt-4o"), _BY_RESPONSE_ID),
+    (litellm.alist_input_items, "get", {"object": "list", "data": [], "has_more": False}, _BY_RESPONSE_ID),
+    (
+        litellm.acompact_responses,
+        "post",
+        _minimal_responses_api_payload("resp_123", "gpt-4o"),
+        {"model": "openai/gpt-4o", "input": "hi"},
+    ),
 )
 
 
-@pytest.mark.parametrize("route,http_method,payload", _MANAGEMENT_ROUTES)
+@pytest.mark.parametrize("route,http_method,payload,route_kwargs", _MANAGEMENT_ROUTES)
 @pytest.mark.asyncio
-async def test_responses_management_routes_forward_client_headers_to_provider(route, http_method, payload):
+async def test_responses_management_routes_forward_client_headers_to_provider(
+    route, http_method, payload, route_kwargs
+):
     """
     The response management routes must forward the proxy's `headers` kwarg
     (`forward_client_headers_to_llm_api`) to the provider, like creating a response does.
@@ -396,10 +406,9 @@ async def test_responses_management_routes_forward_client_headers_to_provider(ro
         mock_request.return_value = MockResponse(payload, 200)
 
         await route(
-            response_id="resp_123",
-            custom_llm_provider="openai",
             api_key="fake-api-key",
             headers={"x-my-new-header": "hello-from-client"},
+            **route_kwargs,
         )
 
         mock_request.assert_called_once()
@@ -408,9 +417,11 @@ async def test_responses_management_routes_forward_client_headers_to_provider(ro
     assert request_headers["x-my-new-header"] == "hello-from-client"
 
 
-@pytest.mark.parametrize("route,http_method,payload", _MANAGEMENT_ROUTES)
+@pytest.mark.parametrize("route,http_method,payload,route_kwargs", _MANAGEMENT_ROUTES)
 @pytest.mark.asyncio
-async def test_responses_management_routes_extra_headers_win_over_client_headers(route, http_method, payload):
+async def test_responses_management_routes_extra_headers_win_over_client_headers(
+    route, http_method, payload, route_kwargs
+):
     """
     Explicit `extra_headers` beat the forwarded client headers on the management routes too,
     case-insensitively.
@@ -422,11 +433,10 @@ async def test_responses_management_routes_extra_headers_win_over_client_headers
         mock_request.return_value = MockResponse(payload, 200)
 
         await route(
-            response_id="resp_123",
-            custom_llm_provider="openai",
             api_key="fake-api-key",
             headers={"X-Shared": "from-client"},
             extra_headers={"x-shared": "from-caller"},
+            **route_kwargs,
         )
 
         request_headers = dict(mock_request.call_args.kwargs["headers"])
