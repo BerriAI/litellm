@@ -258,7 +258,7 @@ class SpendLogCleanup:
             verbose_proxy_logger.info("Deleted %s expired tool index rows", index_deleted)
 
             sessions_deleted = await self._delete_old_auto_router_sessions(prisma_client, cutoff_date)
-            verbose_proxy_logger.info(f"Deleted {sessions_deleted} expired auto-router session rollups")
+            verbose_proxy_logger.info("Deleted %s expired auto-router session rollups", sessions_deleted)
 
         except Exception as e:
             # .exception() captures the traceback; str(e) alone on a Prisma/DB
