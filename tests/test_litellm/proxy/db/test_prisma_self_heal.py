@@ -260,11 +260,20 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_db_error(
         "engine_pid": 123,
         "engine_port": 4567,
         "engine_alive": "true",
+        "engine_state": "S",
+        "engine_started_at": "2026-08-04T12:00:00+00:00",
+        "engine_process_error_type": "none",
         "pool_active": "2",
         "pool_wait": "1",
         "pool_busy": "3",
         "pool_idle": "57",
         "pool_open": "60",
+        "pool_opened_total": "100",
+        "pool_closed_total": "40",
+        "pool_wait_histogram_count": "500",
+        "pool_wait_histogram_sum_ms": "250.5",
+        "pool_wait_histogram_le_1000": "498",
+        "pool_wait_histogram_le_5000": "500",
         "pool_target": "60",
         "pool_metrics_error_type": "none",
     }
@@ -289,6 +298,9 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_db_error(
         timeout_seconds=7.0,
     )
     warning_args = mock_logger.warning.call_args.args
+    formatted_event = warning_args[0] % warning_args[1:]
+    assert "pool_wait_histogram_count=500" in formatted_event
+    assert "engine_state=S" in formatted_event
     assert warning_args[1:5] == (
         "connection_error",
         "Exception",
@@ -300,11 +312,20 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_db_error(
         123,
         4567,
         "true",
+        "S",
+        "2026-08-04T12:00:00+00:00",
+        "none",
         "2",
         "1",
         "3",
         "57",
         "60",
+        "100",
+        "40",
+        "500",
+        "250.5",
+        "498",
+        "500",
         "60",
         "none",
     )
@@ -326,11 +347,20 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_probe_timeout(
         "engine_pid": "unavailable",
         "engine_port": "unavailable",
         "engine_alive": "unknown",
+        "engine_state": "unavailable",
+        "engine_started_at": "unavailable",
+        "engine_process_error_type": "ProcessLookupError",
         "pool_active": "unavailable",
         "pool_wait": "unavailable",
         "pool_busy": "unavailable",
         "pool_idle": "unavailable",
         "pool_open": "unavailable",
+        "pool_opened_total": "unavailable",
+        "pool_closed_total": "unavailable",
+        "pool_wait_histogram_count": "unavailable",
+        "pool_wait_histogram_sum_ms": "unavailable",
+        "pool_wait_histogram_le_1000": "unavailable",
+        "pool_wait_histogram_le_5000": "unavailable",
         "pool_target": "60",
         "pool_metrics_error_type": "TimeoutError",
     }
@@ -373,16 +403,31 @@ def test_db_health_watchdog_diagnostics_reads_local_query_engine_metrics(
         b"prisma_pool_connections_busy 3\n"
         b"prisma_pool_connections_idle 57\n"
         b"prisma_pool_connections_open 60\n"
+        b"prisma_pool_connections_opened_total 100\n"
+        b"prisma_pool_connections_closed_total 40\n"
+        b'prisma_client_queries_wait_histogram_ms_bucket{le="1000"} 498\n'
+        b'prisma_client_queries_wait_histogram_ms_bucket{le="5000"} 500\n'
+        b"prisma_client_queries_wait_histogram_ms_sum 250.5\n"
+        b"prisma_client_queries_wait_histogram_ms_count 500\n"
     )
     response = MagicMock()
     response.__enter__.return_value.read.return_value = metrics
 
+    process_fields = ["321", "(query-engine)", "S"] + ["0"] * 18 + ["500"]
+
+    def _open_proc_file(path, *args, **kwargs):
+        if path == "/proc/321/cmdline":
+            return mock_open(read_data=b"query-engine\0-p\0" b"4567\0")()
+        if path == "/proc/321/stat":
+            return mock_open(read_data=" ".join(process_fields))()
+        if path == "/proc/stat":
+            return mock_open(read_data="cpu 1 2 3 4\nbtime 1000\n")()
+        raise FileNotFoundError(path)
+
     with (
-        patch(
-            "builtins.open",
-            mock_open(read_data=b"query-engine\0-p\0" b"4567\0"),
-        ),
+        patch("builtins.open", side_effect=_open_proc_file),
         patch("litellm.proxy.utils.os.kill"),
+        patch("litellm.proxy.utils.os.sysconf", return_value=100),
         patch("litellm.proxy.utils.urllib.request.urlopen", return_value=response),
         patch.dict(os.environ, {"DATABASE_CONNECTION_POOL_LIMIT": "60"}),
     ):
@@ -392,11 +437,20 @@ def test_db_health_watchdog_diagnostics_reads_local_query_engine_metrics(
         "engine_pid": 321,
         "engine_port": 4567,
         "engine_alive": "true",
+        "engine_state": "S",
+        "engine_started_at": "1970-01-01T00:16:45+00:00",
+        "engine_process_error_type": "none",
         "pool_active": "2",
         "pool_wait": "1",
         "pool_busy": "3",
         "pool_idle": "57",
         "pool_open": "60",
+        "pool_opened_total": "100",
+        "pool_closed_total": "40",
+        "pool_wait_histogram_count": "500",
+        "pool_wait_histogram_sum_ms": "250.5",
+        "pool_wait_histogram_le_1000": "498",
+        "pool_wait_histogram_le_5000": "500",
         "pool_target": "60",
         "pool_metrics_error_type": "none",
     }

@@ -1513,3 +1513,105 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer.get_all_daily_end_user_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_agent_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer.assert_not_called()
+
+
+def test_redis_db_commit_failure_logs_pool_snapshot_and_consecutive_state():
+    writer = DBSpendUpdateWriter()
+    prisma_client = MagicMock()
+    prisma_client._get_db_watchdog_diagnostics.return_value = {
+        "engine_pid": 321,
+        "engine_port": 4567,
+        "engine_alive": "true",
+        "engine_state": "S",
+        "engine_started_at": "2026-08-04T12:00:00+00:00",
+        "engine_process_error_type": "none",
+        "pool_active": "0",
+        "pool_wait": "10",
+        "pool_busy": "0",
+        "pool_idle": "80",
+        "pool_open": "90",
+        "pool_opened_total": "100",
+        "pool_closed_total": "10",
+        "pool_wait_histogram_count": "500",
+        "pool_wait_histogram_sum_ms": "250.5",
+        "pool_wait_histogram_le_1000": "498",
+        "pool_wait_histogram_le_5000": "500",
+        "pool_target": "80",
+        "pool_metrics_error_type": "none",
+    }
+    error = RuntimeError("P2028 transaction start timed out")
+
+    with (
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.time.perf_counter",
+            side_effect=[12.125, 13.0],
+        ),
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.verbose_proxy_logger"
+        ) as logger,
+    ):
+        writer._log_redis_db_commit_failure(prisma_client, error, 10.0)
+        writer._log_redis_db_commit_failure(prisma_client, error, 10.0)
+
+    first_args = logger.error.call_args_list[0].args
+    formatted_event = first_args[0] % first_args[1:]
+    assert "pool_wait_histogram_count=500" in formatted_event
+    assert "engine_started_at=2026-08-04T12:00:00+00:00" in formatted_event
+    assert first_args[1:5] == (
+        "builtins.RuntimeError",
+        2125,
+        "P2028 transaction start timed out",
+        1,
+    )
+    assert first_args[5:] == (
+        321,
+        4567,
+        "true",
+        "S",
+        "2026-08-04T12:00:00+00:00",
+        "none",
+        "0",
+        "10",
+        "0",
+        "80",
+        "90",
+        "100",
+        "10",
+        "500",
+        "250.5",
+        "498",
+        "500",
+        "80",
+        "none",
+    )
+    assert logger.error.call_args_list[1].args[4] == 2
+
+
+@pytest.mark.asyncio
+async def test_redis_db_commit_success_resets_consecutive_failure_state():
+    writer = DBSpendUpdateWriter()
+    writer._redis_db_commit_consecutive_failures = 3
+    writer.redis_update_buffer = AsyncMock()
+    writer.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = (
+        AsyncMock(return_value=(None, None, None, None, None, None))
+    )
+    writer.pod_lock_manager = AsyncMock()
+    writer.pod_lock_manager.acquire_lock.return_value = True
+
+    await writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=MagicMock(),
+        n_retry_times=1,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert writer._redis_db_commit_consecutive_failures == 0
+
+
+def test_prisma_failure_diagnostics_fallback_records_collection_error():
+    prisma_client = MagicMock()
+    prisma_client._get_db_watchdog_diagnostics.side_effect = TimeoutError()
+
+    diagnostics = DBSpendUpdateWriter._get_prisma_failure_diagnostics(prisma_client)
+
+    assert diagnostics["pool_metrics_error_type"] == "TimeoutError"
+    assert diagnostics["pool_open"] == "unavailable"

@@ -92,6 +92,100 @@ class DBSpendUpdateWriter:
         self.daily_agent_spend_update_queue = DailySpendUpdateQueue()
         self.daily_org_spend_update_queue = DailySpendUpdateQueue()
         self.daily_tag_spend_update_queue = DailySpendUpdateQueue()
+        self._redis_db_commit_consecutive_failures = 0
+
+    @staticmethod
+    def _get_prisma_failure_diagnostics(
+        prisma_client: PrismaClient,
+    ) -> Dict[str, Union[str, int]]:
+        """Read local query-engine diagnostics without issuing another DB query."""
+        unavailable: Dict[str, Union[str, int]] = {
+            "engine_pid": "unavailable",
+            "engine_port": "unavailable",
+            "engine_alive": "unknown",
+            "engine_state": "unavailable",
+            "engine_started_at": "unavailable",
+            "engine_process_error_type": "DiagnosticsUnavailable",
+            "pool_active": "unavailable",
+            "pool_wait": "unavailable",
+            "pool_busy": "unavailable",
+            "pool_idle": "unavailable",
+            "pool_open": "unavailable",
+            "pool_opened_total": "unavailable",
+            "pool_closed_total": "unavailable",
+            "pool_wait_histogram_count": "unavailable",
+            "pool_wait_histogram_sum_ms": "unavailable",
+            "pool_wait_histogram_le_1000": "unavailable",
+            "pool_wait_histogram_le_5000": "unavailable",
+            "pool_target": os.getenv("DATABASE_CONNECTION_POOL_LIMIT", "unset"),
+            "pool_metrics_error_type": "DiagnosticsUnavailable",
+        }
+        diagnostics_getter = getattr(
+            prisma_client, "_get_db_watchdog_diagnostics", None
+        )
+        if not callable(diagnostics_getter):
+            return unavailable
+
+        try:
+            collected = diagnostics_getter()
+            if not isinstance(collected, dict):
+                unavailable["pool_metrics_error_type"] = "InvalidDiagnosticsType"
+                return unavailable
+            unavailable.update(
+                {key: value for key, value in collected.items() if key in unavailable}
+            )
+            return unavailable
+        except Exception as diagnostics_error:
+            unavailable["pool_metrics_error_type"] = type(
+                diagnostics_error
+            ).__name__
+            return unavailable
+
+    def _log_redis_db_commit_failure(
+        self,
+        prisma_client: PrismaClient,
+        error: Exception,
+        commit_started: float,
+    ) -> None:
+        self._redis_db_commit_consecutive_failures += 1
+        elapsed_ms = int(round((time.perf_counter() - commit_started) * 1000))
+        diagnostics = self._get_prisma_failure_diagnostics(prisma_client)
+        exception_type = f"{type(error).__module__}.{type(error).__name__}"
+        verbose_proxy_logger.error(
+            "event=prisma_spend_transaction_failure stage=redis_to_db_commit "
+            "exception_type=%s elapsed_ms=%s error=%s consecutive_failures=%s "
+            "engine_pid=%s engine_port=%s engine_alive=%s engine_state=%s "
+            "engine_started_at=%s engine_process_error_type=%s pool_active=%s "
+            "pool_wait=%s pool_busy=%s pool_idle=%s pool_open=%s "
+            "pool_opened_total=%s pool_closed_total=%s "
+            "pool_wait_histogram_count=%s pool_wait_histogram_sum_ms=%s "
+            "pool_wait_histogram_le_1000=%s pool_wait_histogram_le_5000=%s "
+            "pool_target=%s "
+            "pool_metrics_error_type=%s",
+            exception_type,
+            elapsed_ms,
+            str(error),
+            self._redis_db_commit_consecutive_failures,
+            diagnostics["engine_pid"],
+            diagnostics["engine_port"],
+            diagnostics["engine_alive"],
+            diagnostics["engine_state"],
+            diagnostics["engine_started_at"],
+            diagnostics["engine_process_error_type"],
+            diagnostics["pool_active"],
+            diagnostics["pool_wait"],
+            diagnostics["pool_busy"],
+            diagnostics["pool_idle"],
+            diagnostics["pool_open"],
+            diagnostics["pool_opened_total"],
+            diagnostics["pool_closed_total"],
+            diagnostics["pool_wait_histogram_count"],
+            diagnostics["pool_wait_histogram_sum_ms"],
+            diagnostics["pool_wait_histogram_le_1000"],
+            diagnostics["pool_wait_histogram_le_5000"],
+            diagnostics["pool_target"],
+            diagnostics["pool_metrics_error_type"],
+        )
 
     async def update_database(
         # LiteLLM management object fields
@@ -805,6 +899,7 @@ class DBSpendUpdateWriter:
             cronjob_id=DB_SPEND_UPDATE_JOB_NAME,
         ):
             verbose_proxy_logger.debug("acquired lock for spend updates")
+            commit_started = time.perf_counter()
 
             try:
                 (
@@ -903,7 +998,13 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         daily_spend_transactions=daily_agent_spend_update_transactions,
                     )
+                self._redis_db_commit_consecutive_failures = 0
             except Exception as e:
+                self._log_redis_db_commit_failure(
+                    prisma_client=prisma_client,
+                    error=e,
+                    commit_started=commit_started,
+                )
                 spend_log_error(
                     "Spend tracking - failed to commit spend updates from Redis to DB. "
                     "Data already popped from Redis may be lost. Error: %s",
