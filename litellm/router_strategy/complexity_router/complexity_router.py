@@ -1428,7 +1428,11 @@ class ComplexityRouter(CustomLogger):
             if isinstance(metadata, dict):
                 metadata[RETURN_RAW_MODEL_NAME_METADATA_KEY] = True
 
-        conversation_continuing = _conversation_is_continuing(self._resolve_messages(messages, request_kwargs))
+        # Resolved once for the whole hook. Resolution converts Responses API input into
+        # chat-completions messages, so it is real work on every non-chat surface, and
+        # both the conversation shape and the classifier read the same list.
+        resolved_messages = self._resolve_messages(messages, request_kwargs)
+        conversation_continuing = _conversation_is_continuing(resolved_messages)
 
         use_session_affinity = self.config.session_affinity and not self.config.plugins
         session_id = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
@@ -1440,7 +1444,6 @@ class ComplexityRouter(CustomLogger):
                 routed_model: str | None = pinned_model
                 pin_escalation_keyword: str | None = None
                 if self.escalation_keywords:
-                    resolved_messages = self._resolve_messages(messages, request_kwargs)
                     user_message = _newest_turn_ask(resolved_messages) if resolved_messages else None
                     if user_message is not None:
                         pin_escalation_keyword = self._matched_escalation_keyword(user_message)
@@ -1487,6 +1490,7 @@ class ComplexityRouter(CustomLogger):
             input=input,
             specific_deployment=specific_deployment,
             conversation_continuing=conversation_continuing,
+            resolved_messages=resolved_messages,
         )
         if cache_key is not None and response is not None:
             await self.litellm_router_instance.cache.async_set_cache(
@@ -1504,6 +1508,7 @@ class ComplexityRouter(CustomLogger):
         input: str | list | None = None,
         specific_deployment: bool | None = False,
         conversation_continuing: bool = True,
+        resolved_messages: Sequence[Mapping[str, object]] | None = None,
     ) -> PreRoutingHookResponse | None:
         """
         Classifies the request by complexity and returns the appropriate model.
@@ -1516,13 +1521,17 @@ class ComplexityRouter(CustomLogger):
             messages: The messages in the request.
             input: Optional input for Responses API or embeddings.
             specific_deployment: Whether a specific deployment was requested.
+            resolved_messages: Messages the caller already resolved, to avoid converting
+                the request format a second time. Resolved here when absent, so a direct
+                caller does not have to.
 
         Returns:
             PreRoutingHookResponse with the routed model, or None if no routing needed.
         """
         from litellm.types.router import PreRoutingHookResponse
 
-        resolved_messages = self._resolve_messages(messages, request_kwargs)
+        if resolved_messages is None:
+            resolved_messages = self._resolve_messages(messages, request_kwargs)
 
         if not resolved_messages:
             verbose_router_logger.debug("ComplexityRouter: No messages could be resolved, skipping routing")

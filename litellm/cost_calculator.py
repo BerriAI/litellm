@@ -1051,6 +1051,8 @@ def _store_cost_breakdown_in_logging_obj(
     cache_read_cost: float | None = None,
     cache_creation_cost: float | None = None,
     reasoning_cost: float | None = None,
+    service_tier: str | None = None,
+    data_residency: str | None = None,
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
@@ -1068,6 +1070,8 @@ def _store_cost_breakdown_in_logging_obj(
         margin_percent: Margin percentage applied (0.10 = 10%)
         margin_fixed_amount: Fixed margin amount in USD
         margin_total_amount: Total margin added in USD
+        service_tier: Tier the costs above were priced on, already resolved
+        data_residency: Region uplift the costs above were priced on, already resolved
     """
     if litellm_logging_obj is None:
         return
@@ -1089,6 +1093,8 @@ def _store_cost_breakdown_in_logging_obj(
             cache_read_cost=cache_read_cost,
             cache_creation_cost=cache_creation_cost,
             reasoning_cost=reasoning_cost,
+            service_tier=service_tier,
+            data_residency=data_residency,
         )
 
     except Exception as breakdown_error:
@@ -1469,6 +1475,8 @@ def completion_cost(
                         margin_percent=margin_percent,
                         margin_fixed_amount=margin_fixed_amount,
                         margin_total_amount=margin_total_amount,
+                        service_tier=service_tier,
+                        data_residency=data_residency,
                     )
 
                     return _final_cost
@@ -1657,6 +1665,8 @@ def completion_cost(
                         cache_read_cost=_cache_read_cost,
                         cache_creation_cost=_cache_creation_cost,
                         reasoning_cost=_reasoning_cost,
+                        service_tier=service_tier,
+                        data_residency=data_residency,
                     )
 
                 return _final_cost
@@ -2351,6 +2361,7 @@ def handle_realtime_stream_cost_calculation(
         cost_for_built_in_tools_cost_usd_dollar=0.0,
         total_cost_usd_dollar=total_cost,
         additional_costs={"transcription_cost": transcription_cost} if transcription_cost > 0 else None,
+        data_residency=data_residency,
     )
 
     return total_cost
