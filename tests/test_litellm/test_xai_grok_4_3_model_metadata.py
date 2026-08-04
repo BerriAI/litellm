@@ -2,10 +2,11 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import litellm
 import pytest
 
+from litellm.cost_calculator import cost_per_token
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
 
 
@@ -121,14 +122,16 @@ def test_vertex_ai_grok_4_3_tiered_pricing(prompt_tokens, input_rate, output_rat
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
     )
-    with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
-        return_value=model_info,
+    with patch.dict(
+        litellm.model_cost,
+        {"vertex_ai/xai/grok-4.3": model_info},
     ):
-        prompt_cost, completion_cost = generic_cost_per_token(
-            model="xai/grok-4.3",
-            usage=usage,
+        prompt_cost, completion_cost = cost_per_token(
+            model="vertex_ai/xai/grok-4.3",
             custom_llm_provider="vertex_ai",
+            prompt_characters=prompt_tokens * 4,
+            completion_characters=completion_tokens * 4,
+            usage_object=usage,
         )
 
     assert prompt_cost == pytest.approx(prompt_tokens * input_rate)
