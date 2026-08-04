@@ -434,7 +434,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             const browserHeldToken = {
               access_token: oauthTokenResponse.access_token,
               expires_in: oauthTokenResponse.expires_in,
-              refresh_token: oauthTokenResponse.refresh_token,
               token_type: oauthTokenResponse.token_type,
             };
             setToken(response.server_id, browserHeldToken, userID);
