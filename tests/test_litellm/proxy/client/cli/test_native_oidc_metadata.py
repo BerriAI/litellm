@@ -426,7 +426,35 @@ class TestFlowSupport:
         provider = make_provider()
         assert provider.supports_browser_flow() is True
         assert provider.supports_device_flow() is True
-        assert provider.supports_public_client() is True
+
+    @pytest.mark.parametrize(
+        "auth_methods",
+        [
+            ("private_key_jwt", "client_secret_basic", "client_secret_post", "tls_client_auth", "client_secret_jwt"),
+            ("client_secret_basic",),
+            ("client_secret_post",),
+        ],
+    )
+    def test_token_endpoint_auth_methods_without_none_do_not_block_a_flow(self, auth_methods):
+        """Regression: Keycloak omits 'none' from token_endpoint_auth_methods_supported.
+
+        The first parameter set is Keycloak 26's literal advertisement. Keycloak
+        nonetheless accepts public clients at its token endpoint, so treating a
+        missing 'none' as a hard precondition made `lite login` impossible against
+        one of the most widely deployed identity providers. Client authentication
+        is decided by the token request itself, which fails loudly with an OAuth
+        error if the provider really does require a secret.
+        """
+        provider = make_provider(
+            response_types_supported=("code",),
+            grant_types_supported=("authorization_code", DEVICE_GRANT),
+            code_challenge_methods_supported=("S256",),
+            token_endpoint_auth_methods_supported=auth_methods,
+        )
+        assert provider.supports_browser_flow() is True
+        assert provider.supports_device_flow() is True
+        provider.assert_browser_flow_supported()
+        provider.assert_device_flow_supported()
 
     @pytest.mark.parametrize(
         "overrides,message",
@@ -445,10 +473,6 @@ class TestFlowSupport:
                 {"grant_types_supported": ("client_credentials",)},
                 "authorization_code grant",
             ),
-            (
-                {"token_endpoint_auth_methods_supported": ("client_secret_basic",)},
-                "does not accept public clients",
-            ),
         ],
     )
     def test_browser_flow_rejections(self, overrides, message):
@@ -466,10 +490,6 @@ class TestFlowSupport:
             ),
             ({"token_endpoint": None}, "does not advertise a token_endpoint"),
             ({"grant_types_supported": ("authorization_code",)}, "device_code grant"),
-            (
-                {"token_endpoint_auth_methods_supported": ("client_secret_post",)},
-                "does not accept public clients",
-            ),
         ],
     )
     def test_device_flow_rejections(self, overrides, message):

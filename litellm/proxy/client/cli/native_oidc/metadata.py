@@ -177,26 +177,14 @@ class ProviderMetadata:
             return False
         if self.grant_types_supported is not None and "authorization_code" not in self.grant_types_supported:
             return False
-        return self.supports_public_client()
+        return True
 
     def supports_device_flow(self) -> bool:
         if self.device_authorization_endpoint is None or self.token_endpoint is None:
             return False
         if self.grant_types_supported is not None and DEVICE_CODE_GRANT_TYPE not in self.grant_types_supported:
             return False
-        return self.supports_public_client()
-
-    def supports_public_client(self) -> bool:
-        """True when the token endpoint accepts an unauthenticated public client.
-
-        Absent metadata is permitted: RFC 8414 defaults
-        `token_endpoint_auth_methods_supported` to `client_secret_basic`, but
-        real native-client deployments routinely omit the field, and the token
-        request itself will fail loudly if `none` is genuinely unsupported.
-        """
-        if self.token_endpoint_auth_methods_supported is None:
-            return True
-        return "none" in self.token_endpoint_auth_methods_supported
+        return True
 
     def assert_browser_flow_supported(self) -> None:
         """Raise a specific reason why browser login cannot be used."""
@@ -210,11 +198,6 @@ class ProviderMetadata:
             raise NativeOIDCError("provider does not support the 'code' response type")
         if self.grant_types_supported is not None and "authorization_code" not in self.grant_types_supported:
             raise NativeOIDCError("provider does not support the authorization_code grant")
-        if not self.supports_public_client():
-            raise NativeOIDCError(
-                "provider token endpoint does not accept public clients "
-                "(token_endpoint_auth_methods_supported has no 'none')"
-            )
 
     def assert_device_flow_supported(self) -> None:
         if self.device_authorization_endpoint is None:
@@ -223,11 +206,6 @@ class ProviderMetadata:
             raise NativeOIDCError("provider does not advertise a token_endpoint")
         if self.grant_types_supported is not None and DEVICE_CODE_GRANT_TYPE not in self.grant_types_supported:
             raise NativeOIDCError("provider does not support the device_code grant")
-        if not self.supports_public_client():
-            raise NativeOIDCError(
-                "provider token endpoint does not accept public clients "
-                "(token_endpoint_auth_methods_supported has no 'none')"
-            )
 
 
 def parse_provider_metadata(raw: object, expected_issuer: str) -> ProviderMetadata:
