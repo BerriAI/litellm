@@ -677,6 +677,12 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
 # the lookup and return None (caller proceeds to auth_builder).
 _JWT_PROXY_ADMIN_SENTINEL = "__JWT_PROXY_ADMIN__"
 
+_JWT_AUTH_DISABLED_HINT = (
+    " This key has the structure of a JWT, but JWT auth is not enabled on this proxy, so it was treated as a"
+    " virtual key. Set `enable_jwt_auth: true` under `general_settings` in your proxy config to authenticate"
+    " with JWTs."
+)
+
 
 class _PendingAutoRegister(NamedTuple):
     """
@@ -1206,8 +1212,11 @@ async def _user_api_key_auth_builder(
                 from litellm.proxy.proxy_server import premium_user
 
                 if premium_user is not True:
-                    raise ValueError(
-                        f"JWT Auth is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}"
+                    raise ProxyException(
+                        message=f"JWT Auth is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}",
+                        type=ProxyErrorTypes.auth_error,
+                        param="premium_user",
+                        code=status.HTTP_403_FORBIDDEN,
                     )
                 # Try JWT-to-Virtual-Key mapping first to avoid
                 # unnecessary DB queries in auth_builder
@@ -1672,9 +1681,13 @@ async def _user_api_key_auth_builder(
             if isinstance(api_key, str):  # if generated token, make sure it starts with sk-.
                 _masked_key = f"{api_key[:4]}****{api_key[-4:]}" if len(api_key) > 8 else "****"
                 if not api_key.startswith("sk-"):
+                    _hint = _JWT_AUTH_DISABLED_HINT if not enable_jwt_auth and JWTHandler.is_jwt(token=api_key) else ""
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail=(f"LiteLLM Virtual Key expected. Received={_masked_key}, expected to start with 'sk-'."),
+                        detail=(
+                            f"LiteLLM Virtual Key expected. Received={_masked_key}, "
+                            f"expected to start with 'sk-'.{_hint}"
+                        ),
                     )  # prevent token hashes from being used
             else:
                 verbose_logger.warning(
