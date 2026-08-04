@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import ServiceTier, StandardLoggingPayload
 
 # Tiers a caller may name in a request, across the providers that accept the
 # parameter: OpenAI ("auto", "default", "flex", "priority", "scale"), Bedrock and
 # Groq (subsets of those), Anthropic ("auto", "standard_only") and Vertex, which
 # maps "default" to "standard". Bounds the caller-controlled requested tier
-# wherever it is recorded.
+# wherever it is recorded. Derived from ``ServiceTier`` so a tier added there for
+# cost calculation cannot go missing here.
 KNOWN_REQUEST_SERVICE_TIERS = frozenset(
-    {"auto", "batch", "default", "flex", "priority", "scale", "standard", "standard_only"}
+    {tier.value for tier in ServiceTier} | {"batch", "default", "scale", "standard", "standard_only"}
 )
 
 
