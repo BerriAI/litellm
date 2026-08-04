@@ -164,6 +164,50 @@ def remove_custom_field_from_tools(request_body: dict) -> None:
             tool.pop("custom", None)
 
 
+def drop_bedrock_rejected_tool_fields(request_data: Mapping[str, Any], error_text: str) -> dict[str, Any] | None:
+    """
+    Rebuild ``request_data`` without the ``toolSpec`` members Bedrock just rejected.
+
+    Bedrock Converse validates some Claude models through an Anthropic-compatible
+    validator that accepts a narrower ``toolSpec`` than the Converse API documents, and
+    rejects the extras by presence. ``parse_rejected_tool_fields`` owns reading which
+    fields those are; this function applies the verdict to the Converse request shape.
+
+    Returns a copy with those fields removed, or ``None`` when the error is not a
+    rejection of extra tool fields or names nothing this request actually carries.
+    """
+    from litellm.llms.base_llm.base_utils import parse_rejected_tool_fields
+
+    rejected = parse_rejected_tool_fields(error_text)
+    if not rejected:
+        return None
+
+    tool_config = request_data.get("toolConfig")
+    tools = tool_config.get("tools") if isinstance(tool_config, Mapping) else None
+    if not isinstance(tools, list):
+        return None
+
+    rebuilt = tuple(_tool_spec_without(tool, rejected.get(index, frozenset())) for index, tool in enumerate(tools))
+    if all(new is old for new, old in zip(rebuilt, tools)):
+        return None
+
+    retried_config = {**tool_config, "tools": list(rebuilt)}  # mutable-ok: json.dumps needs real dicts
+    return {**request_data, "toolConfig": retried_config}  # mutable-ok: outbound Converse request body
+
+
+def _tool_spec_without(tool: object, rejected_fields: frozenset[str]) -> object:
+    """Return ``tool`` minus the named ``toolSpec`` members, or ``tool`` itself if none apply."""
+    if not rejected_fields or not isinstance(tool, dict):
+        return tool
+    tool_spec = tool.get("toolSpec")
+    if not isinstance(tool_spec, dict):
+        return tool
+    surviving = {k: v for k, v in tool_spec.items() if k not in rejected_fields}  # mutable-ok: serialized body
+    if len(surviving) == len(tool_spec):
+        return tool
+    return {**tool, "toolSpec": surviving}  # mutable-ok: outbound Converse request body
+
+
 def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
     """
     In-place: replace JSON Schema ``type: \"custom\"`` with ``\"object\"`` (iterative walk).

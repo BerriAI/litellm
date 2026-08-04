@@ -269,7 +269,9 @@ class AzureAIStudioConfig(OpenAIConfig):
         return super().should_retry_llm_api_inside_llm_translation_on_http_error(e=e, litellm_params=litellm_params)
 
     def _error_has_tool_level_extra_fields(self, error_text: str) -> bool:
-        return bool(re.search(r"tools\[\d+\]\.", error_text))
+        from litellm.llms.base_llm.base_utils import parse_rejected_tool_fields
+
+        return bool(parse_rejected_tool_fields(error_text))
 
     @property
     def max_retry_on_unprocessable_entity_error(self) -> int:
@@ -290,7 +292,9 @@ class AzureAIStudioConfig(OpenAIConfig):
         return data
 
     def _drop_tool_level_extra_fields(self, request_data: dict, error_text: str) -> dict:
-        fields_to_drop = set(re.findall(r"tools\[\d+\]\.([\w-]+)", error_text))
+        from litellm.llms.base_llm.base_utils import parse_rejected_tool_fields
+
+        fields_to_drop = frozenset().union(*parse_rejected_tool_fields(error_text).values() or (frozenset(),))
         tools = request_data.get("tools")
         if fields_to_drop and isinstance(tools, list):
             for tool in tools:

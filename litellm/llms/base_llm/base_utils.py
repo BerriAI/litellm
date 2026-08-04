@@ -4,7 +4,10 @@ Utility functions for base LLM classes.
 
 import copy
 import json
+import re
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
 
 from openai.lib import _parsing, _pydantic
@@ -101,6 +104,41 @@ class BaseLLMModelInfo(ABC):
             or None if token counting is not supported.
         """
         return None
+
+
+_EXTRA_INPUTS_NOT_PERMITTED = "Extra inputs are not permitted"
+_NO_REJECTED_TOOL_FIELDS: Mapping[int, frozenset[str]] = MappingProxyType({})
+_REJECTED_TOOL_FIELD_RE = re.compile(
+    r"tools(?:\[(?P<bracket_index>\d+)\]|\.(?P<dot_index>\d+)\.[A-Za-z_][\w-]*)\.(?P<field>[A-Za-z_][\w-]*)"
+)
+
+
+def parse_rejected_tool_fields(error_text: str) -> Mapping[int, frozenset[str]]:
+    """
+    Parse a provider's "extra inputs" rejection into ``{tool index: rejected field names}``.
+
+    Several providers validate tool definitions against a narrower schema than the API
+    documents and reject the surplus members by presence, naming each one in the error.
+    Two spellings are in circulation and both appear here:
+
+    - ``tools[0].strict`` (Azure AI Foundry)
+    - ``tools.0.custom.strict`` (Bedrock Converse, where the middle segment is the
+      Anthropic tool union member rather than a key in the request body)
+
+    Returns an empty mapping when the message is not one of these rejections, which
+    callers treat as "not retryable". A field named here is by definition one the
+    provider does not accept, so removing it can never strip something required.
+    """
+    if _EXTRA_INPUTS_NOT_PERMITTED not in error_text:
+        return _NO_REJECTED_TOOL_FIELDS
+
+    rejected = tuple(
+        (int(match.group("bracket_index") or match.group("dot_index")), match.group("field"))
+        for match in _REJECTED_TOOL_FIELD_RE.finditer(error_text)
+    )
+    return MappingProxyType(
+        {index: frozenset(field for other, field in rejected if other == index) for index, _ in rejected}
+    )
 
 
 def _convert_tool_response_to_message(
