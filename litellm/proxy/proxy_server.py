@@ -320,6 +320,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.common_utils.periodic_reload_schedule import (
     MODEL_COST_MAP_RELOAD_PARAM_NAME,
+    clear_reload_interval,
     pod_reload_is_due,
     read_reload_schedule,
     record_manual_reload,
@@ -15853,9 +15854,7 @@ async def cancel_model_cost_map_reload(
         if prisma_client is None:
             raise HTTPException(status_code=500, detail="Database connection not available")
 
-        # Remove reload configuration from database
-        await ConfigRepository(prisma_client).table.delete(where={"param_name": MODEL_COST_MAP_RELOAD_PARAM_NAME})
-        await invalidate_config_param(MODEL_COST_MAP_RELOAD_PARAM_NAME)
+        await clear_reload_interval(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME)
 
         verbose_proxy_logger.info("Model cost map reload schedule cancelled")
 

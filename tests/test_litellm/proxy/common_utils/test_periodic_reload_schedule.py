@@ -6,6 +6,7 @@ import pytest
 
 from litellm.proxy.common_utils.periodic_reload_schedule import (
     ReloadSchedule,
+    clear_reload_interval,
     next_run_at,
     parse_reload_schedule,
     pod_reload_is_due,
@@ -34,6 +35,54 @@ def _mock_prisma(row=None, upserted_revision=1):
     prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=row)
     prisma_client.db.litellm_config.upsert = AsyncMock(return_value=_row(reload_revision=upserted_revision))
     prisma_client.db.litellm_config.update_many = AsyncMock(return_value=1)
+    return prisma_client
+
+
+class _FakeConfigTable:
+    """In-memory stand-in for the prisma LiteLLM_Config actions, faithful on the parts the
+    revision depends on: upsert creates at the column default and applies ``{"increment": 1}``,
+    and delete drops the row along with its counter"""
+
+    def __init__(self):
+        self._rows = {}
+
+    async def find_unique(self, where):
+        return self._rows.get(where["param_name"])
+
+    async def upsert(self, where, data):
+        row = self._rows.get(where["param_name"])
+        if row is None:
+            created = data["create"]
+            row = _row(
+                param_value=created.get("param_value"),
+                reload_revision=created.get("reload_revision", 0),
+                last_run_at=created.get("last_run_at"),
+            )
+            self._rows[where["param_name"]] = row
+            return row
+        self._apply(row, data["update"])
+        return row
+
+    async def update_many(self, data, where):
+        row = self._rows.get(where["param_name"])
+        if row is None:
+            return 0
+        self._apply(row, data)
+        return 1
+
+    async def delete(self, where):
+        return self._rows.pop(where["param_name"], None)
+
+    @staticmethod
+    def _apply(row, data):
+        for field, value in data.items():
+            increment = value.get("increment") if isinstance(value, dict) else None
+            setattr(row, field, getattr(row, field) + increment if increment is not None else value)
+
+
+def _fake_prisma(table):
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_config = table
     return prisma_client
 
 
@@ -240,6 +289,54 @@ async def test_record_reload_run_updates_last_run_without_creating_or_bumping():
     kwargs = prisma_client.db.litellm_config.update_many.await_args.kwargs
     assert kwargs == {"data": {"last_run_at": LAST_RUN}, "where": {"param_name": "model_cost_map_reload_config"}}
     prisma_client.db.litellm_config.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_schedule_never_reissues_a_revision():
+    """Cancelling must keep the row. The revision identifies a request rather than ordering
+    one, so a counter restarted by a delete reissues a number pods already applied and their
+    next manual reload is skipped everywhere but the pod that served it"""
+    prisma_client = _fake_prisma(_FakeConfigTable())
+    param_name = "model_cost_map_reload_config"
+    await write_reload_interval(prisma_client, param_name, 6)
+    pod_applied_revision = await record_manual_reload(prisma_client, param_name, LAST_RUN)
+
+    await clear_reload_interval(prisma_client, param_name)
+    republished = await record_manual_reload(prisma_client, param_name, NOW)
+
+    assert (pod_applied_revision, republished) == (1, 2)
+    schedule = await read_reload_schedule(prisma_client, param_name)
+    assert schedule is not None
+    assert (
+        pod_reload_is_due(
+            schedule=schedule,
+            pod_applied_revision=pod_applied_revision,
+            pod_data_loaded_at=NOW,
+            current_time=NOW,
+            description="test",
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_schedule_stops_it_while_keeping_the_recorded_run():
+    """Dropping only the admin-owned param_value: the card must report no schedule without
+    losing the last run it already showed"""
+    prisma_client = _fake_prisma(_FakeConfigTable())
+    param_name = "model_cost_map_reload_config"
+    await write_reload_interval(prisma_client, param_name, 6)
+    await record_reload_run(prisma_client, param_name, LAST_RUN)
+
+    await clear_reload_interval(prisma_client, param_name)
+
+    status = reload_schedule_status(await read_reload_schedule(prisma_client, param_name))
+    assert status == {
+        "scheduled": False,
+        "interval_hours": None,
+        "last_run": "2024-01-01T06:00:00+00:00",
+        "next_run": None,
+    }
 
 
 @pytest.mark.asyncio

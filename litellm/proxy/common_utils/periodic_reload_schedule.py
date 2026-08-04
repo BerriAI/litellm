@@ -44,7 +44,7 @@ class _RevisionIncrement(TypedDict):
 
 class _ConfigRowWrite(TypedDict, total=False):
     param_name: str
-    param_value: str
+    param_value: str | None
     last_run_at: datetime
     reload_revision: int | _RevisionIncrement
 
@@ -186,6 +186,18 @@ async def write_reload_interval(prisma_client: PrismaClient, param_name: str, in
             "create": {"param_name": param_name, "param_value": param_value},
             "update": {"param_value": param_value},
         },
+    )
+    await evict_config_param(param_name)
+
+
+async def clear_reload_interval(prisma_client: PrismaClient, param_name: str) -> None:
+    """Admin-owned write: drops the schedule but keeps the row, because the revision counter
+    identifies a request rather than ordering one and so can never reuse a number. Deleting
+    the row restarts it, and a reissued revision matches what pods already applied, so their
+    next manual reload is silently skipped"""
+    await _config_table(prisma_client).update_many(
+        data={"param_value": None},
+        where={"param_name": param_name},
     )
     await evict_config_param(param_name)
 
