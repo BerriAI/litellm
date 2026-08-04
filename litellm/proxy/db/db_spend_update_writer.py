@@ -12,7 +12,9 @@ import os
 import random
 import time
 import traceback
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -66,6 +68,12 @@ if TYPE_CHECKING:
 else:
     PrismaClient = Any
     ProxyLogging = Any
+
+
+# Only tag rows carry a request_id, so the other entity types spread nothing. Built
+# once here rather than as an empty literal per transaction, and read-only so it cannot
+# be filled in by accident from one of the call sites that spreads it.
+_NO_TAG_REQUEST_ID: Mapping[str, Any] = MappingProxyType({})
 
 
 def _get_llm_router():
@@ -1587,10 +1595,10 @@ class DBSpendUpdateWriter:
                                     # value here so both payloads are built in one shot: a dict
                                     # appended to after construction is one nobody can reason about
                                     # by reading its literal.
-                                    tag_request_id = (
-                                        {"request_id": transaction["request_id"]}
+                                    tag_request_id: Mapping[str, Any] = (
+                                        MappingProxyType({"request_id": transaction["request_id"]})
                                         if entity_type == "tag" and "request_id" in transaction
-                                        else {}
+                                        else _NO_TAG_REQUEST_ID
                                     )
 
                                     # Common data structure for both create and update
