@@ -51,6 +51,7 @@ from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     ToolDiscoveryQueue,
 )
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+from litellm.proxy.spend_tracking.auto_router_sessions import AutoRouterSessionQueue, build_turn_facts
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
@@ -132,6 +133,46 @@ class DBSpendUpdateWriter:
         self.daily_agent_spend_update_queue = DailySpendUpdateQueue()
         self.daily_org_spend_update_queue = DailySpendUpdateQueue()
         self.daily_tag_spend_update_queue = DailySpendUpdateQueue()
+        self.auto_router_session_queue = AutoRouterSessionQueue()
+
+    def _enqueue_auto_router_turn(self, payload: SpendLogsPayload) -> None:
+        """Stage one auto-routed turn for the benchmarks rollup.
+
+        Runs once per request rather than beside the daily transactions, which are built
+        per entity type and would count every turn six times over. Independent of
+        ``disable_spend_logs``, because the rollup is what the benchmarks dashboard reads
+        now. Never raises, and never blocks: a full queue drops the turn rather than
+        applying backpressure to spend tracking.
+        """
+        try:
+            metadata: Final[SpendLogsMetadata] = json.loads(payload["metadata"])
+            if not metadata.get("routing_decision"):
+                return
+            usage_raw: Final = metadata.get("usage_object")
+            usage_obj: Final = usage_raw if isinstance(usage_raw, dict) else None
+            cache_read_tokens: Final = _extract_cache_read_tokens(usage_obj) if usage_obj is not None else 0
+            savings: Final = compute_savings_spend(
+                model=payload.get("model", None),
+                custom_llm_provider=payload.get("custom_llm_provider", None),
+                compression_saved_tokens=extract_compression_saved_tokens(metadata),
+                cache_read_input_tokens=cache_read_tokens,
+                routing_decision=metadata.get("routing_decision"),
+                model_id=payload.get("model_id"),
+                llm_router=_get_llm_router,
+                usage_object=usage_obj,
+                cost_breakdown=metadata.get("cost_breakdown"),
+            )
+            turn: Final = build_turn_facts(
+                payload=payload,
+                metadata=metadata,
+                autorouter_savings=savings.autorouter,
+                cache_read_tokens=cache_read_tokens,
+                cache_creation_tokens=_extract_cache_creation_tokens(usage_obj) if usage_obj is not None else 0,
+            )
+            if turn is not None:
+                self.auto_router_session_queue.update_queue.put_nowait(turn)
+        except Exception as e:  # noqa: BLE001  # a dashboard rollup must never fail spend tracking
+            verbose_proxy_logger.debug("auto_router_sessions: could not stage turn (%s)", e)
 
     async def update_database(
         # LiteLLM management object fields
@@ -208,6 +249,8 @@ class DBSpendUpdateWriter:
                 verbose_proxy_logger.debug(
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
                 )
+
+            self._enqueue_auto_router_turn(payload=payload)
 
             # Single task replaces 11 create_task() calls
             asyncio.create_task(
@@ -808,6 +851,9 @@ class DBSpendUpdateWriter:
                 n_retry_times=n_retry_times,
                 proxy_logging_obj=proxy_logging_obj,
             )
+
+        ################## Auto-Router Benchmarks Rollup ##################
+        await self.auto_router_session_queue.flush(prisma_client=prisma_client)
 
     async def _commit_spend_updates_to_db_with_redis(
         self,

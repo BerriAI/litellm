@@ -186,6 +186,20 @@ class SpendLogCleanup:
             time_column="start_time",
         )
 
+    async def _delete_old_auto_router_sessions(self, prisma_client: PrismaClient, cutoff_date: datetime) -> int:
+        """Expire auto-router rollups on the spend-log cutoff.
+
+        Keyed on last activity rather than session start, so a conversation still running
+        when the cutoff passes is not pruned out from under itself.
+        """
+        return await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff_date,
+            table_name="LiteLLM_AutoRouterSession",
+            key_columns=("api_key", "session_id", "model_group"),
+            time_column="last_turn_at",
+        )
+
     async def cleanup_old_spend_logs(self, prisma_client: PrismaClient) -> None:
         """
         Main cleanup function. Deletes old spend logs in batches.
@@ -244,6 +258,9 @@ class SpendLogCleanup:
 
             index_deleted: Final = await self._delete_old_tool_index_rows(prisma_client, cutoff_date)
             verbose_proxy_logger.info("Deleted %s expired tool index rows", index_deleted)
+
+            sessions_deleted: Final = await self._delete_old_auto_router_sessions(prisma_client, cutoff_date)
+            verbose_proxy_logger.info("Deleted %s expired auto-router session rollups", sessions_deleted)
 
         except Exception as e:
             # .exception() captures the traceback; str(e) alone on a Prisma/DB

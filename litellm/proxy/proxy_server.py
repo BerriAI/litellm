@@ -16,10 +16,11 @@ import time
 import traceback
 import warnings
 from collections.abc import AsyncGenerator, Callable, Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import UnionType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Final,
     Literal,
@@ -530,6 +531,10 @@ from litellm.proxy.response_api_endpoints.endpoints import router as response_ro
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.proxy.spend_tracking.auto_router_benchmarks import (
+    AutoRouterBenchmarksResponse,
+    fetch_benchmarks,
+)
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
@@ -16475,6 +16480,50 @@ async def get_adaptive_router_state(
         for tagged in tagged_routers
     ]
     return {"routers": snapshots}
+
+
+def _auto_router_error(message: str) -> dict[str, str]:
+    return {"error": message}  # mutable-ok: HTTPException serializes its detail from a real dict
+
+
+@router.get(
+    "/auto_router/benchmarks",
+    tags=["auto_router"],  # mutable-ok: FastAPI types tags as List[str]
+    response_model=AutoRouterBenchmarksResponse,
+)
+async def get_auto_router_benchmarks(
+    start_date: date,
+    end_date: date,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    model_group: str | None = None,
+):
+    """Savings, session shape and prompt-cache behaviour for every auto-router.
+
+    Admin-only. Reads the per-session rollup only; no per-request table is scanned.
+    `start_date` and `end_date` are inclusive calendar dates, clamped to the most recent
+    30 days. Pass `model_group` to scope every figure to one auto-router.
+    """
+    if not _user_has_admin_view(user_api_key_dict):
+        raise HTTPException(
+            status_code=403,
+            detail=_auto_router_error(CommonProxyErrors.not_allowed_access.value),
+        )
+    if end_date < start_date:
+        raise HTTPException(
+            status_code=400,
+            detail=_auto_router_error("end_date must not be earlier than start_date."),
+        )
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail=_auto_router_error(CommonProxyErrors.db_not_connected_error.value),
+        )
+    return await fetch_benchmarks(
+        prisma_client=prisma_client,
+        start_date=start_date,
+        end_date=end_date,
+        model_group=model_group,
+    )
 
 
 @router.get("/routes", dependencies=[Depends(user_api_key_auth)])
