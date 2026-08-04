@@ -96,6 +96,15 @@ def _effective_model_info(router: "Router | None", deployment_id: str | None, mo
         return None
 
 
+def _model_info(model: _ModelIdentity) -> ModelInfo | None:
+    """The public rates for ``model``, or ``None`` when it has none."""
+    try:
+        return litellm.get_model_info(model=model.model, custom_llm_provider=model.provider)
+    except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models
+        verbose_proxy_logger.debug("savings: no pricing for provider=%s model=%s (%s)", model.provider, model.model, e)
+        return None
+
+
 def _cost_of_usage(model: _ModelIdentity, usage: Usage, model_info: ModelInfo | None = None) -> float | None:
     """What ``usage`` costs on ``model``, or ``None`` when the model has no pricing."""
     try:
@@ -125,7 +134,24 @@ _CACHE_SPLIT_FIELDS = frozenset(
 )
 
 
-def _baseline_usage(usage: Usage, conversation_continuing: bool) -> Usage:
+def _baseline_cache_rate_keys(baseline_info: ModelInfo | None) -> tuple[bool, bool]:
+    """Whether the baseline model has a ``(cache read, cache write)`` rate of its own.
+
+    A missing rate is not a free bucket. `_get_token_base_cost` resolves an absent
+    `cache_read_input_token_cost` or `cache_creation_input_token_cost` to 0.0, so a
+    baseline whose provider prices caching implicitly, which is every OpenAI, Azure and
+    Gemini entry for cache writes, would carry the whole prompt for nothing and turn a
+    profitable route into a reported loss. Such a model pays its plain input rate for
+    those tokens, so the buckets it cannot price become ordinary input below.
+    """
+    if baseline_info is None:
+        return True, True
+    return bool(baseline_info.get("cache_read_input_token_cost")), bool(
+        baseline_info.get("cache_creation_input_token_cost")
+    )
+
+
+def _baseline_usage(usage: Usage, conversation_continuing: bool, baseline_info: ModelInfo | None = None) -> Usage:
     """The same request as a single-model baseline would have met it.
 
     The baseline is one model serving every turn, so whether it had this prompt cached
@@ -135,8 +161,9 @@ def _baseline_usage(usage: Usage, conversation_continuing: bool) -> Usage:
     counts against the saving; that write is what switching models costs.
 
     On a conversation's first turn nothing was cached anywhere, for any model. The
-    baseline would have written the same prompt, so the usage passes through untouched
-    and both arms carry the write at their own rates. Charging the write to this case
+    baseline would have written the same prompt, so the cache buckets stay where they are
+    and both arms carry the write at their own rates, unless the baseline has no rate for
+    a bucket, in which case those tokens are its plain input. Charging the write to this case
     too, which is all a single rollup row can support, understates a first turn to a
     few percent of its value and can render a profitable route as a loss.
 
@@ -157,10 +184,26 @@ def _baseline_usage(usage: Usage, conversation_continuing: bool) -> Usage:
     """
     cache_read, cache_creation = _cache_token_split(usage)
     details = usage.prompt_tokens_details
-    if details is None or cache_creation <= 0 or not conversation_continuing:
+    if details is None or (cache_read <= 0 and cache_creation <= 0):
         return usage
-    if cache_read > cache_creation:
+
+    # The tokens this request paid to write move into the cached count and the creation
+    # charge is dropped: on one model that cache was already warm, so the baseline would
+    # have read them rather than paying to create them. The 5m/1h breakdown goes with
+    # them; left behind it re-charges the write.
+    warm = conversation_continuing and cache_creation > 0 and cache_read <= cache_creation
+    reads = cache_read + cache_creation if warm else cache_read
+    writes = 0 if warm else cache_creation
+
+    prices_reads, prices_writes = _baseline_cache_rate_keys(baseline_info)
+    reads = reads if prices_reads else 0
+    writes = writes if prices_writes else 0
+    if (reads, writes) == (cache_read, cache_creation):
         return usage
+
+    other_modalities = sum(
+        (getattr(details, field, 0) or 0) for field in ("audio_tokens", "image_tokens", "video_tokens")
+    )
     return Usage(
         prompt_tokens=usage.prompt_tokens,
         completion_tokens=usage.completion_tokens,
@@ -168,15 +211,12 @@ def _baseline_usage(usage: Usage, conversation_continuing: bool) -> Usage:
         completion_tokens_details=usage.completion_tokens_details,
         prompt_tokens_details=PromptTokensDetailsWrapper(
             **details.model_dump(exclude=_CACHE_SPLIT_FIELDS),
-            # The tokens this request paid to write are moved into the cached count and
-            # the creation charge is dropped: on one model that cache was already warm,
-            # so the baseline would have read them rather than paying to create them.
-            # The 5m/1h breakdown goes with it; left behind it re-charges the write.
-            cached_tokens=cache_read + cache_creation,
-            cache_creation_tokens=0,
-            cache_write_tokens=0,
-            cache_creation_token_details=None,
-            text_tokens=max(usage.prompt_tokens - cache_read - cache_creation, 0),
+            cached_tokens=reads,
+            cache_creation_tokens=writes,
+            cache_write_tokens=writes,
+            cache_creation_token_details=details.cache_creation_token_details if writes else None,
+            # Whatever no longer sits in a cache bucket is plain input on the baseline.
+            text_tokens=max(usage.prompt_tokens - reads - writes - other_modalities, 0),
         ),
     )
 
@@ -215,7 +255,10 @@ def compute_autorouter_savings(
     # name alone reports as zero.
     if baseline == selected:
         return 0.0
-    baseline_cost = _cost_of_usage(baseline, _baseline_usage(usage, conversation_continuing))
+    baseline_info = _model_info(baseline)
+    baseline_cost = _cost_of_usage(
+        baseline, _baseline_usage(usage, conversation_continuing, baseline_info), baseline_info
+    )
     selected_cost = _cost_of_usage(selected, usage, selected_info)
     if baseline_cost is None or selected_cost is None:
         return 0.0

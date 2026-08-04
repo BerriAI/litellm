@@ -484,3 +484,53 @@ def test_a_switch_onto_a_partly_cached_model_still_pays_for_the_write():
         + 1_000 * haiku["output_cost_per_token"]
     )
     assert reported < if_treated_as_same_model / 10, "a mostly-cold switch must not be priced as a continuation"
+
+def test_a_baseline_that_prices_caching_implicitly_still_pays_for_its_prompt():
+    """OpenAI, Azure and Gemini entries carry no `cache_creation_input_token_cost`,
+    because those providers cache implicitly and charge nothing to write. Leaving this
+    request's written tokens in the creation bucket priced them at the 0.0 the cost
+    resolver falls back to, so the baseline carried a 20k prompt for free and a first
+    turn that saved money reported a loss. Those tokens are plain input on such a model.
+    """
+    first_turn = _usage(fresh=0, cached=0, written=20_000, out=1_000)
+    reported = compute_autorouter_savings(
+        baseline_model="gpt-5",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=first_turn,
+        conversation_continuing=False,
+    )
+
+    gpt5 = litellm.get_model_info("gpt-5", "openai")
+    assert gpt5.get("cache_creation_input_token_cost") is None, "pick a baseline with no cache-write rate"
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    baseline_pays_input = 20_000 * gpt5["input_cost_per_token"] + 1_000 * gpt5["output_cost_per_token"]
+    actually_paid = (
+        20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
+    )
+    assert reported == pytest.approx(baseline_pays_input - actually_paid)
+    assert reported > 0, "routing a cold first turn onto a cheaper model is a saving, not a loss"
+
+
+def test_a_baseline_with_no_cache_read_rate_is_charged_its_input_rate():
+    """The same hole on the other bucket. A baseline whose entry has no
+    `cache_read_input_token_cost` reads for 0.0, so a continuing turn priced the whole
+    prompt at nothing and every switch away from it reported a loss.
+    """
+    continuing = _usage(fresh=0, cached=0, written=20_000, out=1_000)
+    reported = compute_autorouter_savings(
+        baseline_model="xai/grok-4",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=continuing,
+        conversation_continuing=True,
+    )
+
+    grok = litellm.get_model_info("grok-4", "xai")
+    assert grok.get("cache_read_input_token_cost") is None, "pick a baseline with no cache-read rate"
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    baseline_pays_input = 20_000 * grok["input_cost_per_token"] + 1_000 * grok["output_cost_per_token"]
+    actually_paid = (
+        20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
+    )
+    assert reported == pytest.approx(baseline_pays_input - actually_paid)
