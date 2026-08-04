@@ -4877,3 +4877,148 @@ async def test_unusable_upstream_cost_records_zero_not_the_flat_estimate():
     assert len(payloads) == 1
     assert payloads[0]["response_cost"] == 0.0
     assert payloads[0]["total_tokens"] == 1874
+
+
+def _langfuse_otel_logging_metadata() -> dict:
+    return {
+        "logging": [
+            {
+                "callback_name": "langfuse_otel",
+                "callback_type": "success",
+                "callback_vars": {
+                    "langfuse_public_key": "pk-team-project-2",
+                    "langfuse_secret_key": "sk-team-project-2",
+                    "langfuse_host": "https://team.langfuse.example",
+                },
+            }
+        ]
+    }
+
+
+async def _capture_pass_through_logging_obj(user_api_key_dict: UserAPIKeyAuth):
+    """
+    Run a pass-through request and hand back the Logging object it built.
+
+    Streaming is used purely because chunk_processor is the cheapest place to
+    intercept that object.
+    """
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.PassThroughStreamingHandler.chunk_processor"
+            ) as mock_chunk_processor:
+                mock_proxy_logging.pre_call_hook = AsyncMock(
+                    return_value={"model": "gpt-4o-mini", "stream": True}
+                )
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                    return_value={}
+                )
+
+                upstream_response = MagicMock()
+                upstream_response.status_code = 200
+                upstream_response.headers = {}
+                upstream_response.raise_for_status = MagicMock()
+
+                async_client = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
+
+                async def _empty_chunks(*args, **kwargs):
+                    return
+                    yield  # pragma: no cover
+
+                mock_chunk_processor.return_value = _empty_chunks()
+
+                mock_request = MagicMock(spec=Request)
+                mock_request.method = "POST"
+                mock_request.url = "http://test-proxy.com/openai/chat/completions"
+                mock_request.body = AsyncMock(
+                    return_value=b'{"model": "gpt-4o-mini", "stream": true}'
+                )
+                mock_request.headers = Headers({})
+                mock_request.query_params = QueryParams({})
+
+                await pass_through_request(
+                    request=mock_request,
+                    target="https://api.openai.com/v1/chat/completions",
+                    custom_headers={},
+                    user_api_key_dict=user_api_key_dict,
+                    stream=True,
+                )
+
+                return mock_chunk_processor.call_args.kwargs["litellm_logging_obj"]
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_logs_with_team_callback_credentials():
+    """
+    Regression (LIT-5152): a pass-through request made with a team-scoped key must
+    log to the team's logging destination. Before this, pass-through routes never
+    resolved team callback settings, so their traces silently went to whichever
+    project the global callback pointed at while /chat/completions on the same key
+    went to the team's project.
+    """
+    from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
+
+    logging_obj = await _capture_pass_through_logging_obj(
+        UserAPIKeyAuth(
+            api_key="sk-team-key",
+            team_id="team-project-2",
+            team_metadata=_langfuse_otel_logging_metadata(),
+        )
+    )
+
+    assert logging_obj.standard_callback_dynamic_params == {
+        "langfuse_public_key": "pk-team-project-2",
+        "langfuse_secret_key": "sk-team-project-2",
+        "langfuse_host": "https://team.langfuse.example",
+    }
+    assert any(
+        isinstance(callback, LangfuseOtelLogger)
+        for callback in logging_obj.dynamic_async_success_callbacks or []
+    )
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_logs_with_key_callback_credentials():
+    """Key-level logging settings win over the team's, same as on /chat/completions"""
+    logging_obj = await _capture_pass_through_logging_obj(
+        UserAPIKeyAuth(
+            api_key="sk-key-with-own-logging",
+            team_id="team-project-2",
+            team_metadata=_langfuse_otel_logging_metadata(),
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "langfuse_otel",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "langfuse_public_key": "pk-key-project-3",
+                            "langfuse_secret_key": "sk-key-project-3",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+
+    assert logging_obj.standard_callback_dynamic_params == {
+        "langfuse_public_key": "pk-key-project-3",
+        "langfuse_secret_key": "sk-key-project-3",
+    }
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_without_scoped_logging_settings_uses_global_callbacks():
+    """A key with no logging settings of its own must not pick up per-request credentials"""
+    logging_obj = await _capture_pass_through_logging_obj(
+        UserAPIKeyAuth(api_key="sk-plain-key")
+    )
+
+    assert logging_obj.standard_callback_dynamic_params == {}
+    assert logging_obj.dynamic_success_callbacks is None
+    assert logging_obj.dynamic_async_success_callbacks is None

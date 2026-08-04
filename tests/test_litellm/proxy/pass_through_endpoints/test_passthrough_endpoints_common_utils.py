@@ -97,3 +97,51 @@ def test_encode_bedrock_runtime_modelid_arn_edge_cases():
     expected = "model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile%2Ftest-profile.v1/invoke"
     result = CommonUtils.encode_bedrock_runtime_modelid_arn(endpoint)
     assert result == expected
+
+
+def test_get_pass_through_dynamic_logging_params_from_default_team_settings():
+    """
+    Regression (LIT-5152): pass-through routes must honor `default_team_settings`
+    from config.yaml, the shape the original report (BerriAI/litellm#9967) used
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.common_utils import (
+        get_pass_through_dynamic_logging_params,
+    )
+
+    proxy_config = Mock()
+    proxy_config.load_team_config.return_value = {
+        "success_callback": ["langfuse"],
+        "langfuse_public_key": "pk-team-project-2",
+        "langfuse_secret": "sk-team-project-2",
+    }
+
+    with patch("litellm.proxy.proxy_server.proxy_config", proxy_config):
+        params = get_pass_through_dynamic_logging_params(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-team-key", team_id="team-project-2")
+        )
+
+    assert params.success_callbacks == ["langfuse"]
+    assert params.callback_vars == {
+        "langfuse_public_key": "pk-team-project-2",
+        "langfuse_secret": "sk-team-project-2",
+    }
+
+
+def test_get_pass_through_dynamic_logging_params_without_settings():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.common_utils import (
+        get_pass_through_dynamic_logging_params,
+    )
+
+    proxy_config = Mock()
+    proxy_config.load_team_config.return_value = {}
+
+    with patch("litellm.proxy.proxy_server.proxy_config", proxy_config):
+        params = get_pass_through_dynamic_logging_params(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-plain-key", team_id="team-no-logging")
+        )
+
+    assert params.callback_vars is None
+    assert params.success_callbacks is None
+    assert params.failure_callbacks is None

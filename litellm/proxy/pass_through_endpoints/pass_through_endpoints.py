@@ -67,6 +67,9 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.pass_through_endpoints.common_utils import (
+    get_pass_through_dynamic_logging_params,
+)
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
@@ -897,6 +900,7 @@ async def pass_through_request(
         # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
         passthrough_model = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
         start_time = datetime.now()
+        dynamic_logging = get_pass_through_dynamic_logging_params(user_api_key_dict=user_api_key_dict)
         logging_obj = Logging(
             model=passthrough_model,
             messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
@@ -905,6 +909,9 @@ async def pass_through_request(
             start_time=start_time,
             litellm_call_id=litellm_call_id,
             function_id="1245",
+            kwargs=dynamic_logging.callback_vars,
+            dynamic_success_callbacks=dynamic_logging.success_callbacks,
+            dynamic_failure_callbacks=dynamic_logging.failure_callbacks,
         )
 
         # Store passthrough guardrails config on logging_obj for field targeting
@@ -1910,6 +1917,7 @@ async def websocket_passthrough_request(
                 upstream_headers[header_name] = header_value
 
     # Initialize logging object similar to HTTP passthrough
+    dynamic_logging = get_pass_through_dynamic_logging_params(user_api_key_dict=user_api_key_dict)
     logging_obj = Logging(
         model="unknown",
         messages=[{"role": "user", "content": "WebSocket connection"}],
@@ -1918,6 +1926,9 @@ async def websocket_passthrough_request(
         start_time=start_time,
         litellm_call_id=litellm_call_id,
         function_id="websocket_passthrough",
+        kwargs=dynamic_logging.callback_vars,
+        dynamic_success_callbacks=dynamic_logging.success_callbacks,
+        dynamic_failure_callbacks=dynamic_logging.failure_callbacks,
     )
 
     # Create passthrough logging payload
