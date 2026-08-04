@@ -2,6 +2,7 @@
 Common utilities for A2A (Agent-to-Agent) Protocol
 """
 
+import json
 from typing import Any
 
 from pydantic import BaseModel
@@ -61,6 +62,19 @@ def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
     return "\n".join(conversation_parts)
 
 
+def serialize_a2a_data_part(data: Any) -> str:
+    """
+    Serialize an A2A ``data``-kind part's payload to text.
+
+    Used both to build the flattened completion text shown to callers and to
+    extract guardrail-scannable text, so the two stay in sync.
+    """
+    try:
+        return json.dumps(data, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(data)
+
+
 def extract_text_from_a2a_message(message: dict[str, Any], depth: int = 0, max_depth: int = 10) -> str:
     """
     Extract text content from A2A message parts.
@@ -80,8 +94,13 @@ def extract_text_from_a2a_message(message: dict[str, Any], depth: int = 0, max_d
     text_parts: list[str] = []
 
     for part in parts:
-        if part.get("kind") == "text":
+        kind = part.get("kind")
+        if kind == "text":
             text_parts.append(part.get("text", ""))
+        elif kind == "data":
+            data = part.get("data")
+            if data is not None:
+                text_parts.append(serialize_a2a_data_part(data))
         # Handle nested parts if they exist
         elif "parts" in part:
             nested_text = extract_text_from_a2a_message(part, depth + 1, max_depth)
