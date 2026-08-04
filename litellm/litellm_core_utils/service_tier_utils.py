@@ -9,7 +9,7 @@ from litellm.types.utils import ServiceTier, StandardLoggingPayload
 # wherever it is recorded. Derived from ``ServiceTier`` so a tier added there for
 # cost calculation cannot go missing here.
 KNOWN_REQUEST_SERVICE_TIERS = frozenset(
-    {tier.value for tier in ServiceTier} | {"batch", "default", "scale", "standard", "standard_only"}
+    tuple(tier.value for tier in ServiceTier) + ("batch", "default", "scale", "standard", "standard_only")
 )
 
 
