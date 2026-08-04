@@ -288,6 +288,8 @@ class LiteLLMRoutes(enum.Enum):
         "/chat/completions",
         "/v1/chat/completions",
         "/cursor/chat/completions",
+        "/cursor/models",
+        "/cursor/v1/models",
         # completions
         "/engines/{model}/completions",
         "/openai/deployments/{model}/completions",
@@ -558,6 +560,7 @@ class LiteLLMRoutes(enum.Enum):
         "/models",
         "/v1/models",
         "/sso/get/ui_settings",
+        "/get/user_banner",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend

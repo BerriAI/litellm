@@ -538,6 +538,9 @@ from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
 )
+from litellm.proxy.ui_crud_endpoints.user_banner_endpoints import (
+    router as user_banner_endpoints_router,
+)
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -6546,7 +6549,8 @@ class ProxyConfig:
                 reload_result = await refetch_model_cost_map(url=model_cost_map_url)
                 if isinstance(reload_result, ModelCostMapReloadUnavailable):
                     verbose_proxy_logger.warning(
-                        f"Model cost map reload failed ({reload_result.reason}); keeping current pricing data, will retry on the next config poll"
+                        "Model cost map reload failed (%s); keeping current pricing data, will retry on the next config poll",
+                        reload_result.reason,
                     )
                     return
                 new_model_cost_map = reload_result.model_cost_map
@@ -16537,6 +16541,7 @@ app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)
 app.include_router(rust_control_plane_router)
 app.include_router(ui_crud_endpoints_router)
+app.include_router(user_banner_endpoints_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
