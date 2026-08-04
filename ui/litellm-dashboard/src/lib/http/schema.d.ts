@@ -760,6 +760,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/benchmarks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Auto Router Benchmarks
+         * @description Session-level benchmarks for every configured auto-router.
+         *
+         *     Admin-only. For each auto-router alias, reports turns per session, session
+         *     length, tokens per session, the dollar savings of the routed mix against the
+         *     counterfactual baseline, and how the provider prompt cache behaved.
+         *
+         *     Reads the per-session rollup, never the per-request spend logs.
+         *     ``start_date`` / ``end_date`` are ``YYYY-MM-DD``; the window is clamped to
+         *     the most recent ``BENCHMARKS_MAX_WINDOW_DAYS`` days and the response echoes
+         *     the window actually served. Sessions are counted whole when they were active
+         *     in the window. Returns 404 when no auto-router is configured.
+         */
+        get: operations["get_auto_router_benchmarks_auto_router_benchmarks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/azure/{endpoint}": {
         parameters: {
             query?: never;
@@ -35695,6 +35725,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_auto_router_benchmarks_auto_router_benchmarks_get: {
+        parameters: {
+            query: {
+                start_date: string;
+                end_date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
