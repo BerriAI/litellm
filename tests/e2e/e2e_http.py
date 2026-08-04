@@ -303,7 +303,7 @@ def _params(params: BaseModel | None) -> dict[str, str]:
     return {key: str(value) for key, value in dumped.items()}
 
 
-TRANSIENT_STATUSES: frozenset[int] = frozenset({500, 502, 503, 504, 529})
+TRANSIENT_STATUSES: frozenset[int] = frozenset({529})
 RETRY_ATTEMPTS: int = 3
 RETRY_BACKOFF_SECONDS: float = 0.5
 
@@ -317,17 +317,21 @@ class RetryableResponse(Protocol):
 def request_with_retry[T: RetryableResponse](
     issue: Callable[[], T], *, sleep: Callable[[float], None] = time.sleep
 ) -> T:
-    """Bounded retry on provider-transient statuses only (500/502/503/504/529),
-    the set production SDKs retry by default (Anthropic's own client retries 529
-    overloaded_error). The intent stays clean because only the dependency call
-    is retried; every assertion still judges a single successful response.
+    """Bounded retry on statuses attributable to the PROVIDER, never the proxy.
 
-    Deliberately NOT retried: 429, because this suite asserts the proxy's own
-    rate-limit and budget 429s and a transport that absorbed them would
-    silently break those tests; network errors and timeouts, because a hang
-    should surface as a hang instead of doubling the wall clock. Every retry
-    prints, so flakiness stays visible in the run log instead of vanishing
-    into green."""
+    The system under test is the proxy, so the transport may only absorb
+    statuses the proxy itself cannot emit; today that is exactly 529, the
+    Anthropic overloaded_error passed through verbatim (their own SDK retries
+    it too). 500/502/503/504 stay first-class failures: at this layer a 5xx
+    from the proxy is indistinguishable from one it relayed, and retrying them
+    could mask an intermittently failing proxy. Widen the set only for a
+    status litellm provably never originates, with an observed flake in hand.
+
+    Also deliberately NOT retried: 429, because this suite asserts the proxy's
+    own rate-limit and budget 429s; network errors and timeouts, because a
+    hang should surface as a hang instead of doubling the wall clock. Every
+    retry prints, so flakiness stays visible in the run log instead of
+    vanishing into green."""
     for attempt in range(1, RETRY_ATTEMPTS):
         resp = issue()
         if resp.status_code not in TRANSIENT_STATUSES:

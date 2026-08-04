@@ -1,11 +1,13 @@
 """Harness coverage for the transport's transient-retry policy.
 
 No proxy needed and no ``e2e`` marker: this pins the retry CONTRACT, which is
-load-bearing for the whole suite. 429 especially must never be retried, because
-the quota suites assert the proxy's own rate-limit and budget 429s; a transport
-that absorbed them would make those tests pass or fail for the wrong reason.
-The fakes satisfy the RetryableResponse protocol directly, so nothing here
-imports requests or monkeypatches anything.
+load-bearing for the whole suite. Only statuses the proxy itself cannot emit
+may ever be retried (today exactly 529, Anthropic's overload signal): 429 must
+stay unretried because the quota suites assert the proxy's own rate-limit and
+budget 429s, and proxy-capable 5xx must stay unretried or an intermittently
+failing proxy would slip through green. The fakes satisfy the
+RetryableResponse protocol directly, so nothing here imports requests or
+monkeypatches anything.
 """
 
 from __future__ import annotations
@@ -41,11 +43,11 @@ def _issue_from(responses: Sequence[FakeResponse]) -> Callable[[], FakeResponse]
 
 
 class TestTransientRetryPolicy:
-    def test_transient_set_is_the_provider_transient_statuses_and_excludes_429(self) -> None:
-        assert TRANSIENT_STATUSES == frozenset({500, 502, 503, 504, 529})
+    def test_transient_set_is_only_statuses_the_proxy_cannot_emit(self) -> None:
+        assert TRANSIENT_STATUSES == frozenset({529})
         assert 429 not in TRANSIENT_STATUSES
 
-    @pytest.mark.parametrize("status", [200, 201, 400, 401, 404, 422])
+    @pytest.mark.parametrize("status", [200, 201, 400, 401, 404, 422, 500, 502, 503, 504])
     def test_non_transient_status_returns_immediately(self, status: int) -> None:
         responses = (FakeResponse(status), FakeResponse(200))
         sleep = SleepRecorder()
@@ -72,7 +74,7 @@ class TestTransientRetryPolicy:
         assert responses[1].close_calls == 0
 
     def test_persistent_transient_is_bounded_and_returns_the_last_response(self) -> None:
-        responses = tuple(FakeResponse(500) for _ in range(RETRY_ATTEMPTS + 1))
+        responses = tuple(FakeResponse(529) for _ in range(RETRY_ATTEMPTS + 1))
         sleep = SleepRecorder()
         result = request_with_retry(_issue_from(responses), sleep=sleep)
         assert result is responses[RETRY_ATTEMPTS - 1]
