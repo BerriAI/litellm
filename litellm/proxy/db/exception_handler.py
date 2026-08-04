@@ -93,6 +93,20 @@ class PrismaDBExceptionHandler:
         return type(e) is prisma.errors.DataError
 
     @staticmethod
+    def is_unique_constraint_violation(e: Exception) -> bool:
+        """True iff ``e`` is a prisma unique-constraint violation, i.e. the row the
+        caller tried to insert already exists.
+
+        Lets callers use an insert as an atomic cross-replica claim without
+        importing prisma themselves: prisma is a proxy-only dependency, and a
+        module reachable from a base ``import litellm`` cannot import it at the top
+        level.
+        """
+        import prisma
+
+        return isinstance(e, prisma.errors.UniqueViolationError)
+
+    @staticmethod
     def is_database_transport_error(e: Exception) -> bool:
         """
         Returns True only for transport/connectivity failures where a reconnect

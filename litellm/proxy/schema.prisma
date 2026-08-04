@@ -1467,3 +1467,15 @@ model LiteLLM_WorkflowMessage {
   @@unique([run_id, sequence_number])
   @@index([run_id])
 }
+
+model LiteLLM_BudgetAlertSent {
+  id            String   @id @default(uuid())
+  entity_type   String
+  entity_id     String
+  alert_type    String
+  threshold_pct Int
+  budget_window String
+  sent_at       DateTime @default(now())
+
+  @@unique([entity_type, entity_id, alert_type, threshold_pct])
+}

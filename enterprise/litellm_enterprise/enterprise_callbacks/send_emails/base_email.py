@@ -20,6 +20,8 @@ from litellm.caching.caching import DualCache
 from litellm.constants import (
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
     EMAIL_BUDGET_ALERT_TTL,
+    MAX_BUDGET_ALERT_TYPE,
+    MAX_BUDGET_DEFAULT_ALERT_TYPE,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.email_templates.email_footer import EMAIL_FOOTER
@@ -43,6 +45,11 @@ from litellm.proxy._types import (
     Litellm_EntityType,
     UserAPIKeyAuth,
     WebhookEvent,
+)
+from litellm.proxy.db.budget_alert_claim import (
+    claim_budget_alert_slot,
+    get_budget_window,
+    release_budget_alert_slot,
 )
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
@@ -542,16 +549,18 @@ class BaseEmailLogger(CustomLogger):
                     _id = user_info.token or user_info.user_id or "default_id"
                     _cache_key = f"email_budget_alerts:max_budget_alert:{_id}"
 
-                    send_count = await _cache.async_increment_cache(
-                        key=_cache_key,
-                        value=1,
-                        ttl=EMAIL_BUDGET_ALERT_TTL,
+                    # Calculate percentage
+                    percentage = int(
+                        EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE * 100
                     )
-                    if send_count is None or send_count <= 1:
-                        # Calculate percentage
-                        percentage = int(
-                            EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE * 100
-                        )
+
+                    if await self._claim_max_budget_alert_send(
+                        cache=_cache,
+                        cache_key=_cache_key,
+                        user_info=user_info,
+                        threshold_pct=percentage,
+                        alert_type=MAX_BUDGET_DEFAULT_ALERT_TYPE,
+                    ):
 
                         # Create WebhookEvent for max budget alert
                         event_message = f"Max Budget Alert - {percentage}% of Maximum Budget Reached"
@@ -572,6 +581,7 @@ class BaseEmailLogger(CustomLogger):
                             projected_exceeded_date=user_info.projected_exceeded_date,
                             projected_spend=user_info.projected_spend,
                             event_group=user_info.event_group,
+                            budget_reset_at=user_info.budget_reset_at,
                         )
 
                         try:
@@ -581,7 +591,13 @@ class BaseEmailLogger(CustomLogger):
                                 f"Error sending max budget alert email: {e}",
                                 exc_info=True,
                             )
-                            await self._release_budget_alert_claim(_cache, _cache_key)
+                            await self._release_max_budget_alert_claim(
+                                cache=_cache,
+                                cache_key=_cache_key,
+                                user_info=user_info,
+                                threshold_pct=percentage,
+                                alert_type=MAX_BUDGET_DEFAULT_ALERT_TYPE,
+                            )
             return
 
     async def _handle_multi_threshold_max_budget_alert(
@@ -624,12 +640,12 @@ class BaseEmailLogger(CustomLogger):
                 continue
             recipient_emails = list(set(emails))
 
-            send_count = await _cache.async_increment_cache(
-                key=_cache_key,
-                value=1,
-                ttl=EMAIL_BUDGET_ALERT_TTL,
-            )
-            if send_count is not None and send_count > 1:
+            if not await self._claim_max_budget_alert_send(
+                cache=_cache,
+                cache_key=_cache_key,
+                user_info=user_info,
+                threshold_pct=threshold_pct,
+            ):
                 continue
 
             event_message = f"Max Budget Alert - {threshold_pct}% of Maximum Budget Reached"
@@ -650,6 +666,7 @@ class BaseEmailLogger(CustomLogger):
                 projected_exceeded_date=user_info.projected_exceeded_date,
                 projected_spend=user_info.projected_spend,
                 event_group=user_info.event_group,
+                budget_reset_at=user_info.budget_reset_at,
             )
 
             try:
@@ -663,7 +680,12 @@ class BaseEmailLogger(CustomLogger):
                     f"Error sending multi-threshold max budget alert email for {threshold_pct}%: {e}",
                     exc_info=True,
                 )
-                await self._release_budget_alert_claim(_cache, _cache_key)
+                await self._release_max_budget_alert_claim(
+                    cache=_cache,
+                    cache_key=_cache_key,
+                    user_info=user_info,
+                    threshold_pct=threshold_pct,
+                )
 
     async def _release_budget_alert_claim(self, cache: DualCache, cache_key: str) -> None:
         try:
@@ -673,6 +695,95 @@ class BaseEmailLogger(CustomLogger):
                 "Failed to release budget alert claim for %s; it expires with the TTL",
                 cache_key,
             )
+
+    @staticmethod
+    def _budget_window(user_info: CallInfo) -> str:
+        return get_budget_window(user_info.budget_reset_at, user_info.max_budget)
+
+    @staticmethod
+    def _windowed_cache_key(cache_key: str, budget_window: str) -> str:
+        """
+        Scope the in-memory claim to the budget window it belongs to. Without this
+        the claim would still suppress the alert for up to EMAIL_BUDGET_ALERT_TTL
+        after the budget resets, even though the durable claim has re-armed.
+        """
+        return f"{cache_key}:{budget_window}"
+
+    @staticmethod
+    def _durable_claim_entity(user_info: CallInfo) -> tuple[str, str] | None:
+        """
+        (entity_type, entity_id) to key the durable claim on, or None when the alert
+        carries no stable identifier and can only be deduped in memory.
+        """
+        entity_id = user_info.token or user_info.user_id
+        if not entity_id:
+            return None
+        return user_info.event_group.value, entity_id
+
+    async def _claim_max_budget_alert_send(
+        self,
+        cache: DualCache,
+        cache_key: str,
+        user_info: CallInfo,
+        threshold_pct: int,
+        alert_type: str = MAX_BUDGET_ALERT_TYPE,
+    ) -> bool:
+        """
+        Decide whether this process should send one max budget alert.
+
+        The in-memory claim stops a replica re-sending on every request it serves.
+        The durable claim is what stops a SECOND replica sending the same alert, and
+        what keeps the alert from firing again after a restart or a cache TTL expiry:
+        the in-memory claim is process-local whenever Redis is not configured, so on
+        its own it cannot dedupe across replicas or across restarts.
+        """
+        budget_window = self._budget_window(user_info)
+        send_count = await cache.async_increment_cache(
+            key=self._windowed_cache_key(cache_key, budget_window),
+            value=1,
+            ttl=EMAIL_BUDGET_ALERT_TTL,
+        )
+        if send_count is not None and send_count > 1:
+            return False
+
+        entity = self._durable_claim_entity(user_info)
+        if entity is None:
+            return True
+
+        entity_type, entity_id = entity
+        return await claim_budget_alert_slot(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            alert_type=alert_type,
+            threshold_pct=threshold_pct,
+            budget_window=budget_window,
+        )
+
+    async def _release_max_budget_alert_claim(
+        self,
+        cache: DualCache,
+        cache_key: str,
+        user_info: CallInfo,
+        threshold_pct: int,
+        alert_type: str = MAX_BUDGET_ALERT_TYPE,
+    ) -> None:
+        """Hand a won claim back after a failed send, so the alert can be retried."""
+        budget_window = self._budget_window(user_info)
+        await self._release_budget_alert_claim(
+            cache, self._windowed_cache_key(cache_key, budget_window)
+        )
+
+        entity = self._durable_claim_entity(user_info)
+        if entity is None:
+            return
+        entity_type, entity_id = entity
+        await release_budget_alert_slot(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            alert_type=alert_type,
+            threshold_pct=threshold_pct,
+            budget_window=budget_window,
+        )
 
     async def _get_email_params(
         self,

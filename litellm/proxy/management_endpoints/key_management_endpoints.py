@@ -68,6 +68,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.budget_alert_claim import delete_budget_alert_claims
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
     VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
@@ -4119,6 +4120,11 @@ async def delete_verification_tokens(
         )
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
+
+    await delete_budget_alert_claims(
+        entity_type=Litellm_EntityType.KEY.value,
+        entity_ids=tuple(key.token for key in _keys_being_deleted),
+    )
 
     for key in tokens:
         user_api_key_cache.delete_cache(key)

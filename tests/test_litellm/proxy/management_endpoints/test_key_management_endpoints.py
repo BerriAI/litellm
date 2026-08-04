@@ -4923,6 +4923,14 @@ async def test_delete_verification_tokens_persists_deleted_keys(monkeypatch):
     # delete_data returns the list directly, which gets wrapped in {"deleted_keys": ...}
     assert isinstance(result["deleted_keys"], list)
     assert set(result["deleted_keys"]) == {"hashed-token-1", "hashed-token-2"}
+
+    # budget alert claim rows are keyed on the token and have no FK, so deleting a key
+    # has to sweep them or a stale claim silences the alert for a recycled token
+    claim_delete = mock_prisma_client.db.litellm_budgetalertsent.delete_many
+    claim_delete.assert_awaited_once()
+    claim_where = claim_delete.await_args.kwargs["where"]
+    assert claim_where["entity_type"] == "key"
+    assert set(claim_where["entity_id"]["in"]) == {"hashed-token-1", "hashed-token-2"}
     assert len(deleted_keys) == 2
 
 

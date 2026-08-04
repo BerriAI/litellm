@@ -2624,6 +2624,7 @@ async def test_virtual_key_max_budget_alert_check_with_user_obj():
         org_id="test-org",
         key_alias="test-key",
         soft_budget=50.0,
+        budget_reset_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
     )
 
     user_obj = LiteLLM_UserTable(
@@ -2655,6 +2656,7 @@ async def test_virtual_key_max_budget_alert_check_with_user_obj():
     assert captured_call_info.organization_id == "test-org"
     assert captured_call_info.key_alias == "test-key"
     assert captured_call_info.event_group == Litellm_EntityType.KEY
+    assert captured_call_info.budget_reset_at == valid_token.budget_reset_at
 
 
 @pytest.mark.asyncio
@@ -2767,6 +2769,7 @@ async def test_virtual_key_max_budget_alert_check_with_multi_threshold_map():
         user_id="test-user",
         key_alias="test-key",
         metadata={"max_budget_alert_emails": alert_config},
+        budget_reset_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
     )
     user_obj = LiteLLM_UserTable(
         user_id="test-user",
@@ -2786,6 +2789,7 @@ async def test_virtual_key_max_budget_alert_check_with_multi_threshold_map():
     assert captured_call_info.max_budget_alert_emails == alert_config
     assert captured_call_info.user_email == "owner@co.com"
     assert captured_call_info.event_group == Litellm_EntityType.KEY
+    assert captured_call_info.budget_reset_at == valid_token.budget_reset_at
 
 
 @pytest.mark.asyncio

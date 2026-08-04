@@ -3092,6 +3092,10 @@ class CallInfo(LiteLLMPydanticObjectBase):
         default=None,
         description="Map of threshold percentage to email recipients (e.g., {'50': ['a@co.com'], '75': ['a@co.com', 'b@co.com']})",
     )
+    budget_reset_at: datetime | None = Field(
+        default=None,
+        description="End of the budget period this alert belongs to. Used to re-arm the alert once the budget rolls over.",
+    )
 
 
 class WebhookEvent(CallInfo):

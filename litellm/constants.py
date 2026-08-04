@@ -464,6 +464,8 @@ EMAIL_BUDGET_ALERT_TTL = int(os.getenv("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60)) 
 EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE = float(
     os.getenv("EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE", 0.8)
 )  # 80% of max budget
+MAX_BUDGET_ALERT_TYPE = "max_budget_alert"
+MAX_BUDGET_DEFAULT_ALERT_TYPE = "max_budget_alert_default_threshold"
 ############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
 ANTHROPIC_TOKEN_COUNTING_BETA_VERSION = os.getenv("ANTHROPIC_TOKEN_COUNTING_BETA_VERSION", "token-counting-2024-11-01")
