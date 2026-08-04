@@ -121,6 +121,14 @@ def separate_cached_messages(
     """
     Returns separated cached and non-cached messages.
 
+    Anthropic allows multiple, non-contiguous cache_control breakpoints
+    (e.g. one on the system prompt, another added later as the conversation
+    grows). Gemini only supports a single contiguous prefix cache, so the
+    cache boundary must extend through the LAST marked message rather than
+    stopping at the first gap -- caching up to the last tag implicitly
+    covers the earlier tags too, since they share the same prefix.
+    See GitHub issue #17201.
+
     Args:
         messages: List of messages to be separated.
 
@@ -138,12 +146,11 @@ def separate_cached_messages(
         if is_cached_message(message=message):
             filtered_messages.append((idx, message))
 
-    # Validate only one block of continuous cached messages
-    last_continuous_block_idx = get_first_continuous_block_idx(filtered_messages)
-    # Separate messages based on the block of cached messages
-    if filtered_messages and last_continuous_block_idx is not None:
+    if filtered_messages:
         first_cached_idx = filtered_messages[0][0]
-        last_cached_idx = filtered_messages[last_continuous_block_idx][0]
+        # Last-write-wins: extend the boundary through the last marked
+        # message, not just the first contiguous run.
+        last_cached_idx = filtered_messages[-1][0]
 
         cached_messages = messages[first_cached_idx : last_cached_idx + 1]
         non_cached_messages = messages[:first_cached_idx] + messages[last_cached_idx + 1 :]
