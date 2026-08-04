@@ -10825,3 +10825,123 @@ def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
         ProxyStartupEvent._warn_if_mock_testing_params_enabled(general_settings={})
 
     assert MOCK_TESTING_CONFIG_KEY not in caplog.text
+
+
+def _mock_startup_prisma_client(health_check_error=None, connect_error=None):
+    client = MagicMock()
+    client.connect = AsyncMock(side_effect=connect_error)
+    client.db.start_token_refresh_task = AsyncMock()
+    client.check_view_exists = AsyncMock()
+    client._set_spend_logs_row_count_in_proxy_state = AsyncMock()
+    client.start_db_health_watchdog_task = AsyncMock()
+    client.health_check = AsyncMock(side_effect=health_check_error)
+    return client
+
+
+async def _run_setup_prisma_client(mock_client):
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    with patch.object(proxy_server_module, "PrismaClient", return_value=mock_client):
+        result = await ProxyStartupEvent._setup_prisma_client(
+            database_url="postgresql://litellm:litellm@localhost:5432/litellm",
+            proxy_logging_obj=MagicMock(),
+            user_api_key_cache=DualCache(),
+        )
+    await asyncio.sleep(0.05)
+    return result
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_retains_connected_client_when_startup_health_check_fails(
+    monkeypatch,
+):
+    """A transient failure of the startup ``SELECT 1`` must not discard a client
+    whose ``connect()`` already succeeded.
+
+    Discarding it assigns ``None`` to the module-level ``prisma_client`` for the
+    life of the process, so a database that came back a second later is never
+    used again until the proxy is restarted."""
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "False")
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+
+    mock_client = _mock_startup_prisma_client(
+        health_check_error=httpx.ReadTimeout("startup health check timed out")
+    )
+    result = await _run_setup_prisma_client(mock_client)
+
+    assert mock_client.connect.await_count == 1
+    assert mock_client.health_check.await_count == 1
+    assert result is mock_client
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_arms_health_watchdog_before_startup_health_check(
+    monkeypatch,
+):
+    """The health watchdog is the only thing that reconnects a dropped DB, so it
+    has to be armed before the startup health check can fail.
+
+    Armed after, the single failure it exists to recover from is exactly the one
+    that skips it, and recovery never happens."""
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "False")
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+
+    mock_client = _mock_startup_prisma_client(
+        health_check_error=httpx.ReadTimeout("startup health check timed out")
+    )
+    call_order = MagicMock()
+    call_order.attach_mock(mock_client.start_db_health_watchdog_task, "watchdog")
+    call_order.attach_mock(mock_client.health_check, "health_check")
+
+    await _run_setup_prisma_client(mock_client)
+
+    assert mock_client.start_db_health_watchdog_task.await_count == 1
+    assert [call[0] for call in call_order.mock_calls] == ["watchdog", "health_check"]
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_raises_when_db_unavailable_is_not_allowed(monkeypatch):
+    """Without ``allow_requests_on_db_unavailable`` a failed startup health check
+    must still hard-fail startup. Retaining the client is a fallback for
+    operators who opted into serving traffic without a database, never a way to
+    boot a proxy whose DB never answered."""
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "False")
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": False},
+    )
+
+    mock_client = _mock_startup_prisma_client(
+        health_check_error=httpx.ReadTimeout("startup health check timed out")
+    )
+    with pytest.raises(httpx.ReadTimeout):
+        await _run_setup_prisma_client(mock_client)
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_returns_none_when_connect_itself_fails(monkeypatch):
+    """Retaining only ever applies to a client that connected. If ``connect()``
+    failed there is no usable client and no watchdog to recover it, so the caller
+    must still get ``None``."""
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "False")
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+
+    mock_client = _mock_startup_prisma_client(connect_error=httpx.ConnectError("connection refused"))
+    result = await _run_setup_prisma_client(mock_client)
+
+    assert result is None
+    assert mock_client.start_db_health_watchdog_task.await_count == 0
+    assert mock_client.health_check.await_count == 0

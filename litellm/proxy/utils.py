@@ -4297,7 +4297,7 @@ class PrismaClient:
             import traceback
 
             error_msg: Final = f"LiteLLM Prisma Client Exception connect(): {e}"
-            print_verbose(error_msg)
+            verbose_proxy_logger.warning(error_msg)
             error_traceback: Final = error_msg + "\n" + traceback.format_exc()
             end_time: Final = time.time()
             _duration: Final = end_time - start_time
@@ -5015,8 +5015,8 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg: Final = f"LiteLLM Prisma Client Exception disconnect(): {e}"
-            print_verbose(error_msg)
+            error_msg: Final = f"LiteLLM Prisma Client Exception health_check(): {e}"
+            verbose_proxy_logger.warning(error_msg)
             error_traceback: Final = error_msg + "\n" + traceback.format_exc()
             end_time: Final = time.time()
             _duration: Final = end_time - start_time
