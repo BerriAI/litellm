@@ -3,7 +3,7 @@
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -68,7 +68,7 @@ def _key_is_active(key_obj: "UserAPIKeyAuth") -> bool:
     """
     if key_obj.blocked is True:
         return False
-    expires = key_obj.expires
+    expires: Final = key_obj.expires
     if expires is not None:
         if isinstance(expires, datetime):
             expiry = expires
@@ -125,7 +125,7 @@ async def _resolve_active_litellm_key(request: Request) -> "_ResolvedKey | _KeyR
     fault, a ``ProxyException`` / ``HTTPException`` from ``get_key_object`` is an unknown or invalid key,
     a database-service-unavailable error is a retryable outage, and anything else is an unexpected
     gateway fault."""
-    token = _litellm_key_from_request(request)
+    token: Final = _litellm_key_from_request(request)
     if not token:
         return "no_active_key"
     from litellm.proxy._types import hash_token  # noqa: PLC0415  # inline import avoids a module-load circular import
@@ -160,7 +160,7 @@ async def _reload_active_key_by_hash(key_hash: str) -> "_ResolvedKey | _KeyResol
     if prisma_client is None:
         return "unresolvable"
     try:
-        key_obj = await get_key_object(
+        key_obj: Final = await get_key_object(
             hashed_token=key_hash,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -209,7 +209,7 @@ async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | No
     if prisma_client is None:
         return "unresolvable"
     try:
-        user_object = await get_user_object(
+        user_object: Final = await get_user_object(
             user_id=user_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -248,7 +248,7 @@ async def _key_owner_scim_deactivated(key: "UserAPIKeyAuth") -> bool:
     if prisma_client is None:
         return False
     try:
-        owner = await get_user_object(
+        owner: Final = await get_user_object(
             user_id=key.user_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -269,7 +269,7 @@ async def _revalidate_active_subject(identity: "EnvelopeIdentity") -> "_KeyResol
     deactivated or deleted user all fail closed to ``no_active_key``."""
     match identity.subject_type:
         case "key_hash":
-            reloaded = await _reload_active_key_by_hash(identity.subject)
+            reloaded: Final = await _reload_active_key_by_hash(identity.subject)
             if not isinstance(reloaded, _ResolvedKey):
                 return reloaded
             if await _key_owner_scim_deactivated(reloaded.key):
@@ -287,7 +287,7 @@ async def _extract_user_id_from_request(request: Request) -> str | None:
     (including a transient DB outage) collapses to ``None`` here and the caller simply skips the store;
     the bridge mint, which must status those outcomes differently, consumes
     :func:`_resolve_active_litellm_key` directly."""
-    resolved = await _resolve_active_litellm_key(request)
+    resolved: Final = await _resolve_active_litellm_key(request)
     if not isinstance(resolved, _ResolvedKey):
         return None
     return _active_key_user_id(resolved.key)
@@ -315,8 +315,8 @@ def _classify_upstream_lifetime(raw_expires_in: object) -> "int | Literal['unspe
     if raw_expires_in is None or isinstance(raw_expires_in, bool) or not isinstance(raw_expires_in, (int, float, str)):
         return "unspecified"
     try:
-        numeric = float(raw_expires_in)
-        seconds = int(numeric)
+        numeric: Final = float(raw_expires_in)
+        seconds: Final = int(numeric)
     except (ValueError, TypeError, OverflowError):
         return "unspecified"
     if numeric <= 0:
@@ -337,14 +337,14 @@ def _bridge_grant_from_token_response(token_response: object) -> "UpstreamTokenG
 
     if not isinstance(token_response, dict):
         return "no_access_token"
-    access = token_response.get("access_token")
+    access: Final = token_response.get("access_token")
     if not isinstance(access, str) or not access:
         return "no_access_token"
-    lifetime = _classify_upstream_lifetime(token_response.get("expires_in"))
+    lifetime: Final = _classify_upstream_lifetime(token_response.get("expires_in"))
     if lifetime == "expired":
         return "expired_lifetime"
-    token_type = token_response.get("token_type")
-    scope = token_response.get("scope")
+    token_type: Final = token_response.get("token_type")
+    scope: Final = token_response.get("scope")
     return UpstreamTokenGrant(
         access_token=SecretStr(access),
         token_type=token_type if isinstance(token_type, str) and token_type else "Bearer",
@@ -518,11 +518,11 @@ async def _prepare_bridge_mint(
 
     if not master_key:
         return "not_configured"
-    keys = envelope_keys_from_master_key(master_key)
+    keys: Final = envelope_keys_from_master_key(master_key)
     if bridge_identity is not None:
         identity = user_identity(server_id=mcp_server.server_id, user_id=bridge_identity.litellm_user_id)
         return _BridgeMintReady(identity=identity, keys=keys)
-    resolved = await _resolve_active_litellm_key(request)
+    resolved: Final = await _resolve_active_litellm_key(request)
     if not isinstance(resolved, _ResolvedKey):
         return _key_resolution_failure_to_mint_error(resolved)
     identity = key_hash_identity(server_id=mcp_server.server_id, key_hash=resolved.key_hash)
@@ -584,11 +584,11 @@ async def _prepare_bridge_refresh(
         return "not_configured"
     if not refresh_value:
         return "invalid_refresh"
-    keys = envelope_keys_from_master_key(master_key)
-    opened = open_bridge_refresh_envelope(refresh_value, keys, datetime.now(timezone.utc), mcp_server.server_id)
+    keys: Final = envelope_keys_from_master_key(master_key)
+    opened: Final = open_bridge_refresh_envelope(refresh_value, keys, datetime.now(timezone.utc), mcp_server.server_id)
     if not isinstance(opened, BridgeRefreshOpened):
         return "invalid_refresh"
-    failure = await _revalidate_active_subject(opened.identity)
+    failure: Final = await _revalidate_active_subject(opened.identity)
     if failure is not None:
         return _refresh_key_failure_to_mint_error(failure)
     return _BridgeRefreshReady(
@@ -616,17 +616,17 @@ def _finish_bridge_mint(
         UpstreamTokenGrant,
     )
 
-    grant = _bridge_grant_from_token_response(token_response)
+    grant: Final = _bridge_grant_from_token_response(token_response)
     if not isinstance(grant, UpstreamTokenGrant):
         return _upstream_rejection_to_mint_error(grant)
-    sealed = build_bridge_token_response(ready.identity, grant, ready.keys, now)
+    sealed: Final = build_bridge_token_response(ready.identity, grant, ready.keys, now)
     if not isinstance(sealed, SealedEnvelope):
         return "too_large"
     # Report expires_in from the JWT's own second-truncated exp, rounding the elapsed portion up, so the
     # client is never told the bearer lives past the point admission (which uses that exp) rejects it.
-    expires_in = max(0, int(sealed.expires_at.timestamp()) - math.ceil(now.timestamp()))
-    refresh_envelope = _mint_refresh_envelope_value(ready.identity, token_response, ready.keys, now, mcp_server)
-    body = {
+    expires_in: Final = max(0, int(sealed.expires_at.timestamp()) - math.ceil(now.timestamp()))
+    refresh_envelope: Final = _mint_refresh_envelope_value(ready.identity, token_response, ready.keys, now, mcp_server)
+    body: Final = {
         "access_token": sealed.token.get_secret_value(),
         "token_type": "Bearer",
         "expires_in": expires_in,
@@ -652,13 +652,13 @@ def _upstream_refresh_credential(token_response: object) -> "RefreshCredential |
 
     if not isinstance(token_response, dict):
         return None
-    refresh = token_response.get("refresh_token")
+    refresh: Final = token_response.get("refresh_token")
     if not isinstance(refresh, str) or not refresh:
         return None
-    lifetime = _classify_upstream_lifetime(token_response.get("refresh_expires_in"))
+    lifetime: Final = _classify_upstream_lifetime(token_response.get("refresh_expires_in"))
     if lifetime == "expired":
         return None
-    scope = token_response.get("scope")
+    scope: Final = token_response.get("scope")
     return RefreshCredential(
         refresh_token=SecretStr(refresh),
         scope=scope if isinstance(scope, str) and scope else None,
@@ -680,10 +680,10 @@ def _mint_refresh_envelope_value(
         SealedEnvelope,
     )
 
-    refresh_credential = _upstream_refresh_credential(token_response)
+    refresh_credential: Final = _upstream_refresh_credential(token_response)
     if refresh_credential is None:
         return None
-    sealed = build_bridge_refresh_token_response(identity, refresh_credential, keys, now)
+    sealed: Final = build_bridge_refresh_token_response(identity, refresh_credential, keys, now)
     if isinstance(sealed, SealedEnvelope):
         return sealed.token.get_secret_value()
     verbose_logger.warning(

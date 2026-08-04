@@ -3,7 +3,7 @@ import json
 import time
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
-from typing import Literal, Protocol, TypeVar
+from typing import Final, Literal, Protocol, TypeVar
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -210,11 +210,11 @@ class ResetBudgetJob:
         matching row's entry or entries in ``user_api_key_cache`` are dropped so
         cached spend cannot stay pinned above the zeroed DB row after a reset.
         """
-        budget_ids = [b.budget_id for b in budgets_to_reset if b.budget_id is not None]
+        budget_ids: Final = [b.budget_id for b in budgets_to_reset if b.budget_id is not None]
         if not budget_ids:
             return
 
-        where: dict[str, object] = {"budget_id": {"in": budget_ids}}
+        where: Final[dict[str, object]] = {"budget_id": {"in": budget_ids}}
         if extra_where:
             where.update(extra_where)
 
@@ -224,7 +224,7 @@ class ResetBudgetJob:
             rows = ()
             verbose_proxy_logger.warning("Failed to fetch %s for counter invalidation: %s", log_subject, e)
 
-        update_result = await table.update_many(where=where, data={"spend": 0})
+        update_result: Final = await table.update_many(where=where, data={"spend": 0})
 
         for row in rows:
             await self._invalidate_spend_counter(counter_key_fn(row))
@@ -305,12 +305,12 @@ class ResetBudgetJob:
         The corresponding Budget duration is also updated.
         """
 
-        now = datetime.now(timezone.utc)
-        start_time = time.time()
+        now: Final = datetime.now(timezone.utc)
+        start_time: Final = time.time()
         endusers_to_reset: list[LiteLLM_EndUserTable] | None = None
         budgets_to_reset: list[LiteLLM_BudgetTableFull] | None = None
-        updated_endusers: list[LiteLLM_EndUserTable] = []
-        failed_endusers = []
+        updated_endusers: Final[list[LiteLLM_EndUserTable]] = []
+        failed_endusers: Final = []
         try:
             budgets_to_reset = await self.prisma_client.get_data(
                 table_name="budget", query_type="find_all", reset_at=now
@@ -339,7 +339,7 @@ class ResetBudgetJob:
                 # users are enforced in-memory but never had budget_id
                 # persisted, so the query above misses them.
                 if litellm.max_end_user_budget_id is not None and litellm.max_end_user_budget_id in budget_ids_to_reset:
-                    default_budget_endusers = await self._get_endusers_with_no_budget_id()
+                    default_budget_endusers: Final = await self._get_endusers_with_no_budget_id()
                     if default_budget_endusers:
                         if endusers_to_reset is None:
                             endusers_to_reset = default_budget_endusers
@@ -436,8 +436,8 @@ class ResetBudgetJob:
         rely on the default budget (litellm.max_end_user_budget_id) applied
         in-memory during auth checks.
         """
-        table: ReadOnlyTable = EndUserRepository(self.prisma_client).table
-        rows = await table.find_many(
+        table: Final[ReadOnlyTable] = EndUserRepository(self.prisma_client).table
+        rows: Final = await table.find_many(
             where={
                 "budget_id": None,
                 "spend": {"gt": 0},
@@ -492,16 +492,16 @@ class ResetBudgetJob:
 
         Catches Exceptions and logs them
         """
-        now = datetime.utcnow()
-        start_time = time.time()
+        now: Final = datetime.utcnow()
+        start_time: Final = time.time()
         keys_to_reset: list[LiteLLM_VerificationToken] | None = None
         try:
             keys_to_reset = await self.prisma_client.get_data(
                 table_name="key", query_type="find_all", expires=now, reset_at=now
             )
             verbose_proxy_logger.debug("Keys to reset %s", json.dumps(keys_to_reset, indent=4, default=str))
-            updated_keys: list[LiteLLM_VerificationToken] = []
-            failed_keys = []
+            updated_keys: Final[list[LiteLLM_VerificationToken]] = []
+            failed_keys: Final = []
             if keys_to_reset is not None and len(keys_to_reset) > 0:
                 for key in keys_to_reset:
                     try:
@@ -570,13 +570,13 @@ class ResetBudgetJob:
         """
         Resets the budget for all LiteLLM Internal Users if their budget has expired
         """
-        now = datetime.utcnow()
-        start_time = time.time()
+        now: Final = datetime.utcnow()
+        start_time: Final = time.time()
         users_to_reset: list[LiteLLM_UserTable] | None = None
         try:
             users_to_reset = await self.prisma_client.get_data(table_name="user", query_type="find_all", reset_at=now)
-            updated_users: list[LiteLLM_UserTable] = []
-            failed_users = []
+            updated_users: Final[list[LiteLLM_UserTable]] = []
+            failed_users: Final = []
             if users_to_reset is not None and len(users_to_reset) > 0:
                 for user in users_to_reset:
                     try:
@@ -651,13 +651,13 @@ class ResetBudgetJob:
         """
         Resets the budget for all LiteLLM Internal Teams if their budget has expired
         """
-        now = datetime.utcnow()
-        start_time = time.time()
+        now: Final = datetime.utcnow()
+        start_time: Final = time.time()
         teams_to_reset: list[LiteLLM_TeamTable] | None = None
         try:
             teams_to_reset = await self.prisma_client.get_data(table_name="team", query_type="find_all", reset_at=now)
-            updated_teams: list[LiteLLM_TeamTable] = []
-            failed_teams = []
+            updated_teams: Final[list[LiteLLM_TeamTable]] = []
+            failed_teams: Final = []
             if teams_to_reset is not None and len(teams_to_reset) > 0:
                 for team in teams_to_reset:
                     try:
@@ -735,10 +735,10 @@ class ResetBudgetJob:
         reset_settings: BudgetResetSettings,
     ) -> bool:
         """Reset a single budget window if expired. Returns True if the window was reset."""
-        reset_at_str = window.get("reset_at")
+        reset_at_str: Final = window.get("reset_at")
         if not reset_at_str:
             return False
-        reset_at = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).replace(tzinfo=None)
+        reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).replace(tzinfo=None)
         if reset_at > now:
             return False
         spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.0)
@@ -760,7 +760,7 @@ class ResetBudgetJob:
 
         from litellm.proxy.proxy_server import spend_counter_cache
 
-        now = datetime.utcnow()
+        now: Final = datetime.utcnow()
 
         # Note on raw SQL: prisma-client-python does not support null-filtering
         # on `Json?` columns (no DbNull/JsonNull sentinel — see
@@ -770,7 +770,7 @@ class ResetBudgetJob:
 
         # --- Keys ---
         try:
-            key_rows = await self.prisma_client.db.query_raw(
+            key_rows: Final = await self.prisma_client.db.query_raw(
                 'SELECT token, budget_limits FROM "LiteLLM_VerificationToken" WHERE budget_limits IS NOT NULL'
             )
             for row in key_rows:
@@ -799,7 +799,7 @@ class ResetBudgetJob:
 
         # --- Teams ---
         try:
-            team_rows = await self.prisma_client.db.query_raw(
+            team_rows: Final = await self.prisma_client.db.query_raw(
                 'SELECT team_id, budget_limits FROM "LiteLLM_TeamTable" WHERE budget_limits IS NOT NULL'
             )
             for row in team_rows:

@@ -2,7 +2,7 @@ import json
 import os
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -18,10 +18,10 @@ from .common_utils import (
 )
 
 # Constants (default values — overridable via environment variables at call time)
-DEFAULT_GITHUB_CLIENT_ID = "Iv1.b507a08c87ecfe98"
-DEFAULT_GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
-DEFAULT_GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
-DEFAULT_GITHUB_API_KEY_URL = "https://api.github.com/copilot_internal/v2/token"
+DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
+DEFAULT_GITHUB_DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
+DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_token"
+DEFAULT_GITHUB_API_KEY_URL: Final = "https://api.github.com/copilot_internal/v2/token"
 
 
 class Authenticator:
@@ -108,7 +108,7 @@ class Authenticator:
             api_key_info = self._refresh_api_key()
             with open(self.api_key_file, "w") as f:
                 json.dump(api_key_info, f)
-            token = api_key_info.get("token")
+            token: Final = api_key_info.get("token")
             if token:
                 return token
             else:
@@ -137,9 +137,9 @@ class Authenticator:
         """
         try:
             with open(self.api_key_file, "r") as f:
-                api_key_info = json.load(f)
-                endpoints = api_key_info.get("endpoints", {})
-                api_endpoint = endpoints.get("api")
+                api_key_info: Final = json.load(f)
+                endpoints: Final = api_key_info.get("endpoints", {})
+                api_endpoint: Final = endpoints.get("api")
                 return api_endpoint
         except (OSError, json.JSONDecodeError, KeyError) as e:
             verbose_logger.warning("Error reading API endpoint from file: %s", e)
@@ -155,11 +155,11 @@ class Authenticator:
         Raises:
             RefreshAPIKeyError: If unable to refresh the API key.
         """
-        access_token = self.get_access_token()
-        headers = self._get_github_headers(access_token)
-        api_key_url = os.getenv("GITHUB_COPILOT_API_KEY_URL", DEFAULT_GITHUB_API_KEY_URL)
+        access_token: Final = self.get_access_token()
+        headers: Final = self._get_github_headers(access_token)
+        api_key_url: Final = os.getenv("GITHUB_COPILOT_API_KEY_URL", DEFAULT_GITHUB_API_KEY_URL)
 
-        max_retries = 3
+        max_retries: Final = 3
         for attempt in range(max_retries):
             try:
                 sync_client = _get_httpx_client()
@@ -197,7 +197,7 @@ class Authenticator:
         Returns:
             Dict[str, str]: Headers for GitHub API requests.
         """
-        headers = {
+        headers: Final = {
             "accept": "application/json",
             "editor-version": "vscode/1.85.1",
             "editor-plugin-version": "copilot/1.155.0",
@@ -224,18 +224,18 @@ class Authenticator:
             GetDeviceCodeError: If unable to get a device code.
         """
         try:
-            sync_client = _get_httpx_client()
-            device_code_url = os.getenv("GITHUB_COPILOT_DEVICE_CODE_URL", DEFAULT_GITHUB_DEVICE_CODE_URL)
-            client_id = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
-            resp = sync_client.post(
+            sync_client: Final = _get_httpx_client()
+            device_code_url: Final = os.getenv("GITHUB_COPILOT_DEVICE_CODE_URL", DEFAULT_GITHUB_DEVICE_CODE_URL)
+            client_id: Final = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
+            resp: Final = sync_client.post(
                 device_code_url,
                 headers=self._get_github_headers(),
                 json={"client_id": client_id, "scope": "read:user"},
             )
             resp.raise_for_status()
-            resp_json = resp.json()
+            resp_json: Final = resp.json()
 
-            required_fields = ["device_code", "user_code", "verification_uri"]
+            required_fields: Final = ["device_code", "user_code", "verification_uri"]
             if not all(field in resp_json for field in required_fields):
                 verbose_logger.error("Response missing required fields: %s", resp_json)
                 raise GetDeviceCodeError(
@@ -276,11 +276,11 @@ class Authenticator:
         Raises:
             GetAccessTokenError: If unable to get an access token.
         """
-        sync_client = _get_httpx_client()
-        max_attempts = 12  # 1 minute (12 * 5 seconds)
+        sync_client: Final = _get_httpx_client()
+        max_attempts: Final = 12  # 1 minute (12 * 5 seconds)
 
-        access_token_url = os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL)
-        client_id = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
+        access_token_url: Final = os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL)
+        client_id: Final = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
 
         for attempt in range(max_attempts):
             try:
@@ -340,11 +340,11 @@ class Authenticator:
             GetDeviceCodeError: If unable to get a device code.
             GetAccessTokenError: If unable to get an access token.
         """
-        device_code_info = self._get_device_code()
+        device_code_info: Final = self._get_device_code()
 
-        device_code = device_code_info["device_code"]
-        user_code = device_code_info["user_code"]
-        verification_uri = device_code_info["verification_uri"]
+        device_code: Final = device_code_info["device_code"]
+        user_code: Final = device_code_info["user_code"]
+        verification_uri: Final = device_code_info["verification_uri"]
 
         print(  # noqa: T201
             f"Please visit {verification_uri} and enter code {user_code} to authenticate.",

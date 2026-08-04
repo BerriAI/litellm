@@ -8,6 +8,8 @@ Route patterns may contain placeholders like {agent_id}, {model}, {batch_id}; th
 match a single path segment when resolving call types for a concrete path.
 """
 
+from typing import Final
+
 from litellm.types.utils import API_ROUTE_TO_CALL_TYPES, CallTypes
 
 
@@ -16,8 +18,8 @@ def _route_matches_pattern(route: str, pattern: str) -> bool:
     Return True if the concrete route matches the pattern.
     Pattern segments like {param} match any single path segment.
     """
-    route_parts = route.strip("/").split("/")
-    pattern_parts = pattern.strip("/").split("/")
+    route_parts: Final = route.strip("/").split("/")
+    pattern_parts: Final = pattern.strip("/").split("/")
     if len(route_parts) != len(pattern_parts):
         return False
     for r, p in zip(route_parts, pattern_parts):
@@ -41,7 +43,7 @@ def get_call_types_for_route(route: str) -> list[CallTypes] | None:
     Returns:
         List of CallTypes for that route, or None if route not found
     """
-    exact = API_ROUTE_TO_CALL_TYPES.get(route, None)
+    exact: Final = API_ROUTE_TO_CALL_TYPES.get(route, None)
     if exact is not None:
         return exact
     for pattern, call_types in API_ROUTE_TO_CALL_TYPES.items():
@@ -60,7 +62,7 @@ def get_routes_for_call_type(call_type: CallTypes) -> list:
     Returns:
         List of routes that use this CallType
     """
-    routes = []
+    routes: Final = []
     for route, types in API_ROUTE_TO_CALL_TYPES.items():
         if call_type in types:
             routes.append(route)

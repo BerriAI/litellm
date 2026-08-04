@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -33,7 +33,7 @@ else:
 # always determined by the request URL path (vector_store_id / vertex_engine_id),
 # so allowing them per request could silently redirect the search to a different
 # target. Rejected in both data-store and engine/app modes.
-VERTEX_SEARCH_TARGET_SELECTING_FIELDS = frozenset(
+VERTEX_SEARCH_TARGET_SELECTING_FIELDS: Final = frozenset(
     {
         "branch",
         "servingConfig",
@@ -45,9 +45,9 @@ VERTEX_SEARCH_TARGET_SELECTING_FIELDS = frozenset(
 # via extra_body, derived from the TypedDicts so the type is the source of truth.
 # Engine/app mode is a superset (adds dataStoreSpecs, numResultsPerDataStore),
 # since an app fans out across multiple member data stores.
-VERTEX_SEARCH_DATASTORE_EXTRA_BODY_FIELDS = frozenset(VertexSearchDataStoreExtraBody.__annotations__)
+VERTEX_SEARCH_DATASTORE_EXTRA_BODY_FIELDS: Final = frozenset(VertexSearchDataStoreExtraBody.__annotations__)
 
-VERTEX_SEARCH_ENGINE_EXTRA_BODY_FIELDS = frozenset(VertexSearchEngineExtraBody.__annotations__)
+VERTEX_SEARCH_ENGINE_EXTRA_BODY_FIELDS: Final = frozenset(VertexSearchEngineExtraBody.__annotations__)
 
 
 class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
@@ -87,10 +87,10 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         (``dataStoreSpecs``, ``numResultsPerDataStore``) are rejected in
         data-store mode where they are meaningless.
         """
-        supported = cls.get_supported_extra_body_fields(is_engine=is_engine)
-        filtered = {key: value for key, value in extra_body.items() if value is not None}
+        supported: Final = cls.get_supported_extra_body_fields(is_engine=is_engine)
+        filtered: Final = {key: value for key, value in extra_body.items() if value is not None}
 
-        target_selecting = set(filtered) & VERTEX_SEARCH_TARGET_SELECTING_FIELDS
+        target_selecting: Final = set(filtered) & VERTEX_SEARCH_TARGET_SELECTING_FIELDS
         if target_selecting:
             raise BadRequestError(
                 message=(
@@ -102,9 +102,9 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 llm_provider="vertex_ai",
             )
 
-        unsupported = set(filtered) - supported
+        unsupported: Final = set(filtered) - supported
         if unsupported:
-            mode = "engine/app" if is_engine else "data store"
+            mode: Final = "engine/app" if is_engine else "data store"
             raise BadRequestError(
                 message=(
                     f"Unsupported Vertex AI Search extra_body fields {sorted(unsupported)} "
@@ -118,8 +118,8 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
     def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         # Get credentials and project info
-        vertex_credentials = self.get_vertex_ai_credentials(dict(litellm_params))
-        vertex_project = self.get_vertex_ai_project(dict(litellm_params))
+        vertex_credentials: Final = self.get_vertex_ai_credentials(dict(litellm_params))
+        vertex_project: Final = self.get_vertex_ai_project(dict(litellm_params))
 
         # Get access token using the base class method
         access_token, project_id = self._ensure_access_token(
@@ -146,7 +146,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         Validate and set up authentication for Vertex AI RAG API
         """
         litellm_params = litellm_params or GenericLiteLLMParams()
-        auth_headers = self.get_auth_credentials(litellm_params.model_dump())
+        auth_headers: Final = self.get_auth_credentials(litellm_params.model_dump())
         headers.update(auth_headers.get("headers", {}))
         return headers
 
@@ -167,25 +167,25 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         if api_base:
             return api_base.rstrip("/")
 
-        vertex_location = self.get_vertex_ai_location(litellm_params)
-        vertex_project = self.get_vertex_ai_project(litellm_params)
-        collection_id = litellm_params.get("vertex_collection_id") or "default_collection"
-        encoded_collection_id = encode_url_path_segment(collection_id, field_name="vertex_collection_id")
-        base = (
+        vertex_location: Final = self.get_vertex_ai_location(litellm_params)
+        vertex_project: Final = self.get_vertex_ai_project(litellm_params)
+        collection_id: Final = litellm_params.get("vertex_collection_id") or "default_collection"
+        encoded_collection_id: Final = encode_url_path_segment(collection_id, field_name="vertex_collection_id")
+        base: Final = (
             f"https://discoveryengine.googleapis.com/v1/"
             f"projects/{vertex_project}/locations/{vertex_location}/"
             f"collections/{encoded_collection_id}"
         )
 
-        engine_id = litellm_params.get("vertex_engine_id")
+        engine_id: Final = litellm_params.get("vertex_engine_id")
         if engine_id:
-            encoded_engine_id = encode_url_path_segment(engine_id, field_name="vertex_engine_id")
+            encoded_engine_id: Final = encode_url_path_segment(engine_id, field_name="vertex_engine_id")
             return f"{base}/engines/{encoded_engine_id}/servingConfigs/default_serving_config"
 
-        datastore_id = litellm_params.get("vector_store_id")
+        datastore_id: Final = litellm_params.get("vector_store_id")
         if not datastore_id:
             raise ValueError("vector_store_id is required when vertex_engine_id is not set")
-        encoded_datastore_id = encode_url_path_segment(datastore_id, field_name="vector_store_id")
+        encoded_datastore_id: Final = encode_url_path_segment(datastore_id, field_name="vector_store_id")
         return f"{base}/dataStores/{encoded_datastore_id}/servingConfigs/default_config"
 
     def transform_search_vector_store_request(
@@ -218,12 +218,12 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         if isinstance(query, list):
             query = " ".join(query)
 
-        url = f"{api_base}:search"
+        url: Final = f"{api_base}:search"
 
-        is_engine = bool(litellm_params.get("vertex_engine_id"))
+        is_engine: Final = bool(litellm_params.get("vertex_engine_id"))
 
-        request_body: dict[str, Any] = {"query": query, "pageSize": 10}
-        max_num_results = vector_store_search_optional_params.get("max_num_results")
+        request_body: Final[dict[str, Any]] = {"query": query, "pageSize": 10}
+        max_num_results: Final = vector_store_search_optional_params.get("max_num_results")
         if max_num_results is not None:
             request_body["pageSize"] = max_num_results
         if isinstance(extra_body, dict):
@@ -256,13 +256,13 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         }
         """
         try:
-            response_json = response.json()
+            response_json: Final = response.json()
 
             # Extract results from Vertex AI Search API response
-            results = response_json.get("results", [])
+            results: Final = response_json.get("results", [])
 
             # Transform results to standard format
-            search_results: list[VectorStoreSearchResult] = []
+            search_results: Final[list[VectorStoreSearchResult]] = []
             for result in results:
                 document = result.get("document", {})
                 derived_data = document.get("derivedStructData", {})
@@ -356,9 +356,9 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         self,
         response: VectorStoreSearchResponse,
     ) -> tuple[float, float]:
-        model_info = get_model_info(
+        model_info: Final = get_model_info(
             model="vertex_ai/search_api",
         )
 
-        input_cost_per_query = model_info.get("input_cost_per_query") or 0.0
+        input_cost_per_query: Final = model_info.get("input_cost_per_query") or 0.0
         return input_cost_per_query, 0.0

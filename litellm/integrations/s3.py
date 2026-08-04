@@ -2,7 +2,7 @@
 #    On success + failure, log events to Supabase
 
 from datetime import datetime
-from typing import cast
+from typing import Final, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -90,13 +90,13 @@ class S3Logger:
 
             # construct payload to send to s3
             # follows the same params as langfuse.py
-            litellm_params = kwargs.get("litellm_params", {})
-            metadata = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
+            litellm_params: Final = kwargs.get("litellm_params", {})
+            metadata: Final = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
 
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
             # we clean out all extra litellm metadata params before logging
-            clean_metadata = {}
+            clean_metadata: Final = {}
             if isinstance(metadata, dict):
                 for key, value in metadata.items():
                     # clean litellm metadata before logging
@@ -111,7 +111,7 @@ class S3Logger:
                         clean_metadata[key] = value
 
             # Ensure everything in the payload is converted to str
-            payload: StandardLoggingPayload | None = cast(
+            payload: Final[StandardLoggingPayload | None] = cast(
                 StandardLoggingPayload | None,
                 kwargs.get("standard_logging_object", None),
             )
@@ -119,31 +119,31 @@ class S3Logger:
             if payload is None:
                 return
 
-            team_alias = payload["metadata"].get("user_api_key_team_alias")
+            team_alias: Final = payload["metadata"].get("user_api_key_team_alias")
 
             team_alias_prefix = ""
             if litellm.enable_preview_features and self.s3_use_team_prefix and team_alias is not None:
                 team_alias_prefix = f"{team_alias}/"
 
-            s3_file_name = litellm.utils.get_logging_id(start_time, payload) or ""
-            s3_object_key = get_s3_object_key(
+            s3_file_name: Final = litellm.utils.get_logging_id(start_time, payload) or ""
+            s3_object_key: Final = get_s3_object_key(
                 cast(str | None, self.s3_path) or "",
                 team_alias_prefix,
                 start_time,
                 s3_file_name,
             )
 
-            s3_object_download_filename = (
+            s3_object_download_filename: Final = (
                 "time-" + start_time.strftime("%Y-%m-%dT%H-%M-%S-%f") + "_" + payload["id"] + ".json"
             )
 
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-            payload_str = safe_dumps(payload)
+            payload_str: Final = safe_dumps(payload)
 
             print_verbose(f"\ns3 Logger - Logging payload = {payload_str}")
 
-            sse_params = {
+            sse_params: Final = {
                 key: value
                 for key, value in {
                     "ServerSideEncryption": self.s3_server_side_encryption,
@@ -152,7 +152,7 @@ class S3Logger:
                 if value
             }
 
-            response = self.s3_client.put_object(
+            response: Final = self.s3_client.put_object(
                 Bucket=self.bucket_name,
                 Key=s3_object_key,
                 Body=payload_str,
@@ -184,9 +184,9 @@ def resolve_sse_params(
     server_side_encryption: str | None,
     sse_kms_key_id: str | None,
 ) -> tuple[str | None, str | None]:
-    valid_sse = _validated_sse_value("s3_server_side_encryption", server_side_encryption)
-    valid_key_id = _validated_sse_value("s3_sse_kms_key_id", sse_kms_key_id)
-    algorithm = valid_sse or ("aws:kms" if valid_key_id else None)
+    valid_sse: Final = _validated_sse_value("s3_server_side_encryption", server_side_encryption)
+    valid_key_id: Final = _validated_sse_value("s3_sse_kms_key_id", sse_kms_key_id)
+    algorithm: Final = valid_sse or ("aws:kms" if valid_key_id else None)
     if algorithm is None:
         return None, None
     if valid_key_id and not algorithm.startswith("aws:kms"):
@@ -204,7 +204,7 @@ def get_s3_object_key(
     start_time: datetime,
     s3_file_name: str,
 ) -> str:
-    sanitized_s3_file_name = s3_file_name.replace("/", "_")
+    sanitized_s3_file_name: Final = s3_file_name.replace("/", "_")
     s3_object_key = (
         (s3_path.rstrip("/") + "/" if s3_path else "")
         + prefix

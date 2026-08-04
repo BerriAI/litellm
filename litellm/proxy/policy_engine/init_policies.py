@@ -6,7 +6,7 @@ Configuration structure:
 - policy_attachments: Define WHERE policies apply (teams, keys, models)
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
@@ -18,10 +18,10 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 # ANSI color codes for terminal output
-_green_color_code = "\033[92m"
-_blue_color_code = "\033[94m"
-_yellow_color_code = "\033[93m"
-_reset_color_code = "\033[0m"
+_green_color_code: Final = "\033[92m"
+_blue_color_code: Final = "\033[94m"
+_yellow_color_code: Final = "\033[93m"
+_reset_color_code: Final = "\033[0m"
 
 
 def _print_policies_on_startup(
@@ -130,14 +130,14 @@ async def init_policies(
     _print_policies_on_startup(policies_config, policy_attachments_config)
 
     # Get the global registries
-    policy_registry = get_policy_registry()
-    attachment_registry = get_attachment_registry()
+    policy_registry: Final = get_policy_registry()
+    attachment_registry: Final = get_attachment_registry()
 
     # Create validator
-    validator = PolicyValidator(prisma_client=prisma_client)
+    validator: Final = PolicyValidator(prisma_client=prisma_client)
 
     # Validate the configuration
-    validation_result = await validator.validate_policy_config(
+    validation_result: Final = await validator.validate_policy_config(
         policies_config,
         validate_db=validate_db,
     )
@@ -157,7 +157,7 @@ async def init_policies(
 
     # Fail if there are errors and fail_on_error is True
     if not validation_result.valid and fail_on_error:
-        error_messages = [f"[{e.policy_name}] {e.message}" for e in validation_result.errors]
+        error_messages: Final = [f"[{e.policy_name}] {e.message}" for e in validation_result.errors]
         raise ValueError(
             f"Policy validation failed with {len(validation_result.errors)} error(s):\n" + "\n".join(error_messages)
         )
@@ -226,15 +226,15 @@ def get_policies_summary() -> dict[str, Any]:
     """
     from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 
-    policy_registry = get_policy_registry()
-    attachment_registry = get_attachment_registry()
+    policy_registry: Final = get_policy_registry()
+    attachment_registry: Final = get_attachment_registry()
 
     if not policy_registry.is_initialized():
         return {"initialized": False, "policies": {}, "attachments": []}
 
-    resolved = PolicyResolver.get_all_resolved_policies()
+    resolved: Final = PolicyResolver.get_all_resolved_policies()
 
-    summary: dict[str, Any] = {
+    summary: Final[dict[str, Any]] = {
         "initialized": True,
         "policy_count": len(resolved),
         "attachment_count": len(attachment_registry.get_all_attachments()),
