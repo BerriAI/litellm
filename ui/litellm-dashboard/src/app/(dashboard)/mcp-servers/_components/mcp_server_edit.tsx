@@ -213,7 +213,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         const browserHeldToken = {
           access_token: token.access_token,
           expires_in: token.expires_in,
-          refresh_token: token.refresh_token,
           token_type: token.token_type,
         };
         setToken(mcpServer.server_id, browserHeldToken, userID);
@@ -969,7 +968,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             const browserHeldToken = {
               access_token: oauthTokenResponse.access_token,
               expires_in: oauthTokenResponse.expires_in,
-              refresh_token: oauthTokenResponse.refresh_token,
               token_type: oauthTokenResponse.token_type,
             };
             setToken(mcpServer.server_id, browserHeldToken, userID);
