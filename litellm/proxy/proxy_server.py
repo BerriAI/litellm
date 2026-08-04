@@ -4364,6 +4364,19 @@ class ProxyConfig:
                 _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
                 premium_user = _license_check.is_premium()
 
+    def _warn_on_misplaced_jwt_keys(self, config: dict) -> tuple[str, ...]:
+        misplaced_jwt_keys = tuple(key for key in ("enable_jwt_auth", "litellm_jwtauth") if key in config)
+        if not misplaced_jwt_keys:
+            return misplaced_jwt_keys
+        verbose_proxy_logger.warning(
+            "Ignoring top-level config key(s) %s. JWT auth settings must live under "
+            "'general_settings' (e.g. general_settings.enable_jwt_auth, "
+            "general_settings.litellm_jwtauth); placed at the top level they are silently "
+            "dropped and JWT auth (and JWT-to-virtual-key mapping) will not engage.",
+            ", ".join(misplaced_jwt_keys),
+        )
+        return misplaced_jwt_keys
+
     async def load_config(self, router: litellm.Router | None, config_file_path: str):
         """
         Load config values into proxy global state
@@ -4400,6 +4413,8 @@ class ProxyConfig:
             config_passthrough_endpoints
 
         config: dict = await self.get_config(config_file_path=config_file_path)
+
+        self._warn_on_misplaced_jwt_keys(config=config)
 
         self._load_environment_variables(config=config)
 
