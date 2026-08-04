@@ -6,6 +6,8 @@ Inherits everything from OpenAIResponsesAPIConfig; subclasses only override
 provider-specific resolution (slug, API key env var, base URL).
 """
 
+from typing import Final
+
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -32,7 +34,7 @@ class OpenAILikeResponsesConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams | None,
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = litellm_params.api_key or get_secret_str("OPENAI_LIKE_API_KEY")
+        api_key: Final = litellm_params.api_key or get_secret_str("OPENAI_LIKE_API_KEY")
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers

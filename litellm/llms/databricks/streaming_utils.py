@@ -1,4 +1,5 @@
 import json
+from typing import Final
 
 import litellm
 from litellm import verbose_logger
@@ -16,7 +17,7 @@ class ModelResponseIterator:
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
-            processed_chunk = litellm.ModelResponseStream(**chunk)
+            processed_chunk: Final = litellm.ModelResponseStream(**chunk)
 
             text = ""
             tool_use: ChatCompletionToolCallChunk | None = None
@@ -28,7 +29,7 @@ class ModelResponseIterator:
             # arrives with an empty ``choices`` list — return usage without
             # indexing ``choices[0]``.
             if len(processed_chunk.choices) == 0:
-                final_usage = getattr(processed_chunk, "usage", None)
+                final_usage: Final = getattr(processed_chunk, "usage", None)
                 return GenericStreamingChunk(
                     text="",
                     tool_use=None,
@@ -74,7 +75,7 @@ class ModelResponseIterator:
                 is_finished = True
                 finish_reason = processed_chunk.choices[0].finish_reason
 
-            usage_chunk: Usage | None = getattr(processed_chunk, "usage", None)
+            usage_chunk: Final[Usage | None] = getattr(processed_chunk, "usage", None)
             if usage_chunk is not None:
                 usage = ChatCompletionUsageBlock(
                     prompt_tokens=usage_chunk.prompt_tokens,
@@ -112,7 +113,7 @@ class ModelResponseIterator:
             chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
             chunk = chunk.strip()
             if len(chunk) > 0:
-                json_chunk = json.loads(chunk)
+                json_chunk: Final = json.loads(chunk)
                 return self.chunk_parser(chunk=json_chunk)
             else:
                 return GenericStreamingChunk(
@@ -159,7 +160,7 @@ class ModelResponseIterator:
             if chunk == "[DONE]":
                 raise StopAsyncIteration
             if len(chunk) > 0:
-                json_chunk = json.loads(chunk)
+                json_chunk: Final = json.loads(chunk)
                 return self.chunk_parser(chunk=json_chunk)
             else:
                 return GenericStreamingChunk(

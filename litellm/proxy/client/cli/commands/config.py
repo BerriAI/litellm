@@ -3,6 +3,7 @@ import os
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Final
 from urllib.parse import urlparse
 
 import click
@@ -10,22 +11,22 @@ from pydantic import TypeAdapter
 
 from .private_json import write_private_json
 
-ALLOWED_CONFIG_KEYS: tuple[str, ...] = ("base_url",)
+ALLOWED_CONFIG_KEYS: Final[tuple[str, ...]] = ("base_url",)
 
-_config_adapter: TypeAdapter[Mapping[str, str]] = TypeAdapter(Mapping[str, str])
+_config_adapter: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
 
 
 def get_config_file_path() -> str:
     """Get the path to the persistent CLI config file"""
-    home_dir = Path.home()
-    config_dir = home_dir / ".litellm"
+    home_dir: Final = Path.home()
+    config_dir: Final = home_dir / ".litellm"
     return str(config_dir / "config.json")
 
 
 def load_config() -> Mapping[str, str]:
     """Load CLI config from file; returns {} if missing or unreadable"""
     try:
-        config_file = get_config_file_path()
+        config_file: Final = get_config_file_path()
     except RuntimeError:
         return {}
     if not os.path.exists(config_file):
@@ -62,13 +63,13 @@ def set_config(key: str, value: str) -> None:
         raise click.UsageError(f"Unknown config key '{key}'. Allowed keys: {', '.join(ALLOWED_CONFIG_KEYS)}")
 
     if key == "base_url":
-        parsed = urlparse(value)
+        parsed: Final = urlparse(value)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise click.UsageError("base_url must be a full http:// or https:// URL including a host")
         if "?" in value or "#" in value:
             raise click.UsageError("base_url must not include a query string or fragment")
 
-    normalized_value = value.rstrip("/")
+    normalized_value: Final = value.rstrip("/")
     save_config({**load_config(), key: normalized_value})
     click.echo(f"Set {key} = {normalized_value} in {get_config_file_path()}")
 
@@ -77,10 +78,10 @@ def set_config(key: str, value: str) -> None:
 @click.argument("key", required=False)
 def get_config(key: str | None) -> None:
     """Print the value of KEY, or all stored config when KEY is omitted"""
-    config = load_config()
+    config: Final = load_config()
 
     if key is not None:
-        value = config.get(key)
+        value: Final = config.get(key)
         if value is None:
             click.echo(f"{key} is not set", err=True)
             sys.exit(1)
@@ -99,7 +100,7 @@ def get_config(key: str | None) -> None:
 @click.argument("key")
 def unset_config(key: str) -> None:
     """Remove KEY from the config file"""
-    config = load_config()
+    config: Final = load_config()
     if key not in config:
         click.echo(f"{key} was not set")
         return

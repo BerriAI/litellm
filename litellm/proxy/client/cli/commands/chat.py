@@ -1,6 +1,6 @@
 import json
 import sys
-from typing import Any
+from typing import Any, Final
 
 import click
 import requests
@@ -16,8 +16,8 @@ from ...chat import ChatClient
 def _get_available_models(ctx: click.Context) -> list[dict[str, Any]]:
     """Get list of available models from the proxy server"""
     try:
-        client = Client(base_url=ctx.obj["base_url"], api_key=ctx.obj["api_key"])
-        models_list = client.models.list()
+        client: Final = Client(base_url=ctx.obj["base_url"], api_key=ctx.obj["api_key"])
+        models_list: Final = client.models.list()
         # Ensure we return a list of dictionaries
         if isinstance(models_list, list):
             # Filter to ensure all items are dictionaries
@@ -32,17 +32,17 @@ def _select_model(console: Console, available_models: list[dict[str, Any]]) -> s
     """Interactive model selection"""
     if not available_models:
         console.print("[yellow]No models available or could not fetch models list.[/yellow]")
-        model_name = Prompt.ask("Please enter a model name")
+        model_name: Final = Prompt.ask("Please enter a model name")
         return model_name if model_name.strip() else None
 
     # Display available models in a table
-    table = Table(title="Available Models")
+    table: Final = Table(title="Available Models")
     table.add_column("Index", style="cyan", no_wrap=True)
     table.add_column("Model ID", style="green")
     table.add_column("Owned By", style="yellow")
-    MAX_MODELS_TO_DISPLAY = 200
+    MAX_MODELS_TO_DISPLAY: Final = 200
 
-    models_to_display: list[dict[str, Any]] = available_models[:MAX_MODELS_TO_DISPLAY]
+    models_to_display: Final[list[dict[str, Any]]] = available_models[:MAX_MODELS_TO_DISPLAY]
     for i, model in enumerate(models_to_display):  # Limit to first 200 models
         table.add_row(str(i + 1), str(model.get("id", "")), str(model.get("owned_by", "")))
 
@@ -122,17 +122,17 @@ def chat(
         # Chat with custom settings
         lite chat gpt-4 --temperature 0.9 --system "You are a helpful coding assistant"
     """
-    console = Console()
+    console: Final = Console()
 
     # If no model specified, show model selection
     if not model:
-        available_models = _get_available_models(ctx)
+        available_models: Final = _get_available_models(ctx)
         model = _select_model(console, available_models)
         if not model:
             console.print("[red]No model selected. Exiting.[/red]")
             return
 
-    client = ChatClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    client: Final = ChatClient(ctx.obj["base_url"], ctx.obj["api_key"])
 
     # Initialize conversation history
     messages: list[dict[str, Any]] = []
@@ -218,7 +218,7 @@ def chat(
 
 def _show_help(console: Console):
     """Show help for interactive chat commands"""
-    help_text = """
+    help_text: Final = """
 [bold]Interactive Chat Commands:[/bold]
 
 [cyan]/help[/cyan]     - Show this help message
@@ -262,7 +262,7 @@ def _show_history(console: Console, messages: list[dict[str, Any]]):
 
 def _save_conversation(console: Console, messages: list[dict[str, Any]], command: str):
     """Save conversation to a file"""
-    parts = command.split()
+    parts: Final = command.split()
     if len(parts) < 2:
         console.print("[red]Usage: /save <filename>[/red]")
         return
@@ -281,7 +281,7 @@ def _save_conversation(console: Console, messages: list[dict[str, Any]], command
 
 def _load_conversation(console: Console, command: str, system: str | None) -> list[dict[str, Any]]:
     """Load conversation from a file"""
-    parts = command.split()
+    parts: Final = command.split()
     if len(parts) < 2:
         console.print("[red]Usage: /load <filename>[/red]")
         return []
@@ -292,7 +292,7 @@ def _load_conversation(console: Console, command: str, system: str | None) -> li
 
     try:
         with open(filename, "r") as f:
-            messages = json.load(f)
+            messages: Final = json.load(f)
         console.print(f"[green]Conversation loaded from {filename}[/green]")
         return messages
     except FileNotFoundError:
@@ -336,8 +336,8 @@ def _handle_special_commands(
         new_messages = _load_conversation(console, user_input, system)
         return False, new_messages, None
     elif user_input.lower() == "/model":
-        available_models = _get_available_models(ctx)
-        new_model = _select_model(console, available_models)
+        available_models: Final = _get_available_models(ctx)
+        new_model: Final = _select_model(console, available_models)
         if new_model:
             console.print(f"[green]Switched to model: {new_model}[/green]")
             return False, messages, new_model
@@ -380,7 +380,7 @@ def _stream_response(
     except requests.exceptions.HTTPError as e:
         console.print(f"\n[red]Error: HTTP {e.response.status_code}[/red]")
         try:
-            error_body = e.response.json()
+            error_body: Final = e.response.json()
             console.print(f"[red]{error_body.get('error', {}).get('message', 'Unknown error')}[/red]")
         except json.JSONDecodeError:
             console.print(f"[red]{e.response.text}[/red]")
