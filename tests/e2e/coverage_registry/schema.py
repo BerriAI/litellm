@@ -39,6 +39,9 @@ LlmEndpoint = Literal[
     "audio_transcriptions",
     "moderations",
     "realtime",
+    "vector_stores",
+    "ocr",
+    "bedrock_native",
 ]
 
 LlmRoute = Literal[
@@ -59,8 +62,11 @@ LlmCapability = Literal[
     "assume_role",
     "basic",
     "count_tokens",
+    "input_sanitization",
+    "input_validation",
     "long_context_1m",
     "mid_conversation_system",
+    "multi_turn",
     "pdf_input",
     "prompt_cache_1h",
     "prompt_cache_5m",

@@ -30,6 +30,7 @@ class httpxSpecialProvider(str, Enum):
     PromptManagement = "prompt_management"
     UI = "ui"
     Sandbox = "sandbox"
+    ModelCostMap = "model_cost_map"
 
 
 VerifyTypes = Union[str, bool, ssl.SSLContext]
