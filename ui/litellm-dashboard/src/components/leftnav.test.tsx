@@ -19,6 +19,7 @@ const { mockUseAuthorized, mockUseOrganizations } = vi.hoisted(() => {
     userId: "test-user-id",
     accessToken: "test-access-token",
     userRole: "admin",
+    isViewOnly: false,
     token: "test-token",
     userEmail: "test@example.com",
     premiumUser: false,
@@ -156,12 +157,15 @@ describe("Sidebar (leftnav)", () => {
 
   describe("Admin Viewer parity", () => {
     // Admin Viewer follows a "read parity with Proxy Admin, no writes, no
-    // cost-incurring actions" rule. Playground stays hidden (incurs LLM
-    // cost); Models + Endpoints and Agents must be visible read-only.
+    // cost-incurring actions" rule. The session hook presents the viewer as
+    // an admin (`userRole: "admin"`) with `isViewOnly: true`; Playground
+    // stays hidden (incurs LLM cost) via the isViewOnly flag, while every
+    // admin page (Models + Endpoints, Agents, Logs, ...) is visible read-only.
     const adminViewerAuth = {
       userId: "admin-viewer-user-id",
       accessToken: "test-access-token",
-      userRole: "admin_viewer",
+      userRole: "admin",
+      isViewOnly: true,
       token: "test-token",
       userEmail: "viewer@example.com",
       premiumUser: false,

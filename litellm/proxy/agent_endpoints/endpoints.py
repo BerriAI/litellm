@@ -21,7 +21,12 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    CommonProxyErrors,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+    user_api_key_has_admin_view,
+)
 from litellm.proxy.a2a.agent_card import (
     SUPPORTED_A2A_PROTOCOL_VERSIONS,
     merge_agent_card,
@@ -240,10 +245,7 @@ async def get_agents(
         returned_agents: list[AgentResponse] = []
 
         # Admin users get all agents
-        if (
-            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-        ):
+        if user_api_key_has_admin_view(user_api_key_dict):
             returned_agents = global_agent_registry.get_agent_list()
         else:
             # Get allowed agents from object_permission (key/team level)
@@ -470,11 +472,7 @@ async def get_agent_by_id(
     """
     await check_feature_access_for_user(user_api_key_dict, "agents")
 
-    is_admin = (
-        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-    )
-    if not is_admin:
+    if not user_api_key_has_admin_view(user_api_key_dict):
         from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
             AgentRequestHandler,
         )

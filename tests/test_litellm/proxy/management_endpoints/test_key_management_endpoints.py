@@ -7927,6 +7927,74 @@ async def test_validate_key_list_check_key_hash_not_found():
 
 
 @pytest.mark.asyncio
+async def test_validate_key_list_check_proxy_admin_viewer_skips_db_lookup():
+    """proxy_admin_viewer takes the same unscoped read fast-path as proxy_admin, so no
+    user row is fetched and none of the user/team scoping filters apply."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(
+            user_id="viewer-user",
+            user_email="viewer@example.com",
+            teams=[],
+            organization_memberships=[],
+        )
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        user_id="viewer-user",
+    )
+
+    result = await validate_key_list_check(
+        user_api_key_dict=user_api_key_dict,
+        user_id="someone-else",
+        team_id="team-viewer-is-not-in",
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is None
+    mock_prisma_client.db.litellm_usertable.find_unique.assert_not_awaited()
+    assert mock_prisma_client.mock_calls == []
+
+
+@pytest.mark.asyncio
+async def test_validate_key_list_check_internal_user_cannot_query_other_user():
+    """Admin-view parity must not leak past the admin roles: an internal user still
+    cannot list another user's keys."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(
+            user_id="test-user",
+            user_email="test@example.com",
+            teams=[],
+            organization_memberships=[],
+        )
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await validate_key_list_check(
+            user_api_key_dict=user_api_key_dict,
+            user_id="other-user",
+            team_id=None,
+            organization_id=None,
+            key_alias=None,
+            key_hash=None,
+            prisma_client=mock_prisma_client,
+        )
+
+    assert exc_info.value.code == "403"
+    assert "not authorized to check another user's keys" in exc_info.value.message
+
+
+@pytest.mark.asyncio
 async def test_key_with_budget_id_does_not_store_budget_duration():
     """
     Test that when a key is created with budget_id but without explicit
@@ -15256,3 +15324,57 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
         prisma_client=mock_prisma_client,
         new_master_key="sk-new-master-key",
     )
+
+
+@pytest.mark.asyncio
+async def test_check_encryption_endpoint_allows_proxy_admin_viewer():
+    """The residual-scan endpoint performs no writes, so proxy_admin_viewer reads it
+    with the same access as proxy_admin."""
+    from litellm.proxy.management_endpoints import credential_migration as cm
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        check_encryption_endpoint,
+    )
+
+    report = cm.MigrationReport()
+    report.add(cm.LocationReport(location="model_table", scanned=2, legacy=0))
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        user_id="viewer-user",
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch.object(
+        cm, "check_encryption", AsyncMock(return_value=report)
+    ):
+        result = await check_encryption_endpoint(user_api_key_dict=user_api_key_dict)
+
+    assert result["status"] == "success"
+    assert result["report"]["residual_legacy"] == 0
+    assert result["report"]["locations"]["model_table"]["scanned"] == 2
+
+
+@pytest.mark.asyncio
+async def test_migrate_encryption_endpoint_rejects_proxy_admin_viewer():
+    """The re-encryption write sibling stays proxy_admin-only even though its
+    /check twin is viewer-readable."""
+    from litellm.proxy.management_endpoints import credential_migration as cm
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        migrate_encryption_endpoint,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        user_id="viewer-user",
+    )
+    mock_migrate = AsyncMock(return_value=cm.MigrationReport())
+
+    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch.object(
+        cm, "migrate_encryption", mock_migrate
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await migrate_encryption_endpoint(
+                user_api_key_dict=user_api_key_dict, dry_run=False
+            )
+
+    assert exc_info.value.status_code == 403
+    mock_migrate.assert_not_awaited()
