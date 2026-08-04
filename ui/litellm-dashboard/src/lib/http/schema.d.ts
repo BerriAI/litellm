@@ -23522,6 +23522,11 @@ export interface components {
              */
             total_api_requests: number;
             /**
+             * Total Autorouter Savings Spend
+             * @default 0
+             */
+            total_autorouter_savings_spend: number;
+            /**
              * Total Cache Creation Input Tokens
              * @default 0
              */
@@ -31427,6 +31432,11 @@ export interface components {
              * @default 0
              */
             api_requests: number;
+            /**
+             * Autorouter Savings Spend
+             * @default 0
+             */
+            autorouter_savings_spend: number;
             /**
              * Cache Creation Input Tokens
              * @default 0

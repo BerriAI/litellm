@@ -12,7 +12,9 @@ import os
 import random
 import time
 import traceback
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -66,6 +68,26 @@ if TYPE_CHECKING:
 else:
     PrismaClient = Any
     ProxyLogging = Any
+
+
+# Only tag rows carry a request_id, so the other entity types spread nothing. Built
+# once here rather than as an empty literal per transaction, and read-only so it cannot
+# be filled in by accident from one of the call sites that spreads it.
+_NO_TAG_REQUEST_ID: Mapping[str, Any] = MappingProxyType({})
+
+
+def _get_llm_router():
+    """The proxy's router, or None outside a running proxy.
+
+    Injected rather than imported where it is used, so the savings computation stays
+    a pure function of its arguments and the caller owns where the router comes from.
+    """
+    try:
+        from litellm.proxy.proxy_server import llm_router
+
+        return llm_router
+    except Exception:  # noqa: BLE001  # no proxy in scope; savings degrade to zero
+        return None
 
 
 def _extract_cache_read_tokens(usage_obj: dict) -> int:
@@ -1545,6 +1567,40 @@ class DBSpendUpdateWriter:
                                     # Get the table dynamically
                                     table = getattr(batcher, table_name)
 
+                                    # Additive metrics that older queued rows may omit; one
+                                    # enumeration feeds both the create and the increment below
+                                    optional_metrics = {
+                                        field: value
+                                        for field, value in (
+                                            ("cache_read_input_tokens", transaction.get("cache_read_input_tokens")),
+                                            (
+                                                "cache_creation_input_tokens",
+                                                transaction.get("cache_creation_input_tokens"),
+                                            ),
+                                            ("compression_saved_tokens", transaction.get("compression_saved_tokens")),
+                                            (
+                                                "compression_savings_spend",
+                                                transaction.get("compression_savings_spend"),
+                                            ),
+                                            (
+                                                "prompt_caching_savings_spend",
+                                                transaction.get("prompt_caching_savings_spend"),
+                                            ),
+                                            ("autorouter_savings_spend", transaction.get("autorouter_savings_spend")),
+                                        )
+                                        if value is not None
+                                    }
+
+                                    # Only tag rows carry a request_id. Resolved to a spreadable
+                                    # value here so both payloads are built in one shot: a dict
+                                    # appended to after construction is one nobody can reason about
+                                    # by reading its literal.
+                                    tag_request_id: Mapping[str, Any] = (
+                                        MappingProxyType({"request_id": transaction["request_id"]})
+                                        if entity_type == "tag" and "request_id" in transaction
+                                        else _NO_TAG_REQUEST_ID
+                                    )
+
                                     # Common data structure for both create and update
                                     common_data = {
                                         entity_id_field: entity_id,
@@ -1561,34 +1617,10 @@ class DBSpendUpdateWriter:
                                         "api_requests": transaction["api_requests"],
                                         "successful_requests": transaction["successful_requests"],
                                         "failed_requests": transaction["failed_requests"],
+                                        **optional_metrics,
+                                        **tag_request_id,
                                     }
 
-                                    # Add cache-related fields if they exist
-                                    if "cache_read_input_tokens" in transaction:
-                                        common_data["cache_read_input_tokens"] = transaction.get(
-                                            "cache_read_input_tokens", 0
-                                        )
-                                    if "cache_creation_input_tokens" in transaction:
-                                        common_data["cache_creation_input_tokens"] = transaction.get(
-                                            "cache_creation_input_tokens", 0
-                                        )
-                                    if "compression_saved_tokens" in transaction:
-                                        common_data["compression_saved_tokens"] = transaction.get(
-                                            "compression_saved_tokens", 0
-                                        )
-                                    if "compression_savings_spend" in transaction:
-                                        common_data["compression_savings_spend"] = transaction.get(
-                                            "compression_savings_spend", 0
-                                        )
-                                    if "prompt_caching_savings_spend" in transaction:
-                                        common_data["prompt_caching_savings_spend"] = transaction.get(
-                                            "prompt_caching_savings_spend", 0
-                                        )
-
-                                    if entity_type == "tag" and "request_id" in transaction:
-                                        common_data["request_id"] = transaction.get("request_id")
-
-                                    # Create update data structure
                                     update_data = {
                                         "prompt_tokens": {"increment": transaction["prompt_tokens"]},
                                         "completion_tokens": {"increment": transaction["completion_tokens"]},
@@ -1596,35 +1628,11 @@ class DBSpendUpdateWriter:
                                         "api_requests": {"increment": transaction["api_requests"]},
                                         "successful_requests": {"increment": transaction["successful_requests"]},
                                         "failed_requests": {"increment": transaction["failed_requests"]},
+                                        **{field: {"increment": value} for field, value in optional_metrics.items()},
+                                        # An existing row predating the endpoint column gets it filled in here
+                                        "endpoint": transaction.get("endpoint") or "",
+                                        **tag_request_id,
                                     }
-
-                                    # Add cache-related fields to update if they exist
-                                    if "cache_read_input_tokens" in transaction:
-                                        update_data["cache_read_input_tokens"] = {
-                                            "increment": transaction.get("cache_read_input_tokens", 0)
-                                        }
-                                    if "cache_creation_input_tokens" in transaction:
-                                        update_data["cache_creation_input_tokens"] = {
-                                            "increment": transaction.get("cache_creation_input_tokens", 0)
-                                        }
-                                    if "compression_saved_tokens" in transaction:
-                                        update_data["compression_saved_tokens"] = {
-                                            "increment": transaction.get("compression_saved_tokens", 0)
-                                        }
-                                    if "compression_savings_spend" in transaction:
-                                        update_data["compression_savings_spend"] = {
-                                            "increment": transaction.get("compression_savings_spend", 0)
-                                        }
-                                    if "prompt_caching_savings_spend" in transaction:
-                                        update_data["prompt_caching_savings_spend"] = {
-                                            "increment": transaction.get("prompt_caching_savings_spend", 0)
-                                        }
-
-                                    if entity_type == "tag" and "request_id" in transaction:
-                                        update_data["request_id"] = transaction.get("request_id")
-
-                                    # Add endpoint to update_data so existing rows get their endpoint field updated
-                                    update_data["endpoint"] = transaction.get("endpoint") or ""
 
                                     table.upsert(
                                         where=where_clause,
@@ -1875,6 +1883,10 @@ class DBSpendUpdateWriter:
                 custom_llm_provider=payload.get("custom_llm_provider", None),
                 compression_saved_tokens=compression_saved_tokens,
                 cache_read_input_tokens=cache_read_input_tokens,
+                routing_decision=_metadata.get("routing_decision"),
+                model_id=payload.get("model_id"),
+                llm_router=_get_llm_router(),
+                usage_object=usage_obj,
             )
 
             daily_transaction = BaseDailySpendTransaction(
@@ -1896,6 +1908,7 @@ class DBSpendUpdateWriter:
                 compression_saved_tokens=compression_saved_tokens,
                 compression_savings_spend=savings_spend.compression,
                 prompt_caching_savings_spend=savings_spend.prompt_caching,
+                autorouter_savings_spend=savings_spend.autorouter,
             )
             return daily_transaction
         except Exception as e:

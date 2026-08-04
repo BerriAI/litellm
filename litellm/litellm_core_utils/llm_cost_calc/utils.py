@@ -683,6 +683,7 @@ def generic_cost_per_token(
     custom_llm_provider: str,
     service_tier: str | None = None,
     data_residency: str | None = None,
+    model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -700,7 +701,12 @@ def generic_cost_per_token(
     """
 
     ## GET MODEL INFO
-    model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    # A caller that already resolved the deployment's effective rates passes them in
+    # rather than handing back a name for this to re-resolve. A name cannot express a
+    # per-deployment override: those are registered under the deployment id and kept off
+    # the shared model-name key, so resolving from the name here reads the public rate.
+    if model_info is None:
+        model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
     ## CALCULATE INPUT COST
     ### Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)

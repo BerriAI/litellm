@@ -224,6 +224,40 @@ def _iter_human_asks_newest_first(messages: Sequence[Mapping[str, object]]) -> I
     )
 
 
+def _conversation_is_continuing(messages: Sequence[Mapping[str, object]] | None) -> bool:
+    """Whether this request continues a conversation that was already underway.
+
+    The counterfactual the savings driver prices against is one model serving every
+    turn, so whether that model had this prompt cached is just whether an earlier turn
+    exists. An assistant turn in the history is the direct evidence of one: something
+    answered before, so a single-model deployment wrote the prompt then and would only
+    read it now, and the write this request paid is what switching models cost. A
+    conversation's first turn has no assistant turn, nothing was cached for any model,
+    and the baseline would have paid the same write.
+
+    Assistant turns rather than human asks, because an agent loop can run twenty turns
+    on one human ask: its tool traffic rides `tool_result` blocks on user turns that
+    flatten to empty text, and on `tool` roles, so counting asks reads a long
+    conversation as its own first turn and hands it the untouched-write arithmetic. That
+    is the one direction this must never fail in, since it inflates.
+
+    Reading the conversation rather than remembering it keeps this free of a cache, a
+    session id and their failure modes, and it works for callers that send no session
+    header at all. A few-shot prompt's synthetic assistant turns read as prior
+    conversation, which charges the write and under-claims; that is the safe side.
+
+    So is an unreadable request. No messages says nothing about whether a turn was
+    served, and a surface that carries its turns somewhere this cannot see, or a
+    genuinely single-turn call arriving with none, is treated as continuing: it pays the
+    cache write and under-claims rather than being handed a first turn's larger saving
+    on no evidence. That direction is deliberate in both cases and is the only one that
+    cannot inflate.
+    """
+    if not messages:
+        return True
+    return any(message.get("role") == "assistant" for message in messages)
+
+
 def _newest_turn_ask(messages: Sequence[Mapping[str, object]]) -> str | None:
     """The human ask on the newest user turn, or None when that turn carries only plumbing.
 
@@ -647,6 +681,7 @@ class ComplexityRouter(CustomLogger):
         escalation_keyword: str | None = None,
         escalated: bool = False,
         classifier_model: str | None = None,
+        conversation_continuing: bool = True,
     ) -> StandardLoggingRoutingDecision:
         """Assemble the per-request provenance record for this router's decision.
 
@@ -660,6 +695,7 @@ class ComplexityRouter(CustomLogger):
             router_type="complexity",
             routed_model=routed_model,
             cause=cause,
+            conversation_continuing=conversation_continuing,
         )
         if tier is not None:
             decision["tier"] = tier.value
@@ -1392,6 +1428,8 @@ class ComplexityRouter(CustomLogger):
             if isinstance(metadata, dict):
                 metadata[RETURN_RAW_MODEL_NAME_METADATA_KEY] = True
 
+        conversation_continuing = _conversation_is_continuing(self._resolve_messages(messages, request_kwargs))
+
         use_session_affinity = self.config.session_affinity and not self.config.plugins
         session_id = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
@@ -1438,6 +1476,7 @@ class ComplexityRouter(CustomLogger):
                             cause=cause,
                             escalation_keyword=pin_escalation_keyword,
                             escalated=escalated,
+                            conversation_continuing=conversation_continuing,
                         ),
                     )
 
@@ -1447,6 +1486,7 @@ class ComplexityRouter(CustomLogger):
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
+            conversation_continuing=conversation_continuing,
         )
         if cache_key is not None and response is not None:
             await self.litellm_router_instance.cache.async_set_cache(
@@ -1463,6 +1503,7 @@ class ComplexityRouter(CustomLogger):
         messages: list[dict[str, Any]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
+        conversation_continuing: bool = True,
     ) -> PreRoutingHookResponse | None:
         """
         Classifies the request by complexity and returns the appropriate model.
@@ -1509,7 +1550,11 @@ class ComplexityRouter(CustomLogger):
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
-                routing_decision=self._build_routing_decision(routed_model=routed_model, cause="default_fallback"),
+                routing_decision=self._build_routing_decision(
+                    routed_model=routed_model,
+                    cause="default_fallback",
+                    conversation_continuing=conversation_continuing,
+                ),
             )
 
         newest_ask = _newest_turn_ask(resolved_messages)
@@ -1532,6 +1577,7 @@ class ComplexityRouter(CustomLogger):
                 messages=messages if has_original_messages else None,
                 routing_decision=self._build_routing_decision(
                     routed_model=routed_model,
+                    conversation_continuing=conversation_continuing,
                     cause=keyword_cause,
                     tier=routed_tier,
                     matched_keyword=override.matched_keyword,
@@ -1579,6 +1625,7 @@ class ComplexityRouter(CustomLogger):
             messages=messages if has_original_messages else None,
             routing_decision=self._build_routing_decision(
                 routed_model=routed_model,
+                conversation_continuing=conversation_continuing,
                 cause=outcome.cause,
                 tier=tier,
                 score=score,
