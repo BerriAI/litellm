@@ -17,7 +17,7 @@ import traceback
 import warnings
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from datetime import datetime, timedelta, timezone
-from types import UnionType
+from types import MappingProxyType, UnionType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -7538,6 +7538,7 @@ _STREAM_KEEPALIVE = object()
 
 _KEEPALIVE_MIN_SECONDS = 1.0
 _KEEPALIVE_MAX_SECONDS = 300.0
+_EMPTY_MAPPING: Mapping[str, Any] = MappingProxyType({})
 
 
 async def _iter_with_keepalive(aiter: AsyncIterator[Any], keepalive_seconds: float) -> AsyncGenerator[Any, None]:
@@ -7551,7 +7552,7 @@ async def _iter_with_keepalive(aiter: AsyncIterator[Any], keepalive_seconds: flo
         while True:
             if pending is None:
                 pending = asyncio.create_task(aiter.__anext__())
-            done, _ = await asyncio.wait({pending}, timeout=keepalive_seconds)
+            done, _ = await asyncio.wait((pending,), timeout=keepalive_seconds)
             if not done:
                 yield _STREAM_KEEPALIVE
                 continue
@@ -7602,15 +7603,17 @@ def _keepalive_from_deployment_config(request_data: Mapping[str, Any], response)
     # model_name agrees on both keepalive_seconds and
     # allow_client_keepalive_override (including deployments that leave either
     # field unset), so a stream never inherits a sibling deployment's policy.
-    configs = {
+    configs = frozenset(
         (
-            (deployment_dict.get("litellm_params") or {}).get("keepalive_seconds"),
-            bool((deployment_dict.get("litellm_params") or {}).get("allow_client_keepalive_override", False)),
+            (deployment_dict.get("litellm_params") or _EMPTY_MAPPING).get("keepalive_seconds"),
+            bool(
+                (deployment_dict.get("litellm_params") or _EMPTY_MAPPING).get("allow_client_keepalive_override", False)
+            ),
         )
-        for deployment_dict in llm_router.get_model_list(model_name=request_data.get("model")) or []
-    }
+        for deployment_dict in llm_router.get_model_list(model_name=request_data.get("model")) or ()
+    )
     if len(configs) == 1:
-        keepalive_seconds, allow_client_override = configs.pop()
+        keepalive_seconds, allow_client_override = next(iter(configs))
         return _DeploymentKeepaliveConfig(
             keepalive_seconds=keepalive_seconds, allow_client_override=allow_client_override
         )
