@@ -5,16 +5,11 @@ import { Accordion, AccordionBody, AccordionHeader, SelectItem, TextInput } from
 import { Alert, Button, Checkbox, Form, Input, Modal, Select, Select as Select2, Space, Tooltip, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import BulkCreateUsers from "./bulk_create_users_button";
+import { AdDirectoryUserSearch } from "./common_components/AdDirectoryUserSearch";
 import TeamDropdown from "./common_components/team_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import NotificationsManager from "./molecules/notifications_manager";
-import {
-  getProxyBaseUrl,
-  getProxyUISettings,
-  invitationCreateCall,
-  modelAvailableCall,
-  userCreateCall,
-} from "./networking";
+import { getProxyBaseUrl, getProxyUISettings, invitationCreateCall, modelAvailableCall, userCreateCall } from "./networking";
 import OnboardingModal, { InvitationLink } from "./onboarding_link";
 const { Option } = Select;
 const { Text, Link, Title } = Typography;
@@ -46,6 +41,7 @@ interface UISettings {
   PROXY_LOGOUT_URL: string | null;
   DEFAULT_TEAM_DISABLED: boolean;
   SSO_ENABLED: boolean;
+  MICROSOFT_DIRECTORY_SEARCH_ENABLED?: boolean;
 }
 
 export const CreateUserButton: React.FC<CreateuserProps> = ({
@@ -65,6 +61,8 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
+  // Bumped on modal close to clear the AD search box's state.
+  const [directorySearchResetSignal, setDirectorySearchResetSignal] = useState(0);
   const { data: organizations = [] } = useOrganizations();
 
   // Derive teams from the user's organizations, falling back to the teams prop
@@ -98,14 +96,28 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
 
   const handleOk = () => {
     setIsModalVisible(false);
+    setDirectorySearchResetSignal((signal) => signal + 1);
     form.resetFields();
   };
 
   const handleCancel = () => {
     setIsModalVisible(false);
     setApiuser(false);
+    setDirectorySearchResetSignal((signal) => signal + 1);
     form.resetFields();
   };
+
+  const userEmailFormItem = uiSettings?.MICROSOFT_DIRECTORY_SEARCH_ENABLED ? (
+    <AdDirectoryUserSearch
+      accessToken={accessToken}
+      resetSignal={directorySearchResetSignal}
+      onSelectUser={(user) => form.setFieldsValue({ user_email: user.email })}
+    />
+  ) : (
+    <Form.Item label="User Email" name="user_email">
+      {isEmbedded ? <TextInput placeholder="" /> : <Input />}
+    </Form.Item>
+  );
 
   const handleCreate = async (formValues: {
     user_id: string;
@@ -199,9 +211,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           showIcon
           className="mb-4"
         />
-        <Form.Item label="User Email" name="user_email">
-          <TextInput placeholder="" />
-        </Form.Item>
+        {userEmailFormItem}
         <Form.Item label="User Role" name="user_role">
           <Select2>
             {possibleUIRoles &&
@@ -281,9 +291,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           labelAlign="left"
           initialValues={{ user_role: "internal_user_viewer", send_invite_email: true }}
         >
-          <Form.Item label="User Email" name="user_email">
-            <Input />
-          </Form.Item>
+          {userEmailFormItem}
           <Form.Item
             label={
               <span>

@@ -8,6 +8,7 @@ import NotificationsManager from "./molecules/notifications_manager";
 
 vi.mock("./networking", () => ({
   userCreateCall: vi.fn(),
+  directoryUsersSearchCall: vi.fn(),
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
   invitationCreateCall: vi.fn(),
   organizationMemberAddCall: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock("./networking", () => ({
     SSO_ENABLED: false,
   }),
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost"),
+  getGlobalLitellmHeaderName: vi.fn().mockReturnValue("Authorization"),
 }));
 
 vi.mock("./bulk_create_users_button", () => ({
@@ -29,6 +31,7 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
 }));
 
 const mockUserCreateCall = vi.mocked(networking.userCreateCall);
+const mockDirectoryUsersSearchCall = vi.mocked(networking.directoryUsersSearchCall);
 const mockInvitationCreateCall = vi.mocked(networking.invitationCreateCall);
 const mockGetProxyUISettings = vi.mocked(networking.getProxyUISettings);
 const mockOrganizationMemberAddCall = vi.mocked(networking.organizationMemberAddCall);
@@ -60,6 +63,7 @@ describe("CreateUserButton", () => {
       DEFAULT_TEAM_DISABLED: false,
       SSO_ENABLED: false,
     });
+    mockDirectoryUsersSearchCall.mockResolvedValue([]);
   });
 
   describe("rendering and visibility", () => {
@@ -212,6 +216,112 @@ describe("CreateUserButton", () => {
   });
 
   describe("standalone mode submission", () => {
+    it("should search directory users and populate user email when a result is selected", async () => {
+      const user = userEvent.setup();
+      mockGetProxyUISettings.mockResolvedValue({
+        PROXY_BASE_URL: null,
+        PROXY_LOGOUT_URL: null,
+        DEFAULT_TEAM_DISABLED: false,
+        SSO_ENABLED: true,
+        MICROSOFT_DIRECTORY_SEARCH_ENABLED: true,
+      });
+      mockDirectoryUsersSearchCall.mockResolvedValue([
+        {
+          id: "aad-user-id",
+          display_name: "Alice Example",
+          email: "alice@example.com",
+        },
+      ]);
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "directory-user" } });
+
+      renderWithProviders(
+        <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+      const dialog = screen.getByRole("dialog", { name: /invite user/i });
+      await user.type(within(dialog).getByRole("combobox", { name: /user email/i }), "ali");
+
+      await waitFor(() => {
+        expect(mockDirectoryUsersSearchCall).toHaveBeenCalledWith("token", "ali");
+      });
+      await user.click(await screen.findByText("Alice Example"));
+
+      expect(within(dialog).getByLabelText(/user email/i)).toHaveValue("alice@example.com");
+
+      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
+      await user.click(screen.getByText("User"));
+      await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalledWith("token", null, expect.objectContaining({
+          user_email: "alice@example.com",
+          user_role: "proxy_user",
+        }));
+      });
+    });
+
+    it("should not show a stale selected directory user after the modal is reopened", async () => {
+      const user = userEvent.setup();
+      mockGetProxyUISettings.mockResolvedValue({
+        PROXY_BASE_URL: null,
+        PROXY_LOGOUT_URL: null,
+        DEFAULT_TEAM_DISABLED: false,
+        SSO_ENABLED: false,
+        MICROSOFT_DIRECTORY_SEARCH_ENABLED: true,
+      });
+      mockDirectoryUsersSearchCall.mockResolvedValue([
+        { id: "aad-user-id", display_name: "Alice Example", email: "alice@example.com" },
+      ]);
+
+      renderWithProviders(<CreateUserButton {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+      let dialog = screen.getByRole("dialog", { name: /invite user/i });
+      await user.type(within(dialog).getByRole("combobox", { name: /user email/i }), "ali");
+      await user.click(await screen.findByText("Alice Example"));
+      expect(within(dialog).getByLabelText(/user email/i)).toHaveValue("alice@example.com");
+
+      await user.click(within(dialog).getByRole("button", { name: /close/i }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+      dialog = screen.getByRole("dialog", { name: /invite user/i });
+
+      expect(screen.queryByText("Alice Example")).not.toBeInTheDocument();
+      expect(within(dialog).getByLabelText(/user email/i)).toHaveValue("");
+    });
+
+    it("should not render the directory-backed email input when the feature is disabled", async () => {
+      const user = userEvent.setup();
+      mockGetProxyUISettings.mockResolvedValue({
+        PROXY_BASE_URL: null,
+        PROXY_LOGOUT_URL: null,
+        DEFAULT_TEAM_DISABLED: false,
+        SSO_ENABLED: false,
+        MICROSOFT_DIRECTORY_SEARCH_ENABLED: false,
+      });
+
+      renderWithProviders(<CreateUserButton {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+      const dialog = screen.getByRole("dialog", { name: /invite user/i });
+      expect(within(dialog).queryByRole("combobox", { name: /user email/i })).not.toBeInTheDocument();
+      expect(mockDirectoryUsersSearchCall).not.toHaveBeenCalled();
+    });
+
     it("should show success notification when user is created successfully in standalone mode", async () => {
       const user = userEvent.setup();
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "new-user-789" } });

@@ -93,6 +93,9 @@ from litellm.proxy.common_utils.html_forms.jwt_display_template import (
 )
 from litellm.proxy.common_utils.html_forms.ui_login import html_form
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm.proxy.management_endpoints.microsoft_graph_directory_search import (
+    is_microsoft_directory_search_configured,
+)
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.sso_helper_utils import (
     check_is_admin_only_access,
@@ -2366,6 +2369,21 @@ async def insert_sso_user(
     return response
 
 
+def _is_microsoft_directory_search_configured_safe() -> bool:
+    """
+    Wraps `is_microsoft_directory_search_configured()` so a secret manager
+    backend failure (e.g. Vault/Secrets Manager unreachable) can't take down
+    the whole `/sso/get_ui_settings` response for every user.
+    """
+    try:
+        return is_microsoft_directory_search_configured()
+    except Exception:
+        verbose_proxy_logger.exception(
+            "Failed to resolve Microsoft directory search configuration"
+        )
+        return False
+
+
 @router.get(
     "/sso/get/ui_settings",
     tags=["experimental"],
@@ -2394,6 +2412,7 @@ async def get_ui_settings(request: Request):
         "LITELLM_UI_API_DOC_BASE_URL": _api_doc_base_url,
         "DEFAULT_TEAM_DISABLED": default_team_disabled,
         "SSO_ENABLED": _is_sso_enabled,
+        "MICROSOFT_DIRECTORY_SEARCH_ENABLED": _is_microsoft_directory_search_configured_safe(),
         "NUM_SPEND_LOGS_ROWS": proxy_state.get_proxy_state_variable(
             "spend_logs_row_count"
         ),

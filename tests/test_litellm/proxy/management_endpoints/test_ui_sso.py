@@ -3065,6 +3065,76 @@ async def test_get_ui_settings_includes_api_doc_base_url():
         assert response["LITELLM_UI_API_DOC_BASE_URL"] == "https://custom.docs"
 
 
+class TestMicrosoftDirectorySearchConfiguredSafe:
+    """_is_microsoft_directory_search_configured_safe() must never let a
+    secret manager failure break /sso/get_ui_settings for every user."""
+
+    def test_returns_true_when_configured(self, mocker):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _is_microsoft_directory_search_configured_safe,
+        )
+
+        mocker.patch(
+            "litellm.proxy.management_endpoints.ui_sso.is_microsoft_directory_search_configured",
+            return_value=True,
+        )
+        assert _is_microsoft_directory_search_configured_safe() is True
+
+    def test_returns_false_when_not_configured(self, mocker):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _is_microsoft_directory_search_configured_safe,
+        )
+
+        mocker.patch(
+            "litellm.proxy.management_endpoints.ui_sso.is_microsoft_directory_search_configured",
+            return_value=False,
+        )
+        assert _is_microsoft_directory_search_configured_safe() is False
+
+    def test_swallows_exception_and_returns_false(self, mocker):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _is_microsoft_directory_search_configured_safe,
+        )
+
+        mocker.patch(
+            "litellm.proxy.management_endpoints.ui_sso.is_microsoft_directory_search_configured",
+            side_effect=Exception("secret manager unreachable"),
+        )
+        assert _is_microsoft_directory_search_configured_safe() is False
+
+    @pytest.mark.asyncio
+    async def test_get_ui_settings_survives_directory_search_config_failure(
+        self, mocker
+    ):
+        """A secret manager blip resolving the directory-search flag must not
+        break the rest of /sso/get_ui_settings."""
+        from fastapi import Request
+
+        from litellm.proxy.management_endpoints.ui_sso import get_ui_settings
+
+        mocker.patch(
+            "litellm.proxy.management_endpoints.ui_sso.is_microsoft_directory_search_configured",
+            side_effect=Exception("secret manager unreachable"),
+        )
+
+        mock_request = Request(
+            scope={
+                "type": "http",
+                "headers": [],
+                "method": "GET",
+                "scheme": "http",
+                "server": ("testserver", 80),
+                "path": "/sso/get/ui_settings",
+                "query_string": b"",
+            }
+        )
+
+        response = await get_ui_settings(mock_request)
+
+        assert response["MICROSOFT_DIRECTORY_SEARCH_ENABLED"] is False
+        assert "PROXY_BASE_URL" in response
+
+
 class TestGenericResponseConvertorNestedAttributes:
     """Test generic_response_convertor with nested attribute paths"""
 

@@ -19,7 +19,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union, cast
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+import httpx
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -41,6 +42,11 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
+from litellm.proxy.management_endpoints.microsoft_graph_directory_search import (
+    MICROSOFT_DIRECTORY_SEARCH_MIN_QUERY_LENGTH,
+    _search_microsoft_directory_users,
+    is_microsoft_directory_search_configured,
+)
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
@@ -49,6 +55,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkUpdateUserRequest,
     BulkUpdateUserResponse,
+    MicrosoftDirectoryUser,
     UserListResponse,
     UserUpdateResult,
 )
@@ -57,6 +64,83 @@ if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
 
 router = APIRouter()
+
+
+@router.get(
+    "/user/directory_search",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=List[MicrosoftDirectoryUser],
+)
+@management_endpoint_wrapper
+async def directory_user_search(
+    query: str = Query(...),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> List[MicrosoftDirectoryUser]:
+    """
+    Search Microsoft Entra ID users for the Admin UI invite user flow.
+
+    Requires `MICROSOFT_DIRECTORY_SEARCH_ENABLED=true` and Microsoft Graph
+    app-only credentials, via either `MICROSOFT_DIRECTORY_TENANT` /
+    `MICROSOFT_DIRECTORY_CLIENT_ID` / `MICROSOFT_DIRECTORY_CLIENT_SECRET`
+    (a dedicated app registration) or the `MICROSOFT_TENANT` /
+    `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` already used for
+    Microsoft SSO login. The app registration must have a directory read
+    permission such as `User.Read.All` or `Directory.Read.All`.
+
+    Restricted to callers with admin view access (`PROXY_ADMIN` or
+    `PROXY_ADMIN_VIEW_ONLY`). Queries shorter than
+    `MICROSOFT_DIRECTORY_SEARCH_MIN_QUERY_LENGTH` return `[]` without
+    contacting Graph, and a 404 is returned if the feature isn't configured.
+    """
+    try:
+        if not _user_has_admin_view(user_api_key_dict):
+            raise HTTPException(
+                status_code=403,
+                detail="Only proxy admins (including admin viewers) can search directory users.",
+            )
+
+        cleaned_query = query.strip()
+        if len(cleaned_query) < MICROSOFT_DIRECTORY_SEARCH_MIN_QUERY_LENGTH:
+            return []
+
+        if not is_microsoft_directory_search_configured():
+            raise HTTPException(
+                status_code=404,
+                detail="Microsoft directory search is not configured.",
+            )
+
+        return await _search_microsoft_directory_users(cleaned_query)
+    except HTTPException as e:
+        # Deliberate errors (403/404 above, or 500 from missing Graph
+        # credentials) - preserves their status code/detail via
+        # handle_exception_on_proxy instead of falling into the 500 below.
+        raise handle_exception_on_proxy(e)
+    except httpx.HTTPStatusError as e:
+        verbose_proxy_logger.exception(
+            "Microsoft Graph directory search failed - {}".format(str(e))
+        )
+        raise handle_exception_on_proxy(
+            HTTPException(
+                status_code=502,
+                detail="Microsoft Graph directory search failed.",
+            )
+        )
+    except httpx.HTTPError as e:
+        verbose_proxy_logger.exception(
+            "Microsoft Graph directory search request failed - {}".format(str(e))
+        )
+        raise handle_exception_on_proxy(
+            HTTPException(
+                status_code=502,
+                detail="Microsoft Graph directory search request failed.",
+            )
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "directory_user_search(): Exception occurred - {}".format(str(e))
+        )
+        raise handle_exception_on_proxy(e)
 
 
 def _hash_password_in_dict(data: dict) -> None:

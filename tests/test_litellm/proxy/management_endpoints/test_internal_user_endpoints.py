@@ -20,7 +20,9 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     LiteLLM_UserTableWithKeyCount,
+    MicrosoftDirectoryUser,
     _update_internal_user_params,
+    directory_user_search,
     get_user_key_counts,
     get_users,
     new_user,
@@ -29,6 +31,224 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 from litellm.proxy.proxy_server import app
 
 client = TestClient(app)
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_returns_microsoft_directory_users(mocker):
+    async def mock_search(query: str):
+        assert query == "alice"
+        return [
+            MicrosoftDirectoryUser(
+                id="aad-user-id",
+                display_name="Alice Example",
+                email="alice@example.com",
+            )
+        ]
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.is_microsoft_directory_search_configured",
+        return_value=True,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users",
+        mock_search,
+    )
+
+    response = await directory_user_search(
+        query=" alice ",
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    assert response == [
+        MicrosoftDirectoryUser(
+            id="aad-user-id",
+            display_name="Alice Example",
+            email="alice@example.com",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_requires_admin_view(mocker):
+    mock_search = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users"
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await directory_user_search(
+            query="alice",
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="user", user_role=LitellmUserRoles.INTERNAL_USER
+            ),
+        )
+
+    assert exc_info.value.code == 403 or exc_info.value.code == "403"
+    mock_search.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_ignores_short_queries(mocker):
+    mock_search = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users"
+    )
+
+    response = await directory_user_search(
+        query="a",
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    assert response == []
+    mock_search.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_allows_admin_view_only(mocker):
+    """PROXY_ADMIN_VIEW_ONLY should be allowed - _user_has_admin_view grants
+    both PROXY_ADMIN and PROXY_ADMIN_VIEW_ONLY read access."""
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.is_microsoft_directory_search_configured",
+        return_value=True,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users",
+        return_value=[],
+    )
+
+    response = await directory_user_search(
+        query="alice",
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+        ),
+    )
+
+    assert response == []
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_exact_min_length_proceeds(mocker):
+    """A query of exactly MICROSOFT_DIRECTORY_SEARCH_MIN_QUERY_LENGTH should
+    proceed to search, not short-circuit."""
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.is_microsoft_directory_search_configured",
+        return_value=True,
+    )
+    mock_search = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users",
+        return_value=[],
+    )
+
+    await directory_user_search(
+        query="al",
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    mock_search.assert_called_once_with("al")
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_whitespace_padded_short_query_is_ignored(mocker):
+    """A query that trims below the length threshold should short-circuit,
+    even if its raw (untrimmed) length would have passed."""
+    mock_search = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users"
+    )
+
+    response = await directory_user_search(
+        query="  a  ",
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    assert response == []
+    mock_search.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_returns_404_when_not_configured(mocker):
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.is_microsoft_directory_search_configured",
+        return_value=False,
+    )
+    mock_search = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users"
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await directory_user_search(
+            query="alice",
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+            ),
+        )
+
+    assert exc_info.value.code == 404 or exc_info.value.code == "404"
+    mock_search.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_http_status_error_maps_to_502(mocker):
+    import httpx
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.is_microsoft_directory_search_configured",
+        return_value=True,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users",
+        side_effect=httpx.HTTPStatusError(
+            "boom", request=mocker.MagicMock(), response=mocker.MagicMock()
+        ),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await directory_user_search(
+            query="alice",
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+            ),
+        )
+
+    assert exc_info.value.code == 502 or exc_info.value.code == "502"
+
+
+@pytest.mark.asyncio
+async def test_directory_user_search_does_not_relabel_deliberate_http_exceptions(
+    mocker,
+):
+    """A deliberate HTTPException raised inside _search_microsoft_directory_users
+    (e.g. missing Graph credentials -> 500) must propagate with its original
+    status code, not get relabeled by the generic except-Exception branch."""
+    from fastapi import HTTPException
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.is_microsoft_directory_search_configured",
+        return_value=True,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._search_microsoft_directory_users",
+        side_effect=HTTPException(
+            status_code=500,
+            detail="Microsoft directory search is missing tenant, client id, or client secret.",
+        ),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await directory_user_search(
+            query="alice",
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+            ),
+        )
+
+    assert exc_info.value.code == 500 or exc_info.value.code == "500"
+    assert "tenant, client id, or client secret" in str(exc_info.value.message)
 
 
 @pytest.mark.asyncio

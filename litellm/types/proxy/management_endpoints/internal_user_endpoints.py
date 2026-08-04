@@ -10,6 +10,14 @@ from litellm.proxy._types import (
 )
 
 
+class MicrosoftDirectoryUser(BaseModel):
+    """A single result row from the Microsoft Graph directory search endpoint."""
+
+    id: str
+    display_name: Optional[str] = None
+    email: str
+
+
 class UserListResponse(BaseModel):
     """
     Response model for the user list endpoint
