@@ -2416,6 +2416,17 @@ class TestReadReplicaUrlWiring:
 
         assert exc_info.value.code == 1
 
+    def test_empty_reader_url_is_ignored_rather_than_rejected(self):
+        """An optional env var rendered empty by a chart or compose file is not a
+        misconfigured URL; treating it as one would fail startup for deployments that
+        never asked for a reader."""
+        captured = self._run_server_and_capture_urls(
+            extra_env={**self._WRITER_ENV, "DATABASE_URL_READ_REPLICA": ""}
+        )
+
+        assert captured.get("DATABASE_URL_READ_REPLICA", "") == ""
+        assert urlparse.urlparse(captured["DATABASE_URL"]).hostname == "writer.internal"
+
     def test_discrete_vars_are_not_read_without_the_opt_in_host(self):
         """DatabaseURLSettings validates the whole DATABASE_* environment, so loading
         it unconditionally would fail startup for single-database deployments that
