@@ -11,6 +11,9 @@ import time
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Final, cast
+from urllib.parse import quote
+
+import httpx
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -287,12 +290,27 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.exception("s3 Layer Error - %s", e)
             self.handle_callback_failure(callback_name="S3Logger")
 
+    def _build_object_url(self, s3_object_key: str) -> str:
+        """
+        Build the object URL, percent-encoding the key once and normalizing it the way httpx will.
+
+        The returned string is what gets both signed and sent; the two must be byte-identical or S3
+        answers 403 SignatureDoesNotMatch.
+        """
+        encoded_key: Final = quote(s3_object_key, safe="/")
+        if not self.s3_endpoint_url or not self.s3_bucket_name:
+            return str(httpx.URL(f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{encoded_key}"))
+        if self.s3_use_virtual_hosted_style:
+            endpoint_host: Final = self.s3_endpoint_url.replace("https://", "").replace("http://", "")
+            protocol: Final = "https://" if self.s3_endpoint_url.startswith("https://") else "http://"
+            return str(httpx.URL(f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{encoded_key}"))
+        return str(httpx.URL(f"{self.s3_endpoint_url}/{self.s3_bucket_name}/{encoded_key}"))
+
     async def async_upload_data_to_s3(self, batch_logging_element: s3BatchLoggingElement):
         try:
             import base64
             import hashlib
 
-            import requests
             from botocore.auth import S3SigV4Auth
             from botocore.awsrequest import AWSRequest
         except ImportError:
@@ -316,18 +334,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.debug("s3_v2 logger - uploading data to s3 - %s", batch_logging_element.s3_object_key)
             verbose_logger.debug("s3_v2 logger - s3_verify setting: %s", self.s3_verify)
 
-            # Prepare the URL
-            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{batch_logging_element.s3_object_key}"
-
-            if self.s3_endpoint_url and self.s3_bucket_name:
-                if self.s3_use_virtual_hosted_style:
-                    # Virtual-hosted-style: bucket.endpoint/key
-                    endpoint_host: Final = self.s3_endpoint_url.replace("https://", "").replace("http://", "")
-                    protocol: Final = "https://" if self.s3_endpoint_url.startswith("https://") else "http://"
-                    url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{batch_logging_element.s3_object_key}"
-                else:
-                    # Path-style: endpoint/bucket/key
-                    url = self.s3_endpoint_url + "/" + self.s3_bucket_name + "/" + batch_logging_element.s3_object_key
+            request_url: Final = self._build_object_url(batch_logging_element.s3_object_key)
 
             # Convert JSON to string
             json_string: Final = safe_dumps(batch_logging_element.payload)
@@ -348,24 +355,12 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
                 **self._sse_headers(),
             }
-            req: Final = requests.Request("PUT", url, data=json_string, headers=headers)
-            prepped: Final = req.prepare()
-
-            # Sign the request
-            aws_request: Final = AWSRequest(
-                method=prepped.method,
-                url=prepped.url,
-                data=prepped.body,
-                headers=prepped.headers,
-            )
+            aws_request: Final = AWSRequest(method="PUT", url=request_url, data=json_string, headers=headers)
             aws_region_name: Final = self.get_aws_region_name_for_non_llm_api_calls(aws_region_name=self.s3_region_name)
             S3SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
 
             # Prepare the signed headers
             signed_headers: Final = dict(aws_request.headers.items())
-
-            # Use prepared URL so path segments match SigV4 canonical request (e.g. %20 for spaces).
-            request_url: Final = prepped.url or url
 
             # Make the request with retry for transient S3 errors (500/503)
             max_retries: Final = 3
@@ -478,7 +473,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             import base64
             import hashlib
 
-            import requests
             from botocore.auth import S3SigV4Auth
             from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
@@ -493,18 +487,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 aws_region_name=self.s3_region_name,
             )
 
-            # Prepare the URL
-            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{batch_logging_element.s3_object_key}"
-
-            if self.s3_endpoint_url and self.s3_bucket_name:
-                if self.s3_use_virtual_hosted_style:
-                    # Virtual-hosted-style: bucket.endpoint/key
-                    endpoint_host: Final = self.s3_endpoint_url.replace("https://", "").replace("http://", "")
-                    protocol: Final = "https://" if self.s3_endpoint_url.startswith("https://") else "http://"
-                    url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{batch_logging_element.s3_object_key}"
-                else:
-                    # Path-style: endpoint/bucket/key
-                    url = self.s3_endpoint_url + "/" + self.s3_bucket_name + "/" + batch_logging_element.s3_object_key
+            request_url: Final = self._build_object_url(batch_logging_element.s3_object_key)
 
             # Convert JSON to string
             json_string: Final = safe_dumps(batch_logging_element.payload)
@@ -525,24 +508,12 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
                 **self._sse_headers(),
             }
-            req: Final = requests.Request("PUT", url, data=json_string, headers=headers)
-            prepped: Final = req.prepare()
-
-            # Sign the request
-            aws_request: Final = AWSRequest(
-                method=prepped.method,
-                url=prepped.url,
-                data=prepped.body,
-                headers=prepped.headers,
-            )
+            aws_request: Final = AWSRequest(method="PUT", url=request_url, data=json_string, headers=headers)
             aws_region_name: Final = self.get_aws_region_name_for_non_llm_api_calls(aws_region_name=self.s3_region_name)
             S3SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
 
             # Prepare the signed headers
             signed_headers: Final = dict(aws_request.headers.items())
-
-            # Use prepared URL so path segments match SigV4 canonical request (e.g. %20 for spaces).
-            request_url: Final = prepped.url or url
 
             httpx_client: Final = _get_httpx_client(
                 params=({"ssl_verify": self.s3_verify} if self.s3_verify is not None else None)
@@ -582,7 +553,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         try:
             import hashlib
 
-            import requests
             from botocore.auth import S3SigV4Auth
             from botocore.awsrequest import AWSRequest
         except ImportError:
@@ -607,18 +577,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             verbose_logger.debug("s3_v2 logger - downloading data from s3 - %s", s3_object_key)
 
-            # Prepare the URL
-            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{s3_object_key}"
-
-            if self.s3_endpoint_url and self.s3_bucket_name:
-                if self.s3_use_virtual_hosted_style:
-                    # Virtual-hosted-style: bucket.endpoint/key
-                    endpoint_host: Final = self.s3_endpoint_url.replace("https://", "").replace("http://", "")
-                    protocol: Final = "https://" if self.s3_endpoint_url.startswith("https://") else "http://"
-                    url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{s3_object_key}"
-                else:
-                    # Path-style: endpoint/bucket/key
-                    url = self.s3_endpoint_url + "/" + self.s3_bucket_name + "/" + s3_object_key
+            request_url: Final = self._build_object_url(s3_object_key)
 
             # Prepare the request for GET operation
             # For GET requests, we need x-amz-content-sha256 with hash of empty string
@@ -626,21 +585,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             headers: Final = {
                 "x-amz-content-sha256": empty_string_hash,
             }
-            req: Final = requests.Request("GET", url, headers=headers)
-            prepped: Final = req.prepare()
-
-            # Sign the request
-            aws_request: Final = AWSRequest(
-                method=prepped.method,
-                url=prepped.url,
-                headers=prepped.headers,
-            )
+            aws_request: Final = AWSRequest(method="GET", url=request_url, headers=headers)
             S3SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
 
             # Prepare the signed headers
             signed_headers: Final = dict(aws_request.headers.items())
-
-            request_url: Final = prepped.url or url
             response: Final = await self.async_httpx_client.get(request_url, headers=signed_headers)
 
             if response.status_code != 200:
