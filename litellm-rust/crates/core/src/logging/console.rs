@@ -7,7 +7,7 @@ use colored_json::{ColorMode, ColoredFormatter, Output, PrettyFormatter};
 use super::{LogEvent, LogSink};
 
 #[derive(Clone, Copy)]
-enum RenderMode {
+pub enum RenderMode {
     Compact,
     Pretty,
 }
@@ -20,21 +20,17 @@ pub struct ConsoleDebugHook {
 
 impl ConsoleDebugHook {
     pub fn from_env() -> Self {
-        Self::with_writer(Box::new(std::io::stderr()))
+        Self::new(
+            Box::new(std::io::stderr()),
+            *render_mode(),
+            ColorMode::Auto(Output::StdErr),
+        )
     }
 
-    pub fn with_writer(writer: Box<dyn Write + Send>) -> Self {
-        Self::with_writer_and_mode(writer, matches!(*render_mode(), RenderMode::Pretty))
-    }
-
-    pub fn with_writer_and_mode(writer: Box<dyn Write + Send>, pretty: bool) -> Self {
+    pub fn new(writer: Box<dyn Write + Send>, mode: RenderMode, color_mode: ColorMode) -> Self {
         Self {
-            mode: if pretty {
-                RenderMode::Pretty
-            } else {
-                RenderMode::Compact
-            },
-            color_mode: ColorMode::Auto(Output::StdErr).eval(),
+            mode,
+            color_mode: color_mode.eval(),
             output: Mutex::new(writer),
         }
     }
@@ -159,11 +155,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn compact_output_is_canonical_json() {
-        let buffer = Arc::new(Mutex::new(Vec::new()));
-        let hook = ConsoleDebugHook::with_writer_and_mode(Box::new(Buffer(buffer.clone())), false);
-        let event = LogEvent::Request(ProviderRequestEvent {
+    fn sample_event() -> LogEvent {
+        LogEvent::Request(ProviderRequestEvent {
             source: "litellm-rust",
             call_id: "call_01".to_string(),
             provider: "anthropic".to_string(),
@@ -175,11 +168,22 @@ mod tests {
             body: json!({"prompt": "visible"}),
             body_truncated: None,
             body_original_bytes: None,
-        });
+        })
+    }
+
+    fn emit_to_string(event: &LogEvent, mode: RenderMode, color_mode: ColorMode) -> String {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let hook = ConsoleDebugHook::new(Box::new(Buffer(buffer.clone())), mode, color_mode);
+        hook.emit(event);
+        let bytes = buffer.lock().expect("buffer lock").clone();
+        String::from_utf8(bytes).expect("output is utf8")
+    }
+
+    #[test]
+    fn compact_output_is_canonical_json() {
+        let event = sample_event();
         let expected = serde_json::to_value(&event).expect("event serializes");
-        hook.emit(&event);
-        let output =
-            String::from_utf8(buffer.lock().expect("buffer lock").clone()).expect("output is utf8");
+        let output = emit_to_string(&event, RenderMode::Compact, ColorMode::Off);
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(output.trim()).expect("output is JSON"),
             expected
@@ -188,24 +192,8 @@ mod tests {
 
     #[test]
     fn pretty_output_has_header_separator_and_indented_payload() {
-        let buffer = Arc::new(Mutex::new(Vec::new()));
-        let hook = ConsoleDebugHook::with_writer_and_mode(Box::new(Buffer(buffer.clone())), true);
-        let event = LogEvent::Request(ProviderRequestEvent {
-            source: "litellm-rust",
-            call_id: "call_01".to_string(),
-            provider: "anthropic".to_string(),
-            model: "claude".to_string(),
-            stream: false,
-            method: "POST",
-            url: "https://example.test".to_string(),
-            headers: Default::default(),
-            body: json!({"prompt": "visible"}),
-            body_truncated: None,
-            body_original_bytes: None,
-        });
-        hook.emit(&event);
-        let output =
-            String::from_utf8(buffer.lock().expect("buffer lock").clone()).expect("output is utf8");
+        let event = sample_event();
+        let output = emit_to_string(&event, RenderMode::Pretty, ColorMode::Off);
         assert!(!output.contains('\x1b'));
         let payload = &output
             [output.find('{').expect("payload starts")..=output.rfind('}').expect("payload ends")];
@@ -218,5 +206,42 @@ mod tests {
         assert!(output.contains("provider.request call_01 anthropic"));
         assert!(output.contains("────────────────"));
         assert!(output.contains("\n  \"event\""));
+    }
+
+    fn strip_ansi(text: &str) -> String {
+        text.split('\x1b')
+            .enumerate()
+            .map(|(index, chunk)| {
+                if index == 0 {
+                    return chunk;
+                }
+                chunk
+                    .split_once(|character: char| character.is_ascii_alphabetic())
+                    .map_or("", |(_, rest)| rest)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn color_mode_is_injected_not_read_from_process_stderr() {
+        let event = sample_event();
+        let colored = emit_to_string(&event, RenderMode::Pretty, ColorMode::On);
+        let plain = emit_to_string(&event, RenderMode::Pretty, ColorMode::Off);
+
+        let payload_start = colored.find('{').expect("payload starts");
+        let colored_header = format!("\x1b[36m{}\x1b[0m", header(&event));
+
+        assert!(colored.contains(&colored_header));
+        assert!(colored.contains("\x1b[2m────────"));
+        assert!(colored[payload_start..].contains('\x1b'));
+        assert_eq!(strip_ansi(&colored), plain);
+        assert!(!plain.contains('\x1b'));
+    }
+
+    #[test]
+    fn compact_output_is_never_colored() {
+        let event = sample_event();
+        let output = emit_to_string(&event, RenderMode::Compact, ColorMode::On);
+        assert!(!output.contains('\x1b'));
     }
 }
