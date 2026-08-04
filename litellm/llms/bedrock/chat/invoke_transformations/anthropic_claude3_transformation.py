@@ -22,6 +22,7 @@ from litellm.llms.bedrock.common_utils import (
     normalize_tool_input_schema_types_for_bedrock_invoke,
     pop_bedrock_invoke_output_config_format,
     remove_custom_field_from_tools,
+    remove_ttl_from_cache_control,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
@@ -246,6 +247,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         # Remove `custom` field from tools (Bedrock doesn't support it)
         remove_custom_field_from_tools(anthropic_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_request)
+        remove_ttl_from_cache_control(anthropic_request, model=model)
         return anthropic_request
 
     def _compute_bedrock_invoke_beta_headers(
