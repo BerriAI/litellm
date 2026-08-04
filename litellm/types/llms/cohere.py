@@ -1,4 +1,4 @@
-from typing import Iterable, List, Optional, Union
+from typing import Final, Iterable, List, Optional, Union
 
 from typing_extensions import Literal, Required, TypedDict
 

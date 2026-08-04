@@ -7,7 +7,7 @@ Reference: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/s
 
 import base64
 from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
 
@@ -99,7 +99,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             return None, voice
 
         # voice is a string
-        voice_str = voice
+        voice_str: Final = voice
 
         # Map OpenAI voice if it's a known OpenAI voice, otherwise use directly
         if voice in self.VOICE_MAPPINGS:
@@ -109,13 +109,13 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             mapped_voice_name = voice
 
         # Extract language code from voice name (e.g., "en-US-Studio-O" -> "en-US")
-        parts = mapped_voice_name.split("-")
+        parts: Final = mapped_voice_name.split("-")
         if len(parts) >= 2:
             language_code = f"{parts[0]}-{parts[1]}"
         else:
             language_code = self.DEFAULT_LANGUAGE_CODE
 
-        voice_dict = {
+        voice_dict: Final = {
             "languageCode": language_code,
             "name": mapped_voice_name,
         }
@@ -151,9 +151,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             base_llm_http_handler: The BaseLLMHTTPHandler instance from main.py
         """
         # Resolve Vertex AI credentials using VertexBase helpers
-        vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params_dict)
-        vertex_project = self.safe_get_vertex_ai_project(litellm_params_dict)
-        vertex_location = self.safe_get_vertex_ai_location(litellm_params_dict)
+        vertex_credentials: Final = self.safe_get_vertex_ai_credentials(litellm_params_dict)
+        vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params_dict)
+        vertex_location: Final = self.safe_get_vertex_ai_location(litellm_params_dict)
 
         # Convert voice to string if it's a dict (extract name)
         # Actual voice mapping happens in map_openai_params
@@ -175,7 +175,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         )
 
         # Call the text_to_speech_handler
-        response = base_llm_http_handler.text_to_speech_handler(
+        response: Final = base_llm_http_handler.text_to_speech_handler(
             model=model,
             input=input,
             voice=voice_str,
@@ -223,7 +223,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         Returns:
             Tuple of (mapped_voice_str, mapped_params)
         """
-        mapped_params: dict[str, Any] = {}
+        mapped_params: Final[dict[str, Any]] = {}
 
         ##########################################################
         # Map voice using helper
@@ -234,7 +234,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
         # Map response format
         if "response_format" in optional_params:
-            format_name = optional_params["response_format"]
+            format_name: Final = optional_params["response_format"]
             if format_name in self.FORMAT_MAPPINGS:
                 mapped_params["audioEncoding"] = self.FORMAT_MAPPINGS[format_name]
             else:
@@ -246,7 +246,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
         # Map speed (OpenAI: 0.25-4.0, Vertex AI: speakingRate 0.25-4.0)
         if "speed" in optional_params:
-            speed = optional_params["speed"]
+            speed: Final = optional_params["speed"]
             if speed is not None:
                 mapped_params["speakingRate"] = str(speed)
 
@@ -272,7 +272,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         Note: Actual authentication is handled in transform_text_to_speech_request
         because Vertex AI requires OAuth2 token refresh
         """
-        validated_headers = headers.copy()
+        validated_headers: Final = headers.copy()
 
         # Content-Type for JSON
         validated_headers["Content-Type"] = "application/json"
@@ -313,7 +313,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             input_data.pop("ssml", None)
 
         # Check if use_ssml is set
-        use_ssml = optional_params.get("use_ssml", False)
+        use_ssml: Final = optional_params.get("use_ssml", False)
 
         if use_ssml:
             if "text" in input_data:
@@ -324,7 +324,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             # LiteLLM will auto-detect if text is in ssml format
             # check if "text" is an ssml - in this case we should pass it as ssml instead of text
             if input_data:
-                _text = input_data.get("text", None) or ""
+                _text: Final = input_data.get("text", None) or ""
                 if "<speak>" in _text:
                     input_data["ssml"] = input_data.pop("text")
 
@@ -356,7 +356,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             TextToSpeechRequestData: Contains dict_body and headers
         """
         # Get Vertex AI credentials from litellm_params
-        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = litellm_params.get("vertex_credentials")
+        vertex_credentials: Final[VERTEX_CREDENTIALS_TYPES | None] = litellm_params.get("vertex_credentials")
         vertex_project: str | None = litellm_params.get("vertex_project")
 
         ####### Authenticate with Vertex AI ########
@@ -390,12 +390,12 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         # Check for voice dict stored in:
         # 1. litellm_params by dispatch method
         # 2. optional_params by map_openai_params
-        voice_dict = litellm_params.get("vertex_voice_dict") or optional_params.get("vertex_voice_dict")
+        voice_dict: Final = litellm_params.get("vertex_voice_dict") or optional_params.get("vertex_voice_dict")
         if voice_dict is not None and isinstance(voice_dict, dict):
             vertex_voice = VertexTextToSpeechVoice(**voice_dict)
         elif voice is not None and isinstance(voice, str):
             # Handle string voice (shouldn't normally happen if dispatch was called)
-            parts = voice.split("-")
+            parts: Final = voice.split("-")
             if len(parts) >= 2:
                 language_code = f"{parts[0]}-{parts[1]}"
             else:
@@ -412,8 +412,8 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             )
 
         # Build audio configuration
-        audio_encoding = optional_params.get("audioEncoding", self.DEFAULT_AUDIO_ENCODING)
-        speaking_rate = optional_params.get("speakingRate", self.DEFAULT_SPEAKING_RATE)
+        audio_encoding: Final = optional_params.get("audioEncoding", self.DEFAULT_AUDIO_ENCODING)
+        speaking_rate: Final = optional_params.get("speakingRate", self.DEFAULT_SPEAKING_RATE)
 
         # Check for full audioConfig in optional_params
         if "audioConfig" in optional_params:
@@ -424,7 +424,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                 speakingRate=speaking_rate,
             )
 
-        request_body: dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "input": dict(vertex_input),
             "voice": dict(vertex_voice),
             "audioConfig": dict(vertex_audio_config),
@@ -450,18 +450,18 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         # Parse JSON response
-        _json_response = raw_response.json()
+        _json_response: Final = raw_response.json()
 
         # Get base64-encoded audio content
-        response_content = _json_response.get("audioContent")
+        response_content: Final = _json_response.get("audioContent")
         if not response_content:
             raise ValueError("No audioContent in Vertex AI TTS response")
 
         # Decode base64 to get binary content
-        binary_data = base64.b64decode(response_content)
+        binary_data: Final = base64.b64decode(response_content)
 
         # Create an httpx.Response object with the binary data
-        response = httpx.Response(
+        response: Final = httpx.Response(
             status_code=200,
             content=binary_data,
         )

@@ -10,7 +10,7 @@ still executes the tool, just with no credentials.
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,9 +44,9 @@ class MCPRequestContext:
         )
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
-        litellm_metadata = kwargs.get("litellm_metadata") or {}
-        metadata = kwargs.get("metadata") or {}
-        user_api_key_auth = (
+        litellm_metadata: Final = kwargs.get("litellm_metadata") or {}
+        metadata: Final = kwargs.get("metadata") or {}
+        user_api_key_auth: Final = (
             kwargs.get("user_api_key_auth")
             or litellm_metadata.get("user_api_key_auth")
             or metadata.get("user_api_key_auth")

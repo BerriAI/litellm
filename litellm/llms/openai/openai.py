@@ -1,13 +1,7 @@
 import time
 import types
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Literal,
-    Optional,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -55,8 +49,8 @@ from .common_utils import (
     drop_params_from_unprocessable_entity_error,
 )
 
-openaiOSeriesConfig = OpenAIOSeriesConfig()
-openAIGPT5Config = OpenAIGPT5Config()
+openaiOSeriesConfig: Final = OpenAIOSeriesConfig()
+openAIGPT5Config: Final = OpenAIGPT5Config()
 
 
 class MistralEmbeddingConfig:
@@ -67,7 +61,7 @@ class MistralEmbeddingConfig:
     def __init__(
         self,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -159,7 +153,7 @@ class OpenAIConfig(BaseConfig):
         top_p: int | None = None,
         response_format: dict | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -193,7 +187,7 @@ class OpenAIConfig(BaseConfig):
             return litellm.openAIGPTConfig.get_supported_openai_params(model=model)
 
     def _map_openai_params(self, non_default_params: dict, optional_params: dict, model: str) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model)
+        supported_openai_params: Final = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:
                 optional_params[param] = value
@@ -273,7 +267,7 @@ class OpenAIConfig(BaseConfig):
     ) -> ModelResponse:
         logging_obj.post_call(original_response=raw_response.text)
         logging_obj.model_call_details["response_headers"] = raw_response.headers
-        final_response_obj = cast(
+        final_response_obj: Final = cast(
             ModelResponse,
             convert_to_model_response_object(
                 response_object=raw_response.json(),
@@ -351,14 +345,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client: OpenAI | AsyncOpenAI | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> OpenAI | AsyncOpenAI | None:
-        client_initialization_params: Dict = locals()
+        client_initialization_params: Final[Dict] = locals()
         if client is None:
             if not isinstance(max_retries, int):
                 raise OpenAIError(
                     status_code=422,
                     message=f"max retries must be an int. Passed in value: {max_retries}",
                 )
-            cached_client = self.get_cached_openai_client(
+            cached_client: Final = self.get_cached_openai_client(
                 client_initialization_params=client_initialization_params,
                 client_type="openai",
             )
@@ -366,11 +360,16 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             if cached_client:
                 if isinstance(cached_client, OpenAI) or isinstance(cached_client, AsyncOpenAI):
                     return cached_client
+            http_client: Final[httpx.Client | httpx.AsyncClient | None] = (
+                OpenAIChatCompletion._get_async_http_client(shared_session=shared_session)
+                if is_async
+                else OpenAIChatCompletion._get_sync_http_client()
+            )
             if is_async:
                 _new_client: OpenAI | AsyncOpenAI = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=OpenAIChatCompletion._get_async_http_client(shared_session=shared_session),
+                    http_client=http_client,
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -379,7 +378,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 _new_client = OpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=OpenAIChatCompletion._get_sync_http_client(),
+                    http_client=http_client,
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -390,6 +389,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 openai_client=_new_client,
                 client_initialization_params=client_initialization_params,
                 client_type="openai",
+                litellm_owned_client=self.owns_wrapped_http_client(http_client),
             )
             return _new_client
 
@@ -414,7 +414,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
         - call chat.completions.create by default
         """
-        start_time = time.time()
+        start_time: Final = time.time()
         try:
             raw_response = await openai_aclient.chat.completions.with_raw_response.create(**data, timeout=timeout)
             end_time = time.time()
@@ -423,7 +423,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 headers = dict(raw_response.headers)
             else:
                 headers = {}
-            response = raw_response.parse()
+            response: Final = raw_response.parse()
             if not data.get("stream") and not hasattr(response, "model_dump"):
                 raise OpenAIError(
                     status_code=500,
@@ -432,7 +432,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             return headers, response
         except openai.APITimeoutError as e:
             end_time = time.time()
-            time_delta = round(end_time - start_time, 2)
+            time_delta: Final = round(end_time - start_time, 2)
             e.message += f" - timeout value={timeout}, time taken={time_delta} seconds"
             raise e
         except Exception as e:
@@ -459,7 +459,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 headers = dict(raw_response.headers)
             else:
                 headers = {}
-            response = raw_response.parse()
+            response: Final = raw_response.parse()
             if not data.get("stream") and not hasattr(response, "model_dump"):
                 raise OpenAIError(
                     status_code=500,
@@ -497,17 +497,17 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         from litellm._logging import verbose_logger
         from litellm.integrations.custom_logger import CustomLogger
 
-        callbacks = litellm.callbacks + (logging_obj.dynamic_success_callbacks or [])
+        callbacks: Final = litellm.callbacks + (logging_obj.dynamic_success_callbacks or [])
         # Avoid logging full callback objects to prevent leaking sensitive data
         verbose_logger.debug("LiteLLM.AgenticHooks: callbacks_count=%s", len(callbacks))
-        tools = optional_params.get("tools", [])
+        tools: Final = optional_params.get("tools", [])
         # Avoid logging full tools payloads; they may contain sensitive parameters
         verbose_logger.debug(
             "LiteLLM.AgenticHooks: tools_count=%s",
             len(tools) if isinstance(tools, list) else 1 if tools else 0,
         )
         # Get custom_llm_provider from litellm_params
-        custom_llm_provider = litellm_params.get("custom_llm_provider", "openai")
+        custom_llm_provider: Final = litellm_params.get("custom_llm_provider", "openai")
 
         for callback in callbacks:
             try:
@@ -551,7 +551,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
             except Exception as e:
                 verbose_logger.exception(
-                    f"LiteLLM.AgenticHookError: Exception in agentic completion hooks for OpenAI: {e!s}"
+                    "LiteLLM.AgenticHookError: Exception in agentic completion hooks for OpenAI: %s", e
                 )
 
         return None
@@ -563,8 +563,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model: str,
         stream_options: dict | None = None,
     ) -> CustomStreamWrapper:
-        completion_stream = MockResponseIterator(model_response=response)
-        streaming_response = CustomStreamWrapper(
+        completion_stream: Final = MockResponseIterator(model_response=response)
+        streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider="openai",
@@ -603,8 +603,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         try:
             fake_stream: bool = False
             inference_params = optional_params.copy()
-            stream_options: dict | None = inference_params.pop("stream_options", None)
-            stream: bool | None = inference_params.pop("stream", False)
+            stream_options: Final[dict | None] = inference_params.pop("stream_options", None)
+            stream: Final[bool | None] = inference_params.pop("stream", False)
             provider_config: BaseConfig | None = None
 
             if custom_llm_provider is not None and model is not None:
@@ -774,7 +774,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     # e.message
                 except Exception as e:
                     if print_verbose is not None:
-                        print_verbose(f"openai.py: Received openai error - {e!s}")
+                        print_verbose(f"openai.py: Received openai error - {e}")
                     if (
                         "Conversation roles must alternate user/assistant" in str(e)
                         or "user and assistant roles should be alternating" in str(e)
@@ -803,11 +803,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         except OpenAIError as e:
             raise e
         except Exception as e:
-            status_code = getattr(e, "status_code", 500)
+            status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_text = getattr(e, "text", str(e))
-            error_response = getattr(e, "response", None)
-            error_body = getattr(e, "body", None)
+            error_text: Final = getattr(e, "text", str(e))
+            error_response: Final = getattr(e, "response", None)
+            error_body: Final = getattr(e, "body", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(
@@ -958,7 +958,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         data["stream"] = True
         data.update(self.get_stream_options(stream_options=stream_options, api_base=api_base))
 
-        openai_client: OpenAI = self._get_openai_client(  # type: ignore
+        openai_client: Final[OpenAI] = self._get_openai_client(  # type: ignore
             is_async=False,
             api_key=api_key,
             api_base=api_base,
@@ -987,7 +987,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         )
 
         logging_obj.model_call_details["response_headers"] = headers
-        streamwrapper = CustomStreamWrapper(
+        streamwrapper: Final = CustomStreamWrapper(
             completion_stream=response,
             model=model,
             custom_llm_provider="openai",
@@ -1089,7 +1089,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 if response is not None and hasattr(response, "text"):
                     raise OpenAIError(
                         status_code=status_code,
-                        message=f"{e!s}\n\nOriginal Response: {response.text}",  # type: ignore
+                        message=f"{e}\n\nOriginal Response: {response.text}",  # type: ignore
                         headers=error_headers,
                         body=exception_body,
                     )
@@ -1111,7 +1111,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     else:
                         raise OpenAIError(
                             status_code=500,
-                            message=f"{e!s}",
+                            message=f"{e}",
                             headers=error_headers,
                             body=exception_body,
                         )
@@ -1144,8 +1144,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         """
         try:
             raw_response = await openai_aclient.embeddings.with_raw_response.create(**data, timeout=timeout)  # type: ignore
-            headers = dict(raw_response.headers)
-            response = raw_response.parse()
+            headers: Final = dict(raw_response.headers)
+            response: Final = raw_response.parse()
             return headers, response
         except Exception as e:
             raise e
@@ -1166,8 +1166,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         try:
             raw_response = openai_client.embeddings.with_raw_response.create(**data, timeout=timeout)  # type: ignore
 
-            headers = dict(raw_response.headers)
-            response = raw_response.parse()
+            headers: Final = dict(raw_response.headers)
+            response: Final = raw_response.parse()
             return headers, response
         except Exception as e:
             raise e
@@ -1186,7 +1186,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         shared_session: Optional["ClientSession"] = None,
     ):
         try:
-            openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
+            openai_aclient: Final[AsyncOpenAI] = self._get_openai_client(  # type: ignore
                 is_async=True,
                 api_key=api_key,
                 api_base=api_base,
@@ -1202,7 +1202,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 logging_obj=logging_obj,
             )
             logging_obj.model_call_details["response_headers"] = headers
-            stringified_response = response.model_dump()
+            stringified_response: Final = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=input,
@@ -1210,7 +1210,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 additional_args={"complete_input_dict": data},
                 original_response=stringified_response,
             )
-            returned_response: EmbeddingResponse = convert_to_model_response_object(
+            returned_response: Final[EmbeddingResponse] = convert_to_model_response_object(
                 response_object=stringified_response,
                 model_response_object=model_response,
                 response_type="embedding",
@@ -1234,10 +1234,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 additional_args={"complete_input_dict": data},
                 original_response=str(e),
             )
-            status_code = getattr(e, "status_code", 500)
+            status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_text = getattr(e, "text", str(e))
-            error_response = getattr(e, "response", None)
+            error_text: Final = getattr(e, "text", str(e))
+            error_response: Final = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
@@ -1259,7 +1259,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     ) -> EmbeddingResponse:
         super().embedding()
         try:
-            data = {"model": model, "input": input, **optional_params}
+            data: Final = {"model": model, "input": input, **optional_params}
             max_retries = max_retries or litellm.DEFAULT_MAX_RETRIES
             if not isinstance(max_retries, int):
                 raise OpenAIError(status_code=422, message="max retries must be an int")
@@ -1284,7 +1284,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     shared_session=shared_session,
                 )
 
-            openai_client: OpenAI = self._get_openai_client(  # type: ignore
+            openai_client: Final[OpenAI] = self._get_openai_client(  # type: ignore
                 is_async=False,
                 api_key=api_key,
                 api_base=api_base,
@@ -1310,7 +1310,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 additional_args={"complete_input_dict": data},
                 original_response=sync_embedding_response,
             )
-            response: EmbeddingResponse = convert_to_model_response_object(
+            response: Final[EmbeddingResponse] = convert_to_model_response_object(
                 response_object=sync_embedding_response.model_dump(),
                 model_response_object=model_response,
                 _response_headers=headers,
@@ -1320,10 +1320,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         except OpenAIError as e:
             raise e
         except Exception as e:
-            status_code = getattr(e, "status_code", 500)
+            status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_text = getattr(e, "text", str(e))
-            error_response = getattr(e, "response", None)
+            error_text: Final = getattr(e, "text", str(e))
+            error_response: Final = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
@@ -1344,7 +1344,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     ):
         response = None
         try:
-            openai_aclient = self._get_openai_client(
+            openai_aclient: Final = self._get_openai_client(
                 is_async=True,
                 api_key=api_key,
                 api_base=api_base,
@@ -1357,7 +1357,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             if headers:
                 data["extra_headers"] = headers
             response = await openai_aclient.images.generate(**data, timeout=timeout)  # type: ignore
-            stringified_response = response.model_dump()
+            stringified_response: Final = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
@@ -1397,7 +1397,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         data = {}
         try:
             data = {"model": model, "prompt": prompt, **optional_params}
-            max_retries = data.pop("max_retries", 2)
+            max_retries: Final = data.pop("max_retries", 2)
             if not isinstance(max_retries, int):
                 raise OpenAIError(status_code=422, message="max retries must be an int")
 
@@ -1416,7 +1416,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     headers=headers,
                 )  # type: ignore
 
-            openai_client: OpenAI = self._get_openai_client(  # type: ignore
+            openai_client: Final[OpenAI] = self._get_openai_client(  # type: ignore
                 is_async=False,
                 api_key=api_key,
                 api_base=api_base,
@@ -1441,9 +1441,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             ## COMPLETION CALL
             if headers:
                 data["extra_headers"] = headers
-            _response = openai_client.images.generate(**data, timeout=timeout)  # type: ignore
+            _response: Final = openai_client.images.generate(**data, timeout=timeout)  # type: ignore
 
-            response = _response.model_dump()
+            response: Final = _response.model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
@@ -1510,7 +1510,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 shared_session=shared_session,
             )  # type: ignore
 
-        openai_client = self._get_openai_client(
+        openai_client: Final = self._get_openai_client(
             is_async=False,
             api_key=api_key,
             api_base=api_base,
@@ -1520,7 +1520,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             shared_session=shared_session,
         )
 
-        response = cast(OpenAI, openai_client).audio.speech.create(
+        response: Final = cast(OpenAI, openai_client).audio.speech.create(
             model=model,
             voice=voice,  # type: ignore
             input=input,
@@ -1543,7 +1543,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client=None,
         shared_session: Optional["ClientSession"] = None,
     ) -> HttpxBinaryResponseContent:
-        openai_client = cast(
+        openai_client: Final = cast(
             AsyncOpenAI,
             self._get_openai_client(
                 is_async=True,
@@ -1556,7 +1556,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             ),
         )
 
-        response = await openai_client.audio.speech.create(
+        response: Final = await openai_client.audio.speech.create(
             model=model,
             voice=voice,  # type: ignore
             input=input,
@@ -1590,10 +1590,10 @@ class OpenAIFilesAPI(BaseLLM):
         client: OpenAI | AsyncOpenAI | None = None,
         _is_async: bool = False,
     ) -> OpenAI | AsyncOpenAI | None:
-        received_args = locals()
+        received_args: Final = locals()
         openai_client: OpenAI | AsyncOpenAI | None = None
         if client is None:
-            data = {}
+            data: Final = {}
             for k, v in received_args.items():
                 if k == "self" or k == "client" or k == "_is_async":
                     pass
@@ -1615,7 +1615,7 @@ class OpenAIFilesAPI(BaseLLM):
         create_file_data: CreateFileRequest,
         openai_client: AsyncOpenAI,
     ) -> OpenAIFileObject:
-        response = await openai_client.files.create(**create_file_data)  # type: ignore[arg-type]
+        response: Final = await openai_client.files.create(**create_file_data)  # type: ignore[arg-type]
         return OpenAIFileObject.model_validate(response.model_dump())
 
     def create_file(
@@ -1629,7 +1629,7 @@ class OpenAIFilesAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
     ) -> OpenAIFileObject | Coroutine[Any, Any, OpenAIFileObject]:
-        openai_client: OpenAI | AsyncOpenAI | None = self.get_openai_client(
+        openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -1651,7 +1651,7 @@ class OpenAIFilesAPI(BaseLLM):
             return self.acreate_file(  # type: ignore
                 create_file_data=create_file_data, openai_client=openai_client
             )
-        response = cast(OpenAI, openai_client).files.create(**create_file_data)  # type: ignore[arg-type]
+        response: Final = cast(OpenAI, openai_client).files.create(**create_file_data)  # type: ignore[arg-type]
         return OpenAIFileObject.model_validate(response.model_dump())
 
     async def afile_content(
@@ -1659,7 +1659,7 @@ class OpenAIFilesAPI(BaseLLM):
         file_content_request: FileContentRequest,
         openai_client: AsyncOpenAI,
     ) -> HttpxBinaryResponseContent:
-        response = await openai_client.files.content(**file_content_request)
+        response: Final = await openai_client.files.content(**file_content_request)
         return HttpxBinaryResponseContent(response=response.response)
 
     def file_content(
@@ -1673,7 +1673,7 @@ class OpenAIFilesAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
     ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
-        openai_client: OpenAI | AsyncOpenAI | None = self.get_openai_client(
+        openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -1696,7 +1696,7 @@ class OpenAIFilesAPI(BaseLLM):
                 file_content_request=file_content_request,
                 openai_client=openai_client,
             )
-        response = cast(OpenAI, openai_client).files.content(**file_content_request)
+        response: Final = cast(OpenAI, openai_client).files.content(**file_content_request)
 
         return HttpxBinaryResponseContent(response=response.response)
 
@@ -1706,9 +1706,9 @@ class OpenAIFilesAPI(BaseLLM):
         openai_client: AsyncOpenAI,
         chunk_size: int = 1024 * 1024,
     ) -> FileContentStreamingResult:
-        response_cm = openai_client.files.with_streaming_response.content(**file_content_request)
-        response = await response_cm.__aenter__()
-        headers = dict(response.headers)
+        response_cm: Final = openai_client.files.with_streaming_response.content(**file_content_request)
+        response: Final = await response_cm.__aenter__()
+        headers: Final = dict(response.headers)
 
         async def _stream() -> AsyncIterator[bytes]:
             exc: BaseException | None = None
@@ -1738,7 +1738,7 @@ class OpenAIFilesAPI(BaseLLM):
         chunk_size: int = 1024 * 1024,
         client: OpenAI | AsyncOpenAI | None = None,
     ) -> FileContentStreamingResult:
-        openai_client: OpenAI | AsyncOpenAI | None = self.get_openai_client(
+        openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -1763,9 +1763,9 @@ class OpenAIFilesAPI(BaseLLM):
                 chunk_size=chunk_size,
             )
 
-        response_cm = cast(OpenAI, openai_client).files.with_streaming_response.content(**file_content_request)
-        response = response_cm.__enter__()
-        headers = dict(response.headers)
+        response_cm: Final = cast(OpenAI, openai_client).files.with_streaming_response.content(**file_content_request)
+        response: Final = response_cm.__enter__()
+        headers: Final = dict(response.headers)
 
         def _stream() -> Iterator[bytes]:
             exc: BaseException | None = None
@@ -1787,7 +1787,7 @@ class OpenAIFilesAPI(BaseLLM):
         file_id: str,
         openai_client: AsyncOpenAI,
     ) -> FileObject:
-        response = await openai_client.files.retrieve(file_id=file_id)
+        response: Final = await openai_client.files.retrieve(file_id=file_id)
         return response
 
     def retrieve_file(
@@ -1801,7 +1801,7 @@ class OpenAIFilesAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
     ):
-        openai_client: OpenAI | AsyncOpenAI | None = self.get_openai_client(
+        openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -1824,7 +1824,7 @@ class OpenAIFilesAPI(BaseLLM):
                 file_id=file_id,
                 openai_client=openai_client,
             )
-        response = openai_client.files.retrieve(file_id=file_id)
+        response: Final = openai_client.files.retrieve(file_id=file_id)
 
         return response
 
@@ -1833,7 +1833,7 @@ class OpenAIFilesAPI(BaseLLM):
         file_id: str,
         openai_client: AsyncOpenAI,
     ) -> FileDeleted:
-        response = await openai_client.files.delete(file_id=file_id)
+        response: Final = await openai_client.files.delete(file_id=file_id)
         return response
 
     def delete_file(
@@ -1847,7 +1847,7 @@ class OpenAIFilesAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
     ):
-        openai_client: OpenAI | AsyncOpenAI | None = self.get_openai_client(
+        openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -1870,7 +1870,7 @@ class OpenAIFilesAPI(BaseLLM):
                 file_id=file_id,
                 openai_client=openai_client,
             )
-        response = openai_client.files.delete(file_id=file_id)
+        response: Final = openai_client.files.delete(file_id=file_id)
 
         return response
 
@@ -1896,7 +1896,7 @@ class OpenAIFilesAPI(BaseLLM):
         purpose: str | None = None,
         client: OpenAI | AsyncOpenAI | None = None,
     ):
-        openai_client: OpenAI | AsyncOpenAI | None = self.get_openai_client(
+        openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -1950,10 +1950,10 @@ class OpenAIBatchesAPI(BaseLLM):
         client: OpenAI | AsyncOpenAI | None = None,
         _is_async: bool = False,
     ) -> OpenAI | AsyncOpenAI | None:
-        received_args = locals()
+        received_args: Final = locals()
         openai_client: OpenAI | AsyncOpenAI | None = None
         if client is None:
-            data = {}
+            data: Final = {}
             for k, v in received_args.items():
                 if k == "self" or k == "client" or k == "_is_async":
                     pass
@@ -1975,7 +1975,7 @@ class OpenAIBatchesAPI(BaseLLM):
         create_batch_data: CreateBatchRequest,
         openai_client: AsyncOpenAI,
     ) -> LiteLLMBatch:
-        response = await openai_client.batches.create(**create_batch_data)  # type: ignore[arg-type]
+        response: Final = await openai_client.batches.create(**create_batch_data)  # type: ignore[arg-type]
         return LiteLLMBatch.model_validate(response.model_dump())
 
     def create_batch(
@@ -1989,7 +1989,7 @@ class OpenAIBatchesAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
     ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
-        openai_client: OpenAI | AsyncOpenAI | None = self.get_openai_client(
+        openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2011,7 +2011,7 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.acreate_batch(  # type: ignore
                 create_batch_data=create_batch_data, openai_client=openai_client
             )
-        response = cast(OpenAI, openai_client).batches.create(**create_batch_data)  # type: ignore[arg-type]
+        response: Final = cast(OpenAI, openai_client).batches.create(**create_batch_data)  # type: ignore[arg-type]
 
         return LiteLLMBatch.model_validate(response.model_dump())
 
@@ -2021,7 +2021,7 @@ class OpenAIBatchesAPI(BaseLLM):
         openai_client: AsyncOpenAI,
     ) -> LiteLLMBatch:
         verbose_logger.debug("retrieving batch, args= %s", retrieve_batch_data)
-        response = await openai_client.batches.retrieve(**retrieve_batch_data)  # type: ignore[arg-type]
+        response: Final = await openai_client.batches.retrieve(**retrieve_batch_data)  # type: ignore[arg-type]
         return LiteLLMBatch.model_validate(response.model_dump())
 
     def retrieve_batch(
@@ -2035,7 +2035,7 @@ class OpenAIBatchesAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | None = None,
     ):
-        openai_client: OpenAI | AsyncOpenAI | None = self.get_openai_client(
+        openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2057,7 +2057,7 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.aretrieve_batch(  # type: ignore
                 retrieve_batch_data=retrieve_batch_data, openai_client=openai_client
             )
-        response = cast(OpenAI, openai_client).batches.retrieve(**retrieve_batch_data)  # type: ignore[arg-type]
+        response: Final = cast(OpenAI, openai_client).batches.retrieve(**retrieve_batch_data)  # type: ignore[arg-type]
         return LiteLLMBatch.model_validate(response.model_dump())
 
     async def acancel_batch(
@@ -2066,7 +2066,7 @@ class OpenAIBatchesAPI(BaseLLM):
         openai_client: AsyncOpenAI,
     ) -> LiteLLMBatch:
         verbose_logger.debug("async cancelling batch, args= %s", cancel_batch_data)
-        response = await openai_client.batches.cancel(**cancel_batch_data)
+        response: Final = await openai_client.batches.cancel(**cancel_batch_data)
         return LiteLLMBatch.model_validate(response.model_dump())
 
     def cancel_batch(
@@ -2080,7 +2080,7 @@ class OpenAIBatchesAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | None = None,
     ):
-        openai_client: OpenAI | AsyncOpenAI | None = self.get_openai_client(
+        openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2106,7 +2106,7 @@ class OpenAIBatchesAPI(BaseLLM):
         # At this point, openai_client is guaranteed to be a sync OpenAI client
         if not isinstance(openai_client, OpenAI):
             raise ValueError("OpenAI client is not an instance of OpenAI. Make sure you passed a sync OpenAI client.")
-        response = openai_client.batches.cancel(**cancel_batch_data)
+        response: Final = openai_client.batches.cancel(**cancel_batch_data)
         return LiteLLMBatch.model_validate(response.model_dump())
 
     async def alist_batches(
@@ -2116,7 +2116,7 @@ class OpenAIBatchesAPI(BaseLLM):
         limit: int | None = None,
     ):
         verbose_logger.debug("listing batches, after= %s, limit= %s", after, limit)
-        response = await openai_client.batches.list(after=after, limit=limit)  # type: ignore
+        response: Final = await openai_client.batches.list(after=after, limit=limit)  # type: ignore
         return response
 
     def list_batches(
@@ -2131,7 +2131,7 @@ class OpenAIBatchesAPI(BaseLLM):
         limit: int | None = None,
         client: OpenAI | None = None,
     ):
-        openai_client: OpenAI | AsyncOpenAI | None = self.get_openai_client(
+        openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2153,7 +2153,7 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.alist_batches(  # type: ignore
                 openai_client=openai_client, after=after, limit=limit
             )
-        response = openai_client.batches.list(after=after, limit=limit)  # type: ignore
+        response: Final = openai_client.batches.list(after=after, limit=limit)  # type: ignore
         return response
 
 
@@ -2170,9 +2170,9 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | None = None,
     ) -> OpenAI:
-        received_args = locals()
+        received_args: Final = locals()
         if client is None:
-            data = {}
+            data: Final = {}
             for k, v in received_args.items():
                 if k == "self" or k == "client":
                     pass
@@ -2195,9 +2195,9 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: AsyncOpenAI | None = None,
     ) -> AsyncOpenAI:
-        received_args = locals()
+        received_args: Final = locals()
         if client is None:
-            data = {}
+            data: Final = {}
             for k, v in received_args.items():
                 if k == "self" or k == "client":
                     pass
@@ -2226,7 +2226,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         before: str | None = None,
         after: str | None = None,
     ) -> AsyncCursorPage[Assistant]:
-        openai_client = self.async_get_openai_client(
+        openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2234,7 +2234,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             organization=organization,
             client=client,
         )
-        request_params = {
+        request_params: Final = {
             "order": order,
             "limit": limit,
         }
@@ -2243,7 +2243,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         if after:
             request_params["after"] = after
 
-        response = await openai_client.beta.assistants.list(**request_params)  # type: ignore
+        response: Final = await openai_client.beta.assistants.list(**request_params)  # type: ignore
 
         return response
 
@@ -2300,7 +2300,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 organization=organization,
                 client=client,
             )
-        openai_client = self.get_openai_client(
+        openai_client: Final = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2309,7 +2309,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        request_params = {
+        request_params: Final = {
             "order": order,
             "limit": limit,
         }
@@ -2319,7 +2319,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         if after:
             request_params["after"] = after
 
-        response = openai_client.beta.assistants.list(**request_params)  # type: ignore
+        response: Final = openai_client.beta.assistants.list(**request_params)  # type: ignore
 
         return response
 
@@ -2334,7 +2334,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         client: AsyncOpenAI | None,
         create_assistant_data: dict,
     ) -> Assistant:
-        openai_client = self.async_get_openai_client(
+        openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2343,7 +2343,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        response = await openai_client.beta.assistants.create(**create_assistant_data)
+        response: Final = await openai_client.beta.assistants.create(**create_assistant_data)
 
         return response
 
@@ -2368,7 +2368,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 client=client,
                 create_assistant_data=create_assistant_data,
             )
-        openai_client = self.get_openai_client(
+        openai_client: Final = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2377,7 +2377,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        response = openai_client.beta.assistants.create(**create_assistant_data)
+        response: Final = openai_client.beta.assistants.create(**create_assistant_data)
         return response
 
     # Delete Assistant
@@ -2391,7 +2391,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         client: AsyncOpenAI | None,
         assistant_id: str,
     ) -> AssistantDeleted:
-        openai_client = self.async_get_openai_client(
+        openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2400,7 +2400,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        response = await openai_client.beta.assistants.delete(assistant_id=assistant_id)
+        response: Final = await openai_client.beta.assistants.delete(assistant_id=assistant_id)
 
         return response
 
@@ -2425,7 +2425,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 client=client,
                 assistant_id=assistant_id,
             )
-        openai_client = self.get_openai_client(
+        openai_client: Final = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2434,7 +2434,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        response = openai_client.beta.assistants.delete(assistant_id=assistant_id)
+        response: Final = openai_client.beta.assistants.delete(assistant_id=assistant_id)
         return response
 
     ### MESSAGES ###
@@ -2450,7 +2450,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: AsyncOpenAI | None = None,
     ) -> OpenAIMessage:
-        openai_client = self.async_get_openai_client(
+        openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2459,7 +2459,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        thread_message: OpenAIMessage = await openai_client.beta.threads.messages.create(  # type: ignore
+        thread_message: Final[OpenAIMessage] = await openai_client.beta.threads.messages.create(  # type: ignore
             thread_id,
             **message_data,  # type: ignore
         )
@@ -2529,7 +2529,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 organization=organization,
                 client=client,
             )
-        openai_client = self.get_openai_client(
+        openai_client: Final = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2538,7 +2538,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        thread_message: OpenAIMessage = openai_client.beta.threads.messages.create(  # type: ignore
+        thread_message: Final[OpenAIMessage] = openai_client.beta.threads.messages.create(  # type: ignore
             thread_id,
             **message_data,  # type: ignore
         )
@@ -2561,7 +2561,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: AsyncOpenAI | None = None,
     ) -> AsyncCursorPage[OpenAIMessage]:
-        openai_client = self.async_get_openai_client(
+        openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2570,7 +2570,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        response = await openai_client.beta.threads.messages.list(thread_id=thread_id)
+        response: Final = await openai_client.beta.threads.messages.list(thread_id=thread_id)
 
         return response
 
@@ -2627,7 +2627,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 organization=organization,
                 client=client,
             )
-        openai_client = self.get_openai_client(
+        openai_client: Final = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2636,7 +2636,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        response = openai_client.beta.threads.messages.list(thread_id=thread_id)
+        response: Final = openai_client.beta.threads.messages.list(thread_id=thread_id)
 
         return response
 
@@ -2653,7 +2653,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         client: AsyncOpenAI | None,
         messages: Iterable[OpenAICreateThreadParamsMessage] | None,
     ) -> Thread:
-        openai_client = self.async_get_openai_client(
+        openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2662,13 +2662,13 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        data = {}
+        data: Final = {}
         if messages is not None:
             data["messages"] = messages  # type: ignore
         if metadata is not None:
             data["metadata"] = metadata  # type: ignore
 
-        message_thread = await openai_client.beta.threads.create(**data)  # type: ignore
+        message_thread: Final = await openai_client.beta.threads.create(**data)  # type: ignore
 
         return Thread(**message_thread.dict())
 
@@ -2739,7 +2739,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 client=client,
                 messages=messages,
             )
-        openai_client = self.get_openai_client(
+        openai_client: Final = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2748,13 +2748,13 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        data = {}
+        data: Final = {}
         if messages is not None:
             data["messages"] = messages  # type: ignore
         if metadata is not None:
             data["metadata"] = metadata  # type: ignore
 
-        message_thread = openai_client.beta.threads.create(**data)  # type: ignore
+        message_thread: Final = openai_client.beta.threads.create(**data)  # type: ignore
 
         return Thread(**message_thread.dict())
 
@@ -2768,7 +2768,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: AsyncOpenAI | None,
     ) -> Thread:
-        openai_client = self.async_get_openai_client(
+        openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2777,7 +2777,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        response = await openai_client.beta.threads.retrieve(thread_id=thread_id)
+        response: Final = await openai_client.beta.threads.retrieve(thread_id=thread_id)
 
         return Thread(**response.dict())
 
@@ -2834,7 +2834,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 organization=organization,
                 client=client,
             )
-        openai_client = self.get_openai_client(
+        openai_client: Final = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2843,7 +2843,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        response = openai_client.beta.threads.retrieve(thread_id=thread_id)
+        response: Final = openai_client.beta.threads.retrieve(thread_id=thread_id)
 
         return Thread(**response.dict())
 
@@ -2869,7 +2869,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: AsyncOpenAI | None,
     ) -> Run:
-        openai_client = self.async_get_openai_client(
+        openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -2878,7 +2878,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        response = await openai_client.beta.threads.runs.create_and_poll(  # type: ignore
+        response: Final = await openai_client.beta.threads.runs.create_and_poll(  # type: ignore
             thread_id=thread_id,
             assistant_id=assistant_id,
             additional_instructions=additional_instructions,
@@ -2902,7 +2902,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         tools: Iterable[AssistantToolParam] | None,
         event_handler: AssistantEventHandler | None,
     ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
-        data: Dict[str, Any] = {
+        data: Final[Dict[str, Any]] = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "additional_instructions": additional_instructions,
@@ -2927,7 +2927,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         tools: Iterable[AssistantToolParam] | None,
         event_handler: AssistantEventHandler | None,
     ) -> AssistantStreamManager[AssistantEventHandler]:
-        data: Dict[str, Any] = {
+        data: Final[Dict[str, Any]] = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "additional_instructions": additional_instructions,
@@ -3009,7 +3009,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     ):
         if arun_thread is not None and arun_thread is True:
             if stream is not None and stream is True:
-                _client = self.async_get_openai_client(
+                _client: Final = self.async_get_openai_client(
                     api_key=api_key,
                     api_base=api_base,
                     timeout=timeout,
@@ -3044,7 +3044,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 organization=organization,
                 client=client,
             )
-        openai_client = self.get_openai_client(
+        openai_client: Final = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -3066,7 +3066,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 event_handler=event_handler,
             )
 
-        response = openai_client.beta.threads.runs.create_and_poll(  # type: ignore
+        response: Final = openai_client.beta.threads.runs.create_and_poll(  # type: ignore
             thread_id=thread_id,
             assistant_id=assistant_id,
             additional_instructions=additional_instructions,

@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Required, TypedDict
@@ -141,7 +141,7 @@ class Role(Enum):
     USER = "user"
 
 
-default_roles = [Role.SYSTEM, Role.ASSISTANT, Role.USER]
+default_roles: Final = [Role.SYSTEM, Role.ASSISTANT, Role.USER]
 
 
 class GuardrailItemSpec(TypedDict, total=False):
@@ -262,7 +262,7 @@ class PiiEntityType(str, Enum):
 
 
 # Define mappings of PII entity types by category
-PII_ENTITY_CATEGORIES_MAP = {
+PII_ENTITY_CATEGORIES_MAP: Final = {
     PiiEntityCategory.GENERAL: [
         PiiEntityType.DATE_TIME,
         PiiEntityType.EMAIL_ADDRESS,
@@ -1001,7 +1001,7 @@ class LitellmParams(
             raise ValueError(f"timeout must be numeric, got {v!r}") from e
 
     def __init__(self, **kwargs):
-        default_on = kwargs.pop("default_on", None)
+        default_on: Final = kwargs.pop("default_on", None)
         if default_on is not None:
             kwargs["default_on"] = default_on
         else:

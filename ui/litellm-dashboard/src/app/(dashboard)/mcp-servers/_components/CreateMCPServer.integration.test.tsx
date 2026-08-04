@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
 import { setToken } from "@/utils/mcpTokenStore";
-import CreateMCPServer from "./create_mcp_server";
+import CreateMCPServer from "./CreateMCPServer";
 import { selectAntOption } from "./testUtils";
 
 vi.mock("@/components/networking", () => ({
@@ -120,10 +120,48 @@ describe("CreateMCPServer", () => {
     expect(screen.getByText("Add New MCP Server")).toBeInTheDocument();
   });
 
-  it("should not render when user is not an admin", () => {
+  // The modal DOES render for a non-admin; it retitles and routes the submit to the review endpoint.
+  // The assertion this replaced only checked that the admin title was absent, which passed for the
+  // wrong reason and left the whole non-admin submission path uncovered.
+  it("routes a non-admin submission to the review endpoint instead of creating the server", async () => {
     render(<CreateMCPServer {...defaultProps} userRole="Internal User" />);
 
+    expect(screen.getByText("Submit MCP Server for Review")).toBeInTheDocument();
     expect(screen.queryByText("Add New MCP Server")).not.toBeInTheDocument();
+
+    await selectAntOption("Transport Type", "Streamable HTTP");
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
+    });
+    await act(async () => {
+      fireEvent.change(getServerNameInput(), { target: { value: "Submitted_Server" } });
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://example.com/mcp" },
+      });
+    });
+    await selectAntOption("Authentication", "None");
+
+    vi.mocked(networking.registerMCPServer).mockResolvedValue({
+      server_id: "submitted-1",
+      server_name: "Submitted_Server",
+      alias: "Submitted_Server",
+      url: "https://example.com/mcp",
+      transport: "http",
+      auth_type: "none",
+      created_at: "2024-01-01T00:00:00Z",
+      created_by: "user-1",
+      updated_at: "2024-01-01T00:00:00Z",
+      updated_by: "user-1",
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+    });
+
+    await waitFor(() => expect(networking.registerMCPServer).toHaveBeenCalledTimes(1));
+    expect(networking.createMCPServer).not.toHaveBeenCalled();
   });
 
   it("should show transport type options", async () => {
@@ -1591,44 +1629,8 @@ describe("CreateMCPServer", () => {
       expect(payload.credentials?.client_secret).toBeUndefined();
     });
 
-    it("omits token_validation from payload when token_validation_json is empty", async () => {
-      vi.mocked(networking.createMCPServer).mockResolvedValue({
-        server_id: "new-server-oauth",
-        server_name: "OAuth_Server",
-        alias: "OAuth_Server",
-        url: "https://example.com/mcp",
-        transport: "http",
-        auth_type: "oauth2",
-        created_at: "2024-01-01T00:00:00Z",
-        created_by: "user-1",
-        updated_at: "2024-01-01T00:00:00Z",
-        updated_by: "user-1",
-      });
-
-      await setupOAuthInteractive();
-
-      const nameInput = document.getElementById("server_name") as HTMLInputElement;
-      await act(async () => {
-        fireEvent.change(nameInput, { target: { value: "OAuth_Server" } });
-      });
-      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
-      await act(async () => {
-        fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
-      });
-
-      // Leave token_validation_json empty
-      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
-      await act(async () => {
-        fireEvent.click(submitButton);
-      });
-
-      await waitFor(() => {
-        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
-      });
-
-      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
-      expect(payload.token_validation).toBeUndefined();
-    });
+    // Empty/whitespace token_validation is covered in createServerPayload.test.ts; the sibling
+    // test above still proves the textarea reaches token_validation_json.
 
     it("includes credentials.token_endpoint_auth_method in payload when client_secret_basic is selected", async () => {
       vi.mocked(networking.createMCPServer).mockResolvedValue({
@@ -1670,43 +1672,8 @@ describe("CreateMCPServer", () => {
       expect(payload.credentials?.token_endpoint_auth_method).toBe("client_secret_basic");
     });
 
-    it("omits token_endpoint_auth_method from credentials when left blank", async () => {
-      vi.mocked(networking.createMCPServer).mockResolvedValue({
-        server_id: "new-server-oauth",
-        server_name: "OAuth_Server",
-        alias: "OAuth_Server",
-        url: "https://example.com/mcp",
-        transport: "http",
-        auth_type: "oauth2",
-        created_at: "2024-01-01T00:00:00Z",
-        created_by: "user-1",
-        updated_at: "2024-01-01T00:00:00Z",
-        updated_by: "user-1",
-      });
-
-      await setupOAuthInteractive();
-
-      const nameInput = document.getElementById("server_name") as HTMLInputElement;
-      await act(async () => {
-        fireEvent.change(nameInput, { target: { value: "OAuth_Server" } });
-      });
-      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
-      await act(async () => {
-        fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
-      });
-
-      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
-      await act(async () => {
-        fireEvent.click(submitButton);
-      });
-
-      await waitFor(() => {
-        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
-      });
-
-      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
-      expect(payload.credentials?.token_endpoint_auth_method).toBeUndefined();
-    });
+    // Blank credential keys are dropped by the shared filter, covered in createServerPayload.test.ts;
+    // the sibling test above still proves the select reaches credentials.token_endpoint_auth_method.
 
     it("persists access + refresh token to the DB on submit for OBO mode", async () => {
       // "Authorize & Fetch" produced a token before submit.
@@ -2052,14 +2019,8 @@ describe("CreateMCPServer oauth2_flow persistence", () => {
     expect(payload.oauth2_flow).toBe("client_credentials");
   });
 
-  it("sends no oauth2_flow for a non-oauth2 create", async () => {
-    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, auth_type: "none" });
-    await setupHttpServerForm();
-    await selectAntOption("Authentication", "None");
-
-    const payload = await submitCreate();
-    expect(payload.oauth2_flow).toBeUndefined();
-  });
+  // oauth2_flow branch coverage lives in createServerPayload.test.ts; the two cases above keep
+  // the dropdown-to-payload wiring they uniquely prove.
 });
 
 describe("CreateMCPServer dcr_bridge toggle", () => {
@@ -2185,18 +2146,9 @@ describe("CreateMCPServer dcr_bridge toggle", () => {
     expect(payload.dcr_bridge).toBe(false);
   });
 
-  it.each([
-    ["none", "None"],
-    ["api_key", "API Key"],
-    ["oauth2", "OAuth"],
-  ])("forces an explicit dcr_bridge: false for %s", async (authType, optionLabel) => {
-    vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, auth_type: authType });
-    await setupHttpServerForm();
-    await selectAntOption("Authentication", optionLabel);
-
-    const payload = await submitCreate();
-    expect(payload.dcr_bridge).toBe(false);
-  });
+  // Forcing dcr_bridge false for every non-client-forwarded auth type is covered in
+  // createServerPayload.test.ts. The two form-state cases below stay: they prove the Form.Item
+  // unmounts on a switch away, and that the live value survives a client-forwarded swap.
 
   it("forces dcr_bridge: false when the auth type is switched away after toggling", async () => {
     vi.mocked(networking.createMCPServer).mockResolvedValue({ ...createdServer, auth_type: "none" });

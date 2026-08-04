@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -93,7 +93,7 @@ class BaseContainerConfig(ABC):
         OPTIONAL - Some providers need `model` in `api_base`.
         """
         if api_base is None:
-            msg = "api_base is required"
+            msg: Final = "api_base is required"
             raise ValueError(msg)
         return api_base
 
