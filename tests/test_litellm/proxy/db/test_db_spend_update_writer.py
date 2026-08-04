@@ -2269,7 +2269,21 @@ class _RegistryOnlyRouter:
         raise AssertionError("recording a turn must not enumerate model_list")
 
 
-def _turn_payload(model_group: str, metadata: str | None = None, session_id: str = "session-1") -> dict:
+def _turn_payload(
+    model_group: str,
+    metadata: str | None = None,
+    session_id: str = "session-1",
+    router_type: str | None = "complexity",
+) -> dict:
+    """One auto-routed spend payload. `router_type=None` is a request whose routing
+    decision was cleared, which is what a fallback off the auto-router leaves behind."""
+    body: dict = {"usage_object": {"cache_read_input_tokens": 6000}}
+    if router_type is not None:
+        body["routing_decision"] = {
+            "router_model_name": model_group,
+            "router_type": router_type,
+            "routed_model": "anthropic/claude-haiku-4-5",
+        }
     return {
         "session_id": session_id,
         "model_group": model_group,
@@ -2281,9 +2295,7 @@ def _turn_payload(model_group: str, metadata: str | None = None, session_id: str
         "prompt_tokens": 8000,
         "completion_tokens": 200,
         "total_tokens": 8200,
-        "metadata": json.dumps({"usage_object": {"cache_read_input_tokens": 6000}})
-        if metadata is None
-        else metadata,
+        "metadata": json.dumps(body) if metadata is None else metadata,
     }
 
 
@@ -2306,24 +2318,26 @@ class TestRecordingAnAutoRouterTurn:
 
         assert queue.staged == [(("session-1", "smart-router"), "complexity", "anthropic/claude-haiku-4-5")]
 
-    @pytest.mark.parametrize(
-        "registry, kind",
-        [
-            ("complexity", "complexity"),
-            ("quality", "quality"),
-            ("adaptive", "adaptive"),
-            ("semantic", "semantic"),
-        ],
-    )
-    async def test_every_kind_of_auto_router_is_folded_under_its_own_kind(self, registry, kind):
-        """All four are auto-routers the benchmarks tab reports on, and only the three
-        strategy routers record a routing decision on the request; a semantic one
-        records none, so its traffic is recognised by the group it served."""
-        router = _RegistryOnlyRouter(**{registry: ("a-router",)})
+    @pytest.mark.parametrize("kind", ["complexity", "quality", "adaptive", "semantic"])
+    async def test_a_turn_is_folded_under_the_kind_the_router_recorded(self, kind):
+        """Every strategy records its own kind, semantic included since it began
+        emitting a decision. The registry the group sits in only answers whether it is
+        an auto-router at all, so the two deliberately disagree here: one alias can own
+        several strategies and only the router knows which of them served the request."""
+        router = _RegistryOnlyRouter(complexity=("a-router",))
 
-        queue = await _record(router, _turn_payload("a-router"))
+        queue = await _record(router, _turn_payload("a-router", router_type=kind))
 
         assert [staged[1] for staged in queue.staged] == [kind]
+
+    async def test_a_request_whose_decision_was_cleared_stages_nothing(self):
+        """Falling back off an auto-router clears the decision, and the model that
+        actually served the turn was not the router's to count."""
+        router = _RegistryOnlyRouter(complexity=("smart-router",))
+
+        queue = await _record(router, _turn_payload("smart-router", router_type=None))
+
+        assert queue.staged == []
 
     async def test_a_group_no_auto_router_serves_stages_nothing(self):
         router = _RegistryOnlyRouter(complexity=("smart-router",))
