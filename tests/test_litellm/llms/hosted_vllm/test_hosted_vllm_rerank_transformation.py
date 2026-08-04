@@ -129,7 +129,23 @@ class TestHostedVLLMRerankTransform:
         assert result.results[0]["relevance_score"] == 0.9
         assert result.results[0]["document"]["text"] == "doc1 text"
         assert result.meta["billed_units"]["total_tokens"] == 42
+        assert result.meta["billed_units"]["search_units"] == 1
         assert result.meta["tokens"]["input_tokens"] == 42
+
+    def test_transform_response_reports_search_unit_for_per_query_cost(self):
+        response_dict = {
+            "results": [{"index": 0, "relevance_score": 0.9}],
+            "usage": {"total_tokens": 42},
+        }
+        result = self.config._transform_response(response_dict)
+        assert result.meta["billed_units"]["search_units"] == 1
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model=self.model,
+            billed_units=result.meta["billed_units"],
+            model_info={"input_cost_per_query": 0.002},
+        )
+        assert prompt_cost == 0.002
+        assert completion_cost == 0.0
 
     def test_transform_response_missing_results(self):
         response_dict = {"id": "abc123", "usage": {"total_tokens": 10}}
