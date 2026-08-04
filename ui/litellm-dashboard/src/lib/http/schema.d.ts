@@ -14729,6 +14729,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/user/directory_search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Directory User Search
+         * @description Search the configured identity provider's directory for the Admin UI
+         *     invite-user flow.
+         *
+         *     Backed by the first configured provider in
+         *     `litellm.proxy.management_endpoints.directory_search` (currently Microsoft
+         *     Entra ID only - see `directory_search/microsoft.py` for its required
+         *     config). A 404 is returned if no provider is configured.
+         *
+         *     Restricted to callers with admin view access (`PROXY_ADMIN` or
+         *     `PROXY_ADMIN_VIEW_ONLY`). Queries shorter than
+         *     `DIRECTORY_SEARCH_MIN_QUERY_LENGTH` return `[]` without contacting the
+         *     provider.
+         */
+        get: operations["directory_user_search_user_directory_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/user/filter/ui": {
         parameters: {
             query?: never;
@@ -23763,6 +23794,19 @@ export interface components {
             model_name: string;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * DirectoryUser
+         * @description A single result row from a directory-search provider (see
+         *     `litellm.proxy.management_endpoints.directory_search`).
+         */
+        DirectoryUser: {
+            /** Display Name */
+            display_name?: string | null;
+            /** Email */
+            email: string;
+            /** Id */
+            id: string;
         };
         /**
          * DistinctTagResponse
@@ -52420,6 +52464,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    directory_user_search_user_directory_search_get: {
+        parameters: {
+            query: {
+                query: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DirectoryUser"][];
                 };
             };
             /** @description Validation Error */

@@ -605,14 +605,16 @@ describe("directoryUsersSearchCall", () => {
   it("should throw with the readable message from litellm's ProxyException error envelope", async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
-      json: vi.fn().mockResolvedValue({
-        error: {
-          message: "Microsoft directory search is not configured.",
-          type: "internal_server_error",
-          param: "None",
-          code: "404",
-        },
-      }),
+      text: vi.fn().mockResolvedValue(
+        JSON.stringify({
+          error: {
+            message: "Microsoft directory search is not configured.",
+            type: "internal_server_error",
+            param: "None",
+            code: "404",
+          },
+        }),
+      ),
     } as any);
 
     await expect(Networking.directoryUsersSearchCall("token", "alice")).rejects.toThrow(

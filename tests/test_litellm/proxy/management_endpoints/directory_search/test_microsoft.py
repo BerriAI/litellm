@@ -1,14 +1,10 @@
 import asyncio
-import os
-import sys
 import time
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
-
-from litellm.proxy.management_endpoints import microsoft_graph_directory_search as mgds
+from litellm.proxy.management_endpoints.directory_search import microsoft as mgds
 
 
 @pytest.fixture(autouse=True)
@@ -78,9 +74,7 @@ class TestIsMicrosoftDirectorySearchConfigured:
         monkeypatch.setenv("MICROSOFT_TENANT", "generic-tenant")
         assert mgds._get_microsoft_directory_tenant() == "directory-tenant"
 
-    def test_explicitly_empty_directory_var_does_not_fall_back_to_generic(
-        self, monkeypatch
-    ):
+    def test_explicitly_empty_directory_var_does_not_fall_back_to_generic(self, monkeypatch):
         """An explicitly-set-but-empty MICROSOFT_DIRECTORY_TENANT (e.g. an
         unresolved template variable) must not silently resolve to the
         generic MICROSOFT_TENANT used for SSO login."""
@@ -129,6 +123,9 @@ class TestGetMicrosoftGraphAccessToken:
         _set_directory_env(monkeypatch)
         mgds._microsoft_graph_token_cache["access_token"] = "cached-token"
         mgds._microsoft_graph_token_cache["expires_at"] = time.time() + 3600
+        mgds._microsoft_graph_token_cache["credentials_fingerprint"] = mgds._credentials_fingerprint(
+            "tenant-1", "client-1", "secret-1"
+        )
 
         mock_get_client = mocker.patch.object(mgds, "get_async_httpx_client")
 
@@ -136,6 +133,38 @@ class TestGetMicrosoftGraphAccessToken:
 
         assert token == "cached-token"
         mock_get_client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cache_ignored_when_credentials_changed(self, monkeypatch, mocker):
+        """A runtime credential change (secret rotation, switching between a
+        dedicated app registration and the shared SSO one) must not reuse a
+        token cached under the previous tenant/client_id/client_secret."""
+        _set_directory_env(monkeypatch, tenant="old-tenant")
+        mgds._microsoft_graph_token_cache["access_token"] = "old-tenant-token"
+        mgds._microsoft_graph_token_cache["expires_at"] = time.time() + 3600
+        mgds._microsoft_graph_token_cache["credentials_fingerprint"] = mgds._credentials_fingerprint(
+            "old-tenant", "client-1", "secret-1"
+        )
+
+        # Credentials change at runtime (e.g. a secret rotation).
+        monkeypatch.setenv("MICROSOFT_DIRECTORY_TENANT", "new-tenant")
+
+        mock_response = mocker.MagicMock()
+        mock_response.json.return_value = {
+            "access_token": "new-tenant-token",
+            "expires_in": 3600,
+        }
+        mock_client = mocker.MagicMock()
+
+        async def mock_post(*args, **kwargs):
+            return mock_response
+
+        mock_client.post = mock_post
+        mocker.patch.object(mgds, "get_async_httpx_client", return_value=mock_client)
+
+        token = await mgds._get_microsoft_graph_access_token()
+
+        assert token == "new-tenant-token"
 
     @pytest.mark.asyncio
     async def test_expired_cache_refetches(self, monkeypatch, mocker):
@@ -185,9 +214,7 @@ class TestGetMicrosoftGraphAccessToken:
         assert token == "forced-refresh-token"
 
     @pytest.mark.asyncio
-    async def test_missing_access_token_in_response_raises_500(
-        self, monkeypatch, mocker
-    ):
+    async def test_missing_access_token_in_response_raises_500(self, monkeypatch, mocker):
         _set_directory_env(monkeypatch)
         mock_response = mocker.MagicMock()
         mock_response.json.return_value = {"expires_in": 3600}
@@ -247,17 +274,13 @@ class TestGetMicrosoftGraphAccessToken:
         mock_client.post = mock_post
         mocker.patch.object(mgds, "get_async_httpx_client", return_value=mock_client)
 
-        tokens = await asyncio.gather(
-            *[mgds._get_microsoft_graph_access_token() for _ in range(5)]
-        )
+        tokens = await asyncio.gather(*[mgds._get_microsoft_graph_access_token() for _ in range(5)])
 
         assert tokens == ["shared-token"] * 5
         assert post_call_count == 1
 
     @pytest.mark.asyncio
-    async def test_logs_azure_error_body_on_token_request_failure(
-        self, monkeypatch, mocker
-    ):
+    async def test_logs_azure_error_body_on_token_request_failure(self, monkeypatch, mocker):
         """A bad/rotated client secret must not fail silently - the Azure
         error body (invalid_client, AADSTS...) should be logged."""
         _set_directory_env(monkeypatch)
@@ -265,9 +288,7 @@ class TestGetMicrosoftGraphAccessToken:
             status_code=400,
             text='{"error": "invalid_client", "error_description": "AADSTS7000215: Invalid client secret."}',
         )
-        invalid_client_error = httpx.HTTPStatusError(
-            "400", request=mocker.MagicMock(), response=mock_400_response
-        )
+        invalid_client_error = httpx.HTTPStatusError("400", request=mocker.MagicMock(), response=mock_400_response)
         mock_client = mocker.MagicMock()
 
         async def mock_post(*args, **kwargs):
@@ -321,47 +342,65 @@ class TestParseMicrosoftDirectoryUsers:
         result = mgds._parse_microsoft_directory_users(
             {"value": [{"id": "3", "displayName": "No Email", "mail": None}]}
         )
-        assert result == []
+        assert result == ()
 
     def test_skips_record_missing_id(self):
         result = mgds._parse_microsoft_directory_users(
             {"value": [{"displayName": "No Id", "mail": "noid@example.com"}]}
         )
-        assert result == []
+        assert result == ()
 
     def test_skips_non_dict_entries(self):
         result = mgds._parse_microsoft_directory_users({"value": ["not-a-dict", None]})
-        assert result == []
+        assert result == ()
 
     def test_empty_value_list(self):
-        assert mgds._parse_microsoft_directory_users({}) == []
+        assert mgds._parse_microsoft_directory_users({}) == ()
+
+    def test_skipped_record_log_does_not_contain_pii(self, mocker):
+        """The warning for a malformed record must say which fields were
+        missing, not the actual name/email values - those shouldn't land in
+        general proxy logs."""
+        log_spy = mocker.patch.object(mgds.verbose_proxy_logger, "warning")
+
+        mgds._parse_microsoft_directory_users(
+            {
+                "value": [
+                    {
+                        "id": "4",
+                        "displayName": "Carol Real Name",
+                        "mail": None,
+                        "userPrincipalName": None,
+                    }
+                ]
+            }
+        )
+
+        log_spy.assert_called_once()
+        fmt, *args = log_spy.call_args.args
+        logged_text = fmt % tuple(args)
+        assert "Carol Real Name" not in logged_text
+        assert "has_display_name=True" in logged_text
+        assert "has_mail=False" in logged_text
 
 
 class TestGetMicrosoftGraphEndpoint:
     def test_default_endpoint(self, monkeypatch):
         monkeypatch.delenv("MICROSOFT_GRAPH_ENDPOINT", raising=False)
-        assert (
-            mgds._get_microsoft_graph_endpoint() == "https://graph.microsoft.com/v1.0"
-        )
+        assert mgds._get_microsoft_graph_endpoint() == "https://graph.microsoft.com/v1.0"
 
     def test_env_override(self, monkeypatch):
-        monkeypatch.setenv(
-            "MICROSOFT_GRAPH_ENDPOINT", "https://graph.microsoft.us/v1.0"
-        )
+        monkeypatch.setenv("MICROSOFT_GRAPH_ENDPOINT", "https://graph.microsoft.us/v1.0")
         assert mgds._get_microsoft_graph_endpoint() == "https://graph.microsoft.us/v1.0"
 
     def test_strips_trailing_slash(self, monkeypatch):
-        monkeypatch.setenv(
-            "MICROSOFT_GRAPH_ENDPOINT", "https://graph.microsoft.us/v1.0/"
-        )
+        monkeypatch.setenv("MICROSOFT_GRAPH_ENDPOINT", "https://graph.microsoft.us/v1.0/")
         assert mgds._get_microsoft_graph_endpoint() == "https://graph.microsoft.us/v1.0"
 
 
 class TestFetchMicrosoftDirectoryUsers:
     @pytest.mark.asyncio
-    async def test_builds_request_with_escaped_filter_and_auth_header(
-        self, monkeypatch, mocker
-    ):
+    async def test_builds_request_with_escaped_filter_and_auth_header(self, monkeypatch, mocker):
         monkeypatch.delenv("MICROSOFT_GRAPH_ENDPOINT", raising=False)
         mock_response = mocker.MagicMock()
         mock_client = mocker.MagicMock()
@@ -390,12 +429,8 @@ class TestFetchMicrosoftDirectoryUsers:
         mock_response.raise_for_status.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_request_url_uses_configured_graph_endpoint(
-        self, monkeypatch, mocker
-    ):
-        monkeypatch.setenv(
-            "MICROSOFT_GRAPH_ENDPOINT", "https://graph.microsoft.us/v1.0"
-        )
+    async def test_request_url_uses_configured_graph_endpoint(self, monkeypatch, mocker):
+        monkeypatch.setenv("MICROSOFT_GRAPH_ENDPOINT", "https://graph.microsoft.us/v1.0")
         mock_response = mocker.MagicMock()
         mock_client = mocker.MagicMock()
 
@@ -414,9 +449,7 @@ class TestFetchMicrosoftDirectoryUsers:
 class TestSearchMicrosoftDirectoryUsers:
     @pytest.mark.asyncio
     async def test_happy_path(self, monkeypatch, mocker):
-        mocker.patch.object(
-            mgds, "_get_microsoft_graph_access_token", return_value="token-123"
-        )
+        mocker.patch.object(mgds, "_get_microsoft_graph_access_token", return_value="token-123")
         mock_response = mocker.MagicMock()
         mock_response.json.return_value = {
             "value": [
@@ -427,9 +460,7 @@ class TestSearchMicrosoftDirectoryUsers:
                 }
             ]
         }
-        mocker.patch.object(
-            mgds, "_fetch_microsoft_directory_users", return_value=mock_response
-        )
+        mocker.patch.object(mgds, "_fetch_microsoft_directory_users", return_value=mock_response)
 
         users = await mgds._search_microsoft_directory_users("alice")
 
@@ -444,9 +475,7 @@ class TestSearchMicrosoftDirectoryUsers:
             side_effect=["stale-token", "fresh-token"],
         )
         mock_401_response = mocker.MagicMock(status_code=401)
-        unauthorized_error = httpx.HTTPStatusError(
-            "401", request=mocker.MagicMock(), response=mock_401_response
-        )
+        unauthorized_error = httpx.HTTPStatusError("401", request=mocker.MagicMock(), response=mock_401_response)
         mock_success_response = mocker.MagicMock()
         mock_success_response.json.return_value = {"value": []}
 
@@ -458,22 +487,16 @@ class TestSearchMicrosoftDirectoryUsers:
 
         users = await mgds._search_microsoft_directory_users("alice")
 
-        assert users == []
+        assert users == ()
         assert get_token.call_count == 2
         get_token.assert_called_with(force_refresh=True)
 
     @pytest.mark.asyncio
     async def test_non_401_http_status_error_propagates(self, mocker):
-        mocker.patch.object(
-            mgds, "_get_microsoft_graph_access_token", return_value="token-123"
-        )
+        mocker.patch.object(mgds, "_get_microsoft_graph_access_token", return_value="token-123")
         mock_500_response = mocker.MagicMock(status_code=500)
-        server_error = httpx.HTTPStatusError(
-            "500", request=mocker.MagicMock(), response=mock_500_response
-        )
-        mocker.patch.object(
-            mgds, "_fetch_microsoft_directory_users", side_effect=server_error
-        )
+        server_error = httpx.HTTPStatusError("500", request=mocker.MagicMock(), response=mock_500_response)
+        mocker.patch.object(mgds, "_fetch_microsoft_directory_users", side_effect=server_error)
 
         with pytest.raises(httpx.HTTPStatusError):
             await mgds._search_microsoft_directory_users("alice")

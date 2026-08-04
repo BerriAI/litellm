@@ -1,7 +1,6 @@
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, field_validator
 
 from litellm.proxy._types import (
     LiteLLM_UserTableWithKeyCount,
@@ -10,8 +9,9 @@ from litellm.proxy._types import (
 )
 
 
-class MicrosoftDirectoryUser(BaseModel):
-    """A single result row from the Microsoft Graph directory search endpoint."""
+class DirectoryUser(BaseModel):
+    """A single result row from a directory-search provider (see
+    `litellm.proxy.management_endpoints.directory_search`)."""
 
     id: str
     display_name: Optional[str] = None
@@ -33,13 +33,9 @@ class UserListResponse(BaseModel):
 class BulkUpdateUserRequest(BaseModel):
     """Request for bulk user updates"""
 
-    users: Optional[List[UpdateUserRequest]] = (
-        None  # List of specific user update requests
-    )
+    users: Optional[List[UpdateUserRequest]] = None  # List of specific user update requests
     all_users: Optional[bool] = False  # Flag to update all users
-    user_updates: Optional[UpdateUserRequestNoUserIDorEmail] = (
-        None  # Updates to apply to all users when all_users=True
-    )
+    user_updates: Optional[UpdateUserRequestNoUserIDorEmail] = None  # Updates to apply to all users when all_users=True
 
     @field_validator("users", "all_users", "user_updates")
     @classmethod
@@ -48,9 +44,7 @@ class BulkUpdateUserRequest(BaseModel):
         values = info.data if hasattr(info, "data") else {}
 
         # After all fields are set, validate the combination
-        if (
-            info.field_name == "user_updates"
-        ):  # This is the last field, do validation here
+        if info.field_name == "user_updates":  # This is the last field, do validation here
             users = values.get("users")
             all_users = values.get("all_users", False)
             user_updates = v
@@ -63,9 +57,7 @@ class BulkUpdateUserRequest(BaseModel):
 
             # Cannot specify both users list and all_users
             if users and all_users:
-                raise ValueError(
-                    "Cannot specify both 'users' and 'all_users=True'. Choose one approach."
-                )
+                raise ValueError("Cannot specify both 'users' and 'all_users=True'. Choose one approach.")
 
         return v
 

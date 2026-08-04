@@ -891,31 +891,9 @@ export interface DirectoryUser {
   email: string;
 }
 
-export const directoryUsersSearchCall = async (
-  accessToken: string,
-  query: string,
-): Promise<DirectoryUser[]> => {
+export const directoryUsersSearchCall = async (accessToken: string, query: string): Promise<DirectoryUser[]> => {
   try {
-    const params = new URLSearchParams({ query });
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/user/directory_search?${params.toString()}`
-      : `/user/directory_search?${params.toString()}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return response.json();
+    return await apiClient.get(`/user/directory_search`, { accessToken, query: { query } });
   } catch (error) {
     console.error("Failed to search directory users:", error);
     throw error;
