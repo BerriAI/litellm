@@ -584,8 +584,7 @@ def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_c
     assert result[0]["input"] == {"location": "Boston"}
 
 
-def test_translate_openai_content_to_anthropic_sanitizes_colon_dot_tool_call_ids():
-    """Cross-provider ids like ``functions.Bash:0`` must be normalized for Anthropic replay."""
+def test_translate_openai_content_to_anthropic_preserves_kimi_tool_call_ids():
     openai_choices = [
         Choices(
             message=Message(
@@ -610,7 +609,33 @@ def test_translate_openai_content_to_anthropic_sanitizes_colon_dot_tool_call_ids
 
     assert len(result) == 1
     assert result[0]["type"] == "tool_use"
-    assert result[0]["id"] == "functions_Bash_0"
+    assert result[0]["id"] == "functions.Bash:0"
+
+
+def test_translate_openai_content_to_anthropic_sanitizes_invalid_tool_call_ids():
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    ChatCompletionAssistantToolCall(
+                        id="tool call#0",
+                        type="function",
+                        function=Function(
+                            name="Bash",
+                            arguments='{"command": "ls"}',
+                        ),
+                    )
+                ],
+            )
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert result[0]["id"] == "tool_call_0"
 
 
 def test_translate_openai_response_to_anthropic_text_and_tool_calls():

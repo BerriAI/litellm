@@ -1447,6 +1447,39 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 "content": [
                     {
                         "type": "tool_use",
+                        "id": "tool call#0",
+                        "name": "Bash",
+                        "input": {},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool call#0",
+                        "content": "ok",
+                    }
+                ],
+            },
+        ]
+        out = sanitize_tool_use_ids_in_anthropic_messages(msgs)
+        assert out[0]["content"][0]["id"] == "tool_call_0"
+        assert out[1]["content"][0]["tool_use_id"] == "tool_call_0"
+        assert msgs[0]["content"][0]["id"] == "tool call#0"
+
+    def test_sanitize_tool_use_ids_preserves_kimi_ids_for_non_anthropic_model(self):
+        from litellm.llms.anthropic.common_utils import (
+            sanitize_tool_use_ids_in_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
                         "id": "functions.Bash:0",
                         "name": "Bash",
                         "input": {},
@@ -1464,10 +1497,43 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 ],
             },
         ]
-        out = sanitize_tool_use_ids_in_anthropic_messages(msgs)
+
+        out = sanitize_tool_use_ids_in_anthropic_messages(
+            msgs, model="private-large"
+        )
+
+        assert out[0]["content"][0]["id"] == "functions.Bash:0"
+        assert out[1]["content"][0]["tool_use_id"] == "functions.Bash:0"
+
+    def test_sanitize_tool_use_ids_normalizes_kimi_ids_for_anthropic_model(self):
+        from litellm.llms.anthropic.common_utils import (
+            sanitize_tool_use_ids_in_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "functions.Bash:0",
+                        "name": "Bash",
+                        "input": {},
+                    }
+                ],
+            }
+        ]
+
+        out = sanitize_tool_use_ids_in_anthropic_messages(
+            msgs, model="anthropic/claude-sonnet-4-5-20250929"
+        )
+
         assert out[0]["content"][0]["id"] == "functions_Bash_0"
-        assert out[1]["content"][0]["tool_use_id"] == "functions_Bash_0"
-        assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
+
+    def test_normalize_anthropic_tool_use_id_preserves_kimi_format(self):
+        from litellm.llms.anthropic.common_utils import normalize_anthropic_tool_use_id
+
+        assert normalize_anthropic_tool_use_id("functions.Read:12") == "functions.Read:12"
 
     def test_normalize_anthropic_tool_use_id_strips_thought_signature(self):
         from litellm.litellm_core_utils.prompt_templates.factory import (
