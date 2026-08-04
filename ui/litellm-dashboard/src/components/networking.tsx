@@ -38,7 +38,7 @@ import type {
   CoordinationRedisTestResponse,
 } from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
-import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
+import { createApiClient, deriveErrorMessage, unwrapProxyErrorMessage } from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
 import {
   registerAuthHeaderNameGetter,
@@ -2643,7 +2643,7 @@ export const teamUpdateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      NotificationsManager.fromBackend("Failed to update team settings: " + errorData);
+      NotificationsManager.fromBackend("Failed to update team settings: " + unwrapProxyErrorMessage(errorData));
       throw new Error(errorData);
     }
     const data = (await response.json()) as { data: Team; team_id: string };
