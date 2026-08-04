@@ -269,6 +269,13 @@ class CustomStreamWrapper:
         if len(self.chunks) < 2:
             return
 
+        # Some providers (e.g. Vertex Gemini grounding/search/thought-only chunks)
+        # emit metadata-only stream chunks where `choices` is empty. Those chunks
+        # cannot contribute to a repetition signal, so skip them instead of
+        # IndexError-ing. https://github.com/BerriAI/litellm/issues/28884
+        if not self.chunks[-1].choices or not self.chunks[-2].choices:
+            return
+
         last_content = self.chunks[-1].choices[0].delta.content
 
         if (
