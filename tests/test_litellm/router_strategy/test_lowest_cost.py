@@ -32,12 +32,18 @@ async def test_provider_prefixed_models_use_resolved_costs() -> None:
     assert selected["model_info"]["id"] == "luna"
 
 
+@pytest.mark.parametrize(
+    "unknown_model",
+    [None, "caller-controlled-model", "ollama/caller-controlled-model"],
+)
 @pytest.mark.asyncio
-async def test_unknown_provider_model_does_not_query_dynamic_metadata() -> None:
+async def test_unknown_models_do_not_query_dynamic_metadata(
+    unknown_model: str | None,
+) -> None:
     deployments = [
         {
             "model_name": "test-group",
-            "litellm_params": {"model": "ollama/caller-controlled-model"},
+            "litellm_params": {"model": unknown_model},
             "model_info": {"id": "unknown"},
         },
         {
@@ -57,6 +63,40 @@ async def test_unknown_provider_model_does_not_query_dynamic_metadata() -> None:
     assert selected is not None
     assert selected["model_info"]["id"] == "luna"
     get_model_info.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_exact_custom_cost_entry_remains_authoritative() -> None:
+    deployments = [
+        {
+            "model_name": "test-group",
+            "litellm_params": {"model": "custom/provider-entry"},
+            "model_info": {"id": "custom"},
+        },
+        {
+            "model_name": "test-group",
+            "litellm_params": {"model": "openai/gpt-5.6-luna"},
+            "model_info": {"id": "luna"},
+        },
+    ]
+    handler = LowestCostLoggingHandler(router_cache=DualCache())
+
+    with patch.dict(
+        litellm.model_cost,
+        {
+            "custom/provider-entry": {
+                "input_cost_per_token": 1e-9,
+                "output_cost_per_token": 1e-9,
+            }
+        },
+    ):
+        selected = await handler.async_get_available_deployments(
+            model_group="test-group",
+            healthy_deployments=deployments,
+        )
+
+    assert selected is not None
+    assert selected["model_info"]["id"] == "custom"
 
 
 @pytest.mark.asyncio
