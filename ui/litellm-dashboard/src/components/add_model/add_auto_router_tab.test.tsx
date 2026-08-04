@@ -306,6 +306,35 @@ describe("AddAutoRouterTab", () => {
     expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(true);
   });
 
+  // handlePresetChange only ever applies an available preset, but that guarantee can go stale by
+  // submit time: select under a caller with the full family, then switch to a caller missing one
+  // of its models. Nothing clears the selection (that would erase in-progress Custom edits too),
+  // so submit itself must re-verify against the current caller's list before creating the router.
+  it("blocks submit when the selected preset's models are no longer available for the current caller", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels
+      .mockResolvedValueOnce(ALL_FAMILY_MODELS)
+      .mockResolvedValueOnce(ALL_FAMILY_MODELS.filter((m) => m.model_group !== "o3"));
+
+    const { rerender } = renderWithProviders(
+      <AddAutoRouterTab handleOk={vi.fn()} accessToken="caller-a" userRole="Admin" />,
+    );
+    openTemplateDropdown();
+    await waitFor(() => expect(isOptionDisabled(optionByLabel("OpenAI Family")!)).toBe(false));
+    fireEvent.click(optionByLabel("OpenAI Family")!);
+
+    rerender(<AddAutoRouterTab handleOk={vi.fn()} accessToken="caller-b" userRole="Admin" />);
+    await waitFor(() => expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2));
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "stale-preset-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    expect(NotificationManager.fromBackend).toHaveBeenCalledWith(
+      "This template's models are no longer available. Please reselect a template or switch to Custom.",
+    );
+    expect(mockHandleAddAutoRouterSubmit).not.toHaveBeenCalled();
+  });
+
   // Prefill must preserve a preset's deliberately-falsy fields (a 0 match threshold, an empty
   // escalation list). Using `||` instead of `??` would swap the 0 for the create-form default and
   // re-enable escalation the preset meant to turn off, so this asserts the exact submitted values.

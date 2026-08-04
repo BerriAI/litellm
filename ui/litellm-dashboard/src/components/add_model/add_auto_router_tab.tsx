@@ -189,6 +189,20 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
+    // handlePresetChange only ever applies a preset that was available at selection time; that
+    // guarantee can go stale by submit time (e.g. the caller's model access narrowed since), so
+    // re-verify here rather than trust state gathered earlier.
+    if (selectedPreset !== "custom") {
+      const preset = getPresetByKey(selectedPreset);
+      if (!preset || presetAvailability(preset).kind !== "available") {
+        setShowValidationErrors(true);
+        NotificationManager.fromBackend(
+          "This template's models are no longer available. Please reselect a template or switch to Custom.",
+        );
+        return;
+      }
+    }
+
     const {
       tiers,
       classifier_type: classifierType,
