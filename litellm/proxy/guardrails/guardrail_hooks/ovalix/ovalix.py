@@ -77,6 +77,17 @@ class ResolvedRouting(NamedTuple):
     checkpoint_id_pre_file: str | None
     checkpoint_id_post_file: str | None
 
+    @property
+    def has_any_checkpoint(self) -> bool:
+        return any(
+            (
+                self.checkpoint_id_pre,
+                self.checkpoint_id_post,
+                self.checkpoint_id_pre_file,
+                self.checkpoint_id_post_file,
+            )
+        )
+
 
 def _coerce_bool(value: bool | str) -> bool:
     if isinstance(value, bool):
@@ -348,12 +359,19 @@ class OvalixGuardrail(CustomGuardrail):
         file_checkpoint = (
             routing.checkpoint_id_post_file if is_response else routing.checkpoint_id_pre_file
         ) or prompt_checkpoint
-        if not prompt_checkpoint:
+        if not routing.has_any_checkpoint:
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
-                message="Ovalix guardrail error: no checkpoint resolved for input_type",
+                message=f"Ovalix guardrail error: application {routing.application_id} has no checkpoints configured",
                 should_wrap_with_default_message=False,
             )
+        if not file_checkpoint:
+            verbose_proxy_logger.debug(
+                "Ovalix guardrail: application %s has no %s checkpoint, leaving this direction uninspected",
+                routing.application_id,
+                input_type,
+            )
+            return inputs
 
         structured_messages = inputs.get("structured_messages") or ()
         file_parts = (
@@ -366,6 +384,14 @@ class OvalixGuardrail(CustomGuardrail):
         )
         if file_block is not None:
             self._block_current_message(file_block)
+
+        if not prompt_checkpoint:
+            verbose_proxy_logger.debug(
+                "Ovalix guardrail: application %s has only a %s file checkpoint, skipping text and tool inspection",
+                routing.application_id,
+                input_type,
+            )
+            return inputs
 
         tool_call_items = tuple(
             ("TOOL", td) for td in (tool_call_to_tool_data(tc) for tc in (inputs.get("tool_calls") or ())) if td

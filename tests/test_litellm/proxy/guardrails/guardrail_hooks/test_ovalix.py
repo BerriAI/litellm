@@ -736,6 +736,25 @@ def _alias_request_data(alias="[Weather App] prod"):
     return {"metadata": {"user_api_key_alias": alias, "user_api_key_user_email": "u@x.com"}}
 
 
+def _routing_body(pre, post, pre_file, post_file, application_id="app-9"):
+    return {
+        "application_id": application_id,
+        "checkpoint_id_pre": pre,
+        "checkpoint_id_post": post,
+        "checkpoint_id_pre_file": pre_file,
+        "checkpoint_id_post_file": post_file,
+    }
+
+
+def _checkpoint_bodies(mock_post):
+    """Bodies of the tracker checkpoint calls only, excluding regex/resolve traffic."""
+    return [
+        c.kwargs["json"]
+        for c in mock_post.call_args_list
+        if c.args and c.args[0].endswith(("/checkpoint", "/file_checkpoint"))
+    ]
+
+
 def _mock_handler(g, routing=None):
     get_resp = MagicMock()
     get_resp.json.return_value = {"regex": _REGEX}
@@ -1251,23 +1270,49 @@ async def test_file_checkpoint_call_failure_fails_closed():
 
 
 @pytest.mark.asyncio
-async def test_discovery_resolved_without_prompt_checkpoint_raises():
+async def test_discovery_resolved_without_any_checkpoint_raises():
+    """An application with no checkpoints in any direction is a tracker misconfiguration, so fail closed."""
     g = _discovery_guardrail(enable_cache=False)
-    _mock_handler(
-        g,
-        routing={
-            "application_id": "app-9",
-            "checkpoint_id_pre": None,
-            "checkpoint_id_post": None,
-            "checkpoint_id_pre_file": None,
-            "checkpoint_id_post_file": None,
-        },
-    )
+    _mock_handler(g, routing=_routing_body(None, None, None, None))
     inputs = GenericGuardrailAPIInputs(texts=["hi"])
-    with pytest.raises(GuardrailRaisedException):
+    with pytest.raises(GuardrailRaisedException) as exc:
         await g.apply_guardrail(
             inputs=inputs, request_data=_alias_request_data(), input_type="request", logging_obj=None
         )
+    assert "no checkpoints configured" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_type, inspected", [("request", ["pre-9"]), ("response", [])])
+async def test_one_sided_discovery_inspects_configured_direction_only(input_type, inspected):
+    """Discovery registers both hooks speculatively, so a direction the app does not inspect must pass through."""
+    g = _discovery_guardrail(enable_cache=False)
+    _, mock_post = _mock_handler(g, routing=_routing_body("pre-9", None, None, None))
+    inputs = GenericGuardrailAPIInputs(texts=["hi"])
+    result = await g.apply_guardrail(
+        inputs=inputs, request_data=_alias_request_data(), input_type=input_type, logging_obj=None
+    )
+    assert result["texts"] == ["hi"]
+    assert [b["checkpoint_id"] for b in _checkpoint_bodies(mock_post)] == inspected
+
+
+@pytest.mark.asyncio
+async def test_file_only_checkpoint_inspects_files_and_skips_text():
+    """A direction with just a file checkpoint still scans files; text and tools need a prompt checkpoint."""
+    g = _discovery_guardrail(enable_cache=False)
+    _, mock_post = _mock_handler(g, routing=_routing_body(None, None, "pre-file-9", None))
+    data_url = "data:text/plain;base64," + base64.b64encode(b"secret").decode()
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hi"],
+        structured_messages=[
+            {"role": "user", "content": [{"type": "file", "file": {"filename": "s.txt", "file_data": data_url}}]}
+        ],
+    )
+    result = await g.apply_guardrail(
+        inputs=inputs, request_data=_alias_request_data(), input_type="request", logging_obj=None
+    )
+    assert result["texts"] == ["hi"]
+    assert [(b["data_type"], b["checkpoint_id"]) for b in _checkpoint_bodies(mock_post)] == [("FILE", "pre-file-9")]
 
 
 def test_initialize_guardrail_wires_new_params(monkeypatch):
