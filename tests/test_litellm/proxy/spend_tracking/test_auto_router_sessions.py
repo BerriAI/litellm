@@ -370,46 +370,103 @@ def test_state_from_row_without_a_timestamp_starts_at_the_epoch():
 class _StoredRow:
     """A session rollup as prisma hands it back."""
 
-    def __init__(self, last_model: str, last_turn_at: float, model_state: dict):
+    def __init__(self, session_id: str, model_group: str, last_model: str, last_turn_at: float, model_state: dict):
+        self.session_id = session_id
+        self.model_group = model_group
         self.last_model = last_model
         self.last_turn_at = datetime.fromtimestamp(last_turn_at, tz=timezone.utc)
         self.model_state = model_state
 
 
 class _RecordingTable:
-    """A session-rollup table that can be told to fail on either side."""
+    """A session-rollup table that can be told to fail on either side.
 
-    def __init__(self, fail_read: bool = False, fail_write: bool = False, row=None):
+    Counts round trips the way prisma issues them: one `find_many` however many
+    keys it selects, and one transaction however many upserts it carries.
+    """
+
+    def __init__(self, fail_read: bool = False, fail_write: bool = False, rows=()):
         self.fail_read = fail_read
         self.fail_write = fail_write
-        self.row = row
+        self.rows = rows
         self.reads = 0
+        self.transactions = 0
         self.upserts: list = []
 
-    async def find_unique(self, where):
+    async def find_many(self, where):
         self.reads += 1
         if self.fail_read:
             raise RuntimeError("transient database fault")
-        return self.row
+        wanted = {(pair["session_id"], pair["model_group"]) for pair in where["OR"]}
+        return [row for row in self.rows if (row.session_id, row.model_group) in wanted]
 
-    async def upsert(self, where, data):
+    def commit(self, statements):
+        self.transactions += 1
         if self.fail_write:
             raise RuntimeError("transient database fault")
-        self.upserts.append((where, data))
+        self.upserts.extend(statements)
+
+
+class _RecordingBatchActions:
+    """Prisma's batcher: statements queue up and land only when the batch commits."""
+
+    def __init__(self):
+        self.queued: list = []
+
+    def upsert(self, where, data):
+        self.queued.append((where, data))
+
+
+class _RecordingBatch:
+    def __init__(self, table):
+        self._table = table
+        self.litellm_autoroutersession = _RecordingBatchActions()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if exc is None:
+            self._table.commit(tuple(self.litellm_autoroutersession.queued))
+        return False
+
+
+class _RecordingTransaction:
+    def __init__(self, table):
+        self._table = table
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def batch_(self):
+        return _RecordingBatch(self._table)
+
+
+class _RecordingDb:
+    def __init__(self, table):
+        self.litellm_autoroutersession = table
+
+    def tx(self, timeout=None):
+        return _RecordingTransaction(self.litellm_autoroutersession)
 
 
 class _RecordingPrisma:
     def __init__(self, table):
-        self.db = type("_Db", (), {"litellm_autoroutersession": table})()
+        self.db = _RecordingDb(table)
 
 
 def _turn_at(at: float, model: str = MODEL_A) -> TurnFacts:
     return turn(model, at=at, created=5000)
 
 
-def _stored_session() -> _StoredRow:
+def _stored_session(session_id: str = "s1", model_group: str = "g") -> _StoredRow:
     """A session last served on MODEL_B that has already used MODEL_A."""
     return _StoredRow(
+        session_id=session_id,
+        model_group=model_group,
         last_model=MODEL_B,
         last_turn_at=60.0,
         model_state={
@@ -487,7 +544,7 @@ class TestFlushDurability:
         """The corrupting move was folding onto an empty state and persisting it."""
         from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
 
-        table = _RecordingTable(fail_read=True, row=_stored_session())
+        table = _RecordingTable(fail_read=True, rows=(_stored_session(),))
         prisma = _RecordingPrisma(table)
         queue = AutoRouterSessionQueue()
         await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(120))
@@ -499,7 +556,7 @@ class TestFlushDurability:
         """Returning to a tier this session already used is a return, not a first visit."""
         from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
 
-        table = _RecordingTable(fail_read=True, row=_stored_session())
+        table = _RecordingTable(fail_read=True, rows=(_stored_session(),))
         prisma = _RecordingPrisma(table)
         queue = AutoRouterSessionQueue()
         await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(120))
@@ -560,3 +617,77 @@ class TestStagingIsBounded:
         await queue.record_turn(("s1", "g"), "complexity", None, _turn_at(60))
         assert await queue.flush(prisma) == 1
         assert table.upserts[1][1]["update"]["turns"] == {"increment": 1}
+
+
+def test_chunking_caps_what_one_statement_carries_and_keeps_it_in_key_order():
+    """Key order is the lock order two pods draining the same sessions have to agree on."""
+    from litellm.proxy.spend_tracking.auto_router_session_queue import SESSIONS_PER_STATEMENT, _chunked
+
+    batch = {(f"s{i:05d}", "g"): i for i in range(2500)}
+    chunks = _chunked(batch, SESSIONS_PER_STATEMENT)
+
+    assert [len(chunk) for chunk in chunks] == [1000, 1000, 500]
+    assert [key for chunk in chunks for key in chunk] == sorted(batch)
+
+
+@pytest.mark.asyncio
+class TestFlushCostDoesNotGrowWithSessionCount:
+    """A read and an upsert per session is two round trips per session; a flush must not do that."""
+
+    async def test_many_sessions_cost_one_read_and_one_transaction(self):
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        table = _RecordingTable()
+        queue = AutoRouterSessionQueue()
+        for i in range(250):
+            await queue.record_turn((f"s{i}", "g"), "complexity", None, _turn_at(0))
+
+        assert await queue.flush(_RecordingPrisma(table)) == 250
+        assert (table.reads, table.transactions) == (1, 1)
+        assert len(table.upserts) == 250
+
+    async def test_sessions_this_pod_has_already_folded_cost_no_read_at_all(self):
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        table = _RecordingTable()
+        prisma = _RecordingPrisma(table)
+        queue = AutoRouterSessionQueue()
+        for i in range(50):
+            await queue.record_turn((f"s{i}", "g"), "complexity", None, _turn_at(0))
+        await queue.flush(prisma)
+
+        for i in range(50):
+            await queue.record_turn((f"s{i}", "g"), "complexity", None, _turn_at(60))
+        assert await queue.flush(prisma) == 50
+        assert (table.reads, table.transactions) == (1, 2)
+
+    async def test_a_chunk_that_could_not_be_written_restages_every_session_in_it(self):
+        """The transaction is the failure unit, so nothing in it landed and nothing may be dropped."""
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        table = _RecordingTable(fail_write=True)
+        prisma = _RecordingPrisma(table)
+        queue = AutoRouterSessionQueue()
+        for i in range(5):
+            await queue.record_turn((f"s{i}", "g"), "complexity", None, _turn_at(0))
+
+        assert await queue.flush(prisma) == 0
+        assert table.upserts == []
+
+        table.fail_write = False
+        assert await queue.flush(prisma) == 5
+        written = {where["session_id_model_group"]["session_id"] for where, _ in table.upserts}
+        assert written == {f"s{i}" for i in range(5)}
+
+    async def test_one_read_serves_a_chunk_of_sessions_that_all_have_history(self):
+        """Every session's own row has to come back from the batched read, not just the first."""
+        from litellm.proxy.spend_tracking.auto_router_session_queue import AutoRouterSessionQueue
+
+        table = _RecordingTable(rows=tuple(_stored_session(session_id=f"s{i}") for i in range(5)))
+        queue = AutoRouterSessionQueue()
+        for i in range(5):
+            await queue.record_turn((f"s{i}", "g"), "complexity", None, _turn_at(120))
+
+        assert await queue.flush(_RecordingPrisma(table)) == 5
+        assert table.reads == 1
+        assert all(data["update"]["return_turns"] == {"increment": 1} for _, data in table.upserts)

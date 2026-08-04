@@ -91,9 +91,6 @@ class StateUnavailable:
     """
 
 
-StateLookup = SessionState | StateUnavailable
-
-
 @dataclass(frozen=True, slots=True)
 class TurnFacts:
     """One auto-routed request, as the spend writer sees it.

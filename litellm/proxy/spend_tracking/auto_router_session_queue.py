@@ -9,20 +9,25 @@ Classifying a turn depends on the session's prior state, so the fold happens in
 the flusher rather than at arrival. That is the one place the stored state can be
 read, folded onto and written back as a single unit of work; a read that fails
 there has no half-finished write to corrupt, and the turns simply stage again.
+
+That unit is a chunk of sessions rather than one session, so an interval costs a
+handful of round trips instead of two per session: one ``find_many`` for the
+states this pod has not cached, then one transaction carrying every upsert.
 """
 
 import asyncio
 from collections import OrderedDict
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.spend_tracking.auto_router_sessions import (
     EMPTY_SESSION_STATE,
     SessionState,
-    StateLookup,
     StateUnavailable,
     TurnDelta,
     TurnFacts,
@@ -40,6 +45,7 @@ SessionKey = tuple[str, str]
 
 DEFAULT_MAX_STAGED_TURNS = 50_000
 MAX_CACHED_SESSIONS = 10_000
+SESSIONS_PER_STATEMENT = 1_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +53,11 @@ class _Pending:
     router_kind: str
     baseline_model: str | None
     turns: tuple[TurnFacts, ...]
+
+
+_Chunk = Mapping[SessionKey, _Pending]
+_Folded = tuple[SessionKey, _Pending, TurnDelta]
+_ChunkStates = Mapping[SessionKey, SessionState] | StateUnavailable
 
 
 @lru_cache(maxsize=1)
@@ -62,6 +73,56 @@ def _epoch_to_datetime(value: float) -> datetime:
     return datetime.fromtimestamp(value, tz=timezone.utc)
 
 
+def _chunked(batch: _Chunk, size: int) -> tuple[_Chunk, ...]:
+    """``batch`` split into runs of at most ``size``, each in key order.
+
+    Sorting once here is what gives every pod the same lock ordering, and the
+    size cap is what stops one statement from carrying the whole staging area.
+    """
+    keys = sorted(batch)
+    return tuple(
+        MappingProxyType({key: batch[key] for key in keys[at : at + size]}) for at in range(0, len(keys), size)
+    )
+
+
+def _key_fields(key: SessionKey) -> Mapping[str, str]:
+    """One composite primary key as the two columns that make it up."""
+    session_id, model_group = key
+    return {"session_id": session_id, "model_group": model_group}  # mutable-ok: prisma's query API takes dict payloads
+
+
+def _unique_where(key: SessionKey) -> Mapping[str, Mapping[str, str]]:
+    """The composite primary key, under the name prisma gives the ``@@id`` selector."""
+    return {"session_id_model_group": _key_fields(key)}  # mutable-ok: prisma's query API takes dict payloads
+
+
+def _increment(value: float) -> Mapping[str, float]:
+    """One counter's atomic add, the way prisma spells it in an update payload."""
+    return {"increment": value}  # mutable-ok: prisma's write API takes dict payloads
+
+
+def _upsert_data(key: SessionKey, pending: _Pending, delta: TurnDelta) -> Mapping[str, Mapping[str, object]]:
+    """One session's write: create its row, or add this interval onto the row already there."""
+    counters = counters_of(delta)
+    increments = MappingProxyType({name: _increment(value) for name, value in counters.items()})
+    shared = {  # mutable-ok: prisma's write API takes dict payloads
+        "last_turn_at": _epoch_to_datetime(max(turn.started_at for turn in pending.turns)),
+        "last_model": delta.state.last_model,
+        "model_state": state_column(delta.state),
+        "baseline_model": pending.baseline_model,
+    }
+    return {  # mutable-ok: prisma's write API takes dict payloads
+        "create": {  # mutable-ok: prisma's write API takes dict payloads
+            **_key_fields(key),
+            "router_kind": pending.router_kind,
+            "first_turn_at": _epoch_to_datetime(min(turn.started_at for turn in pending.turns)),
+            **shared,
+            **counters,
+        },
+        "update": {**increments, **shared},  # mutable-ok: prisma's write API takes dict payloads
+    }
+
+
 class AutoRouterSessionQueue:
     """Stages auto-routed turns in memory and folds them into the rollup on flush."""
 
@@ -72,13 +133,7 @@ class AutoRouterSessionQueue:
         self._lock = asyncio.Lock()
         self._max_staged_turns = max_staged_turns
 
-    async def record_turn(
-        self,
-        key: SessionKey,
-        router_kind: str,
-        baseline_model: str | None,
-        turn: TurnFacts,
-    ) -> None:
+    async def record_turn(self, key: SessionKey, router_kind: str, baseline_model: str | None, turn: TurnFacts) -> None:
         """Stage one turn against its session. Does no I/O; the fold happens on flush.
 
         ``session_id`` is caller-controlled, so the staging is capped on turns
@@ -111,20 +166,19 @@ class AutoRouterSessionQueue:
     async def flush(self, prisma_client: "PrismaClient") -> int:
         """Fold and write every staged session. Returns rows written.
 
-        A session that could not be read or written is staged again rather than
-        dropped. Reading, folding and writing are one unit here, so a failure
-        means nothing landed and replaying it cannot double-count; draining first
-        and swallowing the error would lose that interval's turns, tokens and
-        spend permanently on any transient database fault.
+        A chunk that could not be read or written is staged again rather than
+        dropped. Reading, folding and writing are one unit per chunk, so a
+        failure means nothing in it landed and replaying it cannot double-count;
+        draining first and swallowing the error would lose that interval's turns,
+        tokens and spend permanently on any transient database fault.
         """
         async with self._lock:
             batch = self._pending
             self._pending = {}  # mutable-ok: fresh staging for the next interval
             self._staged_turns = 0
 
-        failed = {  # mutable-ok: built once from the sessions that did not land
-            key: batch[key] for key in sorted(batch.keys()) if not await self._commit(key, batch[key], prisma_client)
-        }
+        chunks = _chunked(batch, SESSIONS_PER_STATEMENT)
+        failed = tuple([key for chunk in chunks if not await self._commit(chunk, prisma_client) for key in chunk])
         if failed:
             verbose_proxy_logger.warning(
                 "auto_router_sessions: %d of %d sessions could not be folded; re-staging them for the next flush",
@@ -132,96 +186,80 @@ class AutoRouterSessionQueue:
                 len(batch),
             )
             async with self._lock:
-                for key, pending in failed.items():
-                    self._stage(key, pending.router_kind, pending.baseline_model, pending.turns)
+                for key in failed:
+                    self._stage(key, batch[key].router_kind, batch[key].baseline_model, batch[key].turns)
         return len(batch) - len(failed)
 
-    async def _commit(self, key: SessionKey, pending: _Pending, prisma_client: "PrismaClient") -> bool:
-        """Read the session's state, fold its staged turns onto it, write both back.
+    async def _commit(self, chunk: _Chunk, prisma_client: "PrismaClient") -> bool:
+        """Read a chunk's states, fold its staged turns onto them, write them all back.
 
-        The cache advances only once the write has landed, so a replay folds from
-        the state the failed attempt did rather than one that was never persisted.
-        An evicted session is not lost either; its next flush reloads the row it
-        was already written to, which costs one read and folds identically.
+        The chunk lands whole or not at all: one read covers it and one
+        transaction writes it, so a failure at either end leaves nothing written
+        for any session in it and the caller re-stages them all. The cache
+        advances only once the write has landed, so a replay folds from the state
+        the failed attempt did rather than one that was never persisted. An
+        evicted session is not lost either; its next flush reloads the row it was
+        already written to and folds identically.
         """
-        state = await self._session_state(key, prisma_client)
-        if isinstance(state, StateUnavailable):
+        states = await self._session_states(tuple(chunk), prisma_client)
+        if isinstance(states, StateUnavailable):
             return False
-        delta = fold_session(state, pending.turns)
-        if not await self._write(key, pending, delta, prisma_client):
+        folded = tuple((key, pending, fold_session(states[key], pending.turns)) for key, pending in chunk.items())
+        if not await self._write(folded, prisma_client):
             return False
-        self._state[key] = delta.state
-        self._state.move_to_end(key)
+        for key, _, delta in folded:
+            self._state[key] = delta.state
+            self._state.move_to_end(key)
         while len(self._state) > MAX_CACHED_SESSIONS:
             self._state.popitem(last=False)
         return True
 
-    async def _session_state(self, key: SessionKey, prisma_client: "PrismaClient") -> StateLookup:
-        """The session's state: from memory if this pod has folded it before, else its row.
+    async def _session_states(self, keys: tuple[SessionKey, ...], prisma_client: "PrismaClient") -> _ChunkStates:
+        """Each key's state: from memory where this pod has folded it before, else from one read.
 
-        Only the flusher touches this cache, so it needs no lock. A session this
-        pod has not seen costs one read, which is what keeps it correct across a
-        restart or a move between pods.
+        The filter is an OR over whole composite keys rather than ``session_id IN
+        (...) AND model_group IN (...)``, because the latter is a cross product:
+        it would drag back rows for pairs nobody asked about, growing with the
+        number of auto-routers in the flush and leaving Python to discard them.
+
+        Only the flusher touches this cache, so it needs no lock, and a chunk it
+        has entirely cached costs no read at all. A fault leaves the whole chunk
+        unavailable, which re-stages it; folding onto an empty state instead
+        would replace a history that really happened with one derived from a
+        single interval.
         """
-        cached = self._state.get(key)
-        if cached is not None:
-            self._state.move_to_end(key)
-            return cached
-        session_id, model_group = key
+        missing = tuple(key for key in keys if key not in self._state)
+        if not missing:
+            return MappingProxyType({key: self._state[key] for key in keys})
         try:
-            row = await AutoRouterSessionRepository(prisma_client).table.find_unique(
-                where={  # mutable-ok: prisma's write API takes dict payloads
-                    "session_id_model_group": {  # mutable-ok: a JSON object is a dict by definition
-                        "session_id": session_id,
-                        "model_group": model_group,
-                    }
-                }
+            rows = await AutoRouterSessionRepository(prisma_client).table.find_many(
+                where={"OR": [_key_fields(key) for key in missing]}  # mutable-ok: prisma's query API takes dicts
             )
-        except Exception as e:  # noqa: BLE001  # a read fault re-stages the turns rather than failing the flush
-            verbose_proxy_logger.warning("auto_router_sessions: could not load session state for %s (%s)", key, e)
+        except Exception as e:  # noqa: BLE001  # a read fault re-stages the chunk rather than failing the flush
+            verbose_proxy_logger.warning("auto_router_sessions: could not load %d session states (%s)", len(missing), e)
             return StateUnavailable()
-        if row is None:
-            return EMPTY_SESSION_STATE
-        return state_from_row(row.last_model, row.last_turn_at, row.model_state)
-
-    async def _write(self, key: SessionKey, pending: _Pending, delta: TurnDelta, prisma_client: "PrismaClient") -> bool:
-        session_id, model_group = key
-        counters = counters_of(delta)
-        shared = {  # mutable-ok: prisma's write API takes dict payloads
-            "last_turn_at": _epoch_to_datetime(max(turn.started_at for turn in pending.turns)),
-            "last_model": delta.state.last_model,
-            "model_state": state_column(delta.state),
-            "baseline_model": pending.baseline_model,
+        stored = {  # mutable-ok: built once from the rows this read returned
+            (row.session_id, row.model_group): state_from_row(row.last_model, row.last_turn_at, row.model_state)
+            for row in rows
         }
+        return MappingProxyType(
+            {key: self._state[key] if key in self._state else stored.get(key, EMPTY_SESSION_STATE) for key in keys}
+        )
+
+    async def _write(self, folded: tuple[_Folded, ...], prisma_client: "PrismaClient") -> bool:
+        """Write a chunk's rows as one transaction of atomic increment upserts.
+
+        ``batch_()`` issues its statements sequentially inside the transaction, so
+        iteration order is lock acquisition order; the chunk arrives sorted, which
+        is what keeps two pods flushing the same sessions from deadlocking.
+        """
         try:
-            await AutoRouterSessionRepository(
-                prisma_client
-            ).table.upsert(
-                where={  # mutable-ok: prisma's write API takes dict payloads
-                    "session_id_model_group": {  # mutable-ok: a JSON object is a dict by definition
-                        "session_id": session_id,
-                        "model_group": model_group,
-                    }
-                },
-                data={  # mutable-ok: prisma's write API takes dict payloads
-                    "create": {  # mutable-ok: prisma's write API takes dict payloads
-                        "session_id": session_id,
-                        "model_group": model_group,
-                        "router_kind": pending.router_kind,
-                        "first_turn_at": _epoch_to_datetime(min(turn.started_at for turn in pending.turns)),
-                        **shared,
-                        **counters,
-                    },
-                    "update": {  # mutable-ok: prisma's write API takes dict payloads
-                        **{  # mutable-ok: a JSON object is a dict by definition
-                            field: {"increment": value}  # mutable-ok: a JSON object is a dict by definition
-                            for field, value in counters.items()  # mutable-ok: spread into the prisma payload immediately below
-                        },  # mutable-ok: spread into the prisma payload immediately below
-                        **shared,
-                    },
-                },
-            )
-        except Exception as e:  # noqa: BLE001  # one session's write must not drop the rest of the batch
-            verbose_proxy_logger.exception("auto_router_sessions: failed to flush session %s (%s)", key, e)
+            async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction:
+                async with transaction.batch_() as batcher:
+                    table = batcher.litellm_autoroutersession
+                    for key, pending, delta in folded:
+                        table.upsert(where=_unique_where(key), data=_upsert_data(key, pending, delta))
+        except Exception as e:  # noqa: BLE001  # one chunk's write must not drop the rest of the flush
+            verbose_proxy_logger.exception("auto_router_sessions: failed to flush %d sessions (%s)", len(folded), e)
             return False
         return True
