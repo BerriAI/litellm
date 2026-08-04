@@ -27,6 +27,7 @@ from litellm.constants import (
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_DATA_PREFIX,
+    UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
@@ -2689,6 +2690,7 @@ class ProxyBaseLLMRequestProcessing:
                 _response_headers: Final = getattr(_response, "headers", None)
                 if _response_headers:
                     headers = get_response_headers(dict(_response_headers))
+        headers = {k: v for k, v in headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
         headers.update(custom_headers)
 
         # Call response headers hook for failure
@@ -2704,13 +2706,16 @@ class ProxyBaseLLMRequestProcessing:
         except Exception:
             pass
 
+        headers = {k: v for k, v in headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
+
         self._apply_router_cooldown_retry_after(headers, e)
 
         if isinstance(e, ProxyException):
-            e.headers = {
+            merged_headers = {
                 **e.headers,
                 **{k: v if isinstance(v, str) else str(v) for k, v in headers.items()},
             }
+            e.headers = {k: v for k, v in merged_headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
             raise e
 
         if isinstance(e, HTTPException):
