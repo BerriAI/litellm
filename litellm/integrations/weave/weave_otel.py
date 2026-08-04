@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry.trace import Status, StatusCode
 from typing_extensions import override
@@ -43,7 +43,7 @@ class WeaveLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
 
     @staticmethod
     @override
-    def set_messages(span: "Span", kwargs: dict[str, Any]):
+    def set_messages(span: Span, kwargs: dict[str, Any]):
         """Set input messages as span attributes using OpenInference conventions."""
 
         messages = kwargs.get("messages") or []
@@ -148,10 +148,10 @@ def get_weave_otel_config() -> WeaveOtelConfig:
             host = "https://" + host
         # Self-managed instances use a different path
         endpoint = host.rstrip("/") + WEAVE_OTEL_ENDPOINT
-        verbose_logger.debug(f"Using Weave OTEL endpoint from host: {endpoint}")
+        verbose_logger.debug("Using Weave OTEL endpoint from host: %s", endpoint)
     else:
         endpoint = WEAVE_BASE_URL + WEAVE_OTEL_ENDPOINT
-        verbose_logger.debug(f"Using Weave cloud endpoint: {endpoint}")
+        verbose_logger.debug("Using Weave cloud endpoint: %s", endpoint)
 
     # Weave uses Basic auth with format: api:<WANDB_API_KEY>
     auth_header = _get_weave_authorization_header(api_key=api_key)
@@ -203,8 +203,8 @@ class WeaveOtelLogger(OpenTelemetry):
 
     def __init__(
         self,
-        config: Optional[OpenTelemetryConfig] = None,
-        callback_name: Optional[str] = "weave_otel",
+        config: OpenTelemetryConfig | None = None,
+        callback_name: str | None = "weave_otel",
         **kwargs,
     ):
         """
@@ -233,7 +233,6 @@ class WeaveOtelLogger(OpenTelemetry):
         already contains all the necessary attributes, so the child span
         is redundant.
         """
-        pass
 
     def _start_primary_span(
         self,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 import polars as pl
 
@@ -24,9 +24,9 @@ class FocusLiteLLMDatabase:
     async def get_usage_data(
         self,
         *,
-        limit: Optional[int] = None,
-        start_time_utc: Optional[datetime] = None,
-        end_time_utc: Optional[datetime] = None,
+        limit: int | None = None,
+        start_time_utc: datetime | None = None,
+        end_time_utc: datetime | None = None,
     ) -> pl.DataFrame:
         """Return usage data for the requested window."""
         client = self._ensure_prisma_client()
@@ -100,7 +100,7 @@ class FocusLiteLLMDatabase:
         except Exception as exc:
             raise RuntimeError(f"Error retrieving usage data: {exc}") from exc
 
-    async def get_table_info(self) -> Dict[str, Any]:
+    async def get_table_info(self) -> dict[str, Any]:
         """Return metadata about the spend table for diagnostics."""
         client = self._ensure_prisma_client()
 

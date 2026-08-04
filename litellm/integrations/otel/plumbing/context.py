@@ -1,7 +1,7 @@
 """Trace-context + Baggage helpers."""
 
+from collections.abc import Mapping
 from contextvars import ContextVar, Token
-from typing import Mapping
 
 from opentelemetry import baggage
 from opentelemetry.context import Context, get_current

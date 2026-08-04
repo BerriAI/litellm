@@ -3,15 +3,10 @@
 import base64
 import io
 import struct
+from collections.abc import Callable, Mapping
 from typing import (
     Any,
-    Callable,
-    List,
     Literal,
-    Mapping,
-    Optional,
-    Tuple,
-    Union,
     cast,
 )
 
@@ -30,8 +25,8 @@ from litellm.constants import (
     MAX_TILE_WIDTH,
 )
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.litellm_core_utils.url_utils import safe_get
+from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.types.llms.anthropic import (
     AnthropicMessagesToolResultParam,
     AnthropicMessagesToolUseParam,
@@ -48,11 +43,11 @@ from litellm.types.utils import Message, SelectTokenizerResponse
 def get_modified_max_tokens(
     model: str,
     base_model: str,
-    messages: Optional[List[AllMessageValues]],
-    user_max_tokens: Optional[int],
-    buffer_perc: Optional[float],
-    buffer_num: Optional[float],
-) -> Optional[int]:
+    messages: list[AllMessageValues] | None,
+    user_max_tokens: int | None,
+    buffer_perc: float | None,
+    buffer_num: float | None,
+) -> int | None:
     """
     Params:
 
@@ -85,17 +80,20 @@ def get_modified_max_tokens(
         )  # give at least a 10 token buffer. token counting can be imprecise.
 
         input_tokens += int(token_buffer)
-        verbose_logger.debug(f"max_output_tokens: {max_output_tokens}, user_max_tokens: {user_max_tokens}")
+        verbose_logger.debug("max_output_tokens: %s, user_max_tokens: %s", max_output_tokens, user_max_tokens)
         ## CASE 1: model input + output can't exceed X - happens when max input = max output, e.g. gpt-3.5-turbo
         if _model_info["max_input_tokens"] == max_output_tokens:
-            verbose_logger.debug(f"input_tokens: {input_tokens}, max_output_tokens: {max_output_tokens}")
+            verbose_logger.debug("input_tokens: %s, max_output_tokens: %s", input_tokens, max_output_tokens)
             if input_tokens > max_output_tokens:
                 pass  # allow call to fail normally - don't set max_tokens to negative.
             elif (
                 user_max_tokens + input_tokens > max_output_tokens
             ):  # we can still modify to keep it positive but below the limit
                 verbose_logger.debug(
-                    f"MODIFYING MAX TOKENS - user_max_tokens={user_max_tokens}, input_tokens={input_tokens}, max_output_tokens={max_output_tokens}"
+                    "MODIFYING MAX TOKENS - user_max_tokens=%s, input_tokens=%s, max_output_tokens=%s",
+                    user_max_tokens,
+                    input_tokens,
+                    max_output_tokens,
                 )
                 user_max_tokens = int(max_output_tokens - input_tokens)
         ## CASE 2: user_max_tokens> model max output tokens
@@ -103,15 +101,17 @@ def get_modified_max_tokens(
             user_max_tokens = max_output_tokens
 
         verbose_logger.debug(
-            f"litellm.litellm_core_utils.token_counter.py::get_modified_max_tokens() - user_max_tokens: {user_max_tokens}"
+            "litellm.litellm_core_utils.token_counter.py::get_modified_max_tokens() - user_max_tokens: %s",
+            user_max_tokens,
         )
 
         return user_max_tokens
     except Exception as e:
         verbose_logger.debug(
-            "litellm.litellm_core_utils.token_counter.py::get_modified_max_tokens() - Error while checking max token limit: {}\nmodel={}, base_model={}".format(
-                str(e), model, base_model
-            )
+            "litellm.litellm_core_utils.token_counter.py::get_modified_max_tokens() - Error while checking max token limit: %s\nmodel=%s, base_model=%s",
+            e,
+            model,
+            base_model,
         )
         return user_max_tokens
 
@@ -119,7 +119,7 @@ def get_modified_max_tokens(
 def resize_image_high_res(
     width: int,
     height: int,
-) -> Tuple[int, int]:
+) -> tuple[int, int]:
     # Maximum dimensions for high res mode
     max_short_side = MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES
     max_long_side = MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES
@@ -167,7 +167,7 @@ def calculate_tiles_needed(
     return total_tiles
 
 
-def get_image_type(image_data: bytes) -> Union[str, None]:
+def get_image_type(image_data: bytes) -> str | None:
     """take an image (really only the first ~100 bytes max are needed)
     and return 'png' 'gif' 'jpeg' 'webp' 'heic' or None. method added to
     allow deprecation of imghdr in 3.13"""
@@ -192,7 +192,7 @@ def get_image_type(image_data: bytes) -> Union[str, None]:
 
 def get_image_dimensions(
     data: str,
-) -> Tuple[int, int]:
+) -> tuple[int, int]:
     """
     Async Function to get the dimensions of an image from a URL or base64 encoded string.
 
@@ -287,7 +287,7 @@ def calculate_img_tokens(
         int: The number of tokens for the image.
     """
     if use_default_image_token_count:
-        verbose_logger.debug("Using default image token count: {}".format(DEFAULT_IMAGE_TOKEN_COUNT))
+        verbose_logger.debug("Using default image token count: %s", DEFAULT_IMAGE_TOKEN_COUNT)
         return DEFAULT_IMAGE_TOKEN_COUNT
     if mode == "low" or mode == "auto":
         return base_tokens
@@ -317,7 +317,7 @@ class _MessageCountParams:
     def __init__(
         self,
         model: str,
-        custom_tokenizer: Optional[Union[dict, SelectTokenizerResponse]],
+        custom_tokenizer: dict | SelectTokenizerResponse | None,
     ):
         from litellm.utils import print_verbose
 
@@ -325,10 +325,7 @@ class _MessageCountParams:
         if actual_model == "gpt-3.5-turbo-0301":
             self.tokens_per_message = 4  # every message follows <|start|>{role/name}\n{content}<|end|>\n
             self.tokens_per_name = -1  # if there's a name, the role is omitted
-        elif actual_model in litellm.open_ai_chat_completion_models:
-            self.tokens_per_message = 3
-            self.tokens_per_name = 1
-        elif actual_model in litellm.azure_llms:
+        elif actual_model in litellm.open_ai_chat_completion_models or actual_model in litellm.azure_llms:
             self.tokens_per_message = 3
             self.tokens_per_name = 1
         else:
@@ -340,14 +337,14 @@ class _MessageCountParams:
 
 def token_counter(
     model="",
-    custom_tokenizer: Optional[Union[dict, SelectTokenizerResponse]] = None,
-    text: Optional[Union[str, List[str]]] = None,
-    messages: Optional[List[Union[AllMessageValues, Message]]] = None,
-    count_response_tokens: Optional[bool] = False,
-    tools: Optional[List[ChatCompletionToolParam]] = None,
-    tool_choice: Optional[ChatCompletionNamedToolChoiceParam] = None,
-    use_default_image_token_count: Optional[bool] = False,
-    default_token_count: Optional[int] = None,
+    custom_tokenizer: dict | SelectTokenizerResponse | None = None,
+    text: str | list[str] | None = None,
+    messages: list[AllMessageValues | Message] | None = None,
+    count_response_tokens: bool | None = False,
+    tools: list[ChatCompletionToolParam] | None = None,
+    tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
+    use_default_image_token_count: bool | None = False,
+    default_token_count: int | None = None,
 ) -> int:
     """
     Count the number of tokens in a given text using a specified model.
@@ -377,7 +374,7 @@ def token_counter(
     if litellm.disable_token_counter is True:
         return 0
 
-    verbose_logger.debug(f"messages in token_counter: {messages}, text in token_counter: {text}")
+    verbose_logger.debug("messages in token_counter: %s, text in token_counter: %s", messages, text)
     if text is not None and messages is not None:
         raise ValueError("text and messages cannot both be set")
     if use_default_image_token_count is None:
@@ -386,7 +383,7 @@ def token_counter(
     if text is not None:
         if tools or tool_choice:
             raise ValueError("tools or tool_choice cannot be set if using text")
-        if isinstance(text, List):
+        if isinstance(text, list):
             text_to_count = "".join(t for t in text if isinstance(t, str))
         elif isinstance(text, str):
             text_to_count = text
@@ -394,7 +391,7 @@ def token_counter(
         num_tokens = count_function(text_to_count)
 
     elif messages is not None:
-        new_messages = cast(List[AllMessageValues], convert_list_message_to_dict(messages))
+        new_messages = cast(list[AllMessageValues], convert_list_message_to_dict(messages))
         params = _MessageCountParams(model, custom_tokenizer)
         num_tokens = _count_messages(params, new_messages, use_default_image_token_count, default_token_count)
         if count_response_tokens is False:
@@ -422,7 +419,7 @@ def _count_function_call_tokens(
     tool/function definitions and `tool_choice`.
     """
     if key == "tool_calls":
-        if not isinstance(value, List):
+        if not isinstance(value, list):
             raise ValueError(f"Unsupported type {type(value)} for key tool_calls in message {message}")
         total = 0
         for tool_call in value:
@@ -440,9 +437,9 @@ def _count_function_call_tokens(
 
 def _count_messages(
     params: _MessageCountParams,
-    messages: List[AllMessageValues],
+    messages: list[AllMessageValues],
     use_default_image_token_count: bool,
-    default_token_count: Optional[int],
+    default_token_count: int | None,
 ) -> int:
     """
     Count the number of tokens in a list of messages.
@@ -467,7 +464,7 @@ def _count_messages(
                 num_tokens += params.count_function(value)
                 if key == "name":
                     num_tokens += params.tokens_per_name
-            elif key == "content" and isinstance(value, List):
+            elif key == "content" and isinstance(value, list):
                 num_tokens += _count_content_list(
                     params.count_function,
                     value,
@@ -490,8 +487,8 @@ def _count_messages(
 
 def _count_extra(
     count_function: TokenCounterFunction,
-    tools: Optional[List[ChatCompletionToolParam]],
-    tool_choice: Optional[ChatCompletionNamedToolChoiceParam],
+    tools: list[ChatCompletionToolParam] | None,
+    tool_choice: ChatCompletionNamedToolChoiceParam | None,
     includes_system_message: bool,
 ) -> int:
     """Count extra tokens for function definitions and tool choices.
@@ -523,8 +520,8 @@ def _count_extra(
 
 
 def _get_count_function(
-    model: Optional[str],
-    custom_tokenizer: Optional[Union[dict, SelectTokenizerResponse]] = None,
+    model: str | None,
+    custom_tokenizer: dict | SelectTokenizerResponse | None = None,
 ) -> TokenCounterFunction:
     """
     Get the function to count tokens based on the model and custom tokenizer."""
@@ -644,7 +641,7 @@ def _count_anthropic_content(
     content: Mapping[str, Any],
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
-    default_token_count: Optional[int],
+    default_token_count: int | None,
 ) -> int:
     """
     Count tokens in Anthropic-specific content blocks (tool_use, tool_result, etc.).
@@ -693,7 +690,7 @@ def _count_content_list(
     count_function: TokenCounterFunction,
     content_list: OpenAIMessageContent,
     use_default_image_token_count: bool,
-    default_token_count: Optional[int],
+    default_token_count: int | None,
 ) -> int:
     """
     Recursively count tokens from a list of content blocks.

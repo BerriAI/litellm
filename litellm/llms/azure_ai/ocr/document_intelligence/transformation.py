@@ -11,20 +11,19 @@ The operation location must be polled until the analysis completes.
 import asyncio
 import re
 import time
-from typing import Any, Dict
+from typing import Any
 from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.constants import (
     AZURE_DOCUMENT_INTELLIGENCE_API_VERSION,
     AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI,
     AZURE_OPERATION_POLLING_TIMEOUT,
 )
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin, encode_url_path_segment
 from litellm.llms.base_llm.ocr.transformation import (
     BaseOCRConfig,
     DocumentType,
@@ -205,13 +204,13 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
         litellm_params: dict | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers for Azure Document Intelligence.
 
@@ -354,7 +353,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         Returns:
             OCRRequestData with JSON data
         """
-        verbose_logger.debug(f"Azure Document Intelligence transform_ocr_request - model: {model}")
+        verbose_logger.debug("Azure Document Intelligence transform_ocr_request - model: %s", model)
 
         if not isinstance(document, dict):
             raise ValueError(f"Expected document dict, got {type(document)}")
@@ -374,7 +373,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             raise ValueError("Document URL is required")
 
         # Build Azure DI request
-        data: Dict[str, Any] = {}
+        data: dict[str, Any] = {}
 
         # Check if it's a data URI (base64)
         if document_url.startswith("data:"):
@@ -456,7 +455,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             Retry-after duration in seconds (default: 2)
         """
         retry_after = int(response.headers.get("retry-after", "2"))
-        verbose_logger.debug(f"Retry polling after: {retry_after} seconds")
+        verbose_logger.debug("Retry polling after: %s seconds", retry_after)
         return retry_after
 
     @staticmethod
@@ -477,7 +476,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             result = response.json()
             status = result.get("status")
 
-            verbose_logger.debug(f"Azure DI operation status: {status}")
+            verbose_logger.debug("Azure DI operation status: %s", status)
 
             if status == "succeeded":
                 return "succeeded"
@@ -498,7 +497,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     def _poll_operation_sync(
         self,
         operation_url: str,
-        headers: Dict[str, str],
+        headers: dict[str, str],
         timeout_secs: int,
     ) -> httpx.Response:
         """
@@ -520,7 +519,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         client = _get_httpx_client()
         start_time = time.time()
 
-        verbose_logger.debug(f"Polling Azure DI operation: {operation_url}")
+        verbose_logger.debug("Polling Azure DI operation: %s", operation_url)
 
         while True:
             self._check_timeout(start_time=start_time, timeout_secs=timeout_secs)
@@ -541,7 +540,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     async def _poll_operation_async(
         self,
         operation_url: str,
-        headers: Dict[str, str],
+        headers: dict[str, str],
         timeout_secs: int,
     ) -> httpx.Response:
         """
@@ -561,7 +560,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         client = get_async_httpx_client(llm_provider=litellm.LlmProviders.AZURE_AI)
         start_time = time.time()
 
-        verbose_logger.debug(f"Polling Azure DI operation (async): {operation_url}")
+        verbose_logger.debug("Polling Azure DI operation (async): %s", operation_url)
 
         while True:
             self._check_timeout(start_time=start_time, timeout_secs=timeout_secs)
@@ -579,7 +578,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 retry_after = self._get_retry_after(response=response)
                 await asyncio.sleep(retry_after)
 
-    def _get_polling_target(self, raw_response: httpx.Response) -> tuple[str, Dict[str, str]]:
+    def _get_polling_target(self, raw_response: httpx.Response) -> tuple[str, dict[str, str]]:
         operation_url = raw_response.headers.get("Operation-Location")
         if not operation_url:
             raise ValueError("Azure Document Intelligence returned 202 but no Operation-Location header found")
@@ -604,7 +603,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         """
         operation = AzureDocumentIntelligenceOperation.model_validate(raw_response.json())
 
-        verbose_logger.debug(f"Azure Document Intelligence response status: {operation.status}")
+        verbose_logger.debug("Azure Document Intelligence response status: %s", operation.status)
 
         if operation.status != "succeeded":
             raise ValueError(f"Azure Document Intelligence analysis failed with status: {operation.status}")

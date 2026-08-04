@@ -2,7 +2,7 @@ import configparser
 import os
 import time
 import uuid
-from typing import Any, Dict, Final, List, Optional, Tuple
+from typing import Any, Final
 
 CONFIG_FILE_PATH_DEFAULT: Final[str] = "~/.opik.config"
 
@@ -35,7 +35,7 @@ def create_uuid7() -> str:
     return str(uuid.UUID(bytes=bytes(uuid_bytes)))
 
 
-def _read_opik_config_file() -> Dict[str, str]:
+def _read_opik_config_file() -> dict[str, str]:
     config_path = os.path.expanduser(CONFIG_FILE_PATH_DEFAULT)
 
     config = configparser.ConfigParser()
@@ -49,14 +49,12 @@ def _read_opik_config_file() -> Dict[str, str]:
     return {}
 
 
-def _get_env_variable(key: str) -> Optional[str]:
+def _get_env_variable(key: str) -> str | None:
     env_prefix = "opik_"
     return os.getenv((env_prefix + key).upper(), None)
 
 
-def get_opik_config_variable(
-    key: str, user_value: Optional[str] = None, default_value: Optional[str] = None
-) -> Optional[str]:
+def get_opik_config_variable(key: str, user_value: str | None = None, default_value: str | None = None) -> str | None:
     """
     Get the configuration value of a variable, order priority is:
     1. user provided value
@@ -95,14 +93,14 @@ def create_usage_object(usage):
     return usage_dict
 
 
-def _remove_nulls(x: Dict[str, Any]) -> Dict[str, Any]:
+def _remove_nulls(x: dict[str, Any]) -> dict[str, Any]:
     """Remove None values from dict."""
     return {k: v for k, v in x.items() if v is not None}
 
 
 def get_traces_and_spans_from_payload(
-    payload: List[Dict[str, Any]],
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    payload: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Separate traces and spans from payload.
 

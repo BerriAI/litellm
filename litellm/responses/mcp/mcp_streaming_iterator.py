@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -30,14 +30,14 @@ MAX_MCP_TOOL_CALL_ROUNDS = 5
 
 
 async def create_mcp_list_tools_events(
-    mcp_tools_with_litellm_proxy: List[ToolParam],
+    mcp_tools_with_litellm_proxy: list[ToolParam],
     user_api_key_auth: Any,
     base_item_id: str,
-    pre_processed_mcp_tools: List[Any],
-) -> List[ResponsesAPIStreamingResponse]:
+    pre_processed_mcp_tools: list[Any],
+) -> list[ResponsesAPIStreamingResponse]:
     """Create MCP discovery events using pre-processed tools from the parent"""
 
-    events: List[ResponsesAPIStreamingResponse] = []
+    events: list[ResponsesAPIStreamingResponse] = []
 
     try:
         # Extract MCP server names
@@ -124,10 +124,10 @@ async def create_mcp_list_tools_events(
         )
         events.append(output_item_done_event)
 
-        verbose_logger.debug(f"Created {len(events)} MCP discovery events")
+        verbose_logger.debug("Created %s MCP discovery events", len(events))
 
     except Exception as e:
-        verbose_logger.error(f"Error creating MCP list tools events: {e}")
+        verbose_logger.error("Error creating MCP list tools events: %s", e)
         import traceback
 
         traceback.print_exc()
@@ -165,12 +165,12 @@ def create_mcp_call_events(
     tool_name: str,
     tool_call_id: str,
     arguments: str,
-    result: Optional[str] = None,
-    base_item_id: Optional[str] = None,
+    result: str | None = None,
+    base_item_id: str | None = None,
     sequence_start: int = 1,
-) -> List[ResponsesAPIStreamingResponse]:
+) -> list[ResponsesAPIStreamingResponse]:
     """Create MCP call events following OpenAI's specification"""
-    events: List[ResponsesAPIStreamingResponse] = []
+    events: list[ResponsesAPIStreamingResponse] = []
     item_id = base_item_id or f"mcp_{uuid.uuid4().hex[:8]}"
 
     # MCP call in progress event
@@ -256,11 +256,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __init__(
         self,
         base_iterator: Any,  # Can be None - will be created internally
-        mcp_events: List[ResponsesAPIStreamingResponse],
+        mcp_events: list[ResponsesAPIStreamingResponse],
         tool_server_map: dict[str, str],
-        mcp_tools_with_litellm_proxy: Optional[List[Any]] = None,
+        mcp_tools_with_litellm_proxy: list[Any] | None = None,
         user_api_key_auth: Any = None,
-        original_request_params: Optional[Dict[str, Any]] = None,
+        original_request_params: dict[str, Any] | None = None,
     ):
         # MCP setup
         self.mcp_tools_with_litellm_proxy = mcp_tools_with_litellm_proxy or []
@@ -273,19 +273,19 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.finished = False
 
         # Event queues and generation flags
-        self.mcp_discovery_events: List[ResponsesAPIStreamingResponse] = (
+        self.mcp_discovery_events: list[ResponsesAPIStreamingResponse] = (
             mcp_events  # Pre-generated MCP discovery events
         )
-        self.tool_execution_events: List[ResponsesAPIStreamingResponse] = []
+        self.tool_execution_events: list[ResponsesAPIStreamingResponse] = []
         self.mcp_discovery_generated = True  # Events are already generated
         self.mcp_events = mcp_events  # Store the initial MCP events for backward compatibility
         self.tool_server_map = tool_server_map
 
         # Iterator references
-        self.base_iterator: Optional[Union[Any, ResponsesAPIResponse]] = base_iterator  # Will be created when needed
+        self.base_iterator: Any | ResponsesAPIResponse | None = base_iterator  # Will be created when needed
 
         # Response collection for tool execution
-        self.collected_response: Optional[ResponsesAPIResponse] = None
+        self.collected_response: ResponsesAPIResponse | None = None
 
         # Counts completed rounds of tool execution, so a model that keeps
         # calling tools (e.g. retrying after an error) can't loop forever.
@@ -298,7 +298,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         # response had no tool calls (e.g. the model finally answered in
         # text) would incorrectly reuse tool_results left over from an
         # earlier round and keep looping instead of finishing.
-        self._tool_results_for_response: Optional[ResponsesAPIResponse] = None
+        self._tool_results_for_response: ResponsesAPIResponse | None = None
 
         # Set up model metadata (will be updated when we get the real iterator)
         self.model = self.original_request_params.get("model", "unknown")
@@ -316,7 +316,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.initial_events_emitted = False
 
         # Cache the response ID to ensure consistency across all events
-        self._cached_response_id: Optional[str] = None
+        self._cached_response_id: str | None = None
 
         self._initial_creation_error: Exception | None = None
         self._stream_error: Exception | None = None
@@ -325,23 +325,24 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _extract_mcp_headers_from_params(self) -> None:
         """Extract MCP headers from original request params to pass to tool calls"""
-        from typing import Dict, Optional
+
         from starlette.datastructures import Headers
+
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )
 
         # Extract headers from secret_fields in original_request_params
-        raw_headers_from_request: Optional[Dict[str, str]] = None
+        raw_headers_from_request: dict[str, str] | None = None
         secret_fields = self.original_request_params.get("secret_fields")
         if secret_fields and isinstance(secret_fields, dict):
             raw_headers_from_request = secret_fields.get("raw_headers")
 
         # Extract MCP-specific headers
-        self.mcp_auth_header: Optional[str] = None
-        self.mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
-        self.oauth2_headers: Optional[Dict[str, str]] = None
-        self.raw_headers: Optional[Dict[str, str]] = raw_headers_from_request
+        self.mcp_auth_header: str | None = None
+        self.mcp_server_auth_headers: dict[str, dict[str, str]] | None = None
+        self.oauth2_headers: dict[str, str] | None = None
+        self.raw_headers: dict[str, str] | None = raw_headers_from_request
 
         if raw_headers_from_request:
             headers_obj = Headers(raw_headers_from_request)
@@ -483,7 +484,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     async def _handle_initial_response_phase(
         self,
-    ) -> Optional[ResponsesAPIStreamingResponse]:
+    ) -> ResponsesAPIStreamingResponse | None:
         """
         Handle Phase 1: Initial Response Stream.
 
@@ -512,7 +513,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         response_obj = getattr(chunk, "response", None)
                         if response_obj and hasattr(response_obj, "id"):
                             self._cached_response_id = response_obj.id
-                            verbose_logger.debug(f"Cached response ID: {self._cached_response_id}")
+                            verbose_logger.debug("Cached response ID: %s", self._cached_response_id)
 
                     # After emitting response.output_item.added, transition to MCP discovery
                     if not self.initial_events_emitted and hasattr(chunk, "type"):
@@ -575,7 +576,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             response_obj = getattr(chunk, "response", None)
             if response_obj and hasattr(response_obj, "id"):
                 if response_obj.id != self._cached_response_id:
-                    verbose_logger.debug(f"Updating response ID from {response_obj.id} to {self._cached_response_id}")
+                    verbose_logger.debug(
+                        "Updating response ID from %s to %s", response_obj.id, self._cached_response_id
+                    )
                     response_obj.id = self._cached_response_id
 
         # If auto-execution is enabled, check for completed responses
@@ -606,7 +609,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 params_for_llm[key] = value  # Copy all params as-is since tools are already processed
 
             tools_count = len(params_for_llm.get("tools", [])) if params_for_llm.get("tools") else 0
-            verbose_logger.debug(f"Making LLM call with {tools_count} tools")
+            verbose_logger.debug("Making LLM call with %s tools", tools_count)
             response = await aresponses(**params_for_llm)
 
             # Set the base iterator
@@ -616,15 +619,15 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self.model = getattr(response, "model", self.model)
                 self.litellm_metadata = getattr(response, "litellm_metadata", {})
                 self.custom_llm_provider = getattr(response, "custom_llm_provider", self.custom_llm_provider)
-                verbose_logger.debug(f"Created base iterator: {type(self.base_iterator)}")
+                verbose_logger.debug("Created base iterator: %s", type(self.base_iterator))
             else:
                 # Non-streaming response - this shouldn't happen but handle it
-                verbose_logger.warning(f"Got non-streaming response: {type(response)}")
+                verbose_logger.warning("Got non-streaming response: %s", type(response))
                 self.base_iterator = None
                 self.phase = "finished"
 
         except Exception as e:
-            verbose_logger.error(f"Error creating initial response iterator: {e}")
+            verbose_logger.error("Error creating initial response iterator: %s", e)
             import traceback
 
             traceback.print_exc()
@@ -741,7 +744,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             self._tool_results_for_response = self.collected_response
 
         except Exception as e:
-            verbose_logger.error(f"Error in tool execution: {e}")
+            verbose_logger.error("Error in tool execution: %s", e)
             import traceback
 
             traceback.print_exc()
@@ -806,7 +809,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self._cached_response_id = None
 
         except Exception as e:
-            verbose_logger.error(f"Error creating follow-up iterator: {e}")
+            verbose_logger.error("Error creating follow-up iterator: %s", e)
             import traceback
 
             traceback.print_exc()

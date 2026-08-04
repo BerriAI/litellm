@@ -10,8 +10,9 @@ middleware is a transparent pass-through.
 
 import re
 import threading
+from collections.abc import Callable, Sequence
 from enum import Enum
-from typing import Callable, Optional, Protocol, Sequence, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -27,7 +28,7 @@ class BillableCategory(str, Enum):
 
 @runtime_checkable
 class BillingRecorder(Protocol):
-    def record(self, *, category: BillableCategory, route: str, status_code: int, model_id: Optional[str]) -> None: ...
+    def record(self, *, category: BillableCategory, route: str, status_code: int, model_id: str | None) -> None: ...
 
 
 _MODEL_ID_HEADER = b"x-litellm-model-id"
@@ -84,7 +85,7 @@ _PASSTHROUGH_PREFIXES: tuple[str, ...] = tuple(
 )
 
 
-def _classify_llm_route(path: str) -> Optional[str]:
+def _classify_llm_route(path: str) -> str | None:
     exact_match = next((route for route in _LLM_ROUTE_EXACT if path == route), None)
     if exact_match is not None:
         return exact_match
@@ -113,7 +114,7 @@ _A2A_TRANSPORT_PREFIXES: tuple[str, ...] = ("/v1/a2a/", "/a2a/")
 # method-agnostic by contrast because its list path logs a SpendLogs row too.
 
 
-def _classify_mcp_route(path: str) -> Optional[str]:
+def _classify_mcp_route(path: str) -> str | None:
     if path == _MCP_MANAGEMENT_PREFIX or path.startswith(f"{_MCP_MANAGEMENT_PREFIX}/"):
         return None
     if path == "/mcp" or path.startswith("/mcp/"):
@@ -125,13 +126,13 @@ def _classify_mcp_route(path: str) -> Optional[str]:
     return None
 
 
-def _classify_a2a_route(path: str) -> Optional[str]:
+def _classify_a2a_route(path: str) -> str | None:
     if path.endswith(_A2A_INVOKE_SUFFIX) and any(path.startswith(prefix) for prefix in _A2A_TRANSPORT_PREFIXES):
         return "/a2a"
     return None
 
 
-def classify_billable_request(path: str, method: str = "POST") -> Optional[tuple[BillableCategory, str]]:
+def classify_billable_request(path: str, method: str = "POST") -> tuple[BillableCategory, str] | None:
     """Map a request path to its (category, normalized route), or None if not billable."""
     normalized = path.rstrip("/") or "/"
 
@@ -155,7 +156,7 @@ def classify_billable_request(path: str, method: str = "POST") -> Optional[tuple
     return None
 
 
-def _extract_model_id(headers: Sequence[tuple[bytes, bytes]]) -> Optional[str]:
+def _extract_model_id(headers: Sequence[tuple[bytes, bytes]]) -> str | None:
     return next(
         (value.decode("latin-1") for name, value in headers if name.lower() == _MODEL_ID_HEADER and value),
         None,
@@ -173,8 +174,8 @@ class BillableRequestMetricsMiddleware:
     def __init__(
         self,
         app: ASGIApp,
-        recorder: Optional[BillingRecorder] = None,
-        recorder_factory: Optional[Callable[[], Optional[BillingRecorder]]] = None,
+        recorder: BillingRecorder | None = None,
+        recorder_factory: Callable[[], BillingRecorder | None] | None = None,
     ) -> None:
         self.app = app
         self.recorder = recorder
@@ -187,7 +188,7 @@ class BillableRequestMetricsMiddleware:
         self._resolved = recorder_factory is None
         self._resolve_lock = threading.Lock()
 
-    def _resolve_recorder(self) -> Optional[BillingRecorder]:
+    def _resolve_recorder(self) -> BillingRecorder | None:
         if self._resolved:
             return self.recorder
         # The lock keeps concurrent first requests from each building their own
@@ -216,7 +217,7 @@ class BillableRequestMetricsMiddleware:
 
         category, route = classification
         status_code = 0
-        model_id: Optional[str] = None
+        model_id: str | None = None
 
         async def send_wrapper(message: Message) -> None:
             nonlocal status_code, model_id

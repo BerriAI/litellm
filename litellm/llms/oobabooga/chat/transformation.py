@@ -1,5 +1,5 @@
 import time
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -23,7 +23,7 @@ class OobaboogaConfig(OpenAIGPTConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Optional[Union[dict, httpx.Headers]] = None,
+        headers: dict | httpx.Headers | None = None,
     ) -> BaseLLMException:
         return OobaboogaError(status_code=status_code, message=error_message, headers=headers)
 
@@ -34,12 +34,12 @@ class OobaboogaConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LoggingClass,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         ## LOGGING
         logging_obj.post_call(
@@ -82,11 +82,11 @@ class OobaboogaConfig(OpenAIGPTConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers = {
             "accept": "application/json",

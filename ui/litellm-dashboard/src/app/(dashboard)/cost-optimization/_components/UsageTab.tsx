@@ -3,9 +3,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Info } from "lucide-react";
 
-import { AreaChart, BarChart, CustomLegend, DonutChart, DEFAULT_COLOR_CYCLE } from "@/components/shared/charts";
+import { AreaChart, BarChart, CustomLegend, DonutChart, SEQUENTIAL_COLOR_RAMP } from "@/components/shared/charts";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getToolSpend, ToolSpendResponse } from "@/components/networking";
@@ -16,6 +16,8 @@ import {
   formatRangeLabel,
   localIsoDay,
   MAX_POINTS_WITH_DOTS,
+  SAVINGS_COLORS,
+  SAVINGS_DRIVERS,
   SAVINGS_SERIES,
   SavingsAccumulation,
   SavingsPoint,
@@ -34,12 +36,9 @@ interface UsageTabProps {
 const EMPTY_TOOL_SPEND: ToolSpendResponse = {
   by_tool: [],
   daily: [],
-  total_spend: 0,
   start_date: null,
   end_date: null,
 };
-
-const SAVINGS_COLORS = ["emerald", "blue"] as const;
 
 const shortDate = (iso: string): string =>
   new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -48,6 +47,7 @@ const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
 
 const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?? 0;
 const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
+const autorouterOf = (m: SpendMetrics): number => m.autorouter_savings_spend ?? 0;
 const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
 
 const SummaryCard = ({ label, value, hint, info }: { label: string; value: string; hint?: string; info?: string }) => (
@@ -103,12 +103,12 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
 
   const toolSpend = toolSpendState?.key === rangeKey ? toolSpendState.data : null;
   const toolSpendLoading = toolSpendEnabled && toolSpend === null;
-  const toolSpendWindowClamped = !!toolSpend?.start_date && !!startTime && toolSpend.start_date > isoDay(startTime);
 
   const compressionTotal = useMemo(() => results.reduce((sum, d) => sum + compressionOf(d.metrics), 0), [results]);
   const cachingTotal = useMemo(() => results.reduce((sum, d) => sum + cachingOf(d.metrics), 0), [results]);
+  const autorouterTotal = useMemo(() => results.reduce((sum, d) => sum + autorouterOf(d.metrics), 0), [results]);
   const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
-  const totalSaved = compressionTotal + cachingTotal;
+  const totalSaved = compressionTotal + cachingTotal + autorouterTotal;
 
   const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
 
@@ -124,6 +124,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
           date: shortDate(d.date),
           Compression: compressionOf(d.metrics),
           "Prompt caching": cachingOf(d.metrics),
+          "Auto-router": autorouterOf(d.metrics),
         })),
     [results],
   );
@@ -145,14 +146,19 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
     .filter(Boolean)
     .join(" \u00b7 ");
 
+  // A driver can come out negative (auto-router pays a cold-cache write on every
+  // model switch), and a negative slice has no meaning in a donut, so only drivers
+  // that actually saved are plotted; the range total keeps the signed truth.
   const byDriver = useMemo(
     () =>
-      [
-        { driver: "Compression", usd: compressionTotal },
-        { driver: "Prompt caching", usd: cachingTotal },
-      ].filter((d) => d.usd > 0),
-    [compressionTotal, cachingTotal],
+      SAVINGS_DRIVERS.map(({ name, color }) => ({
+        driver: name,
+        color,
+        usd: { Compression: compressionTotal, "Prompt caching": cachingTotal, "Auto-router": autorouterTotal }[name],
+      })).filter((d) => d.usd > 0),
+    [compressionTotal, cachingTotal, autorouterTotal],
   );
+  const plottedDriverTotal = useMemo(() => byDriver.reduce((sum, d) => sum + d.usd, 0), [byDriver]);
 
   const topTools = useMemo(() => topToolsBySpend(toolSpend?.by_tool ?? []), [toolSpend]);
   const topToolNames = useMemo(() => topTools.map((t) => t.tool_name), [topTools]);
@@ -168,7 +174,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
       })),
     [toolSpend, topToolNames],
   );
-  const toolColors = useMemo(() => DEFAULT_COLOR_CYCLE.slice(0, Math.max(topToolNames.length, 1)), [topToolNames]);
+  const toolColors = useMemo(() => SEQUENTIAL_COLOR_RAMP.slice(0, Math.max(topToolNames.length, 1)), [topToolNames]);
 
   return (
     <div className="w-full space-y-6">
@@ -176,11 +182,11 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
         <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
         <SummaryCard
           label="Total saved"
           value={usd(totalSaved)}
-          hint={loading || isFetchingMore ? "Loading..." : "Compression + prompt caching"}
+          hint={loading || isFetchingMore ? "Loading..." : "Compression + prompt caching + auto-router"}
         />
         <SummaryCard
           label="Compression savings"
@@ -194,26 +200,32 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
           hint="Cache read discount"
           info="Tokens the provider served from cache, priced at the discount between the input and cache-read rates."
         />
+        <SummaryCard
+          label="Auto-router savings"
+          value={usd(autorouterTotal)}
+          hint="vs. the priciest model it could pick"
+          info="What this traffic would have cost had every request gone to the most expensive model the auto-router can route to, minus what it actually cost. Switching leaves the new model with a cold cache, so it pays to write the prompt again while the baseline is priced as already warm; a route that thrashes the cache can total below zero, and a genuine first turn, where neither side had anything cached, is undercounted."
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
+          {/* CardHeader's own slots rather than hand-rolled rows: the action column is
+              sized to its content and the title column takes the rest, so the subtitle
+              never competes with the controls for width and neither moves when it grows.
+              The controls wrap within their column instead of pushing past the card */}
           <CardHeader>
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <CardTitle>Savings</CardTitle>
-                <p className="text-sm text-muted-foreground">{savingsSubtitle}</p>
-              </div>
-              <div className="flex items-center gap-4">
-                <CustomLegend categories={SAVINGS_SERIES} colors={SAVINGS_COLORS} />
-                <Tabs value={accumulation} onValueChange={(value) => setAccumulation(value as SavingsAccumulation)}>
-                  <TabsList>
-                    <TabsTrigger value="cumulative">Cumulative</TabsTrigger>
-                    <TabsTrigger value="per-interval">{intervalLabel}</TabsTrigger>
-                  </TabsList>
-                </Tabs>
-              </div>
-            </div>
+            <CardTitle>Savings</CardTitle>
+            <CardDescription>{savingsSubtitle}</CardDescription>
+            <CardAction className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+              <CustomLegend categories={SAVINGS_SERIES} colors={SAVINGS_COLORS} />
+              <Tabs value={accumulation} onValueChange={(value) => setAccumulation(value as SavingsAccumulation)}>
+                <TabsList>
+                  <TabsTrigger value="cumulative">Cumulative</TabsTrigger>
+                  <TabsTrigger value="per-interval">{intervalLabel}</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </CardAction>
           </CardHeader>
           <CardContent>
             {accumulation === "cumulative" ? (
@@ -227,12 +239,14 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
                 showDots={overTime.length <= MAX_POINTS_WITH_DOTS}
               />
             ) : (
+              // Not stacked: a driver can be negative once a model switch is charged
+              // for its cold cache, and stacking would draw that segment below the axis
+              // while the remaining bar still read as the day's total
               <BarChart
                 data={overTime}
                 index="date"
                 categories={SAVINGS_SERIES}
                 colors={SAVINGS_COLORS}
-                stack
                 valueFormatter={usd}
                 showLegend={false}
               />
@@ -249,10 +263,10 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
               data={byDriver}
               index="driver"
               category="usd"
-              colors={["emerald", "blue"]}
+              colors={byDriver.map((d) => d.color)}
               valueFormatter={usd}
               showLabel
-              label={usd(totalSaved)}
+              label={usd(plottedDriverTotal)}
             />
           </CardContent>
         </Card>
@@ -262,15 +276,10 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
         <CardHeader>
           <CardTitle>Spend by tool</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Spend on requests that called each tool (MCP and client-side tools). A request that used multiple tools
-            counts its full spend toward each, so this attributes rather than partitions spend.
+            Spend on requests that invoked each tool (MCP and client-side tools); declaring a tool without invoking it
+            does not count. A request that invoked multiple tools counts its full spend toward each, so this attributes
+            rather than partitions spend.
           </p>
-          {toolSpendWindowClamped && (
-            <p className="text-xs text-muted-foreground">
-              Tool spend is capped at 30 days before the end of the selected range; showing spend since{" "}
-              {toolSpend?.start_date}.
-            </p>
-          )}
         </CardHeader>
         <CardContent>
           {topTools.length === 0 ? (
@@ -285,22 +294,27 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
                   data={topToolsChart}
                   index="tool_name"
                   categories={["spend"]}
-                  colors={["emerald"]}
+                  colors={toolColors}
+                  colorByDatum
                   layout="vertical"
                   yAxisWidth={140}
+                  maxBarSize={64}
                   showLegend={false}
                   valueFormatter={usd}
                 />
               </div>
               <div>
                 <p className="mb-2 text-sm font-medium text-muted-foreground">Daily spend by tool</p>
+                <CustomLegend categories={topToolNames} colors={toolColors} />
                 <BarChart
                   data={dailyToolSeries}
                   index="date"
                   categories={topToolNames}
                   colors={toolColors}
                   stack
+                  maxBarSize={64}
                   valueFormatter={usd}
+                  showLegend={false}
                 />
               </div>
             </div>

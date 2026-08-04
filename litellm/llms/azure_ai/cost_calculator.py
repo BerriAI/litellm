@@ -3,8 +3,6 @@ Azure AI cost calculation helper.
 Handles Azure AI Foundry Model Router flat cost and other Azure AI specific pricing.
 """
 
-from typing import Optional, Tuple
-
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
@@ -59,10 +57,10 @@ def calculate_azure_model_router_flat_cost(model: str, prompt_tokens: int) -> fl
 def cost_per_token(
     model: str,
     usage: Usage,
-    response_time_ms: Optional[float] = 0.0,
-    request_model: Optional[str] = None,
-    service_tier: Optional[str] = None,
-) -> Tuple[float, float]:
+    response_time_ms: float | None = 0.0,
+    request_model: str | None = None,
+    service_tier: str | None = None,
+) -> tuple[float, float]:
     """
     Calculate the cost per token for Azure AI models.
 
@@ -109,7 +107,7 @@ def cost_per_token(
             # Re-raise for non-router models - they should have pricing defined
             raise
         verbose_logger.debug(
-            f"Azure AI Model Router: model '{model}' not in cost map, calculating routing flat cost only. Error: {e}"
+            "Azure AI Model Router: model '%s' not in cost map, calculating routing flat cost only. Error: %s", model, e
         )
 
     # Add flat cost for Azure Model Router
