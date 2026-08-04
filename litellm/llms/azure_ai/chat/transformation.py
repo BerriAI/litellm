@@ -294,7 +294,8 @@ class AzureAIStudioConfig(OpenAIConfig):
     def _drop_tool_level_extra_fields(self, request_data: dict, error_text: str) -> dict:
         from litellm.llms.base_llm.base_utils import parse_rejected_tool_fields
 
-        fields_to_drop = frozenset().union(*parse_rejected_tool_fields(error_text).values() or (frozenset(),))
+        rejected = parse_rejected_tool_fields(error_text)
+        fields_to_drop = frozenset(field for fields in rejected.values() for field in fields)
         tools = request_data.get("tools")
         if fields_to_drop and isinstance(tools, list):
             for tool in tools:

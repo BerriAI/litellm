@@ -147,6 +147,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         credentials: Credentials,
         aws_region_name: str,
         caller_headers: Mapping[str, str],
+        extra_headers: Mapping[str, str] | None,
         endpoint_url: str,
         api_key: str | None,
     ) -> tuple[_SendResultT, str]:
@@ -168,7 +169,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 error_text=_provider_error_text(err),
                 credentials=credentials,
                 aws_region_name=aws_region_name,
-                extra_headers=caller_headers,
+                extra_headers=extra_headers,
                 endpoint_url=endpoint_url,
                 headers=caller_headers,
                 api_key=api_key,
@@ -188,6 +189,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         credentials: Credentials,
         aws_region_name: str,
         caller_headers: Mapping[str, str],
+        extra_headers: Mapping[str, str] | None,
         endpoint_url: str,
         api_key: str | None,
     ) -> tuple[_SendResultT, str]:
@@ -200,7 +202,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 error_text=_provider_error_text(err),
                 credentials=credentials,
                 aws_region_name=aws_region_name,
-                extra_headers=caller_headers,
+                extra_headers=extra_headers,
                 endpoint_url=endpoint_url,
                 headers=caller_headers,
                 api_key=api_key,
@@ -283,6 +285,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
             caller_headers=headers,
+            extra_headers=headers,
             endpoint_url=api_base,
             api_key=api_key,
         )
@@ -377,6 +380,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
             caller_headers=caller_headers,
+            extra_headers=caller_headers,
             endpoint_url=api_base,
             api_key=api_key,
         )
@@ -619,6 +623,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 credentials=credentials,
                 aws_region_name=aws_region_name,
                 caller_headers=headers,
+                extra_headers=extra_headers,
                 endpoint_url=proxy_endpoint_url,
                 api_key=api_key,
             )
@@ -656,6 +661,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             credentials=credentials,
             aws_region_name=aws_region_name,
             caller_headers=headers,
+            extra_headers=extra_headers,
             endpoint_url=proxy_endpoint_url,
             api_key=api_key,
         )

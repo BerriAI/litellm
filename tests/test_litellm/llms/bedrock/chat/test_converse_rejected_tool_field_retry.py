@@ -49,6 +49,7 @@ def _retry_kwargs():
         "credentials": _credentials(),
         "aws_region_name": "us-east-1",
         "caller_headers": {"Content-Type": "application/json"},
+        "extra_headers": None,
         "endpoint_url": "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse",
         "api_key": None,
     }
@@ -189,6 +190,27 @@ async def test_async_retry_resends_without_the_rejected_field_and_resigns() -> N
     assert '"strict"' not in attempts[1][0]
     assert attempts[1][1]["Authorization"].startswith("AWS4-HMAC-SHA256")
     assert sent_body == attempts[1][0]
+
+
+def test_retry_preserves_a_caller_supplied_authorization_header() -> None:
+    """``extra_headers`` is not a duplicate of ``caller_headers``: it is the only thing
+    that restores a caller's non-SigV4 ``Authorization`` after signing, so the retry has
+    to pass it through or a proxied bearer token is silently replaced by a SigV4 one."""
+    bearer = {"Authorization": "Bearer caller-supplied-token"}
+    attempts: list[dict] = []
+
+    def send(body: str, headers) -> str:
+        attempts.append(dict(headers))
+        if len(attempts) == 1:
+            raise BedrockError(status_code=400, message=_STRICT_REJECTION)
+        return "ok"
+
+    BedrockConverseLLM()._send_retrying_rejected_tool_fields(
+        send=send,
+        **{**_retry_kwargs(), "caller_headers": {"Content-Type": "application/json", **bearer}, "extra_headers": bearer},
+    )
+
+    assert attempts[1]["Authorization"] == "Bearer caller-supplied-token"
 
 
 def test_reported_body_is_the_original_when_no_retry_happens() -> None:
