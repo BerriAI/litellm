@@ -92,6 +92,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   const [isTestModalVisible, setIsTestModalVisible] = useState<boolean>(false);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
+  const [isSubmittingRouter, setIsSubmittingRouter] = useState<boolean>(false);
   const [connectionTestId, setConnectionTestId] = useState<number>(0);
   const [testTargets, setTestTargets] = useState<AutoRouterTestTarget[]>([]);
 
@@ -191,25 +192,34 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     setEscalationKeywords(config.escalation_keywords ?? DEFAULT_ESCALATION_KEYWORDS);
   };
 
-  const submitRecommendedRouter = (name: string) => {
+  // The dropdown and handlePresetChange trust the cached model list, so a caller's access can
+  // narrow without ever being reflected here (nothing invalidates a preset already applied, and a
+  // background refetch failure keeps trusting the stale cache by design - see modelsUnverifiable
+  // above). The backend does not re-check a router's referenced model names against the caller's
+  // access either, so this is the only place that can catch it: force a fresh fetch right before
+  // creating the router, rather than trusting whatever's cached.
+  const verifyPresetStillAvailable = async (presetKey: string): Promise<boolean> => {
+    const preset = getPresetByKey(presetKey);
+    if (!preset) return false;
+    const { data: freshModels, isError: freshError } = await refetchModels();
+    if (freshError) return false;
+    const freshSet = new Set((freshModels ?? []).map((m) => m.model_group));
+    return getMissingModelsInPreset(preset, freshSet).length === 0;
+  };
+
+  const submitRecommendedRouter = async (name: string) => {
     if (!selectedPreset) {
       setShowValidationErrors(true);
       NotificationManager.fromBackend("Please select a template, or choose Custom Configuration");
       return;
     }
 
-    // handlePresetChange only ever applies a preset that was available at selection time; that
-    // guarantee can go stale by submit time (e.g. the caller's model access narrowed since), so
-    // re-verify here rather than trust state gathered earlier.
-    if (selectedPreset !== "custom") {
-      const preset = getPresetByKey(selectedPreset);
-      if (!preset || presetAvailability(preset).kind !== "available") {
-        setShowValidationErrors(true);
-        NotificationManager.fromBackend(
-          "This template's models are no longer available. Please reselect a template or switch to Custom.",
-        );
-        return;
-      }
+    if (selectedPreset !== "custom" && !(await verifyPresetStillAvailable(selectedPreset))) {
+      setShowValidationErrors(true);
+      NotificationManager.fromBackend(
+        "This template's models are no longer available. Please reselect a template or switch to Custom.",
+      );
+      return;
     }
 
     const {
@@ -256,48 +266,48 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       auto_router_default_model: defaultModel,
     });
 
-    form
-      .validateFields(requiresTeamScope ? ["auto_router_name", "team_id"] : ["auto_router_name"])
-      .then((values) => {
-        const complexityRouterConfigParams = {
-          tiers,
-          classifierType,
-          classifierLlmConfig,
-          classifierContextWindowSize,
-          classifierContextPerTurnChars,
-          classifierContextIncludeAssistantTurns,
-          sessionAffinity,
-          customTechnicalKeywords,
-          keywordTierRules,
-          semanticMatchingEnabled,
-          embeddingModel,
-          matchThreshold,
-          escalationKeywords,
-          adaptive,
-          adaptiveWeights,
-          tierDistancePenalty,
-          adaptiveEligible,
-          returnRawModelName,
-        };
+    try {
+      const values = await form.validateFields(
+        requiresTeamScope ? ["auto_router_name", "team_id"] : ["auto_router_name"],
+      );
+      const complexityRouterConfigParams = {
+        tiers,
+        classifierType,
+        classifierLlmConfig,
+        classifierContextWindowSize,
+        classifierContextPerTurnChars,
+        classifierContextIncludeAssistantTurns,
+        sessionAffinity,
+        customTechnicalKeywords,
+        keywordTierRules,
+        semanticMatchingEnabled,
+        embeddingModel,
+        matchThreshold,
+        escalationKeywords,
+        adaptive,
+        adaptiveWeights,
+        tierDistancePenalty,
+        adaptiveEligible,
+        returnRawModelName,
+      };
 
-        const submitValues = {
-          ...values,
-          auto_router_name: name,
-          auto_router_default_model: defaultModel,
-          model_type: "complexity_router",
-          complexity_router_config: buildComplexityRouterConfig(complexityRouterConfigParams),
-          model_access_group: form.getFieldValue("model_access_group"),
-        };
+      const submitValues = {
+        ...values,
+        auto_router_name: name,
+        auto_router_default_model: defaultModel,
+        model_type: "complexity_router",
+        complexity_router_config: buildComplexityRouterConfig(complexityRouterConfigParams),
+        model_access_group: form.getFieldValue("model_access_group"),
+      };
 
-        handleAddAutoRouterSubmit(submitValues, accessToken, form, handleOk);
-      })
-      .catch((error) => {
-        console.error("Validation failed:", error);
-        NotificationManager.fromBackend("Please fill in all required fields");
-      });
+      await handleAddAutoRouterSubmit(submitValues, accessToken, form, handleOk);
+    } catch (error) {
+      console.error("Validation failed:", error);
+      NotificationManager.fromBackend("Please fill in all required fields");
+    }
   };
 
-  const handleAutoRouterSubmit = () => {
+  const handleAutoRouterSubmit = async () => {
     const name = form.getFieldValue("auto_router_name");
     if (!name) {
       setShowValidationErrors(true);
@@ -306,7 +316,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
-    submitRecommendedRouter(name);
+    setIsSubmittingRouter(true);
+    try {
+      await submitRecommendedRouter(name);
+    } finally {
+      setIsSubmittingRouter(false);
+    }
   };
 
   const handleTestConnection = () => {
@@ -483,8 +498,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               <Button
                 type="primary"
                 onClick={() => {
-                  handleAutoRouterSubmit();
+                  void handleAutoRouterSubmit();
                 }}
+                loading={isSubmittingRouter}
               >
                 Add Auto Router
               </Button>

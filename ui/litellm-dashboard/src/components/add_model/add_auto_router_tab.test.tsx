@@ -202,11 +202,16 @@ describe("AddAutoRouterTab", () => {
   });
 
   // react-query keeps the last successful list when a later refetch fails, so a background
-  // refetch error must not treat an already-verified, still-cached preset as unverifiable: the
-  // caller never sees a stale error message, and a preset they already picked stays submittable.
+  // refetch error must not treat an already-verified, still-cached preset as unverifiable in the
+  // UI: the dropdown stays selectable and the caller never sees a stale error just from a passive
+  // hiccup. Submit still forces its own fresh check (separately tested below); here that fresh
+  // check succeeds, representing the hiccup having been transient.
   it("keeps a selected preset submit-reachable when a background refetch fails but cached models remain valid", async () => {
     const user = userEvent.setup();
-    mockFetchAvailableModels.mockResolvedValueOnce(ALL_FAMILY_MODELS).mockRejectedValue(new Error("boom"));
+    mockFetchAvailableModels
+      .mockResolvedValueOnce(ALL_FAMILY_MODELS)
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce(ALL_FAMILY_MODELS);
 
     renderWithProviders(<Harness />);
     openTemplateDropdown();
@@ -216,6 +221,10 @@ describe("AddAutoRouterTab", () => {
     await act(async () => {
       await testQueryClient.refetchQueries({ queryKey: ["availableModels", "autoRouter", "token"] });
     });
+    // The passive refetch failure must not have re-disabled the already-selected preset's option.
+    openTemplateDropdown();
+    expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
+    openTemplateDropdown();
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "resilient-router");
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
@@ -224,6 +233,60 @@ describe("AddAutoRouterTab", () => {
     expect(NotificationManager.fromBackend).not.toHaveBeenCalledWith(
       "This template's models are no longer available. Please reselect a template or switch to Custom.",
     );
+  });
+
+  // The backend does not re-check a router's referenced model names against the caller's access,
+  // so submit is the only place that can catch a genuinely stale preset: force a fresh fetch right
+  // before creating the router rather than trusting the cache, and block if that fresh check can't
+  // confirm availability (a real outage, or the caller's access having actually narrowed).
+  it("blocks submit when a fresh re-check at submit time cannot confirm the preset's models", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValueOnce(ALL_FAMILY_MODELS).mockRejectedValue(new Error("boom"));
+
+    renderWithProviders(<Harness />);
+    openTemplateDropdown();
+    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false));
+    fireEvent.click(optionByLabel("Anthropic Family")!);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "unconfirmed-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() =>
+      expect(NotificationManager.fromBackend).toHaveBeenCalledWith(
+        "This template's models are no longer available. Please reselect a template or switch to Custom.",
+      ),
+    );
+    expect(mockHandleAddAutoRouterSubmit).not.toHaveBeenCalled();
+  });
+
+  // The fresh re-check is a real network round trip, not instant, so the submit button must show
+  // its own loading state (matching the Test Connection button's existing convention) rather than
+  // silently doing nothing until it settles. This also proves the button can't be clicked again
+  // mid-check.
+  it("shows a loading state on the submit button while the submit-time re-check is in flight", async () => {
+    const user = userEvent.setup();
+    let resolveRecheck: (models: ModelGroup[]) => void = () => undefined;
+    mockFetchAvailableModels
+      .mockResolvedValueOnce(ALL_FAMILY_MODELS)
+      .mockReturnValueOnce(new Promise<ModelGroup[]>((resolve) => (resolveRecheck = resolve)));
+
+    renderWithProviders(<Harness />);
+    openTemplateDropdown();
+    await waitFor(() => expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false));
+    fireEvent.click(optionByLabel("Anthropic Family")!);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "loading-state-router");
+    const submitButton = screen.getByRole("button", { name: /add auto router/i });
+    await user.click(submitButton);
+
+    await waitFor(() => expect(submitButton).toHaveClass("ant-btn-loading"));
+    await user.click(submitButton);
+    expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2);
+
+    resolveRecheck(ALL_FAMILY_MODELS);
+
+    await waitFor(() => expect(submitButton).not.toHaveClass("ant-btn-loading"));
+    expect(mockHandleAddAutoRouterSubmit).toHaveBeenCalledTimes(1);
   });
 
   // The headline behavior: selecting a preset must pre-fill the tier config so the created
