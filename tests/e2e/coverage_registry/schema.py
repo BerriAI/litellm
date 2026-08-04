@@ -40,7 +40,6 @@ LlmEndpoint = Literal[
     "moderations",
     "realtime",
     "vector_stores",
-    "search",
     "ocr",
     "bedrock_native",
 ]
