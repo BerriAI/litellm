@@ -1,6 +1,8 @@
 import base64
 import time
 from collections.abc import Iterator, Mapping, Sequence
+from itertools import groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Union, cast
 
 from litellm._logging import verbose_logger
@@ -237,6 +239,20 @@ class ChunkProcessor:
                         if getattr(custom, "input", None):
                             yield index, "custom_input", custom.input
 
+    @staticmethod
+    def _join_fragments_by_index_and_field(
+        fragment_records: Iterator[tuple[int, str, str]],
+    ) -> Mapping[tuple[int, str], str]:
+        def group_key(record: tuple[int, str, str]) -> tuple[int, str]:
+            return record[0], record[1]
+
+        return MappingProxyType(
+            {
+                key: "".join(fragment for _, _, fragment in group)
+                for key, group in groupby(sorted(fragment_records, key=group_key), key=group_key)
+            }
+        )
+
     def get_combined_tool_content(
         self, tool_call_chunks: Sequence[Mapping[str, Any]]
     ) -> list[
@@ -344,7 +360,7 @@ class ChunkProcessor:
                         if isinstance(provider_fields, dict):
                             tool_call_map[index]["provider_specific_fields"].update(provider_fields)
 
-        fragment_records = tuple(self._iter_tool_call_fragments(tool_call_chunks))
+        joined_fragments = self._join_fragments_by_index_and_field(self._iter_tool_call_fragments(tool_call_chunks))
 
         # Convert the map to a list of tool calls
         for index in sorted(tool_call_map.keys()):
@@ -355,23 +371,12 @@ class ChunkProcessor:
                         id=tool_call_data["id"],
                         custom=ChatCompletionCustomToolCallPayload(
                             name=tool_call_data["custom_name"],
-                            input="".join(
-                                fragment
-                                for fragment_index, field, fragment in fragment_records
-                                if fragment_index == index and field == "custom_input"
-                            ),
+                            input=joined_fragments.get((index, "custom_input"), ""),
                         ),
                     )
                 )
             elif tool_call_data["id"] and tool_call_data["name"]:
-                combined_arguments = (
-                    "".join(
-                        fragment
-                        for fragment_index, field, fragment in fragment_records
-                        if fragment_index == index and field == "arguments"
-                    )
-                    or "{}"
-                )
+                combined_arguments = joined_fragments.get((index, "arguments"), "") or "{}"
 
                 # Build function - provider_specific_fields should be on tool_call level, not function level
                 function = Function(
