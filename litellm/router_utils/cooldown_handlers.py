@@ -9,6 +9,7 @@ Router cooldown handlers
 import asyncio
 import math
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -102,7 +103,7 @@ def _get_deployment_cooldown_policy(
     dep = litellm_router_instance.get_model_info(id=deployment)
     if dep is None:
         return None, None
-    mi: Mapping[str, Any] = dep.get("model_info") or {}
+    mi: Mapping[str, Any] = dep.get("model_info") or MappingProxyType({})
     raw = mi.get("allowed_fails_policy")
     policy: Mapping[str, int] | None = raw if isinstance(raw, dict) else None
     allowed: int | None = mi.get("allowed_fails")
