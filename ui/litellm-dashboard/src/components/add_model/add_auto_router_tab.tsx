@@ -38,8 +38,6 @@ interface AddAutoRouterTabProps {
   createScope?: ModelWriteScope;
 }
 
-const { Title } = Typography;
-
 const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   handleOk,
   accessToken,
@@ -90,11 +88,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   }, [accessToken]);
 
   const isAdmin = all_admin_roles.includes(userRole);
-
-  const modelGroupOptions = Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group) => ({
-    value: model_group,
-    label: model_group,
-  }));
 
   // Why the submit is unavailable, or null when it is available. The button reads this to disable
   // itself and to say what is missing, so the two can never give different answers.
