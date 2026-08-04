@@ -6,7 +6,7 @@ path used for OpenAI and Azure models.
 """
 
 import json
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
@@ -45,10 +45,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     @staticmethod
     def _translate_anthropic_image_source_to_url(source: dict) -> str | None:
         """Convert Anthropic image source to a URL string."""
-        source_type = source.get("type")
+        source_type: Final = source.get("type")
         if source_type == "base64":
-            media_type = source.get("media_type", "image/jpeg")
-            data = source.get("data", "")
+            media_type: Final = source.get("media_type", "image/jpeg")
+            data: Final = source.get("data", "")
             return f"data:{media_type};base64,{data}" if data else None
         elif source_type == "url":
             return source.get("url")
@@ -68,7 +68,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
           assistant text     -> message(role=assistant, output_text)
           assistant tool_use -> function_call
         """
-        input_items: list[dict[str, Any]] = []
+        input_items: Final[list[dict[str, Any]]] = []
 
         for m in messages:
             role = m["role"]
@@ -173,7 +173,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         tools: list[AllAnthropicToolsValues],
     ) -> list[dict[str, Any]]:
         """Convert Anthropic tool definitions to Responses API function tools."""
-        result: list[dict[str, Any]] = []
+        result: Final[list[dict[str, Any]]] = []
         for tool in tools:
             tool_dict = cast(dict[str, Any], tool)
             tool_type = tool_dict.get("type", "")
@@ -195,7 +195,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         tool_choice: AnthropicMessagesToolChoice,
     ) -> str | dict[str, Any]:
         """Convert Anthropic tool_choice to Responses API tool_choice."""
-        tc_type = tool_choice.get("type")
+        tc_type: Final = tool_choice.get("type")
         if tc_type == "any":
             return "required"
         elif tc_type == "tool":
@@ -217,11 +217,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if not isinstance(context_management, dict):
             return None
 
-        edits = context_management.get("edits", [])
+        edits: Final = context_management.get("edits", [])
         if not isinstance(edits, list):
             return None
 
-        result: list[dict[str, Any]] = []
+        result: Final[list[dict[str, Any]]] = []
         for edit in edits:
             if not isinstance(edit, dict):
                 continue
@@ -251,7 +251,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if not isinstance(thinking, dict):
             return None
 
-        thinking_type = thinking.get("type")
+        thinking_type: Final = thinking.get("type")
 
         if thinking_type == "adaptive":
             # Use output_config.effort if available
@@ -263,9 +263,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         else:
             return None
 
-        auto_summary = is_reasoning_auto_summary_enabled()
-        result: dict[str, Any] = {"effort": effort}
-        summary = thinking.get("summary")
+        auto_summary: Final = is_reasoning_auto_summary_enabled()
+        result: Final[dict[str, Any]] = {"effort": effort}
+        summary: Final = thinking.get("summary")
         if summary:
             result["summary"] = summary
         elif auto_summary:
@@ -280,19 +280,19 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         Translate a full Anthropic /v1/messages request dict to
         litellm.responses() / litellm.aresponses() kwargs.
         """
-        model: str = anthropic_request["model"]
-        messages_list = cast(
+        model: Final[str] = anthropic_request["model"]
+        messages_list: Final = cast(
             list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam],
             anthropic_request["messages"],
         )
 
-        responses_kwargs: dict[str, Any] = {
+        responses_kwargs: Final[dict[str, Any]] = {
             "model": model,
             "input": self.translate_messages_to_responses_input(messages_list),
         }
 
         # system -> instructions
-        system = anthropic_request.get("system")
+        system: Final = anthropic_request.get("system")
         if system:
             if isinstance(system, str):
                 responses_kwargs["instructions"] = system
@@ -301,7 +301,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 responses_kwargs["instructions"] = "\n".join(filter(None, text_parts))
 
         # max_tokens -> max_output_tokens
-        max_tokens = anthropic_request.get("max_tokens")
+        max_tokens: Final = anthropic_request.get("max_tokens")
         if max_tokens:
             responses_kwargs["max_output_tokens"] = max_tokens
 
@@ -312,24 +312,24 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             responses_kwargs["top_p"] = anthropic_request["top_p"]
 
         # tools
-        tools = anthropic_request.get("tools")
+        tools: Final = anthropic_request.get("tools")
         if tools:
             responses_kwargs["tools"] = self.translate_tools_to_responses_api(
                 cast(list[AllAnthropicToolsValues], tools)
             )
 
         # tool_choice
-        tool_choice = anthropic_request.get("tool_choice")
+        tool_choice: Final = anthropic_request.get("tool_choice")
         if tool_choice:
             responses_kwargs["tool_choice"] = self.translate_tool_choice_to_responses_api(
                 cast(AnthropicMessagesToolChoice, tool_choice)
             )
 
         # thinking -> reasoning
-        thinking = anthropic_request.get("thinking")
+        thinking: Final = anthropic_request.get("thinking")
         if isinstance(thinking, dict):
             output_config = anthropic_request.get("output_config")
-            reasoning = self.translate_thinking_to_reasoning(
+            reasoning: Final = self.translate_thinking_to_reasoning(
                 thinking,
                 output_config=cast(dict[str, Any] | None, output_config),
             )
@@ -344,7 +344,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if not isinstance(output_format, dict) and isinstance(output_config, dict):
             output_format = output_config.get("format")  # type: ignore[assignment]
         if isinstance(output_format, dict) and output_format.get("type") == "json_schema":
-            schema = output_format.get("schema")
+            schema: Final = output_format.get("schema")
             if schema:
                 responses_kwargs["text"] = {
                     "format": {
@@ -356,14 +356,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 }
 
         # context_management: Anthropic dict -> OpenAI array
-        context_management = anthropic_request.get("context_management")
+        context_management: Final = anthropic_request.get("context_management")
         if isinstance(context_management, dict):
-            openai_cm = self.translate_context_management_to_responses_api(context_management)
+            openai_cm: Final = self.translate_context_management_to_responses_api(context_management)
             if openai_cm is not None:
                 responses_kwargs["context_management"] = openai_cm
 
         # metadata user_id -> user
-        metadata = anthropic_request.get("metadata")
+        metadata: Final = anthropic_request.get("metadata")
         if isinstance(metadata, dict) and "user_id" in metadata:
             responses_kwargs["user"] = str(metadata["user_id"])[:64]
 
@@ -388,7 +388,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         from litellm.types.llms.openai import ResponseAPIUsage
 
-        content: list[dict[str, Any]] = []
+        content: Final[list[dict[str, Any]]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
 
         for item in response.output:
@@ -454,11 +454,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             stop_reason = "max_tokens"
 
         # usage
-        raw_usage: ResponseAPIUsage | None = response.usage
-        input_tokens = int(getattr(raw_usage, "input_tokens", 0) or 0)
-        output_tokens = int(getattr(raw_usage, "output_tokens", 0) or 0)
+        raw_usage: Final[ResponseAPIUsage | None] = response.usage
+        input_tokens: Final = int(getattr(raw_usage, "input_tokens", 0) or 0)
+        output_tokens: Final = int(getattr(raw_usage, "output_tokens", 0) or 0)
 
-        anthropic_usage = AnthropicUsage(
+        anthropic_usage: Final = AnthropicUsage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )

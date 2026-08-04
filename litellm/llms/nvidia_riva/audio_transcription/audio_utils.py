@@ -16,7 +16,7 @@ import io
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from litellm.llms.nvidia_riva.audio_transcription.transformation import (
     RIVA_TARGET_NUM_CHANNELS,
@@ -70,10 +70,10 @@ def resample_to_riva_pcm(file_bytes: bytes) -> ResampledAudio:
 
     # Clip + convert float [-1, 1] to int16 little-endian PCM.
     np.clip(samples_float, -1.0, 1.0, out=samples_float)
-    pcm_int16 = (samples_float * 32767.0).astype("<i2")
-    pcm_bytes = pcm_int16.tobytes()
+    pcm_int16: Final = (samples_float * 32767.0).astype("<i2")
+    pcm_bytes: Final = pcm_int16.tobytes()
 
-    duration_seconds = float(pcm_int16.size) / float(RIVA_TARGET_SAMPLE_RATE_HZ)
+    duration_seconds: Final = float(pcm_int16.size) / float(RIVA_TARGET_SAMPLE_RATE_HZ)
 
     return ResampledAudio(
         pcm_bytes=pcm_bytes,
@@ -132,8 +132,8 @@ def _decode_to_float32(file_bytes: bytes) -> tuple["FloatArray", int]:
         try:
             with audioread.audio_open(tmp_path) as src:
                 source_rate = int(src.samplerate)
-                channels = int(src.channels)
-                chunks = []
+                channels: Final = int(src.channels)
+                chunks: Final = []
                 for buf in src:
                     chunks.append(np.frombuffer(buf, dtype=np.int16))
                 if not chunks:
@@ -192,9 +192,9 @@ def _resample(samples: "FloatArray", source_rate: int, target_rate: int) -> "Flo
 
         from scipy.signal import resample_poly  # type: ignore
 
-        g = gcd(int(source_rate), int(target_rate))
-        up = int(target_rate) // g
-        down = int(source_rate) // g
+        g: Final = gcd(int(source_rate), int(target_rate))
+        up: Final = int(target_rate) // g
+        down: Final = int(source_rate) // g
         return cast("FloatArray", np.asarray(resample_poly(samples, up, down), dtype=np.float32))
     except ImportError:
         pass
@@ -206,14 +206,14 @@ def _linear_resample(samples: "FloatArray", source_rate: int, target_rate: int) 
     """Linear-interpolation fallback. See :func:`_resample` for caveats."""
     import numpy as np  # type: ignore
 
-    duration = samples.size / float(source_rate)
-    target_length = int(round(duration * target_rate))
+    duration: Final = samples.size / float(source_rate)
+    target_length: Final = int(round(duration * target_rate))
     if target_length <= 1:
         return samples.astype(np.float32)
 
-    src_indices = np.linspace(0, samples.size - 1, num=target_length, dtype=np.float64)
-    left = np.floor(src_indices).astype(np.int64)
-    right = np.minimum(left + 1, samples.size - 1)
-    frac = (src_indices - left).astype(np.float32)
+    src_indices: Final = np.linspace(0, samples.size - 1, num=target_length, dtype=np.float64)
+    left: Final = np.floor(src_indices).astype(np.int64)
+    right: Final = np.minimum(left + 1, samples.size - 1)
+    frac: Final = (src_indices - left).astype(np.float32)
 
     return ((1.0 - frac) * samples[left] + frac * samples[right]).astype(np.float32)

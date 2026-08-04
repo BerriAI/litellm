@@ -3,7 +3,7 @@ Vertex AI DeepSeek OCR transformation implementation.
 """
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -18,7 +18,7 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
-VERTEX_AI_DEEPSEEK_OCR_API_KEY_ENV_VAR = "VERTEX_AI_API_KEY"
+VERTEX_AI_DEEPSEEK_OCR_API_KEY_ENV_VAR: Final = "VERTEX_AI_API_KEY"
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -66,8 +66,8 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         # Use safe_get_* methods that don't mutate litellm_params dict
         litellm_params = litellm_params or {}
 
-        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
-        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params=litellm_params)
+        vertex_project: Final = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
+        vertex_credentials: Final = VertexBase.safe_get_vertex_ai_credentials(litellm_params=litellm_params)
 
         # Get access token from Vertex credentials
         access_token, project_id = self.vertex_base.get_access_token(
@@ -106,7 +106,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         # Use safe_get_* methods that don't mutate litellm_params dict
         litellm_params = litellm_params or {}
 
-        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
+        vertex_project: Final = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
         vertex_location = VertexBase.safe_get_vertex_ai_location(litellm_params=litellm_params)
 
         if vertex_project is None:
@@ -157,7 +157,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
             raise ValueError(f"Expected document dict, got {type(document)}")
 
         # Extract document type and URL
-        doc_type = document.get("type")
+        doc_type: Final = document.get("type")
         image_url = None
         document_url = None
 
@@ -177,13 +177,13 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
             content_item = {"type": "image_url", "image_url": document_url}
 
         # Build DeepSeek OCR request
-        data = {
+        data: Final = {
             "model": "deepseek-ai/" + model,
             "messages": [{"role": "user", "content": [content_item]}],
         }
 
         # Add optional parameters (stream, temperature, etc.)
-        deepseek_ocr_params = {}
+        deepseek_ocr_params: Final = {}
         for key, value in optional_params.items():
             if key in ["stream", "temperature", "max_tokens", "top_p", "n", "stop"]:
                 deepseek_ocr_params[key] = value
@@ -262,15 +262,15 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         verbose_logger.debug("Raw response: %s", raw_response.text)
 
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
 
             # Extract OCR content from provider response
-            choices = response_json.get("choices", [])
+            choices: Final = response_json.get("choices", [])
             if not choices:
                 raise ValueError("No choices in DeepSeek OCR response")
 
-            message = choices[0].get("message", {})
-            content = message.get("content", "")
+            message: Final = choices[0].get("message", {})
+            content: Final = message.get("content", "")
 
             if not content:
                 raise ValueError("No content in DeepSeek OCR response")
@@ -315,7 +315,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
             # Convert usage info if present
             usage_info = None
             if "usage_info" in ocr_data:
-                usage_dict = ocr_data["usage_info"]
+                usage_dict: Final = ocr_data["usage_info"]
                 if isinstance(usage_dict, dict):
                     usage_info = OCRUsageInfo(**usage_dict)
 

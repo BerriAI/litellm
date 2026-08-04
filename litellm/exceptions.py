@@ -10,7 +10,7 @@
 ## LiteLLM versions of the OpenAI Exception Types
 
 import enum
-from typing import Any
+from typing import Any, Final
 
 import httpx
 import openai
@@ -81,8 +81,8 @@ class RateLimitType(str, enum.Enum):
     """Per-session max-iterations cap reached (agent-style flows)."""
 
 
-_RATE_LIMIT_CATEGORY_VALUES = frozenset(c.value for c in RateLimitErrorCategory)
-_RATE_LIMIT_TYPE_VALUES = frozenset(t.value for t in RateLimitType)
+_RATE_LIMIT_CATEGORY_VALUES: Final = frozenset(c.value for c in RateLimitErrorCategory)
+_RATE_LIMIT_TYPE_VALUES: Final = frozenset(t.value for t in RateLimitType)
 
 
 def validate_rate_limit_category(value: Any) -> str | None:
@@ -339,7 +339,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         headers: dict | None = None,
         exception_status_code: int | None = None,
     ):
-        request = httpx.Request(
+        request: Final = httpx.Request(
             method="POST",
             url="https://api.openai.com/v1",
         )
@@ -464,7 +464,7 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         # headers stay reachable on `e.response.headers` for callers that
         # explicitly want them; only the proxy-supplied `headers=` kwarg
         # makes it onto `self.headers`.
-        _response_headers = getattr(response, "headers", None) if response is not None else None
+        _response_headers: Final = getattr(response, "headers", None) if response is not None else None
         self.headers: dict[str, str] | None = {k: str(v) for k, v in headers.items()} if headers else None
         # Mirrors FastAPI HTTPException.detail so the same instance can be
         # serialized through both the ProxyException and HTTPException paths.
@@ -558,8 +558,8 @@ class RejectedRequestError(BadRequestError):  # type: ignore
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
         self.request_data = request_data
-        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        response = httpx.Response(status_code=400, request=request)
+        request: Final = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        response: Final = httpx.Response(status_code=400, request=request)
         super().__init__(
             message=self.message,
             model=self.model,  # type: ignore
@@ -648,7 +648,7 @@ class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        _response_headers = getattr(response, "headers", None) if response is not None else None
+        _response_headers: Final = getattr(response, "headers", None) if response is not None else None
         self.response = httpx.Response(
             status_code=self.status_code,
             headers=_response_headers,
@@ -696,7 +696,7 @@ class BadGatewayError(openai.APIStatusError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        _response_headers = getattr(response, "headers", None) if response is not None else None
+        _response_headers: Final = getattr(response, "headers", None) if response is not None else None
         self.response = httpx.Response(
             status_code=self.status_code,
             headers=_response_headers,
@@ -744,7 +744,7 @@ class InternalServerError(openai.InternalServerError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        _response_headers = getattr(response, "headers", None) if response is not None else None
+        _response_headers: Final = getattr(response, "headers", None) if response is not None else None
         self.response = httpx.Response(
             status_code=self.status_code,
             headers=_response_headers,
@@ -868,8 +868,8 @@ class APIResponseValidationError(openai.APIResponseValidationError):  # type: ig
         self.message = f"litellm.APIResponseValidationError: {message}"
         self.llm_provider = llm_provider
         self.model = model
-        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        response = httpx.Response(status_code=500, request=request)
+        request: Final = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        response: Final = httpx.Response(status_code=500, request=request)
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
@@ -933,7 +933,7 @@ class UnsupportedParamsError(BadRequestError):
         self.num_retries = num_retries
 
 
-LITELLM_EXCEPTION_TYPES = [
+LITELLM_EXCEPTION_TYPES: Final = [
     AuthenticationError,
     NotFoundError,
     BadRequestError,
@@ -1046,7 +1046,7 @@ class GuardrailRaisedException(Exception):
         should_wrap_with_default_message: bool = True,
         status_code: int = 400,
     ):
-        default_message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
+        default_message: Final = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
         self.guardrail_name = guardrail_name
         self.status_code = status_code
         self.message = default_message if should_wrap_with_default_message else message
@@ -1084,7 +1084,7 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         generated_content: str = "",
         is_pre_first_chunk: bool = False,
     ):
-        original_status = getattr(original_exception, "status_code", None)
+        original_status: Final = getattr(original_exception, "status_code", None)
         self.status_code = int(original_status) if original_status is not None else 503
         self.message = f"litellm.MidStreamFallbackError: {message}"
         self.model = model
@@ -1109,11 +1109,11 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
             self.response = response
 
         # Save the original attributes before they are overridden by ServiceUnavailableError
-        _saved_response = self.response
-        _saved_request = getattr(self.response, "request", None) or httpx.Request(
+        _saved_response: Final = self.response
+        _saved_request: Final = getattr(self.response, "request", None) or httpx.Request(
             method="POST", url=f"https://{llm_provider}.com/v1/"
         )
-        _saved_message = self.message
+        _saved_message: Final = self.message
 
         # Call the parent constructor (which hardcodes status_code=503 and modifies the response object)
         super().__init__(

@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Final, Literal
 
 import httpx
 
@@ -65,7 +65,7 @@ class VertexEmbedding(VertexBase):
                 litellm_params=litellm_params,
             )
 
-        should_use_v1beta1_features = self.is_using_v1beta1_features(optional_params=optional_params)
+        should_use_v1beta1_features: Final = self.is_using_v1beta1_features(optional_params=optional_params)
 
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -73,7 +73,7 @@ class VertexEmbedding(VertexBase):
             custom_llm_provider=custom_llm_provider,
         )
         # Extract use_psc_endpoint_format from optional_params
-        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+        use_psc_endpoint_format: Final = optional_params.get("use_psc_endpoint_format", False)
 
         auth_header, api_base = self._get_token_and_url(
             model=model,
@@ -89,8 +89,8 @@ class VertexEmbedding(VertexBase):
             mode="embedding",
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
-        headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
-        vertex_request: VertexEmbeddingRequest = (
+        headers: Final = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
+        vertex_request: Final[VertexEmbeddingRequest] = (
             litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
                 input=input,
                 optional_params=optional_params,
@@ -99,7 +99,7 @@ class VertexEmbedding(VertexBase):
             )
         )
 
-        _client_params = {}
+        _client_params: Final = {}
         if timeout:
             _client_params["timeout"] = timeout
         if client is None or not isinstance(client, HTTPHandler):
@@ -118,15 +118,15 @@ class VertexEmbedding(VertexBase):
         )
 
         try:
-            response = client.post(url=api_base, headers=headers, json=vertex_request)  # type: ignore
+            response: Final = client.post(url=api_base, headers=headers, json=vertex_request)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code = err.response.status_code
+            error_code: Final = err.response.status_code
             raise VertexAIError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        _json_response = response.json()
+        _json_response: Final = response.json()
         ## LOGGING POST-CALL
         logging_obj.post_call(input=input, api_key=None, original_response=_json_response)
 
@@ -160,14 +160,14 @@ class VertexEmbedding(VertexBase):
         """
         Async embedding implementation
         """
-        should_use_v1beta1_features = self.is_using_v1beta1_features(optional_params=optional_params)
+        should_use_v1beta1_features: Final = self.is_using_v1beta1_features(optional_params=optional_params)
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
             custom_llm_provider=custom_llm_provider,
         )
         # Extract use_psc_endpoint_format from optional_params
-        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+        use_psc_endpoint_format: Final = optional_params.get("use_psc_endpoint_format", False)
 
         auth_header, api_base = self._get_token_and_url(
             model=model,
@@ -183,8 +183,8 @@ class VertexEmbedding(VertexBase):
             mode="embedding",
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
-        headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
-        vertex_request: VertexEmbeddingRequest = (
+        headers: Final = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
+        vertex_request: Final[VertexEmbeddingRequest] = (
             litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
                 input=input,
                 optional_params=optional_params,
@@ -193,7 +193,7 @@ class VertexEmbedding(VertexBase):
             )
         )
 
-        _async_client_params = {}
+        _async_client_params: Final = {}
         if timeout:
             _async_client_params["timeout"] = timeout
         if client is None or not isinstance(client, AsyncHTTPHandler):
@@ -212,15 +212,15 @@ class VertexEmbedding(VertexBase):
         )
 
         try:
-            response = await client.post(api_base, headers=headers, json=vertex_request)  # type: ignore
+            response: Final = await client.post(api_base, headers=headers, json=vertex_request)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code = err.response.status_code
+            error_code: Final = err.response.status_code
             raise VertexAIError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        _json_response = response.json()
+        _json_response: Final = response.json()
         ## LOGGING POST-CALL
         logging_obj.post_call(input=input, api_key=None, original_response=_json_response)
 

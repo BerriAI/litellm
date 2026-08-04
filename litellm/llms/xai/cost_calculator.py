@@ -4,7 +4,7 @@ Helper util for handling XAI-specific cost calculation
 - Handles XAI-specific reasoning token billing (billed as part of completion tokens)
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
@@ -29,17 +29,17 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     # tokens. Detect when the transformation layer already folded them so we
     # don't double-count; fall back to raw xAI shape for callers that bypass
     # the transformation (e.g. proxy logs replayed into cost calc).
-    prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-    completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-    total_tokens = int(getattr(usage, "total_tokens", 0) or 0)
+    prompt_tokens: Final = int(getattr(usage, "prompt_tokens", 0) or 0)
+    completion_tokens: Final = int(getattr(usage, "completion_tokens", 0) or 0)
+    total_tokens: Final = int(getattr(usage, "total_tokens", 0) or 0)
     reasoning_tokens = 0
     if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
         reasoning_tokens = int(getattr(usage.completion_tokens_details, "reasoning_tokens", 0) or 0)
 
-    already_normalised = total_tokens == prompt_tokens + completion_tokens
-    total_completion_tokens = completion_tokens if already_normalised else completion_tokens + reasoning_tokens
+    already_normalised: Final = total_tokens == prompt_tokens + completion_tokens
+    total_completion_tokens: Final = completion_tokens if already_normalised else completion_tokens + reasoning_tokens
 
-    modified_usage = Usage(
+    modified_usage: Final = Usage(
         prompt_tokens=usage.prompt_tokens,
         completion_tokens=total_completion_tokens,
         total_tokens=usage.total_tokens,
@@ -63,7 +63,7 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     by the transformation layer to be compatible with the existing detection system.
     """
     # Cost per source used: $25 per 1,000 sources = $0.025 per source
-    cost_per_source = 25.0 / 1000.0  # $0.025
+    cost_per_source: Final = 25.0 / 1000.0  # $0.025
 
     num_sources_used = 0
 
@@ -79,6 +79,6 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     elif hasattr(usage, "num_sources_used") and usage.num_sources_used is not None:
         num_sources_used = int(usage.num_sources_used)
 
-    total_cost = cost_per_source * num_sources_used
+    total_cost: Final = cost_per_source * num_sources_used
 
     return total_cost

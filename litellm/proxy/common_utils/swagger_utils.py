@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 from pydantic import BaseModel, Field
 
@@ -32,7 +32,7 @@ def get_status_code(exception):
 
 
 # Create error responses
-ERROR_RESPONSES = {
+ERROR_RESPONSES: Final = {
     get_status_code(exception): {
         "model": ErrorResponse,
         "description": exception.__doc__ or exception.__name__,

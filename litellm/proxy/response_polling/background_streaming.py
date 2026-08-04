@@ -10,7 +10,7 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 
 import asyncio
 import json
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from fastapi import Request, Response
 
@@ -64,12 +64,12 @@ async def background_streaming_task(
         data.pop("background", None)
 
         # Create processor
-        processor = ProxyBaseLLMRequestProcessing(data=data)
+        processor: Final = ProxyBaseLLMRequestProcessing(data=data)
 
         # Make streaming request.
         # Pre-call checks (rate limits, guardrails, budget) were already run
         # before polling ID creation, so skip them here to avoid double-counting.
-        response = await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -91,8 +91,8 @@ async def background_streaming_task(
 
         # Process streaming response following OpenAI events format
         # https://platform.openai.com/docs/api-reference/responses-streaming
-        output_items: dict[str, dict[str, Any]] = {}  # Track output items by ID
-        accumulated_text = {}  # Track accumulated text deltas by (item_id, content_index)
+        output_items: Final[dict[str, dict[str, Any]]] = {}  # Track output items by ID
+        accumulated_text: Final = {}  # Track accumulated text deltas by (item_id, content_index)
 
         # ResponsesAPIResponse fields to extract from response.completed
         usage_data = None
@@ -114,14 +114,14 @@ async def background_streaming_task(
 
         state_dirty = False  # Track if state needs to be synced
         last_update_time = asyncio.get_event_loop().time()
-        UPDATE_INTERVAL = 0.150  # 150ms batching interval
+        UPDATE_INTERVAL: Final = 0.150  # 150ms batching interval
 
         # Track the terminal event from the stream (may not be "completed")
         terminal_status: ResponsesAPIStatus | None = (
             None  # Will be set by response.completed/failed/incomplete/cancelled
         )
         terminal_error = None
-        _event_to_status = {
+        _event_to_status: Final = {
             "response.completed": "completed",
             "response.failed": "failed",
             "response.incomplete": "incomplete",
@@ -132,10 +132,10 @@ async def background_streaming_task(
             """Flush accumulated state to Redis if interval elapsed or forced"""
             nonlocal state_dirty, last_update_time
 
-            current_time = asyncio.get_event_loop().time()
+            current_time: Final = asyncio.get_event_loop().time()
             if state_dirty and (force or (current_time - last_update_time) >= UPDATE_INTERVAL):
                 # Convert output_items dict to list for update
-                output_list = list(output_items.values())
+                output_list: Final = list(output_items.values())
                 await polling_handler.update_state(
                     polling_id=polling_id,
                     output=output_list,
@@ -299,7 +299,7 @@ async def background_streaming_task(
             await flush_state_if_needed(force=True)
 
         # Use the terminal status from the stream, default to "completed"
-        final_status = terminal_status or "completed"
+        final_status: Final = terminal_status or "completed"
 
         await polling_handler.update_state(
             polling_id=polling_id,

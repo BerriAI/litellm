@@ -1,6 +1,6 @@
 import base64
 import os
-from typing import Any
+from typing import Any, Final
 from urllib.parse import quote
 
 import httpx
@@ -36,7 +36,7 @@ class CyberArkSecretManager(BaseSecretManager):
 
         # SSL verification - can be disabled for self-signed certificates
         # Set CYBERARK_SSL_VERIFY=false to disable SSL verification
-        ssl_verify_env = str_to_bool(os.getenv("CYBERARK_SSL_VERIFY"))
+        ssl_verify_env: Final = str_to_bool(os.getenv("CYBERARK_SSL_VERIFY"))
         self.ssl_verify: bool = ssl_verify_env if ssl_verify_env is not None else True
 
         # Validate environment
@@ -49,7 +49,7 @@ class CyberArkSecretManager(BaseSecretManager):
         litellm._key_management_system = KeyManagementSystem.CYBERARK
 
         # Tokens expire after ~8 minutes, so we cache for 5 minutes to be safe
-        _refresh_interval = int(os.environ.get("CYBERARK_REFRESH_INTERVAL", "300"))
+        _refresh_interval: Final = int(os.environ.get("CYBERARK_REFRESH_INTERVAL", "300"))
         self.cache = InMemoryCache(default_ttl=_refresh_interval)
 
         if premium_user is not True:
@@ -72,31 +72,31 @@ class CyberArkSecretManager(BaseSecretManager):
             str: Base64-encoded session token
         """
         # Check if we have a cached token
-        cached_token = self.cache.get_cache("cyberark_auth_token")
+        cached_token: Final = self.cache.get_cache("cyberark_auth_token")
         if cached_token is not None:
             return cached_token
 
         verbose_logger.debug("Authenticating with CyberArk Conjur...")
-        auth_url = f"{self.conjur_addr}/authn/{self.conjur_account}/{self.conjur_username}/authenticate"
+        auth_url: Final = f"{self.conjur_addr}/authn/{self.conjur_account}/{self.conjur_username}/authenticate"
 
         try:
             if self.tls_cert_path and self.tls_key_path:
                 # Certificate-based authentication - need custom client for cert
-                http_client = httpx.Client(
+                http_client: Final = httpx.Client(
                     cert=(self.tls_cert_path, self.tls_key_path),
                     verify=self.ssl_verify,
                 )
                 resp = http_client.post(auth_url, content=self.conjur_api_key)
             else:
                 # API key authentication
-                http_handler = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
+                http_handler: Final = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
                 resp = http_handler.client.post(auth_url, content=self.conjur_api_key)
 
             resp.raise_for_status()
 
             # The response is a JSON token that needs to be base64-encoded
-            token_json = resp.text
-            token_b64 = base64.b64encode(token_json.encode()).decode()
+            token_json: Final = resp.text
+            token_b64: Final = base64.b64encode(token_json.encode()).decode()
 
             verbose_logger.debug("Successfully authenticated with CyberArk Conjur.")
 
@@ -114,7 +114,7 @@ class CyberArkSecretManager(BaseSecretManager):
         Returns:
             dict: Headers with authentication token
         """
-        token = self._authenticate()
+        token: Final = self._authenticate()
         return {"Authorization": f'Token token="{token}"'}
 
     def _ensure_variable_exists(self, secret_name: str) -> None:
@@ -127,14 +127,14 @@ class CyberArkSecretManager(BaseSecretManager):
         # In production, we'd check if the variable exists first
         # For now, we'll attempt to create it and ignore if it already exists
         raise_if_unsafe_secret_name(secret_name)
-        policy_url = f"{self.conjur_addr}/policies/{self.conjur_account}/policy/root"
+        policy_url: Final = f"{self.conjur_addr}/policies/{self.conjur_account}/policy/root"
         # Use a real YAML serializer to build the scalar safely.
-        quoted_name = yaml.safe_dump(secret_name, default_style='"').strip()
-        policy_yaml = f"- !variable {quoted_name}\n"
+        quoted_name: Final = yaml.safe_dump(secret_name, default_style='"').strip()
+        policy_yaml: Final = f"- !variable {quoted_name}\n"
 
         try:
-            client = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
-            resp = client.client.post(
+            client: Final = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
+            resp: Final = client.client.post(
                 policy_url,
                 headers={
                     **self._get_request_headers(),
@@ -166,7 +166,7 @@ class CyberArkSecretManager(BaseSecretManager):
             str: Full URL for the secret
         """
         # URL-encode the secret name to handle slashes and special characters
-        encoded_name = quote(secret_name, safe="")
+        encoded_name: Final = quote(secret_name, safe="")
         return f"{self.conjur_addr}/secrets/{self.conjur_account}/variable/{encoded_name}"
 
     async def async_read_secret(
@@ -190,18 +190,18 @@ class CyberArkSecretManager(BaseSecretManager):
         if self.cache.get_cache(secret_name) is not None:
             return self.cache.get_cache(secret_name)
 
-        async_client = get_async_httpx_client(
+        async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"ssl_verify": self.ssl_verify},
         )
 
         try:
-            url = self.get_url(secret_name)
-            response = await async_client.get(url, headers=self._get_request_headers())
+            url: Final = self.get_url(secret_name)
+            response: Final = await async_client.get(url, headers=self._get_request_headers())
             response.raise_for_status()
 
             # CyberArk Conjur returns the raw secret value as text
-            secret_value = response.text
+            secret_value: Final = response.text
             self.cache.set_cache(secret_name, secret_value)
             return secret_value
 
@@ -236,15 +236,15 @@ class CyberArkSecretManager(BaseSecretManager):
         if self.cache.get_cache(secret_name) is not None:
             return self.cache.get_cache(secret_name)
 
-        sync_client = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
+        sync_client: Final = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
 
         try:
-            url = self.get_url(secret_name)
-            response = sync_client.client.get(url, headers=self._get_request_headers())
+            url: Final = self.get_url(secret_name)
+            response: Final = sync_client.client.get(url, headers=self._get_request_headers())
             response.raise_for_status()
 
             # CyberArk Conjur returns the raw secret value as text
-            secret_value = response.text
+            secret_value: Final = response.text
             self.cache.set_cache(secret_name, secret_value)
             return secret_value
 
@@ -281,7 +281,7 @@ class CyberArkSecretManager(BaseSecretManager):
         Returns:
             dict: Response containing status and details of the operation
         """
-        async_client = get_async_httpx_client(
+        async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"ssl_verify": self.ssl_verify},
         )
@@ -291,7 +291,7 @@ class CyberArkSecretManager(BaseSecretManager):
             self._ensure_variable_exists(secret_name)
 
             # Now set the secret value
-            url = self.get_url(secret_name)
+            url: Final = self.get_url(secret_name)
             response = await async_client.post(url=url, headers=self._get_request_headers(), content=secret_value)
             response.raise_for_status()
 
