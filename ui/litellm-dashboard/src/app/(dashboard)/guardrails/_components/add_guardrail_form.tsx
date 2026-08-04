@@ -1,4 +1,4 @@
-import { Form, Input, Modal, Select, Tag, Typography, Button } from "antd";
+import { Form, Input, Modal, Select, Tag, Button } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import {
@@ -30,7 +30,6 @@ import LLMJudgeFields from "./llm_judge/LLMJudgeFields";
 import PiiConfiguration from "./pii_configuration";
 import ToolPermissionRulesEditor, { ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
 
-const { Title, Text, Link } = Typography;
 const { Option } = Select;
 
 // Define human-friendly descriptions for each mode
@@ -164,9 +163,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(null);
 
   // Azure Text Moderation state
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
-  const [globalSeverityThreshold, setGlobalSeverityThreshold] = useState<number>(2);
-  const [categorySpecificThresholds, setCategorySpecificThresholds] = useState<{ [key: string]: number }>({});
+  const [, setSelectedCategories] = useState<string[]>([]);
+  const [, setGlobalSeverityThreshold] = useState<number>(2);
+  const [, setCategorySpecificThresholds] = useState<{ [key: string]: number }>({});
 
   // Content Filter state
   const [selectedPatterns, setSelectedPatterns] = useState<ContentFilterPattern[]>([]);
@@ -336,22 +335,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   };
 
   // Azure Text Moderation handlers
-  const handleCategorySelect = (category: string) => {
-    setSelectedCategories((prev) =>
-      prev.includes(category) ? prev.filter((c) => c !== category) : [...prev, category],
-    );
-  };
-
-  const handleGlobalSeverityChange = (threshold: number) => {
-    setGlobalSeverityThreshold(threshold);
-  };
-
-  const handleCategorySeverityChange = (category: string, threshold: number) => {
-    setCategorySpecificThresholds((prev) => ({
-      ...prev,
-      [category]: threshold,
-    }));
-  };
 
   const nextStep = async () => {
     try {
@@ -386,45 +369,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
 
   const prevStep = () => {
     setCurrentStep(currentStep - 1);
-  };
-
-  const handleAddAndContinue = (competitorIntentOnly?: boolean) => {
-    // Competitor intent only: just advance to next step (no category to add)
-    if (competitorIntentOnly) {
-      setCurrentStep(currentStep + 1);
-      return;
-    }
-
-    if (!pendingCategorySelection || !guardrailSettings) return;
-
-    const contentFilterSettings = guardrailSettings.content_filter_settings;
-    if (!contentFilterSettings) return;
-
-    const category = contentFilterSettings.content_categories?.find((c) => c.name === pendingCategorySelection);
-    if (!category) return;
-
-    // Check if already added
-    if (selectedContentCategories.some((c) => c.category === pendingCategorySelection)) {
-      setPendingCategorySelection("");
-      setCurrentStep(currentStep + 1);
-      return;
-    }
-
-    // Add the category
-    setSelectedContentCategories([
-      ...selectedContentCategories,
-      {
-        id: `category-${Date.now()}`,
-        category: category.name,
-        display_name: category.display_name,
-        action: category.default_action as "BLOCK" | "MASK",
-        severity_threshold: "medium",
-      },
-    ]);
-
-    // Clear pending selection and advance to next step
-    setPendingCategorySelection("");
-    setCurrentStep(currentStep + 1);
   };
 
   const resetForm = () => {
@@ -963,48 +907,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       default:
         return null;
     }
-  };
-
-  const renderStepButtons = () => {
-    const totalSteps = shouldRenderContentFilterConfigSettings(selectedProvider) ? 5 : 2;
-    const isLastStep = currentStep === totalSteps - 1;
-    const isCategoriesStep = shouldRenderContentFilterConfigSettings(selectedProvider) && currentStep === 1;
-    const hasPendingCategory = pendingCategorySelection !== "";
-    const hasCompetitorIntentConfigured =
-      competitorIntentEnabled && (competitorIntentConfig?.brand_self?.length ?? 0) > 0;
-    const canContinueFromCategoriesStep = hasPendingCategory || hasCompetitorIntentConfigured;
-
-    return (
-      <div className="flex justify-end space-x-2 mt-4">
-        {currentStep > 0 && <Button onClick={prevStep}>Previous</Button>}
-        {isCategoriesStep ? (
-          <>
-            <Button onClick={nextStep}>Skip</Button>
-            <Button
-              type="primary"
-              onClick={() => handleAddAndContinue(hasCompetitorIntentConfigured)}
-              disabled={!canContinueFromCategoriesStep}
-            >
-              {hasPendingCategory ? "Add & Continue →" : "Continue →"}
-            </Button>
-          </>
-        ) : (
-          <>
-            {!isLastStep && (
-              <Button type="primary" onClick={nextStep}>
-                Next
-              </Button>
-            )}
-            {isLastStep && (
-              <Button type="primary" onClick={handleSubmit} loading={loading}>
-                Create Guardrail
-              </Button>
-            )}
-          </>
-        )}
-        <Button onClick={handleClose}>Cancel</Button>
-      </div>
-    );
   };
 
   const renderEndpointSettings = () => {

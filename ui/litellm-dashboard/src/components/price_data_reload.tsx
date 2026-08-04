@@ -60,9 +60,9 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [hours, setHours] = useState<number>(6);
   const [reloadStatus, setReloadStatus] = useState<ReloadStatus | null>(null);
-  const [loadingStatus, setLoadingStatus] = useState(false);
+  const [, setLoadingStatus] = useState(false);
   const [sourceInfo, setSourceInfo] = useState<CostMapSourceInfo | null>(null);
-  const [loadingSource, setLoadingSource] = useState(false);
+  const [, setLoadingSource] = useState(false);
 
   // Fetch status on component mount and periodically
   useEffect(() => {

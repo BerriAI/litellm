@@ -53,7 +53,7 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [resolvedGuardrails, setResolvedGuardrails] = useState<string[]>([]);
-  const [isLoadingResolved, setIsLoadingResolved] = useState(false);
+  const [, setIsLoadingResolved] = useState(false);
 
   const fetchPolicy = useCallback(async () => {
     if (!accessToken || !policyId) return;

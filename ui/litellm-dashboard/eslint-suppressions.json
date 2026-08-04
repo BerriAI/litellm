@@ -42,9 +42,6 @@
     },
     "react-hooks/set-state-in-effect": {
       "count": 2
-    },
-    "unused-imports/no-unused-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/agents/_components/agent_card_discovery.tsx": {
@@ -255,22 +252,12 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_cost_results.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_cost_results.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     },
     "no-restricted-imports": {
       "count": 2
-    }
-  },
-  "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_export_dropdown.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_export_dropdown.tsx": {
@@ -283,11 +270,6 @@
   },
   "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/use_multi_cost_estimate.ts": {
     "no-restricted-syntax": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/cost-tracking/_components/provider_discount_table.test.tsx": {
-    "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
@@ -366,7 +348,7 @@
   },
   "src/app/(dashboard)/guardrails/_components/GuardrailTestResults.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/guardrails/_components/GuardrailsPanel.tsx": {
@@ -813,11 +795,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/mcp-servers/_components/MCPLogoSelector.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/mcp-servers/_components/MCPNetworkSettings.tsx": {
     "react-hooks/immutability": {
       "count": 2
@@ -1146,9 +1123,6 @@
     },
     "react-hooks/set-state-in-effect": {
       "count": 4
-    },
-    "unused-imports/no-unused-imports": {
-      "count": 13
     }
   },
   "src/app/(dashboard)/playground/components/chat_ui/CodeInterpreterOutput.tsx": {
@@ -2179,11 +2153,6 @@
       "count": 1
     }
   },
-  "src/components/HelpLink.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
   "src/components/LicenseExpiryBanner.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -2448,11 +2417,6 @@
       "count": 1
     }
   },
-  "src/components/ToolDetail.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
   "src/components/UIAccessControlForm.tsx": {
     "no-restricted-imports": {
       "count": 2
@@ -2677,9 +2641,6 @@
   },
   "src/components/agent_management/AgentSelector.test.tsx": {
     "react/display-name": {
-      "count": 1
-    },
-    "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
@@ -3272,7 +3233,7 @@
       "count": 2
     },
     "prefer-const": {
-      "count": 5
+      "count": 4
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -3306,9 +3267,6 @@
   },
   "src/components/navbar.test.tsx": {
     "prefer-const": {
-      "count": 1
-    },
-    "unused-imports/no-unused-imports": {
       "count": 1
     }
   },
@@ -3383,7 +3341,7 @@
       "count": 2
     },
     "prefer-const": {
-      "count": 4
+      "count": 2
     },
     "react-hooks/set-state-in-effect": {
       "count": 4
@@ -3570,7 +3528,7 @@
       "count": 3
     },
     "prefer-const": {
-      "count": 7
+      "count": 4
     }
   },
   "src/components/shared/CreatedKeyDisplay.tsx": {
@@ -3790,11 +3748,6 @@
       "count": 2
     },
     "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/components/templates/key_info_view.test.tsx": {
-    "unused-imports/no-unused-imports": {
       "count": 2
     }
   },
@@ -4115,11 +4068,6 @@
   "src/components/view_logs/LogDetailsDrawer/OutputCard.tsx": {
     "no-restricted-imports": {
       "count": 1
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/RealtimePrettyView.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 2
     }
   },
   "src/components/view_logs/LogDetailsDrawer/RealtimePrettyView.tsx": {

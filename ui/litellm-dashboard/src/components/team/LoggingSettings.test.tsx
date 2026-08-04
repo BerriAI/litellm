@@ -10,7 +10,7 @@ describe("LoggingSettings", () => {
   });
 
   it("passes a number to updateCallbackVar when user inputs a number in NumericalInput", async () => {
-    const user = userEvent.setup();
+    userEvent.setup();
     const mockOnChange = vi.fn();
 
     // Create initial config with a callback that has number parameters (LangSmith has langsmith_sampling_rate)

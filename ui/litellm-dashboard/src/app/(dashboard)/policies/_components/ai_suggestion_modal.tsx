@@ -76,7 +76,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
   const [testInputText, setTestInputText] = useState("");
   const [isTestLoading, setIsTestLoading] = useState(false);
   const [testResults, setTestResults] = useState<GuardrailTestResult[] | null>(null);
-  const [testOverallAction, setTestOverallAction] = useState<string | null>(null);
+  const [, setTestOverallAction] = useState<string | null>(null);
   const [collapsedResults, setCollapsedResults] = useState<Set<string>>(new Set());
   // Enrichment state for competitor templates
   const [enrichedDefs, setEnrichedDefs] = useState<Record<string, any[]>>({});

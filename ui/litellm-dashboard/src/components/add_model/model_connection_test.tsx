@@ -24,7 +24,7 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
   onTestComplete,
 }) => {
   const [error, setError] = React.useState<Error | string | null>(null);
-  const [rawRequest, setRawRequest] = React.useState<any>(null);
+  const [, setRawRequest] = React.useState<any>(null);
   const [rawResponse, setRawResponse] = React.useState<any>(null);
   const [isLoading, setIsLoading] = React.useState<boolean>(true);
   const [isSuccess, setIsSuccess] = React.useState<boolean>(false);
@@ -51,7 +51,7 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
         return;
       }
 
-      const { litellmParamsObj, modelInfoObj, modelName: returnedModelName } = result[0];
+      const { litellmParamsObj, modelInfoObj } = result[0];
 
       const response = await testConnectionRequest(accessToken, litellmParamsObj, modelInfoObj, modelInfoObj?.mode);
       if (response.status === "success") {

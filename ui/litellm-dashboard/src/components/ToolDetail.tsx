@@ -26,10 +26,8 @@ import {
   keyListCall,
   teamListCall,
   updateToolPolicy,
-  type ToolPolicyOption,
   type ToolPolicyOverrideRow,
 } from "@/components/networking";
-import type { Team } from "@/components/key_team_helpers/key_list";
 
 interface ToolDetailProps {
   toolName: string;
@@ -87,7 +85,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
     staleTime: 60_000,
   });
 
-  const { data: teamsData } = useQuery({
+  useQuery({
     queryKey: ["teams-list-tool-detail"],
     queryFn: () => teamListCall(accessToken!, null, null),
     enabled: !!accessToken,
@@ -121,24 +119,6 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
       input_snippet: l.input_snippet ?? undefined,
     }));
   }, [logsData?.logs]);
-
-  const teams: Team[] = useMemo(() => {
-    const arr = Array.isArray(teamsData) ? teamsData : teamsData?.data ?? [];
-    return arr.map((t: { team_id?: string; id?: string; team_alias?: string }) => ({
-      team_id: t.team_id ?? t.id ?? "",
-      team_alias: t.team_alias ?? t.team_id ?? "",
-      models: [],
-      max_budget: null,
-      budget_duration: null,
-      tpm_limit: null,
-      rpm_limit: null,
-      organization_id: "",
-      created_at: "",
-      keys: [],
-      members_with_roles: [],
-      spend: 0,
-    }));
-  }, [teamsData]);
 
   const keys: KeyOption[] = useMemo(() => {
     const keysRes = keysData?.keys ?? keysData?.data ?? [];

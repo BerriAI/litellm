@@ -49,12 +49,6 @@ interface UserDashboardProps {
   prefillData?: CreateKeyPrefillData;
 }
 
-type TeamInterface = {
-  models: any[];
-  team_id: null;
-  team_alias: string;
-};
-
 const UserDashboard: React.FC<UserDashboardProps> = ({
   userID,
   userRole,
@@ -72,15 +66,15 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   prefillData,
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(null);
-  const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
+  const [currentOrg] = useState<Organization | null>(null);
 
   const token = getCookie("token");
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [teamSpend, setTeamSpend] = useState<number | null>(null);
-  const [userModels, setUserModels] = useState<string[]>([]);
-  const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
-  const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
+  const [, setTeamSpend] = useState<number | null>(null);
+  const [, setUserModels] = useState<string[]>([]);
+  const [, setProxySettings] = useState<ProxySettings | null>(null);
+  const [selectedTeam] = useState<any | null>(null);
 
   // Clear session storage on page unload so next load fetches fresh data.
   // Note: MCP auth tokens are persistent and should not be cleared on page refresh
@@ -186,7 +180,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     if (accessToken) {
       const fetchKeyInfo = async () => {
         try {
-          const keyInfo = await keyInfoCall(accessToken, [accessToken]);
+          await keyInfoCall(accessToken, [accessToken]);
         } catch (error: any) {
           if (error.message.includes("Invalid proxy server token passed")) {
             gotoLogin();

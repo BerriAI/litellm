@@ -43,13 +43,6 @@ interface TeamProps {
   premiumUser?: boolean;
 }
 
-interface EditTeamModalProps {
-  visible: boolean;
-  onCancel: () => void;
-  team: any; // Assuming TeamType is a type representing your team object
-  onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
-}
-
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { teamCreateCall } from "./networking";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
@@ -112,18 +105,6 @@ const getAdminOrganizations = (
   return [];
 };
 
-const getOrganizationAlias = (
-  organizationId: string | null | undefined,
-  organizations: Organization[] | null | undefined,
-): string => {
-  if (!organizationId || !organizations) {
-    return organizationId || "N/A";
-  }
-
-  const organization = organizations.find((org) => org.organization_id === organizationId);
-  return organization?.organization_alias || organizationId;
-};
-
 // @deprecated
 const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser = false }) => {
   const { data: organizationsData } = useOrganizations();
@@ -135,27 +116,22 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
 
   const [form] = Form.useForm();
-  const [memberForm] = Form.useForm();
-  const [value, setValue] = useState("");
-  const [editModalVisible, setEditModalVisible] = useState(false);
 
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
   const { teamId: selectedTeamId, openTeam, close: closeTeamDetail } = useTeamDetailRouting();
   const [editTeam, setEditTeam] = useState<boolean>(false);
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
-  const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
-  const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<Team | null>(null);
-  const [modelsToPick, setModelsToPick] = useState<string[]>([]);
+  const [, setModelsToPick] = useState<string[]>([]);
   const [isTeamDeleting, setIsTeamDeleting] = useState(false);
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
-  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
+  const [, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
@@ -245,12 +221,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     setRouterSettingsKey((prev) => prev + 1);
   };
 
-  const handleMemberOk = () => {
-    setIsAddMemberModalVisible(false);
-    setIsEditMemberModalVisible(false);
-    memberForm.resetFields();
-  };
-
   const handleCancel = () => {
     setIsTeamModalVisible(false);
     form.resetFields();
@@ -258,12 +228,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     setModelAliases({});
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
-  };
-
-  const handleMemberCancel = () => {
-    setIsAddMemberModalVisible(false);
-    setIsEditMemberModalVisible(false);
-    memberForm.resetFields();
   };
 
   const handleDelete = async (team: Team) => {

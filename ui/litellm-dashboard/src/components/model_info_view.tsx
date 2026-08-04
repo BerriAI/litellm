@@ -137,7 +137,7 @@ export default function ModelInfoView({
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
   const [isUpdateCredentialsModalOpen, setIsUpdateCredentialsModalOpen] = useState(false);
-  const [isDirty, setIsDirty] = useState(false);
+  const [, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [existingCredential, setExistingCredential] = useState<CredentialItem | null>(null);
@@ -302,7 +302,7 @@ export default function ModelInfoView({
       },
     };
     NotificationsManager.info("Storing credential..");
-    let credentialResponse = await credentialCreateCall(accessToken, credentialItem);
+    await credentialCreateCall(accessToken, credentialItem);
     NotificationsManager.success("Credential stored successfully");
   };
 

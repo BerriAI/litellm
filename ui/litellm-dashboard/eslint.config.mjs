@@ -22,7 +22,10 @@ const eslintConfig = [
       "local/no-complex-jsx-arrow": ["error", { maxStatements: 2 }],
       "@typescript-eslint/no-explicit-any": "warn",
       "no-console": ["warn", { allow: ["warn", "error"] }],
-      "@typescript-eslint/no-unused-vars": "off",
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { args: "none", caughtErrors: "none", ignoreRestSiblings: true, varsIgnorePattern: "^_" },
+      ],
       "@typescript-eslint/no-unused-expressions": "off",
       "@typescript-eslint/ban-ts-comment": "off",
       "prefer-const": "error",

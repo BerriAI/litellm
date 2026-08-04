@@ -38,8 +38,6 @@ interface AddAutoRouterTabProps {
   createScope?: ModelWriteScope;
 }
 
-const { Title } = Typography;
-
 const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   handleOk,
   accessToken,
@@ -91,7 +89,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   const isAdmin = all_admin_roles.includes(userRole);
 
-  const modelGroupOptions = Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group) => ({
+  Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group) => ({
     value: model_group,
     label: model_group,
   }));
