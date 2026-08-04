@@ -1,6 +1,6 @@
 import base64
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Union, cast
 
 from litellm._logging import verbose_logger
@@ -205,6 +205,38 @@ class ChunkProcessor:
         response = self.update_model_response_with_hidden_params(model_response=response, chunk=chunk)
         return response
 
+    @staticmethod
+    def _iter_tool_call_fragments(
+        tool_call_chunks: Sequence[Mapping[str, Any]],
+    ) -> Iterator[tuple[int, str, str]]:
+        for chunk in tool_call_chunks:
+            for choice in chunk["choices"]:
+                delta = choice.get("delta")
+                if not delta:
+                    continue
+                for tool_call in delta.get("tool_calls", ()):
+                    if not tool_call:
+                        continue
+                    if isinstance(tool_call, dict):
+                        index = tool_call.get("index", 0)
+                        function = tool_call.get("function")
+                        if isinstance(function, dict):
+                            if function.get("arguments"):
+                                yield index, "arguments", function["arguments"]
+                        elif getattr(function, "arguments", None):
+                            yield index, "arguments", function.arguments
+                        custom = tool_call.get("custom")
+                        if isinstance(custom, dict) and custom.get("input"):
+                            yield index, "custom_input", custom["input"]
+                    else:
+                        index = getattr(tool_call, "index", 0)
+                        function = getattr(tool_call, "function", None)
+                        if getattr(function, "arguments", None):
+                            yield index, "arguments", function.arguments
+                        custom = getattr(tool_call, "custom", None)
+                        if getattr(custom, "input", None):
+                            yield index, "custom_input", custom.input
+
     def get_combined_tool_content(
         self, tool_call_chunks: Sequence[Mapping[str, Any]]
     ) -> list[
@@ -250,9 +282,7 @@ class ChunkProcessor:
                             "id": None,
                             "name": None,
                             "type": None,
-                            "arguments": (),
                             "custom_name": None,
-                            "custom_input": (),
                             "provider_specific_fields": None,
                         }
 
@@ -267,21 +297,15 @@ class ChunkProcessor:
                         if isinstance(function, dict):
                             if function.get("name"):
                                 tool_call_map[index]["name"] = function["name"]
-                            if function.get("arguments"):
-                                tool_call_map[index]["arguments"] += (function["arguments"],)
                         else:
                             # function is an object
                             if hasattr(function, "name") and function.name:
                                 tool_call_map[index]["name"] = function.name
-                            if hasattr(function, "arguments") and function.arguments:
-                                tool_call_map[index]["arguments"] += (function.arguments,)
 
                         custom = tool_call.get("custom")
                         if isinstance(custom, dict):
                             if custom.get("name"):
                                 tool_call_map[index]["custom_name"] = custom["name"]
-                            if custom.get("input"):
-                                tool_call_map[index]["custom_input"] += (custom["input"],)
                     else:
                         # tool_call is an object
                         if hasattr(tool_call, "id") and tool_call.id:
@@ -291,15 +315,11 @@ class ChunkProcessor:
                         if hasattr(tool_call, "function"):
                             if hasattr(tool_call.function, "name") and tool_call.function.name:
                                 tool_call_map[index]["name"] = tool_call.function.name
-                            if hasattr(tool_call.function, "arguments") and tool_call.function.arguments:
-                                tool_call_map[index]["arguments"] += (tool_call.function.arguments,)
 
                         custom = getattr(tool_call, "custom", None)
                         if custom is not None:
                             if getattr(custom, "name", None):
                                 tool_call_map[index]["custom_name"] = custom.name
-                            if getattr(custom, "input", None):
-                                tool_call_map[index]["custom_input"] += (custom.input,)
 
                     # Preserve provider_specific_fields from streaming chunks
                     provider_fields = None
@@ -324,6 +344,8 @@ class ChunkProcessor:
                         if isinstance(provider_fields, dict):
                             tool_call_map[index]["provider_specific_fields"].update(provider_fields)
 
+        fragment_records = tuple(self._iter_tool_call_fragments(tool_call_chunks))
+
         # Convert the map to a list of tool calls
         for index in sorted(tool_call_map.keys()):
             tool_call_data = tool_call_map[index]
@@ -333,12 +355,23 @@ class ChunkProcessor:
                         id=tool_call_data["id"],
                         custom=ChatCompletionCustomToolCallPayload(
                             name=tool_call_data["custom_name"],
-                            input="".join(tool_call_data["custom_input"]),
+                            input="".join(
+                                fragment
+                                for fragment_index, field, fragment in fragment_records
+                                if fragment_index == index and field == "custom_input"
+                            ),
                         ),
                     )
                 )
             elif tool_call_data["id"] and tool_call_data["name"]:
-                combined_arguments = "".join(tool_call_data["arguments"]) or "{}"
+                combined_arguments = (
+                    "".join(
+                        fragment
+                        for fragment_index, field, fragment in fragment_records
+                        if fragment_index == index and field == "arguments"
+                    )
+                    or "{}"
+                )
 
                 # Build function - provider_specific_fields should be on tool_call level, not function level
                 function = Function(
