@@ -538,6 +538,9 @@ from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
 )
+from litellm.proxy.ui_crud_endpoints.user_banner_endpoints import (
+    router as user_banner_endpoints_router,
+)
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -4361,6 +4364,19 @@ class ProxyConfig:
                 _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
                 premium_user = _license_check.is_premium()
 
+    def _warn_on_misplaced_jwt_keys(self, config: dict) -> tuple[str, ...]:
+        misplaced_jwt_keys = tuple(key for key in ("enable_jwt_auth", "litellm_jwtauth") if key in config)
+        if not misplaced_jwt_keys:
+            return misplaced_jwt_keys
+        verbose_proxy_logger.warning(
+            "Ignoring top-level config key(s) %s. JWT auth settings must live under "
+            "'general_settings' (e.g. general_settings.enable_jwt_auth, "
+            "general_settings.litellm_jwtauth); placed at the top level they are silently "
+            "dropped and JWT auth (and JWT-to-virtual-key mapping) will not engage.",
+            ", ".join(misplaced_jwt_keys),
+        )
+        return misplaced_jwt_keys
+
     async def load_config(self, router: litellm.Router | None, config_file_path: str):
         """
         Load config values into proxy global state
@@ -4397,6 +4413,8 @@ class ProxyConfig:
             config_passthrough_endpoints
 
         config: dict = await self.get_config(config_file_path=config_file_path)
+
+        self._warn_on_misplaced_jwt_keys(config=config)
 
         self._load_environment_variables(config=config)
 
@@ -6538,11 +6556,19 @@ class ProxyConfig:
             if should_reload:
                 # Perform the reload
                 from litellm.litellm_core_utils.get_model_cost_map import (
-                    get_model_cost_map,
+                    ModelCostMapReloadUnavailable,
+                    refetch_model_cost_map,
                 )
 
                 model_cost_map_url = litellm.model_cost_map_url
-                new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
+                reload_result = await refetch_model_cost_map(url=model_cost_map_url)
+                if isinstance(reload_result, ModelCostMapReloadUnavailable):
+                    verbose_proxy_logger.warning(
+                        "Model cost map reload failed (%s); keeping current pricing data, will retry on the next config poll",
+                        reload_result.reason,
+                    )
+                    return
+                new_model_cost_map = reload_result.model_cost_map
                 litellm.model_cost = new_model_cost_map
                 # Invalidate case-insensitive lookup map since model_cost was replaced
                 _invalidate_model_cost_lowercase_map()
@@ -15836,10 +15862,19 @@ async def reload_model_cost_map(
             raise HTTPException(status_code=500, detail="Database connection not available")
 
         # Immediately reload the model cost map in the current pod
-        from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+        from litellm.litellm_core_utils.get_model_cost_map import (
+            ModelCostMapReloadUnavailable,
+            refetch_model_cost_map,
+        )
 
         model_cost_map_url = litellm.model_cost_map_url
-        new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
+        reload_result = await refetch_model_cost_map(url=model_cost_map_url)
+        if isinstance(reload_result, ModelCostMapReloadUnavailable):
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to reload model cost map: {reload_result.reason}. Current pricing data was kept.",
+            )
+        new_model_cost_map = reload_result.model_cost_map
         litellm.model_cost = new_model_cost_map
         # Invalidate case-insensitive lookup map since model_cost was replaced
         _invalidate_model_cost_lowercase_map()
@@ -15881,6 +15916,8 @@ async def reload_model_cost_map(
             "models_count": models_count,
             "timestamp": current_time.isoformat(),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Failed to reload model cost map: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to reload model cost map: {e}")
@@ -16519,6 +16556,7 @@ app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)
 app.include_router(rust_control_plane_router)
 app.include_router(ui_crud_endpoints_router)
+app.include_router(user_banner_endpoints_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
