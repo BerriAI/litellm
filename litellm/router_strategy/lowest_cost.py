@@ -246,6 +246,15 @@ class LowestCostLoggingHandler(CustomLogger):
             )
             item_litellm_model_name = _deployment.get("litellm_params", {}).get("model")
             item_litellm_model_cost_map = litellm.model_cost.get(item_litellm_model_name, {})
+            if not item_litellm_model_cost_map and isinstance(item_litellm_model_name, str):
+                provider, separator, unprefixed_model_name = item_litellm_model_name.partition("/")
+                if separator and provider in litellm.provider_list:
+                    resolved_model_cost = litellm.model_cost.get(unprefixed_model_name)
+                    if (
+                        isinstance(resolved_model_cost, dict)
+                        and resolved_model_cost.get("litellm_provider") == provider
+                    ):
+                        item_litellm_model_cost_map = resolved_model_cost
 
             # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
             item_input_cost = None

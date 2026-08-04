@@ -50,6 +50,86 @@ async def test_get_available_deployments():
 
 
 @pytest.mark.asyncio
+async def test_get_available_deployments_resolves_provider_prefixed_model_cost():
+    test_cache = DualCache()
+    model_list = [
+        {
+            "model_name": "cost-routing-models",
+            "litellm_params": {"model": "openai/gpt-5.6-luna"},
+            "model_info": {"id": "provider-prefixed-model"},
+        },
+        {
+            "model_name": "cost-routing-models",
+            "litellm_params": {"model": "gpt-4"},
+            "model_info": {"id": "unprefixed-model"},
+        },
+    ]
+    lowest_cost_logger = LowestCostLoggingHandler(router_cache=test_cache)
+
+    selected_model = await lowest_cost_logger.async_get_available_deployments(
+        model_group="cost-routing-models", healthy_deployments=model_list
+    )
+
+    assert selected_model["model_info"]["id"] == "provider-prefixed-model"
+
+
+@pytest.mark.asyncio
+async def test_get_available_deployments_preserves_unknown_model_fallback_cost():
+    test_cache = DualCache()
+    model_list = [
+        {
+            "model_name": "cost-routing-models",
+            "litellm_params": {"model": "openai/not-in-model-cost-map"},
+            "model_info": {"id": "unknown-model"},
+        },
+        {
+            "model_name": "cost-routing-models",
+            "litellm_params": {
+                "model": "gpt-4",
+                "input_cost_per_token": 6.0,
+                "output_cost_per_token": 6.0,
+            },
+            "model_info": {"id": "explicit-cost-model"},
+        },
+    ]
+    lowest_cost_logger = LowestCostLoggingHandler(router_cache=test_cache)
+
+    selected_model = await lowest_cost_logger.async_get_available_deployments(
+        model_group="cost-routing-models", healthy_deployments=model_list
+    )
+
+    assert selected_model["model_info"]["id"] == "unknown-model"
+
+
+@pytest.mark.asyncio
+async def test_get_available_deployments_rejects_mismatched_provider_cost():
+    test_cache = DualCache()
+    model_list = [
+        {
+            "model_name": "cost-routing-models",
+            "litellm_params": {"model": "groq/gpt-4"},
+            "model_info": {"id": "mismatched-provider-model"},
+        },
+        {
+            "model_name": "cost-routing-models",
+            "litellm_params": {
+                "model": "gpt-4",
+                "input_cost_per_token": 1.0,
+                "output_cost_per_token": 1.0,
+            },
+            "model_info": {"id": "explicit-cost-model"},
+        },
+    ]
+    lowest_cost_logger = LowestCostLoggingHandler(router_cache=test_cache)
+
+    selected_model = await lowest_cost_logger.async_get_available_deployments(
+        model_group="cost-routing-models", healthy_deployments=model_list
+    )
+
+    assert selected_model["model_info"]["id"] == "explicit-cost-model"
+
+
+@pytest.mark.asyncio
 async def test_get_available_deployments_custom_price():
     from litellm._logging import verbose_router_logger
     import logging
