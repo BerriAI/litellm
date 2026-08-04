@@ -2,12 +2,14 @@
 Shared utility functions for rate limiter hooks.
 """
 
+from typing import Final
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import PriorityReservationDict
 
-PROXY_LLM_PROVIDER_FALLBACK = "litellm_proxy"
+PROXY_LLM_PROVIDER_FALLBACK: Final = "litellm_proxy"
 
 
 def resolve_llm_provider_for_rate_limit(
@@ -51,7 +53,7 @@ def resolve_llm_provider_for_rate_limit(
             custom_llm_provider or PROXY_LLM_PROVIDER_FALLBACK,
         )
     except Exception as e:
-        alias_resolution = _resolve_provider_from_router_alias(model)
+        alias_resolution: Final = _resolve_provider_from_router_alias(model)
         if alias_resolution is not None:
             return alias_resolution
         verbose_proxy_logger.debug(
@@ -84,7 +86,7 @@ def _resolve_provider_from_router_alias(
     if llm_router is None:
         return None
     try:
-        model_list = getattr(llm_router, "model_list", None)
+        model_list: Final = getattr(llm_router, "model_list", None)
         if not model_list:
             return None
         for deployment in model_list:
@@ -139,8 +141,8 @@ def convert_priority_to_percent(value: float | PriorityReservationDict, model_in
         return float(value)
 
     if isinstance(value, dict):
-        val_type = value.get("type", "percent")
-        val_num = value.get("value", 1.0)
+        val_type: Final = value.get("type", "percent")
+        val_num: Final = value.get("value", 1.0)
 
         if val_type == "percent":
             return float(val_num)

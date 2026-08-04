@@ -1,5 +1,5 @@
 import time
-from typing import Any, Optional
+from typing import Any, Final, Optional
 
 import litellm
 from litellm import CustomLLM, ImageObject, ImageResponse, completion, get_llm_provider
@@ -23,4 +23,4 @@ class MyCustomLLM(CustomLLM):
         )  # type: ignore
 
 
-my_custom_llm = MyCustomLLM()
+my_custom_llm: Final = MyCustomLLM()

@@ -1,5 +1,5 @@
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-MANUS_API_BASE = "https://api.manus.im"
+MANUS_API_BASE: Final = "https://api.manus.im"
 
 
 class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -82,7 +82,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Manus uses `API_KEY` header instead of `Authorization: Bearer`.
         """
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = litellm_params.api_key or litellm.api_key or get_secret_str("MANUS_API_KEY")
+        api_key: Final = litellm_params.api_key or litellm.api_key or get_secret_str("MANUS_API_KEY")
 
         if not api_key:
             raise ValueError(
@@ -136,7 +136,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - `agent_profile` extracted from model name in the request body
         """
         # First, get the base OpenAI request
-        base_request = super().transform_responses_api_request(
+        base_request: Final = super().transform_responses_api_request(
             model=model,
             input=input,
             response_api_optional_request_params=response_api_optional_request_params,
@@ -145,7 +145,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
 
         # Extract agent profile from model name
-        agent_profile = self._extract_agent_profile(model=model)
+        agent_profile: Final = self._extract_agent_profile(model=model)
 
         # Add Manus-specific parameters directly to the request body
         # These will be sent as part of the request
@@ -153,7 +153,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         base_request["agent_profile"] = agent_profile
 
         # Merge any existing extra_body into the request
-        extra_body = response_api_optional_request_params.get("extra_body", {}) or {}
+        extra_body: Final = response_api_optional_request_params.get("extra_body", {}) or {}
         if extra_body:
             base_request.update(extra_body)
 
@@ -177,7 +177,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
 
             # Manus uses camelCase "createdAt" instead of snake_case "created_at"
             if "createdAt" in raw_response_json and "created_at" not in raw_response_json:
@@ -189,8 +189,8 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
 
-        raw_response_headers = dict(raw_response.headers)
-        processed_headers = process_response_headers(raw_response_headers)
+        raw_response_headers: Final = dict(raw_response.headers)
+        processed_headers: Final = process_response_headers(raw_response_headers)
 
         # Ensure reasoning is an empty dict if not present, OpenAI SDK does not allow None
         if "reasoning" not in raw_response_json or raw_response_json.get("reasoning") is None:
@@ -248,9 +248,9 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         Reference: https://open.manus.im/docs/openai-compatibility
         """
-        encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
-        url = f"{api_base}/{encoded_response_id}"
-        data: dict = {}
+        encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
+        url: Final = f"{api_base}/{encoded_response_id}"
+        data: Final[dict] = {}
         return url, data
 
     def transform_get_response_api_response(
@@ -269,7 +269,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
 
             # Manus uses camelCase "createdAt" instead of snake_case "created_at"
             if "createdAt" in raw_response_json and "created_at" not in raw_response_json:
@@ -281,8 +281,8 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
 
-        raw_response_headers = dict(raw_response.headers)
-        processed_headers = process_response_headers(raw_response_headers)
+        raw_response_headers: Final = dict(raw_response.headers)
+        processed_headers: Final = process_response_headers(raw_response_headers)
 
         # Ensure reasoning, text, output, and usage are present with defaults
         if "reasoning" not in raw_response_json or raw_response_json.get("reasoning") is None:

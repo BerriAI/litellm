@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel
 
@@ -78,7 +78,7 @@ class IdentityStore:
         auth_method: AuthMethod = AuthMethod.API_KEY,
         network: NetworkContext | None = None,
     ) -> Principal:
-        key = await self._resolve_key(hashed_token)
+        key: Final = await self._resolve_key(hashed_token)
         return self._principal_from_key(
             key,
             auth_method=auth_method,
@@ -103,14 +103,14 @@ class IdentityStore:
         if self._prisma is None:
             raise NoDatabaseConnectionError()
 
-        cached = await self._cache.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
+        cached: Final = await self._cache.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
         if cached is not None:
             return _copy_user_api_key_auth_for_cache(user_api_key_obj=cached)
 
         if self._check_cache_only:
             raise KeyNotInCacheError(hashed_token)
 
-        from_db: BaseModel | None = await _fetch_key_object_from_db_with_reconnect(
+        from_db: Final[BaseModel | None] = await _fetch_key_object_from_db_with_reconnect(
             hashed_token=hashed_token,
             prisma_client=self._prisma,
             parent_otel_span=self._parent_otel_span,
@@ -119,7 +119,7 @@ class IdentityStore:
         if from_db is None:
             raise KeyNotFoundError(hashed_token)
 
-        key = UserAPIKeyAuth.model_validate(from_db.model_dump(exclude_none=True))
+        key: Final = UserAPIKeyAuth.model_validate(from_db.model_dump(exclude_none=True))
 
         if key.object_permission_id and not key.object_permission:
             try:
@@ -162,17 +162,17 @@ class IdentityStore:
         Pure: issues no lookup. Both ``resolve`` and the auth seam call this so
         identity is projected once off whichever key object they already hold.
         """
-        teams: list[TeamIdentity] = []
+        teams: Final[list[TeamIdentity]] = []
         if key.team_id is not None:
-            role = team_role(key.team_member.role) if key.team_member else TeamRole.MEMBER
+            role: Final = team_role(key.team_member.role) if key.team_member else TeamRole.MEMBER
             teams.append(TeamIdentity(id=key.team_id, name=key.team_alias, role=role))
-        organization = (
+        organization: Final = (
             OrganizationIdentity(id=key.org_id, name=key.organization_alias) if key.org_id is not None else None
         )
-        user = UserIdentity(id=key.user_id, email=key.user_email) if key.user_id is not None else None
+        user: Final = UserIdentity(id=key.user_id, email=key.user_email) if key.user_id is not None else None
         project = ProjectIdentity(id=key.project_id, name=key.project_alias) if key.project_id is not None else None
-        end_user = EndUserIdentity(id=key.end_user_id) if key.end_user_id is not None else None
-        mapped = map_role(key.user_role)
+        end_user: Final = EndUserIdentity(id=key.end_user_id) if key.end_user_id is not None else None
+        mapped: Final = map_role(key.user_role)
         return Principal(
             principal_type=(PrincipalType.HUMAN if key.user_id else PrincipalType.SERVICE_ACCOUNT),
             subject=key.user_id or key.key_alias or subject_fallback or "",

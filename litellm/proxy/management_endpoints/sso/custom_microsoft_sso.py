@@ -14,6 +14,7 @@ If these are not set, the default Microsoft endpoints are used.
 """
 
 import os
+from typing import Final
 
 import pydantic
 from fastapi_sso.sso.base import DiscoveryDocument
@@ -55,16 +56,16 @@ class CustomMicrosoftSSO(MicrosoftSSO):
         Override to support custom endpoints via environment variables.
         Falls back to default Microsoft endpoints if not set.
         """
-        custom_authorization_endpoint = os.getenv("MICROSOFT_AUTHORIZATION_ENDPOINT", None)
-        custom_token_endpoint = os.getenv("MICROSOFT_TOKEN_ENDPOINT", None)
-        custom_userinfo_endpoint = os.getenv("MICROSOFT_USERINFO_ENDPOINT", None)
+        custom_authorization_endpoint: Final = os.getenv("MICROSOFT_AUTHORIZATION_ENDPOINT", None)
+        custom_token_endpoint: Final = os.getenv("MICROSOFT_TOKEN_ENDPOINT", None)
+        custom_userinfo_endpoint: Final = os.getenv("MICROSOFT_USERINFO_ENDPOINT", None)
 
         # Use custom endpoints if set, otherwise use defaults
-        authorization_endpoint = (
+        authorization_endpoint: Final = (
             custom_authorization_endpoint or f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/authorize"
         )
         token_endpoint = custom_token_endpoint or f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/token"
-        userinfo_endpoint = custom_userinfo_endpoint or f"https://graph.microsoft.com/{self.version}/me"
+        userinfo_endpoint: Final = custom_userinfo_endpoint or f"https://graph.microsoft.com/{self.version}/me"
 
         if custom_authorization_endpoint or custom_token_endpoint or custom_userinfo_endpoint:
             verbose_proxy_logger.debug(

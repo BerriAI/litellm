@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 
@@ -21,7 +21,7 @@ class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
         request_query_params: dict | None,
         litellm_params: dict,
     ) -> tuple["URL", str]:
-        base_target_url = self.get_api_base(api_base)
+        base_target_url: Final = self.get_api_base(api_base)
 
         if base_target_url is None:
             raise Exception("VLLM api base not found")

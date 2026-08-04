@@ -1,6 +1,6 @@
 """Shared response shapes for the `/management/v1` control-plane surface."""
 
-from typing import Generic, TypeVar
+from typing import Final, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 

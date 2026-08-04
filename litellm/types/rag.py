@@ -2,7 +2,7 @@
 Type definitions for RAG (Retrieval Augmented Generation) Ingest API.
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict

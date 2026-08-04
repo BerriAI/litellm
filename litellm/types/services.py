@@ -1,5 +1,5 @@
 import enum
-from typing import List, Optional
+from typing import Final, List, Optional
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -58,7 +58,7 @@ Metric types to use for each service
 - REDIS only needs Counter, Histogram
 - Pod Lock Manager only needs a gauge metric
 """
-DEFAULT_SERVICE_CONFIGS = {
+DEFAULT_SERVICE_CONFIGS: Final = {
     ServiceTypes.REDIS.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
     ServiceTypes.DB.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
     ServiceTypes.BATCH_WRITE_TO_DB.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},

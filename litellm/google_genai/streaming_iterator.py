@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 else:
     BaseGoogleGenAIGenerateContentConfig = Any
 
-GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ = PassThroughEndpointLogging()
+GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ: Final = PassThroughEndpointLogging()
 
 
 def _encode_google_genai_sse_event(event_lines: list[str]) -> bytes:
@@ -23,7 +23,7 @@ def _encode_google_genai_sse_event(event_lines: list[str]) -> bytes:
 
 
 def _next_google_genai_sse_chunk(line_iter) -> bytes:
-    event_lines: list[str] = []
+    event_lines: Final[list[str]] = []
     while True:
         try:
             line = next(line_iter)
@@ -39,7 +39,7 @@ def _next_google_genai_sse_chunk(line_iter) -> bytes:
 
 
 async def _anext_google_genai_sse_chunk(line_iter) -> bytes:
-    event_lines: list[str] = []
+    event_lines: Final[list[str]] = []
     while True:
         try:
             line = await line_iter.__anext__()
@@ -82,7 +82,7 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
             PassThroughStreamingHandler,
         )
 
-        end_time = datetime.now()
+        end_time: Final = datetime.now()
         asyncio.create_task(
             PassThroughStreamingHandler._route_streaming_logging_to_handler(
                 litellm_logging_obj=self.litellm_logging_obj,
@@ -134,7 +134,7 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
 
     def __next__(self):
         try:
-            chunk = _next_google_genai_sse_chunk(self.stream_iterator)
+            chunk: Final = _next_google_genai_sse_chunk(self.stream_iterator)
             self.collected_chunks.append(chunk)
             return chunk
         except StopIteration:
@@ -185,7 +185,7 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
 
     async def __anext__(self):
         try:
-            chunk = await _anext_google_genai_sse_chunk(self.stream_iterator)
+            chunk: Final = await _anext_google_genai_sse_chunk(self.stream_iterator)
             self.collected_chunks.append(chunk)
             return chunk
         except StopAsyncIteration:

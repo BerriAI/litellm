@@ -3,7 +3,7 @@ Model repository for database operations on LiteLLM_ProxyModelTable.
 """
 
 import json
-from typing import Any
+from typing import Any, Final
 
 from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
@@ -34,7 +34,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
 
     def _encrypt_litellm_params(self, litellm_params: dict[str, Any]) -> dict[str, Any]:
         """Encrypt sensitive values in litellm_params."""
-        encrypted = {}
+        encrypted: Final = {}
         for key, value in litellm_params.items():
             if isinstance(value, str):
                 encrypted[key] = encrypt_value_helper(value, new_encryption_key=self._encryption_key)
@@ -44,7 +44,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
 
     def _decrypt_litellm_params(self, litellm_params: dict[str, Any]) -> dict[str, Any]:
         """Decrypt sensitive values in litellm_params."""
-        decrypted = {}
+        decrypted: Final = {}
         for key, value in litellm_params.items():
             if isinstance(value, str):
                 decrypted[key] = decrypt_value_helper(
@@ -59,7 +59,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         if record is None:
             return None
 
-        data = record.dict() if hasattr(record, "dict") else dict(record)
+        data: Final = record.dict() if hasattr(record, "dict") else dict(record)
 
         if isinstance(data.get("litellm_params"), str):
             data["litellm_params"] = json.loads(data["litellm_params"])
@@ -76,17 +76,17 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
 
     async def find_by_name(self, model_name: str) -> list[LiteLLM_ProxyModelTable]:
         """Find models by name."""
-        records = await self.table.find_many(where={"model_name": model_name})
+        records: Final = await self.table.find_many(where={"model_name": model_name})
         return self._to_model_list(records)
 
     async def find_all(self) -> list[LiteLLM_ProxyModelTable]:
         """Find all models."""
-        records = await self.table.find_many()
+        records: Final = await self.table.find_many()
         return self._to_model_list(records)
 
     async def find_unblocked(self) -> list[LiteLLM_ProxyModelTable]:
         """Find all models that are not blocked."""
-        records = await self.table.find_many(where={"blocked": False})
+        records: Final = await self.table.find_many(where={"blocked": False})
         return self._to_model_list(records)
 
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_ProxyModelTable]:
@@ -96,7 +96,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         JSON. For large deployments with many models, consider adding a dedicated
         team_id column with a database index.
         """
-        all_models = await self.find_all()
+        all_models: Final = await self.find_all()
         return [m for m in all_models if m.team_id == team_id]
 
     async def create_model(
@@ -109,9 +109,9 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         blocked: bool = False,
     ) -> LiteLLM_ProxyModelTable:
         """Create a new model with encryption."""
-        encrypted_params = self._encrypt_litellm_params(litellm_params)
+        encrypted_params: Final = self._encrypt_litellm_params(litellm_params)
 
-        data: dict[str, Any] = {
+        data: Final[dict[str, Any]] = {
             "model_name": model_name,
             "litellm_params": json.dumps(encrypted_params),
             "created_by": created_by,
@@ -123,8 +123,8 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         if model_info is not None:
             data["model_info"] = json.dumps(model_info)
 
-        record = await self.table.create(data=data)
-        model = self._to_model(record)
+        record: Final = await self.table.create(data=data)
+        model: Final = self._to_model(record)
         assert model is not None
         return model
 
@@ -138,18 +138,18 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         blocked: bool | None = None,
     ) -> LiteLLM_ProxyModelTable | None:
         """Update a model with encryption."""
-        data: dict[str, Any] = {"updated_by": updated_by}
+        data: Final[dict[str, Any]] = {"updated_by": updated_by}
         if model_name is not None:
             data["model_name"] = model_name
         if litellm_params is not None:
-            encrypted_params = self._encrypt_litellm_params(litellm_params)
+            encrypted_params: Final = self._encrypt_litellm_params(litellm_params)
             data["litellm_params"] = json.dumps(encrypted_params)
         if model_info is not None:
             data["model_info"] = json.dumps(model_info)
         if blocked is not None:
             data["blocked"] = blocked
 
-        record = await self.table.update(where={"model_id": model_id}, data=data)
+        record: Final = await self.table.update(where={"model_id": model_id}, data=data)
         return self._to_model(record)
 
     async def delete_model(self, model_id: str) -> LiteLLM_ProxyModelTable | None:
