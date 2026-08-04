@@ -154,8 +154,6 @@ async def test_list_keys_include_created_by_keys():
         )
 
     conditions = _flatten_and(where_condition)
-    # key_alias/key_hash are global AND filters (LIT-3243) so they narrow
-    # every visibility branch, not just the own-keys branch
     assert {"key_alias": test_key_alias} in conditions
     assert {"token": test_key_hash} in conditions
 
@@ -177,8 +175,6 @@ async def test_list_keys_include_created_by_keys():
     assert user_condition is not None, "User condition should be present"
     assert created_by_condition is not None, "Created by condition should be present"
 
-    # Verify user condition scopes visibility; key_alias/token must NOT be
-    # confined to this branch (that was the LIT-3243 bug)
     assert user_condition["user_id"] == test_user_id
     assert user_condition["organization_id"] == test_org_id
     assert "key_alias" not in user_condition
@@ -8961,7 +8957,6 @@ async def test_build_key_filter_project_id_and_access_group_id():
         access_group_id=access_group_id,
     )
 
-    # Both filters sit in the top-level AND alongside the visibility where
     assert "AND" in where
     outer_and = where["AND"]
     assert {"project_id": project_id} in outer_and
@@ -9027,8 +9022,6 @@ async def test_build_key_filter_admin_substring_matching():
         use_substring_matching=True,
     )
 
-    # user_id lives in the flattened own-keys condition; key_alias is a
-    # global AND filter (LIT-3243)
     assert where["AND"][0]["user_id"] == {"contains": user_id, "mode": "insensitive"}
     assert {"key_alias": {"contains": key_alias, "mode": "insensitive"}} in where["AND"]
 
@@ -9060,8 +9053,7 @@ async def test_build_key_filter_non_admin_exact_matching():
         use_substring_matching=False,
     )
 
-    # Exact match — no contains/insensitive wrapping; key_alias is a global
-    # AND filter (LIT-3243)
+    # Exact match — no contains/insensitive wrapping
     assert where["AND"][0]["user_id"] == user_id
     assert {"key_alias": key_alias} in where["AND"]
 

@@ -5762,9 +5762,8 @@ def _build_key_filter_conditions(
     elif len(or_conditions) == 1:
         where.update(or_conditions[0])
 
-    # Apply key_alias, key_hash, team_id, project_id and access_group_id as global
-    # AND filters so they narrow results across all visibility conditions
-    # (own keys, admin team keys, member service accounts, created_by keys)
+    # Apply team_id, project_id and access_group_id as global AND filters so they
+    # narrow results across all visibility conditions (own keys, team keys, etc.)
     global_filters: tuple[dict[str, Any], ...] = (
         *(
             (
