@@ -420,6 +420,34 @@ async def test_assert_user_can_view_request_id_rejects_both_users_none():
     assert exc_info.value.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_assert_user_can_view_request_id_rejects_missing_row():
+    """
+    A request_id with no spend-log row (e.g. pruned by retention) must not
+    authorize reading the payload from cold storage; a missing row is not
+    the same as an owned row.
+    """
+
+    class MockSpendLogs:
+        async def find_unique(self, where, include=None):
+            return None
+
+    class MockDB:
+        def __init__(self):
+            self.litellm_spendlogs = MockSpendLogs()
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MockDB()
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    with pytest.raises(HTTPException) as exc_info:
+        await spend_management_endpoints._assert_user_can_view_request_id(
+            MockPrisma(), auth, "req-missing-row"
+        )
+    assert exc_info.value.status_code == 403
+
+
 def test_ui_view_request_response_forbids_non_admin_without_db(client, monkeypatch):
     """
     Without prisma, non-admins cannot be authorized to read request/response
@@ -4775,5 +4803,163 @@ def test_ui_view_request_response_reads_from_cold_storage(client, monkeypatch):
         assert body["messages"] == [{"role": "user", "content": "hi"}]
         assert body["response"] == {"choices": [{"message": {"content": "hello"}}]}
         assert cold_logger.requested_object_keys == ["k/cold.json"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def _fake_prisma_with_owned_spend_log(owner_user_id, messages_json, response_json):
+    class _Row:
+        user = owner_user_id
+        team_id = None
+
+    class _SpendLogs:
+        async def find_unique(self, where, include=None):
+            return _Row()
+
+    class _DB:
+        def __init__(self):
+            self.litellm_spendlogs = _SpendLogs()
+
+        async def query_raw(self, _sql, *_args):
+            return [
+                {
+                    "messages": messages_json,
+                    "response": response_json,
+                    "proxy_server_request": "{}",
+                    "metadata": "{}",
+                }
+            ]
+
+    class _Prisma:
+        def __init__(self):
+            self.db = _DB()
+
+    return _Prisma()
+
+
+def test_ui_view_request_response_internal_user_owner_gets_payload(client, monkeypatch):
+    """
+    An internal_user who owns the spend-log row can fetch the Logs drawer
+    detail payload for their own request (regression for #34099, where the
+    route was blocked for INTERNAL_USER before reaching this ownership check).
+    """
+    messages_json = json.dumps([{"role": "user", "content": "hi"}])
+    response_json = json.dumps({"choices": [{"message": {"content": "hello"}}]})
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        _fake_prisma_with_owned_spend_log("user_a", messages_json, response_json),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_a"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui/req-owned-by-user-a",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert json.loads(body["messages"]) == [{"role": "user", "content": "hi"}]
+        assert json.loads(body["response"]) == {
+            "choices": [{"message": {"content": "hello"}}]
+        }
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+class _RecordingAdditionalLoggingUtils:
+    """Injectable custom logger that records every request_id it's asked for."""
+
+    def __init__(self, payload):
+        self._payload = payload
+        self.requested_ids = []
+
+    async def get_request_response_payload(self, request_id, start_time_utc, end_time_utc):
+        self.requested_ids.append(request_id)
+        return self._payload
+
+
+def test_ui_view_request_response_internal_user_non_owner_forbidden(client, monkeypatch):
+    """
+    A different internal_user requesting someone else's row is forbidden;
+    guards against _assert_user_can_view_request_id being skipped in the
+    detail-drawer handler. Also proves the handler stops before it ever asks
+    a custom logger or the DB for the payload.
+    """
+    messages_json = json.dumps([{"role": "user", "content": "hi"}])
+    response_json = json.dumps({"choices": [{"message": {"content": "hello"}}]})
+    fake_prisma = _fake_prisma_with_owned_spend_log("user_a", messages_json, response_json)
+    original_query_raw = fake_prisma.db.query_raw
+    query_raw_calls = []
+
+    async def _spy_query_raw(*args, **kwargs):
+        query_raw_calls.append((args, kwargs))
+        return await original_query_raw(*args, **kwargs)
+
+    fake_prisma.db.query_raw = _spy_query_raw
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", fake_prisma)
+
+    custom_logger = _RecordingAdditionalLoggingUtils({"messages": "should-not-be-returned"})
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_additional_logging_utils_from_custom_logger",
+        lambda: [custom_logger],
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_b"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui/req-owned-by-user-a",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+        assert custom_logger.requested_ids == []
+        assert query_raw_calls == []
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_ui_view_request_response_internal_user_missing_row_forbidden(client, monkeypatch):
+    """
+    Regression for the fail-open in _assert_user_can_view_request_id: a
+    request_id with no spend-log row (e.g. pruned by retention) must be
+    denied before the handler ever consults a custom logger, otherwise a
+    non-admin who guesses/obtains a request_id could read another tenant's
+    payload out of cold storage. Fails if `if row is None: return` is
+    reintroduced.
+    """
+
+    class _SpendLogs:
+        async def find_unique(self, where, include=None):
+            return None
+
+    class _DB:
+        def __init__(self):
+            self.litellm_spendlogs = _SpendLogs()
+
+    from types import SimpleNamespace
+
+    fake_prisma = SimpleNamespace(db=_DB())
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", fake_prisma)
+
+    custom_logger = _RecordingAdditionalLoggingUtils({"messages": "should-not-be-returned"})
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_additional_logging_utils_from_custom_logger",
+        lambda: [custom_logger],
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_a"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui/req-pruned",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+        assert custom_logger.requested_ids == []
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)

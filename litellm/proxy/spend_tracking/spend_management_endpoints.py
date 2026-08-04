@@ -3849,16 +3849,16 @@ async def _assert_user_can_view_request_id(
     Verify the requesting non-admin user is allowed to view this spend-log row.
     Allowed when the log belongs to the user directly, or to one of their
     permitted teams (admin or ``/spend/logs`` permission).
-    Raises HTTP 403 if not.
+    Raises HTTP 403 if not, including when no spend-log row exists for the
+    request_id (e.g. it was pruned by retention), so a missing row can't be
+    used to read a payload out of cold storage via the detail endpoint.
     """
     row = await _find_spend_log_row(prisma_client, request_id)
-    if row is None:
+
+    if row is not None and row.user is not None and row.user == user_api_key_dict.user_id:
         return
 
-    if row.user is not None and row.user == user_api_key_dict.user_id:
-        return
-
-    if row.team_id:
+    if row is not None and row.team_id:
         can_view = await _can_team_member_view_log(
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
