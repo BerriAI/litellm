@@ -163,8 +163,8 @@ def _with_query_value(url: str, key: str, value: str) -> str:
 def append_query_params(url: str | None, params: dict) -> str:
     from litellm._logging import verbose_proxy_logger
 
-    verbose_proxy_logger.debug(f"url: {url}")
-    verbose_proxy_logger.debug(f"params: {params}")
+    verbose_proxy_logger.debug("url: %s", url)
+    verbose_proxy_logger.debug("params: %s", params)
     if not isinstance(url, str) or url == "":
         # Preserve previous startup behavior when DATABASE_URL is absent.
         # Returning an empty string avoids urlparse type errors in test/dev flows.

@@ -56,7 +56,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
             # Validate the request
             self.validate_request(model, messages)
 
-            verbose_logger.debug(f"Processing Azure AI Anthropic CountTokens request for model: {model}")
+            verbose_logger.debug("Processing Azure AI Anthropic CountTokens request for model: %s", model)
 
             # Transform request to Anthropic format
             request_body = self.transform_request_to_count_tokens(
@@ -66,12 +66,12 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 system=system,
             )
 
-            verbose_logger.debug(f"Transformed request: {request_body}")
+            verbose_logger.debug("Transformed request: %s", request_body)
 
             # Get endpoint URL
             endpoint_url = self.get_count_tokens_endpoint(api_base)
 
-            verbose_logger.debug(f"Making request to: {endpoint_url}")
+            verbose_logger.debug("Making request to: %s", endpoint_url)
 
             # Get required headers with Azure authentication
             headers = self.get_required_headers(
@@ -92,11 +92,11 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 timeout=request_timeout,
             )
 
-            verbose_logger.debug(f"Response status: {response.status_code}")
+            verbose_logger.debug("Response status: %s", response.status_code)
 
             if response.status_code != 200:
                 error_text = response.text
-                verbose_logger.error(f"Azure AI Anthropic API error: {error_text}")
+                verbose_logger.error("Azure AI Anthropic API error: %s", error_text)
                 raise AnthropicError(
                     status_code=response.status_code,
                     message=error_text,
@@ -104,7 +104,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
 
             azure_response = response.json()
 
-            verbose_logger.debug(f"Azure AI Anthropic response: {azure_response}")
+            verbose_logger.debug("Azure AI Anthropic response: %s", azure_response)
 
             # Return Anthropic-compatible response directly - no transformation needed
             return azure_response
@@ -114,14 +114,14 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
             raise
         except httpx.HTTPStatusError as e:
             # HTTP errors - preserve the actual status code
-            verbose_logger.error(f"HTTP error in CountTokens handler: {e!s}")
+            verbose_logger.error("HTTP error in CountTokens handler: %s", e)
             raise AnthropicError(
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
         except Exception as e:
-            verbose_logger.error(f"Error in CountTokens handler: {e!s}")
+            verbose_logger.error("Error in CountTokens handler: %s", e)
             raise AnthropicError(
                 status_code=500,
-                message=f"CountTokens processing error: {e!s}",
+                message=f"CountTokens processing error: {e}",
             )

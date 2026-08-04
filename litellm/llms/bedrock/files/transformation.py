@@ -652,7 +652,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 )
             except Exception as e:
                 verbose_logger.exception(
-                    f"litellm.llms.bedrock.files.transformation.py::_transform_openai_jsonl_content_to_bedrock_jsonl_content() - Error inferring custom_llm_provider - {e!s}"
+                    "litellm.llms.bedrock.files.transformation.py::_transform_openai_jsonl_content_to_bedrock_jsonl_content() - Error inferring custom_llm_provider - %s",
+                    e,
                 )
 
             # Determine provider from model name

@@ -159,7 +159,7 @@ def rerank(
             instruction=instruction,
             non_default_params=kwargs,
         )
-        verbose_logger.debug(f"optional_rerank_params: {optional_rerank_params}")
+        verbose_logger.debug("optional_rerank_params: %s", optional_rerank_params)
         if isinstance(optional_params.timeout, str):
             optional_params.timeout = float(optional_params.timeout)
 
@@ -534,5 +534,5 @@ def rerank(
         # Placeholder return
         return response
     except Exception as e:
-        verbose_logger.error(f"Error in rerank: {e!s}")
+        verbose_logger.error("Error in rerank: %s", e)
         raise exception_type(model=model, custom_llm_provider=custom_llm_provider, original_exception=e)

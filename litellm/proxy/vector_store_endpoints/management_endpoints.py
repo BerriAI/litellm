@@ -207,11 +207,11 @@ def _resolve_embedding_config_from_router(embedding_model: str, llm_router) -> d
                 # Only return config if we have at least api_key or api_base
                 if embedding_config:
                     verbose_proxy_logger.debug(
-                        f"Resolved embedding config from router model {model_name}: {list(embedding_config.keys())}"
+                        "Resolved embedding config from router model %s: %s", model_name, list(embedding_config.keys())
                     )
                     return embedding_config
         except Exception as e:
-            verbose_proxy_logger.debug(f"Error resolving embedding config from router for model {model_name}: {e!s}")
+            verbose_proxy_logger.debug("Error resolving embedding config from router for model %s: %s", model_name, e)
             continue
 
     return None
@@ -295,11 +295,13 @@ async def _resolve_embedding_config_from_db(embedding_model: str, prisma_client)
                 # Only return config if we have at least api_key or api_base
                 if embedding_config:
                     verbose_proxy_logger.debug(
-                        f"Resolved embedding config from database model {model_name}: {list(embedding_config.keys())}"
+                        "Resolved embedding config from database model %s: %s",
+                        model_name,
+                        list(embedding_config.keys()),
                     )
                     return embedding_config
         except Exception as e:
-            verbose_proxy_logger.debug(f"Error resolving embedding config for model {model_name}: {e!s}")
+            verbose_proxy_logger.debug("Error resolving embedding config for model %s: %s", model_name, e)
             continue
 
     return None
@@ -344,7 +346,7 @@ async def _resolve_embedding_config(embedding_model: str, prisma_client, llm_rou
     if llm_router is not None:
         router_config = _resolve_embedding_config_from_router(embedding_model=embedding_model, llm_router=llm_router)
         if router_config:
-            verbose_proxy_logger.debug(f"Resolved embedding config from router for model {embedding_model}")
+            verbose_proxy_logger.debug("Resolved embedding config from router for model %s", embedding_model)
             cache.set_cache(embedding_model, router_config)
             return router_config
 
@@ -354,12 +356,12 @@ async def _resolve_embedding_config(embedding_model: str, prisma_client, llm_rou
             embedding_model=embedding_model, prisma_client=prisma_client
         )
         if db_config:
-            verbose_proxy_logger.debug(f"Resolved embedding config from database for model {embedding_model}")
+            verbose_proxy_logger.debug("Resolved embedding config from database for model %s", embedding_model)
             cache.set_cache(embedding_model, db_config)
             return db_config
 
     verbose_proxy_logger.debug(
-        f"Could not resolve embedding config for model {embedding_model} from router or database"
+        "Could not resolve embedding config for model %s from router or database", embedding_model
     )
     return None
 
@@ -469,7 +471,7 @@ async def create_vector_store_in_db(
     if litellm.vector_store_registry is not None:
         litellm.vector_store_registry.add_vector_store_to_registry(vector_store=new_vector_store)
 
-    verbose_proxy_logger.info(f"Vector store {vector_store_id} created in database successfully")
+    verbose_proxy_logger.info("Vector store %s created in database successfully", vector_store_id)
 
     return new_vector_store
 
@@ -542,7 +544,7 @@ async def new_vector_store(
             "vector_store": response_vs,
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error creating vector store: {e!s}")
+        verbose_proxy_logger.exception("Error creating vector store: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -604,7 +606,8 @@ async def list_vector_stores(
                 # If vector store is in memory but NOT in database, it was deleted
                 if vector_store_id not in db_vector_store_ids:
                     verbose_proxy_logger.info(
-                        f"Vector store {vector_store_id} exists in memory but not in database - marking for deletion from cache"
+                        "Vector store %s exists in memory but not in database - marking for deletion from cache",
+                        vector_store_id,
                     )
                     vector_stores_to_delete_from_memory.append(vector_store_id)
                 # If not in our map yet, add it (only in-memory, not in DB)
@@ -615,7 +618,7 @@ async def list_vector_stores(
             # 1. Remove deleted vector stores from memory
             for vs_id in vector_stores_to_delete_from_memory:
                 litellm.vector_store_registry.delete_vector_store_from_registry(vector_store_id=vs_id)
-                verbose_proxy_logger.debug(f"Removed deleted vector store {vs_id} from in-memory registry")
+                verbose_proxy_logger.debug("Removed deleted vector store %s from in-memory registry", vs_id)
 
             # 2. Update in-memory registry with database versions (for updates)
             for vector_store in vector_stores_from_db:
@@ -647,7 +650,7 @@ async def list_vector_stores(
 
         return response
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error listing vector stores: {e!s}")
+        verbose_proxy_logger.exception("Error listing vector stores: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -727,7 +730,7 @@ async def delete_vector_store(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error deleting vector store: {e!s}")
+        verbose_proxy_logger.exception("Error deleting vector store: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -799,7 +802,7 @@ async def get_vector_store_info(
         # the catch-all below would otherwise rewrite them as 500.
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting vector store info: {e!s}")
+        verbose_proxy_logger.exception("Error getting vector store info: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -868,7 +871,7 @@ async def update_vector_store(
                 updated_data=updated_vs,
             )
             verbose_proxy_logger.debug(
-                f"Updated vector store {vector_store_id} in both database and in-memory registry"
+                "Updated vector store %s in both database and in-memory registry", vector_store_id
             )
 
         # The DB row is returned in full, so the response would otherwise
@@ -888,5 +891,5 @@ async def update_vector_store(
         # as 500 with the original status code embedded in the detail.
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating vector store: {e!s}")
+        verbose_proxy_logger.exception("Error updating vector store: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

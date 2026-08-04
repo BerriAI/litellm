@@ -90,7 +90,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         self.severity_threshold = int(severity_threshold) if severity_threshold else None
         self.severity_threshold_by_category = severity_threshold_by_category
 
-        verbose_proxy_logger.info(f"Initialized Azure Text Moderation Guardrail: {guardrail_name}")
+        verbose_proxy_logger.info("Initialized Azure Text Moderation Guardrail: %s", guardrail_name)
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
@@ -223,7 +223,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         user_prompt = self.get_user_prompt(new_messages)
 
         if user_prompt:
-            verbose_proxy_logger.info(f"Azure Text Moderation: User prompt: {user_prompt}")
+            verbose_proxy_logger.info("Azure Text Moderation: User prompt: %s", user_prompt)
             await self.async_make_request(
                 text=user_prompt,
             )

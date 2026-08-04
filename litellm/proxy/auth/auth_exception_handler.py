@@ -95,7 +95,9 @@ class UserAPIKeyAuthExceptionHandler:
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
             )
             verbose_proxy_logger.exception(
-                f"litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {e!s}\nRequester IP Address:{requester_ip}",
+                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",
+                e,
+                requester_ip,
                 extra={"requester_ip": requester_ip},
             )
 
@@ -150,7 +152,7 @@ class UserAPIKeyAuthExceptionHandler:
                 )
             if isinstance(e, HTTPException):
                 raise ProxyException(
-                    message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                    message=getattr(e, "detail", f"Authentication Error({e})"),
                     type=ProxyErrorTypes.auth_error,
                     param=getattr(e, "param", "None"),
                     code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),

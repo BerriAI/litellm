@@ -23,6 +23,7 @@ from litellm.proxy.config_resolvers.sso import (
 )
 from litellm.proxy.utils import invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import (
     SSOConfigRepository,
     UISettingsRepository,
@@ -636,6 +637,36 @@ async def _validate_default_teams_exist(teams: list[str] | list[NewUserRequestTe
         )
 
 
+async def _validate_default_organization_exists(organization_id: str) -> None:
+    """Reject a default organization that cannot be assigned.
+
+    Teams are created from these settings long after they are saved, and an unknown
+    organization id would fail every future team creation instead of here, where the
+    admin who typed it can still fix it.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
+                "error": "Database not connected. Please connect a database."
+            },
+        )
+
+    organization_exists = await OrganizationRepository(prisma_client).exists(
+        organization_id, id_field="organization_id"
+    )
+    if not organization_exists:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
+                "error": f"Organization not found: {organization_id}. "
+                "An organization must exist before it can be set as the default organization for new teams."
+            },
+        )
+
+
 async def update_default_team_member_budget(teams: list[NewUserRequestTeam], user_api_key_dict: UserAPIKeyAuth):
     """
     1. Update the max member budget for the team
@@ -658,7 +689,10 @@ async def update_default_team_member_budget(teams: list[NewUserRequestTeam], use
             )
         except Exception as e:
             verbose_proxy_logger.info(
-                f"Error updating team {team_id} with team member budget {max_budget_in_team} with error: {e}, skipping.."
+                "Error updating team %s with team member budget %s with error: %s, skipping..",
+                team_id,
+                max_budget_in_team,
+                e,
             )
             continue
 
@@ -774,6 +808,9 @@ async def update_default_team_settings(
     Update the default team parameters for SSO users.
     These settings will be applied to new teams created from SSO.
     """
+    if settings.organization_id is not None:
+        await _validate_default_organization_exists(settings.organization_id)
+
     return await _update_litellm_setting(
         settings=settings,
         settings_key="default_team_params",
@@ -966,7 +1003,7 @@ async def update_sso_settings(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Error updating environment_variables: {e!s}"},
+            detail={"error": f"Error updating environment_variables: {e}"},
         )
 
     return {
@@ -1175,7 +1212,7 @@ async def update_mcp_semantic_filter_settings(
         if prisma_client is not None:
             await proxy_config._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
     except Exception as e:
-        verbose_proxy_logger.warning(f"Failed to reinitialize MCP semantic filter settings immediately: {e}")
+        verbose_proxy_logger.warning("Failed to reinitialize MCP semantic filter settings immediately: %s", e)
 
     return result
 

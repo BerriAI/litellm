@@ -43,7 +43,7 @@ def _extract_cache_params() -> dict[str, Any]:
         cleaned_params = HealthCheckCacheParams(**cache_params).model_dump() if cache_params else {}
         return masker.mask_dict(cleaned_params)
     except (AttributeError, TypeError) as e:
-        verbose_proxy_logger.debug(f"Error extracting cache params: {e!s}")
+        verbose_proxy_logger.debug("Error extracting cache params: %s", e)
         return {}
 
 
@@ -158,7 +158,7 @@ async def cache_delete(request: Request):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Cache Delete Failed({e!s})",
+            detail=f"Cache Delete Failed({e})",
         )
 
 
@@ -173,7 +173,7 @@ def _get_redis_client_info(cache_instance) -> tuple[list, int]:
         client_list = cache_instance.client_list()
         return client_list, len(client_list)
     except Exception as e:
-        verbose_proxy_logger.warning(f"CLIENT LIST command failed (likely restricted on managed Redis): {e!s}")
+        verbose_proxy_logger.warning("CLIENT LIST command failed (likely restricted on managed Redis): %s", e)
         return ["CLIENT LIST command not available on this Redis instance"], -1
 
 
@@ -209,7 +209,7 @@ async def cache_redis_info():
     except Exception as e:
         raise HTTPException(
             status_code=503,
-            detail=f"Service Unhealthy ({e!s})",
+            detail=f"Service Unhealthy ({e})",
         )
 
 
@@ -245,5 +245,5 @@ async def cache_flushall():
     except Exception as e:
         raise HTTPException(
             status_code=503,
-            detail=f"Service Unhealthy ({e!s})",
+            detail=f"Service Unhealthy ({e})",
         )

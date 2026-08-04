@@ -197,7 +197,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             raise e
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {e!s}"
+                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
             )
 
     async def async_moderation_hook(  # type: ignore

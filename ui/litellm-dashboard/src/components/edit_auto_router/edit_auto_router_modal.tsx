@@ -1,18 +1,19 @@
 import React, { useEffect, useState } from "react";
-import { Modal, Form, Button, Select as AntdSelect } from "antd";
+import { Modal, Form, Button, Select as AntdSelect, Tooltip } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
 import { normalizeTierModels } from "../add_model/complexity_router_tiers";
 import { isComplexityRouter } from "../add_model/auto_router_strategies";
-import { getSemanticConfigError } from "../add_model/build_complexity_router_config";
+import { getKeywordTierRulesError, getSemanticConfigError } from "../add_model/build_complexity_router_config";
 import { KeywordTierRule } from "../add_model/KeywordTierRules";
 import { DEFAULT_MATCH_THRESHOLD } from "../add_model/SemanticKeywordMatching";
 import { hydrateKeywordTierRules, serializeKeywordTierRules } from "../add_model/complexity_router_keywords";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   DEFAULT_ADAPTIVE_WEIGHTS,
+  DEFAULT_SESSION_AFFINITY,
   DEFAULT_TIER_DISTANCE_PENALTY,
 } from "../add_model/ComplexityRouterConfig";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -36,6 +37,7 @@ const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classifier_context_window_size",
   "classifier_context_per_turn_chars",
   "classifier_context_include_assistant_turns",
+  "session_affinity",
   "adaptive",
   "adaptive_weights",
   "tier_distance_penalty",
@@ -101,6 +103,7 @@ export const buildUpdatedComplexityRouterConfig = (
       value.classifier_context_include_assistant_turns !== undefined && {
         classifier_context_include_assistant_turns: value.classifier_context_include_assistant_turns,
       }),
+    session_affinity: value.session_affinity ?? DEFAULT_SESSION_AFFINITY,
     ...(customTechnicalKeywords &&
       customTechnicalKeywords.length > 0 && {
         custom_technical_keywords: customTechnicalKeywords,
@@ -115,8 +118,8 @@ export const buildUpdatedComplexityRouterConfig = (
     }),
     ...(value.return_raw_model_name && { return_raw_model_name: true }),
     ...(keywordMatching && {
-      // Mirrors buildComplexityRouterConfig: rules only when non-empty (the backend rejects
-      // an empty rule with a 400), escalation keywords always, semantic trio only when on.
+      // Mirrors buildComplexityRouterConfig: the key only when there is a rule to write,
+      // escalation keywords always, semantic trio only when on.
       ...(storedKeywordRules.length > 0 && { keyword_tier_rules: storedKeywordRules }),
       escalation_keywords: keywordMatching.escalationKeywords.map((k) => k.trim()).filter(Boolean),
       ...(keywordMatching.semanticMatchingEnabled && {
@@ -142,6 +145,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [showCustomDefaultModel, setShowCustomDefaultModel] = useState<boolean>(false);
   const [showCustomEmbeddingModel, setShowCustomEmbeddingModel] = useState<boolean>(false);
+  const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
   const [routerConfig, setRouterConfig] = useState<any>(null);
   const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
   const [keywordTierRules, setKeywordTierRules] = useState<KeywordTierRule[]>([]);
@@ -154,6 +158,15 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
     classifier_type: "heuristic",
   });
   const isComplexityRouterModel = isComplexityRouter(modelData?.litellm_params);
+
+  // Mirrors the create form: the button says why it is unavailable and disables on the same
+  // answer. Tiers use this modal's own rule, which allows a partly filled router, so an edit that
+  // is legal today stays legal.
+  const submitBlockedReason = !isComplexityRouterModel
+    ? null
+    : (Object.values(complexityRouterConfig.tiers).every((models) => models.length === 0)
+        ? "Please select at least one model for a complexity tier"
+        : null) ?? getKeywordTierRulesError(keywordTierRules);
 
   useEffect(() => {
     if (isVisible && modelData) {
@@ -218,6 +231,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             typeof parsedConfig.classifier_context_include_assistant_turns === "boolean"
               ? parsedConfig.classifier_context_include_assistant_turns
               : undefined,
+          session_affinity:
+            typeof parsedConfig.session_affinity === "boolean"
+              ? parsedConfig.session_affinity
+              : DEFAULT_SESSION_AFFINITY,
           adaptive: parsedConfig.adaptive || false,
           adaptive_weights: parsedConfig.adaptive_weights,
           tier_distance_penalty: parsedConfig.tier_distance_penalty,
@@ -288,24 +305,29 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       if (isComplexityRouterModel) {
         const { tiers, classifier_type, classifier_llm_config } = complexityRouterConfig;
         if (Object.values(tiers).every((models) => models.length === 0)) {
+          setShowValidationErrors(true);
           NotificationsManager.fromBackend("Please select at least one model for a complexity tier");
           return;
         }
         if (classifier_type === "llm" && !classifier_llm_config?.model) {
+          setShowValidationErrors(true);
           NotificationsManager.fromBackend("Please select a classifier model, or switch back to Heuristic");
           return;
         }
-        // Same guard the create form applies (add_auto_router_tab.tsx). The backend rejects
-        // semantic_keyword_matching without an embedding model or keyword rules
-        // (complexity_router/config.py), so without this a save fails as a raw 400 instead of
-        // an inline message.
+        // Same guards the create form applies (add_auto_router_tab.tsx). The backend rejects a
+        // keyword rule with no keyword, and semantic_keyword_matching without an embedding model
+        // or keyword rules (complexity_router/config.py), so without these a save fails as a raw
+        // 400 instead of an inline message.
+        const keywordRulesError = getKeywordTierRulesError(keywordTierRules);
+        if (keywordRulesError) {
+          setShowValidationErrors(true);
+          NotificationsManager.fromBackend(keywordRulesError);
+          return;
+        }
 
-        // Same guard the create form applies (add_auto_router_tab.tsx). The backend rejects
-        // semantic_keyword_matching without an embedding model or keyword rules
-        // (complexity_router/config.py), so without this a save fails as a raw 400 instead of
-        // an inline message.
         const semanticError = getSemanticConfigError({ semanticMatchingEnabled, embeddingModel, keywordTierRules });
         if (semanticError) {
+          setShowValidationErrors(true);
           NotificationsManager.fromBackend(semanticError);
           return;
         }
@@ -403,9 +425,11 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         <Button key="cancel" onClick={onCancel}>
           Cancel
         </Button>,
-        <Button key="submit" loading={loading} onClick={handleSubmit}>
-          Save Changes
-        </Button>,
+        <Tooltip key="submit" title={submitBlockedReason}>
+          <Button loading={loading} disabled={submitBlockedReason !== null} onClick={handleSubmit}>
+            Save Changes
+          </Button>
+        </Tooltip>,
       ]}
       width={1000}
       destroyOnHidden
@@ -429,6 +453,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             /* Complexity Router Configuration */
             <div className="w-full">
               <ComplexityRouterConfig
+                showValidationErrors={showValidationErrors}
                 modelInfo={modelInfo}
                 value={complexityRouterConfig}
                 onChange={(config) => {

@@ -116,7 +116,7 @@ async def responses_api(
             ResponsePollingHandler,
         )
 
-        verbose_proxy_logger.info(f"Starting background response with polling for model={data.get('model')}")
+        verbose_proxy_logger.info("Starting background response with polling for model=%s", data.get("model"))
 
         # Run pre-call checks (rate limits, guardrails, budget) BEFORE creating
         # polling ID. This ensures rate-limited requests get a synchronous 429
@@ -233,7 +233,8 @@ async def responses_api(
 
                         if not model_id:
                             verbose_proxy_logger.warning(
-                                f"No model_id found in response hidden params for response {response.id}, skipping managed object storage"
+                                "No model_id found in response hidden params for response %s, skipping managed object storage",
+                                response.id,
                             )
                             raise Exception("No model_id found in response hidden params")
                         # Store in managed objects table
@@ -247,11 +248,13 @@ async def responses_api(
                         )
 
                         verbose_proxy_logger.info(
-                            f"Stored background response {response.id} in managed objects table with unified_id={response.id}"
+                            "Stored background response %s in managed objects table with unified_id=%s",
+                            response.id,
+                            response.id,
                         )
                     except Exception as e:
                         verbose_proxy_logger.error(
-                            f"Failed to store background response in managed objects table: {e!s}"
+                            "Failed to store background response in managed objects table: %s", e
                         )
 
         return response

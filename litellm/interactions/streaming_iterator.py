@@ -109,7 +109,7 @@ class BaseInteractionsAPIStreamingIterator:
             return None
         except json.JSONDecodeError:
             # If we can't parse the chunk, continue
-            verbose_logger.debug(f"Failed to parse streaming chunk: {stripped_chunk[:200]}...")
+            verbose_logger.debug("Failed to parse streaming chunk: %s...", stripped_chunk[:200])
             return None
 
     def _handle_logging_completed_response(self):

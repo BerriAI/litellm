@@ -71,7 +71,7 @@ class UserManagementEventHooks:
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.warning(f"Unable to create audit log for user on `/user/new` - {e!s}")
+            verbose_proxy_logger.warning("Unable to create audit log for user on `/user/new` - %s", e)
 
     @staticmethod
     async def async_send_user_invitation_email(

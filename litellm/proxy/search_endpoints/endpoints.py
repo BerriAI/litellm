@@ -170,14 +170,15 @@ async def search(
                     team_object=team_object,
                 )
         except Exception as e:
-            verbose_proxy_logger.error(f"Search tool authorization failed for {search_tool_name_value}: {e!s}")
+            verbose_proxy_logger.error("Search tool authorization failed for %s: %s", search_tool_name_value, e)
             raise
 
         if llm_router is not None and hasattr(llm_router, "search_tools"):
             verbose_proxy_logger.debug(
-                f"Search endpoint - Looking for search_tool_name: {search_tool_name_value}. "
-                f"Available search tools in router: {[tool.get('search_tool_name') for tool in llm_router.search_tools]}. "
-                f"Total search tools: {len(llm_router.search_tools)}"
+                "Search endpoint - Looking for search_tool_name: %s. Available search tools in router: %s. Total search tools: %s",
+                search_tool_name_value,
+                [tool.get("search_tool_name") for tool in llm_router.search_tools],
+                len(llm_router.search_tools),
             )
 
             matching_tools = [
@@ -302,5 +303,5 @@ async def list_search_tools(
     except Exception as e:
         from litellm._logging import verbose_proxy_logger
 
-        verbose_proxy_logger.exception(f"Error listing search tools: {e}")
+        verbose_proxy_logger.exception("Error listing search tools: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

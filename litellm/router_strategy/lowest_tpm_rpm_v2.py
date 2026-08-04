@@ -245,7 +245,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                f"litellm.proxy.hooks.lowest_tpm_rpm_v2.py::log_success_event(): Exception occured - {e!s}"
+                "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::log_success_event(): Exception occured - %s", e
             )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -289,7 +289,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                f"litellm.proxy.hooks.lowest_tpm_rpm_v2.py::async_log_success_event(): Exception occured - {e!s}"
+                "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::async_log_success_event(): Exception occured - %s", e
             )
 
     def _return_potential_deployments(
@@ -375,7 +375,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             input_tokens = token_counter(messages=messages, text=input)
         except Exception:
             input_tokens = 0
-        verbose_router_logger.debug(f"input_tokens={input_tokens}")
+        verbose_router_logger.debug("input_tokens=%s", input_tokens)
         # -----------------------
         # Find lowest used model
         # ----------------------
@@ -420,7 +420,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         """
         # get list of potential deployments
         verbose_router_logger.debug(
-            f"get_available_deployments - Usage Based. model_group: {model_group}, healthy_deployments: {healthy_deployments}"
+            "get_available_deployments - Usage Based. model_group: %s, healthy_deployments: %s",
+            model_group,
+            healthy_deployments,
         )
 
         dt = get_utc_datetime()
@@ -535,7 +537,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         """
         # get list of potential deployments
         verbose_router_logger.debug(
-            f"get_available_deployments - Usage Based. model_group: {model_group}, healthy_deployments: {healthy_deployments}"
+            "get_available_deployments - Usage Based. model_group: %s, healthy_deployments: %s",
+            model_group,
+            healthy_deployments,
         )
 
         dt = get_utc_datetime()

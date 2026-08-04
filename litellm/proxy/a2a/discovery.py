@@ -122,11 +122,11 @@ async def fetch_well_known_card(
             # dict so production (``user_url_validation=True``) doesn't 500.
             response = await async_safe_get(client, url, headers=headers or {})
         except SSRFError as exc:
-            last_error = f"{url}: {exc!s}"
+            last_error = f"{url}: {exc}"
             verbose_proxy_logger.debug("A2A discovery blocked by SSRF guard for %s: %s", url, exc)
             continue
         except Exception as exc:
-            last_error = f"{url}: {exc!s}"
+            last_error = f"{url}: {exc}"
             verbose_proxy_logger.debug("A2A discovery failed for %s: %s", url, exc)
             continue
 
@@ -138,7 +138,7 @@ async def fetch_well_known_card(
         try:
             card = response.json()
         except Exception as exc:
-            last_error = f"{url}: invalid JSON ({exc!s})"
+            last_error = f"{url}: invalid JSON ({exc})"
             continue
 
         if not isinstance(card, dict):

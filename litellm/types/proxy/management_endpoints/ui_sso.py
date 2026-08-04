@@ -229,3 +229,7 @@ class DefaultTeamSSOParams(LiteLLMPydanticObjectBase):
         default=None,
         description="Default permissions granted to members of newly created teams (e.g. /key/generate, /key/update, /key/delete). /key/info and /key/health are always included.",
     )
+    organization_id: str | None = Field(
+        default=None,
+        description="Default organization for new teams created without an explicit organization",
+    )

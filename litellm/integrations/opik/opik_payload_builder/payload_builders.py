@@ -61,7 +61,7 @@ def build_span_payload(
     created = response_obj.get("created", 0)
     span_name = f"{model}_{obj_type}_{created}"
 
-    _logging.verbose_logger.debug(f"OpikLogger creating span with id {span_id} for trace {trace_id}")
+    _logging.verbose_logger.debug("OpikLogger creating span with id %s for trace %s", span_id, trace_id)
 
     return types.SpanPayload(
         id=span_id,

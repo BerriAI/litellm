@@ -178,7 +178,7 @@ def _get_parent_otel_span_from_logging_obj(
         return _get_parent_otel_span_from_kwargs(logging_obj.model_call_details)
 
     except Exception as e:
-        verbose_logger.exception(f"Error in _get_parent_otel_span_from_logging_obj: {e!s}")
+        verbose_logger.exception("Error in _get_parent_otel_span_from_logging_obj: %s", e)
         return None
 
 
@@ -265,7 +265,7 @@ def _set_duration_in_model_call_details(
         else:
             verbose_logger.debug("`logging_obj` not found - unable to track `llm_api_duration_ms")
     except Exception as e:
-        verbose_logger.warning(f"Error setting `llm_api_duration_ms`: {e!s}")
+        verbose_logger.warning("Error setting `llm_api_duration_ms`: %s", e)
 
 
 def track_llm_api_timing():
@@ -321,7 +321,7 @@ def track_llm_api_timing():
                         )
                     )
                 except Exception as e:
-                    verbose_logger.debug(f"Error in service logging: {e!s}")
+                    verbose_logger.debug("Error in service logging: %s", e)
 
         @functools.wraps(func)
         def sync_wrapper(*args, **kwargs):
@@ -366,7 +366,7 @@ def track_llm_api_timing():
                         parent_otel_span=parent_otel_span,
                     )
                 except Exception as e:
-                    verbose_logger.debug(f"Error in service logging: {e!s}")
+                    verbose_logger.debug("Error in service logging: %s", e)
 
         # Check if the function is async or sync
         if inspect.iscoroutinefunction(func):

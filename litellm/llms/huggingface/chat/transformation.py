@@ -148,7 +148,7 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
             provider_mapping = provider_mapping[provider]
             if provider_mapping["status"] == "staging":
                 logger.warning(
-                    f"Model {model_id} is in staging mode for provider {provider}. Meant for test purposes only."
+                    "Model %s is in staging mode for provider %s. Meant for test purposes only.", model_id, provider
                 )
             mapped_model = provider_mapping["providerId"]
 

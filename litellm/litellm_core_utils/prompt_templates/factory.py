@@ -438,9 +438,7 @@ def _render_chat_template(env, chat_template: str, bos_token: str, eos_token: st
 
         return rendered_text
     except Exception as e:
-        raise Exception(
-            f"Error rendering template - {e!s}"
-        )  # don't use verbose_logger.exception, if exception is raised
+        raise Exception(f"Error rendering template - {e}")  # don't use verbose_logger.exception, if exception is raised
 
 
 async def _afetch_and_extract_template(
@@ -858,7 +856,7 @@ def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) ->
         raise
     except Exception as e:
         raise Exception(
-            f"""Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{{base64_image}}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']. Error: {e!s}"""
+            f"""Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{{base64_image}}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']. Error: {e}"""
         )
 
 
@@ -1361,7 +1359,7 @@ def convert_to_gemini_tool_call_invoke(
                 )
         return _parts_list
     except Exception as e:
-        raise Exception(f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e!s}")
+        raise Exception(f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e}")
 
 
 def convert_to_gemini_tool_call_result(
@@ -1415,7 +1413,7 @@ def convert_to_gemini_tool_call_result(
                         inline_data_list.append(BlobType(data=mime_rest[1], mime_type=clean_mime))
                         content_str = ""
                 except Exception as e:
-                    verbose_logger.warning(f"Failed to parse data URL in tool response: {e}")
+                    verbose_logger.warning("Failed to parse data URL in tool response: %s", e)
         elif isinstance(message["content"], list):
             content_list = message["content"]
             for content in content_list:
@@ -1434,7 +1432,7 @@ def convert_to_gemini_tool_call_result(
                                 )
                             )
                         except Exception as e:
-                            verbose_logger.warning(f"Failed to process Anthropic image block in tool response: {e}")
+                            verbose_logger.warning("Failed to process Anthropic image block in tool response: %s", e)
                 elif content_type in ("input_image", "image_url"):
                     # Extract image for inline_data (for Computer Use screenshots and tool results)
                     image_url_data = content.get("image_url", "")
@@ -1451,7 +1449,7 @@ def convert_to_gemini_tool_call_result(
                                 )
                             )
                         except Exception as e:
-                            verbose_logger.warning(f"Failed to process image in tool response: {e}")
+                            verbose_logger.warning("Failed to process image in tool response: %s", e)
                 elif content_type in ("file", "input_file"):
                     # Extract file for inline_data (for tool results with PDF, audio, video, etc.)
                     file_data = content.get("file_data", "")
@@ -1476,7 +1474,7 @@ def convert_to_gemini_tool_call_result(
                                 )
                             )
                         except Exception as e:
-                            verbose_logger.warning(f"Failed to process file in tool response: {e}")
+                            verbose_logger.warning("Failed to process file in tool response: %s", e)
     name: str | None = message.get("name", "")  # type: ignore
 
     # Recover name from last message with tool calls
@@ -1999,7 +1997,7 @@ def _sanitize_empty_text_content(
             message = cast(AllMessageValues, dict(message))  # Make a copy
             message["content"] = _EMPTY_TEXT_PLACEHOLDER
             verbose_logger.debug(
-                f"_sanitize_empty_text_content: Replaced empty text content in {message.get('role')} message"
+                "_sanitize_empty_text_content: Replaced empty text content in %s message", message.get("role")
             )
         return message
 
@@ -2024,7 +2022,7 @@ def _sanitize_empty_text_content(
             message = cast(AllMessageValues, dict(message))  # Make a copy
             message["content"] = new_blocks  # type: ignore
             verbose_logger.debug(
-                f"_sanitize_empty_text_content: Replaced empty text block(s) in {message.get('role')} message"
+                "_sanitize_empty_text_content: Replaced empty text block(s) in %s message", message.get("role")
             )
 
     return message
@@ -2088,7 +2086,8 @@ def _add_missing_tool_results(
 
     if missing_tool_call_ids:
         verbose_logger.debug(
-            f"_add_missing_tool_results: Found {len(missing_tool_call_ids)} orphaned tool calls. Adding dummy tool results."
+            "_add_missing_tool_results: Found %s orphaned tool calls. Adding dummy tool results.",
+            len(missing_tool_call_ids),
         )
 
         result_messages.append(current_message)
@@ -3713,7 +3712,7 @@ def _convert_to_bedrock_tool_call_invoke(
                         _parts_list.append(cache_point_block)
         return _parts_list
     except Exception as e:
-        raise Exception(f"Unable to convert openai tool calls={tool_calls} to bedrock tool calls. Received error={e!s}")
+        raise Exception(f"Unable to convert openai tool calls={tool_calls} to bedrock tool calls. Received error={e}")
 
 
 def _append_bedrock_tool_result_media_block(

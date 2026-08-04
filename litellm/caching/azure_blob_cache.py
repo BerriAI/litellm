@@ -67,7 +67,10 @@ class AzureBlobCache(BaseCache):
             cached_response = json.loads(as_str)
 
             verbose_logger.debug(
-                f"Got Azure Blob Cache: key: {key}, cached_response {cached_response}. Type Response {type(cached_response)}"
+                "Got Azure Blob Cache: key: %s, cached_response %s. Type Response %s",
+                key,
+                cached_response,
+                type(cached_response),
             )
 
             return cached_response
@@ -84,7 +87,10 @@ class AzureBlobCache(BaseCache):
             as_str = as_bytes.decode("utf-8")
             cached_response = json.loads(as_str)
             verbose_logger.debug(
-                f"Got Azure Blob Cache: key: {key}, cached_response {cached_response}. Type Response {type(cached_response)}"
+                "Got Azure Blob Cache: key: %s, cached_response %s. Type Response %s",
+                key,
+                cached_response,
+                type(cached_response),
             )
             return cached_response
         except ResourceNotFoundError:

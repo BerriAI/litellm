@@ -91,7 +91,7 @@ async def admitted_user_context(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKey
     try:
         admitted = await MCPRequestHandler._reload_admitted_user(user_id)
     except HTTPException as e:
-        verbose_logger.warning(f"MCP dashboard session: admitted-subject reload failed for {user_id}: {e.detail}")
+        verbose_logger.warning("MCP dashboard session: admitted-subject reload failed for %s: %s", user_id, e.detail)
         return None
     return admitted.model_copy(update={"parent_otel_span": user_api_key_auth.parent_otel_span})
 

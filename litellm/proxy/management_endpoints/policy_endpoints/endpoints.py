@@ -432,7 +432,7 @@ async def validate_policy(
     from litellm.proxy.policy_engine.policy_validator import PolicyValidator
     from litellm.proxy.proxy_server import prisma_client
 
-    verbose_proxy_logger.debug(f"Validating policy configuration with {len(data.policies)} policies")
+    verbose_proxy_logger.debug("Validating policy configuration with %s policies", len(data.policies))
 
     validator = PolicyValidator(prisma_client=prisma_client)
 

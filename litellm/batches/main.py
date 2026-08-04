@@ -182,7 +182,7 @@ def create_batch(
                 )
         except Exception as e:
             verbose_logger.exception(
-                f"litellm.batches.main.py::create_batch() - Error inferring custom_llm_provider - {e!s}"
+                "litellm.batches.main.py::create_batch() - Error inferring custom_llm_provider - %s", e
             )
 
         _is_async = kwargs.pop("acreate_batch", False) is True
@@ -890,7 +890,7 @@ def cancel_batch(
                 )
         except Exception as e:
             verbose_logger.exception(
-                f"litellm.batches.main.py::cancel_batch() - Error inferring custom_llm_provider - {e!s}"
+                "litellm.batches.main.py::cancel_batch() - Error inferring custom_llm_provider - %s", e
             )
         optional_params = GenericLiteLLMParams(**kwargs)
         litellm_params = get_litellm_params(

@@ -85,9 +85,10 @@ class QualityRouter(CustomLogger):
         self._tier_to_models_cache: dict[int, list[str]] | None = None
 
         verbose_router_logger.debug(
-            f"QualityRouter initialized for {model_name} with "
-            f"available_models={self.config.available_models}, "
-            f"default_model={self.config.default_model}"
+            "QualityRouter initialized for %s with available_models=%s, default_model=%s",
+            model_name,
+            self.config.available_models,
+            self.config.default_model,
         )
 
     @property
@@ -371,10 +372,11 @@ class QualityRouter(CustomLogger):
         if keyword_match is not None:
             routed_model, matched_keyword = keyword_match
             verbose_router_logger.info(
-                f"QualityRouter: keyword override matched='{matched_keyword}' "
-                f"routed_model={routed_model} "
-                f"(quality_tier={self._model_quality.get(routed_model)}, "
-                f"input_cost_per_token={self._model_cost.get(routed_model)})"
+                "QualityRouter: keyword override matched='%s' routed_model=%s (quality_tier=%s, input_cost_per_token=%s)",
+                matched_keyword,
+                routed_model,
+                self._model_quality.get(routed_model),
+                self._model_cost.get(routed_model),
             )
             self._stash_decision(
                 request_kwargs,

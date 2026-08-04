@@ -115,7 +115,7 @@ def get_guardrail_initializer_from_hooks():
             module_path = f"litellm.proxy.guardrails.guardrail_hooks.{item}"
             try:
                 # Import the module
-                verbose_proxy_logger.debug(f"Discovering guardrails in: {module_path}")
+                verbose_proxy_logger.debug("Discovering guardrails in: %s", module_path)
 
                 module = importlib.import_module(module_path)
 
@@ -125,7 +125,7 @@ def get_guardrail_initializer_from_hooks():
                     if isinstance(registry, dict):
                         discovered_initializers.update(registry)
                         verbose_proxy_logger.debug(
-                            f"Found guardrail_initializer_registry in {module_path}: {list(registry.keys())}"
+                            "Found guardrail_initializer_registry in %s: %s", module_path, list(registry.keys())
                         )
 
                 # Check for standalone initialize_guardrail function (fallback for directory-based guardrails)
@@ -133,21 +133,23 @@ def get_guardrail_initializer_from_hooks():
                     # For directories with just initialize_guardrail, use the directory name as the key
                     initialize_fn = getattr(module, "initialize_guardrail")
                     discovered_initializers[item] = initialize_fn
-                    verbose_proxy_logger.debug(f"Found initialize_guardrail function in {module_path}")
+                    verbose_proxy_logger.debug("Found initialize_guardrail function in %s", module_path)
 
             except ImportError as e:
-                verbose_proxy_logger.error(f"Could not import {module_path}: {e}")
+                verbose_proxy_logger.error("Could not import %s: %s", module_path, e)
                 continue
             except Exception as e:
-                verbose_proxy_logger.error(f"Error processing {module_path}: {e}")
+                verbose_proxy_logger.error("Error processing %s: %s", module_path, e)
                 continue
 
         verbose_proxy_logger.debug(
-            f"Discovered {len(discovered_initializers)} guardrail initializers: {list(discovered_initializers.keys())}"
+            "Discovered %s guardrail initializers: %s",
+            len(discovered_initializers),
+            list(discovered_initializers.keys()),
         )
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error discovering guardrail initializers: {e}")
+        verbose_proxy_logger.error("Error discovering guardrail initializers: %s", e)
 
     return discovered_initializers
 
@@ -194,7 +196,7 @@ def get_guardrail_class_from_hooks():
 
             try:
                 # Import the module
-                verbose_proxy_logger.debug(f"Discovering guardrails in: {module_path}")
+                verbose_proxy_logger.debug("Discovering guardrails in: %s", module_path)
 
                 module = importlib.import_module(module_path)
 
@@ -205,14 +207,14 @@ def get_guardrail_class_from_hooks():
                         discovered_classes.update(registry)
 
             except ImportError as e:
-                verbose_proxy_logger.debug(f"Could not import {module_path}: {e}")
+                verbose_proxy_logger.debug("Could not import %s: %s", module_path, e)
                 continue
             except Exception as e:
-                verbose_proxy_logger.exception(f"Error processing {module_path}: {e}")
+                verbose_proxy_logger.exception("Error processing %s: %s", module_path, e)
                 continue
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error discovering guardrail initializers: {e}")
+        verbose_proxy_logger.error("Error discovering guardrail initializers: %s", e)
 
     return discovered_classes
 
@@ -285,7 +287,7 @@ class GuardrailRegistry:
 
             return guardrail_dict
         except Exception as e:
-            raise Exception(f"Error adding guardrail to DB: {e!s}")
+            raise Exception(f"Error adding guardrail to DB: {e}")
 
     async def delete_guardrail_from_db(self, guardrail_id: str, prisma_client: PrismaClient):
         """
@@ -297,7 +299,7 @@ class GuardrailRegistry:
 
             return {"message": f"Guardrail {guardrail_id} deleted successfully"}
         except Exception as e:
-            raise Exception(f"Error deleting guardrail from DB: {e!s}")
+            raise Exception(f"Error deleting guardrail from DB: {e}")
 
     async def update_guardrail_in_db(self, guardrail_id: str, guardrail: Guardrail, prisma_client: PrismaClient):
         """
@@ -328,7 +330,7 @@ class GuardrailRegistry:
             # Convert to dict and return
             return dict(updated_guardrail)
         except Exception as e:
-            raise Exception(f"Error updating guardrail in DB: {e!s}")
+            raise Exception(f"Error updating guardrail in DB: {e}")
 
     @staticmethod
     async def get_all_guardrails_from_db(
@@ -350,7 +352,7 @@ class GuardrailRegistry:
 
             return guardrails
         except Exception as e:
-            raise Exception(f"Error getting guardrails from DB: {e!s}")
+            raise Exception(f"Error getting guardrails from DB: {e}")
 
     async def get_guardrail_by_id_from_db(self, guardrail_id: str, prisma_client: PrismaClient) -> Guardrail | None:
         """
@@ -366,7 +368,7 @@ class GuardrailRegistry:
 
             return Guardrail(**(dict(guardrail)))  # type: ignore
         except Exception as e:
-            raise Exception(f"Error getting guardrail from DB: {e!s}")
+            raise Exception(f"Error getting guardrail from DB: {e}")
 
     async def get_guardrail_by_name_from_db(self, guardrail_name: str, prisma_client: PrismaClient) -> Guardrail | None:
         """
@@ -382,7 +384,7 @@ class GuardrailRegistry:
 
             return Guardrail(**(dict(guardrail)))  # type: ignore
         except Exception as e:
-            raise Exception(f"Error getting guardrail from DB: {e!s}")
+            raise Exception(f"Error getting guardrail from DB: {e}")
 
 
 class InMemoryGuardrailHandler:
@@ -686,8 +688,8 @@ class InMemoryGuardrailHandler:
                 return LitellmParams(**params).model_dump()
             except ValidationError as e:
                 verbose_proxy_logger.warning(
-                    f"Could not normalize guardrail litellm_params for comparison; "
-                    f"treating the guardrail as changed. Error: {e}"
+                    "Could not normalize guardrail litellm_params for comparison; treating the guardrail as changed. Error: %s",
+                    e,
                 )
                 return params
         return params
@@ -723,7 +725,7 @@ class InMemoryGuardrailHandler:
 
         # Log differences if any found
         if changed_fields:
-            verbose_proxy_logger.debug(f"Guardrail params changed. Differences: {changed_fields}")
+            verbose_proxy_logger.debug("Guardrail params changed. Differences: %s", changed_fields)
 
         # Return True if any fields changed
         return len(changed_fields) > 0
@@ -763,7 +765,7 @@ class InMemoryGuardrailHandler:
         if self._has_guardrail_params_changed(guardrail_id, guardrail):
             guardrail_name = guardrail.get("guardrail_name", "Unknown")
             verbose_proxy_logger.info(
-                f"Guardrail '{guardrail_name}' (ID: {guardrail_id}) params changed, re-initializing..."
+                "Guardrail '%s' (ID: %s) params changed, re-initializing...", guardrail_name, guardrail_id
             )
             return self.reinitialize_guardrail(
                 guardrail=guardrail,

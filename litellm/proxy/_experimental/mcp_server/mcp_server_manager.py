@@ -1566,7 +1566,7 @@ class MCPServerManager:
                     if target_server_name == server_name and alias_name not in used_aliases:
                         alias = alias_name
                         used_aliases.add(alias_name)
-                        verbose_logger.debug(f"Mapped alias '{alias_name}' to server '{server_name}'")
+                        verbose_logger.debug("Mapped alias '%s' to server '%s'", alias_name, server_name)
                         break
 
             # Create a temporary server object to use with get_server_prefix utility
@@ -1785,7 +1785,7 @@ class MCPServerManager:
             # Check if this is an OpenAPI-based server
             spec_path = server_config.get("spec_path", None)
             if spec_path:
-                verbose_logger.info(f"Loading OpenAPI spec from {spec_path} for server {server_name}")
+                verbose_logger.info("Loading OpenAPI spec from %s for server %s", spec_path, server_name)
                 await self._register_openapi_tools(
                     spec_path=spec_path,
                     server=new_server,
@@ -1793,7 +1793,7 @@ class MCPServerManager:
                 )
 
         verbose_logger.debug(
-            f"Loaded MCP Servers: {json.dumps(_redacted_registry_dump(self.config_mcp_servers), indent=4)}"
+            "Loaded MCP Servers: %s", json.dumps(_redacted_registry_dump(self.config_mcp_servers), indent=4)
         )
 
         await self._hydrate_config_servers_dcr_clients()
@@ -1856,7 +1856,7 @@ class MCPServerManager:
             # Use base_url from config if provided, otherwise extract from spec
             if not base_url:
                 base_url = get_openapi_base_url(spec, spec_path)
-            verbose_logger.info(f"Registering OpenAPI tools for server {server.name} with base URL: {base_url}")
+            verbose_logger.info("Registering OpenAPI tools for server %s with base URL: %s", server.name, base_url)
 
             # Get server prefix for tool naming
             server_prefix = get_server_prefix(server)
@@ -1892,7 +1892,7 @@ class MCPServerManager:
             )
 
             verbose_logger.debug(
-                f"Using headers for OpenAPI tools (excluding sensitive values): {list(headers.keys())}"
+                "Using headers for OpenAPI tools (excluding sensitive values): %s", list(headers.keys())
             )
 
             # Extract and register tools from OpenAPI paths
@@ -1900,7 +1900,7 @@ class MCPServerManager:
             components = spec.get("components", {})
             registered_count = 0
 
-            verbose_logger.debug(f"Processing {len(paths)} paths from OpenAPI spec")
+            verbose_logger.debug("Processing %s paths from OpenAPI spec", len(paths))
 
             for path, path_item in paths.items():
                 for method in ["get", "post", "put", "delete", "patch"]:
@@ -1946,12 +1946,12 @@ class MCPServerManager:
                     self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = server_prefix
 
                     registered_count += 1
-                    verbose_logger.debug(f"Registered OpenAPI tool: {prefixed_tool_name} for server {server.name}")
+                    verbose_logger.debug("Registered OpenAPI tool: %s for server %s", prefixed_tool_name, server.name)
 
-            verbose_logger.info(f"Successfully registered {registered_count} OpenAPI tools for server {server.name}")
+            verbose_logger.info("Successfully registered %s OpenAPI tools for server %s", registered_count, server.name)
 
         except Exception as e:
-            verbose_logger.error(f"Failed to register OpenAPI tools for server {server.name}: {e!s}")
+            verbose_logger.error("Failed to register OpenAPI tools for server %s: %s", server.name, e)
             raise e
 
     def _cleanup_server_tool_routing_artifacts(self, server: MCPServer) -> None:
@@ -2000,7 +2000,7 @@ class MCPServerManager:
             verbose_logger.debug("Removed MCP Server: %s", mcp_server.server_id or mcp_server.server_name)
             self._cleanup_server_tool_routing_artifacts(evicted)
         else:
-            verbose_logger.warning(f"Server ID {mcp_server.server_id} not found in registry")
+            verbose_logger.warning("Server ID %s not found in registry", mcp_server.server_id)
 
     def _resolve_env_vars_list(
         self,
@@ -2295,7 +2295,7 @@ class MCPServerManager:
     async def _maybe_register_openapi_tools(self, server: MCPServer, *, initialize_mapping: bool = True):
         """Register OpenAPI tools if the server has a spec_path configured."""
         if server.spec_path:
-            verbose_logger.info(f"Loading OpenAPI spec from {server.spec_path} for server {server.name}")
+            verbose_logger.info("Loading OpenAPI spec from %s for server %s", server.spec_path, server.name)
             await self._register_openapi_tools(
                 spec_path=server.spec_path,
                 server=server,
@@ -2323,10 +2323,10 @@ class MCPServerManager:
                 self._assign_unique_short_prefix(new_server)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
-                verbose_logger.debug(f"Added MCP Server: {new_server.name}")
+                verbose_logger.debug("Added MCP Server: %s", new_server.name)
 
         except Exception as e:
-            verbose_logger.debug(f"Failed to add MCP server: {e!s}")
+            verbose_logger.debug("Failed to add MCP server: %s", e)
             raise e
 
     async def update_server(self, mcp_server: LiteLLM_MCPServerTable):
@@ -2357,10 +2357,10 @@ class MCPServerManager:
                 self._assign_unique_short_prefix(new_server)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
-                verbose_logger.debug(f"Updated MCP Server: {new_server.name}")
+                verbose_logger.debug("Updated MCP Server: %s", new_server.name)
 
         except Exception as e:
-            verbose_logger.debug(f"Failed to udpate MCP server: {e!s}")
+            verbose_logger.debug("Failed to udpate MCP server: %s", e)
             raise e
 
     def get_all_mcp_server_ids(self) -> set[str]:
@@ -2386,7 +2386,7 @@ class MCPServerManager:
 
             await user_api_key_cache.async_delete_cache(key=self.get_byom_submitted_servers_cache_key(user_id))
         except Exception as e:  # noqa: BLE001
-            verbose_logger.warning(f"Failed to invalidate BYOM submitted MCP server cache: {e!s}")
+            verbose_logger.warning("Failed to invalidate BYOM submitted MCP server cache: %s", e)
 
     async def _get_active_submitted_mcp_server_ids_for_user(
         self, user_api_key_auth: UserAPIKeyAuth | None
@@ -2401,7 +2401,7 @@ class MCPServerManager:
             )
             from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
         except Exception as e:  # noqa: BLE001
-            verbose_logger.warning(f"Failed to load BYOM submitted MCP server cache dependencies: {e!s}")
+            verbose_logger.warning("Failed to load BYOM submitted MCP server cache dependencies: %s", e)
             return []
 
         byom_cache_key = self.get_byom_submitted_servers_cache_key(submitter_user_id)
@@ -2411,7 +2411,7 @@ class MCPServerManager:
             if cached_submitted_server_ids is not None:
                 submitted_server_ids = cast(list[str], cached_submitted_server_ids)
         except Exception as e:  # noqa: BLE001
-            verbose_logger.warning(f"Failed to read BYOM submitted MCP server cache: {e!s}")
+            verbose_logger.warning("Failed to read BYOM submitted MCP server cache: %s", e)
 
         if submitted_server_ids is None:
             if prisma_client is None:
@@ -2422,7 +2422,7 @@ class MCPServerManager:
                         prisma_client, submitter_user_id
                     )
                 except Exception as e:  # noqa: BLE001
-                    verbose_logger.warning(f"Failed to read BYOM submitted MCP servers from database: {e!s}")
+                    verbose_logger.warning("Failed to read BYOM submitted MCP servers from database: %s", e)
                     submitted_server_ids = []
             try:
                 await user_api_key_cache.async_set_cache(
@@ -2431,7 +2431,7 @@ class MCPServerManager:
                     ttl=60,
                 )
             except Exception as e:  # noqa: BLE001
-                verbose_logger.warning(f"Failed to write BYOM submitted MCP server cache: {e!s}")
+                verbose_logger.warning("Failed to write BYOM submitted MCP server cache: %s", e)
 
         return [server_id for server_id in submitted_server_ids if self.get_mcp_server_by_id(server_id) is not None]
 
@@ -2522,7 +2522,7 @@ class MCPServerManager:
             key_object_permission.mcp_servers is not None
         )
         if has_explicit_object_permission:
-            verbose_logger.debug(f"Object permission mcp_servers explicitly set: {key_object_permission.mcp_servers}")
+            verbose_logger.debug("Object permission mcp_servers explicitly set: %s", key_object_permission.mcp_servers)
 
         # BYOM creator visibility never widens a key that was explicitly scoped:
         # only keys without their own mcp_servers list get submitted servers unioned in.
@@ -2551,7 +2551,7 @@ class MCPServerManager:
 
             # Get allowed servers from object permissions (respects object_permission even for admins)
             allowed_mcp_servers = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
-            verbose_logger.debug(f"Allowed MCP Servers for user api key auth: {allowed_mcp_servers}")
+            verbose_logger.debug("Allowed MCP Servers for user api key auth: %s", allowed_mcp_servers)
             combined_servers = set(allowed_mcp_servers)
             combined_servers.update(
                 await self.operator_open_server_ids(
@@ -2647,7 +2647,7 @@ class MCPServerManager:
             )
             return tool_permissions
         except Exception as e:
-            verbose_logger.warning(f"Failed to resolve toolset permissions: {e!s}")
+            verbose_logger.warning("Failed to resolve toolset permissions: %s", e)
             return {}
 
     def invalidate_toolset_cache(self, toolset_id: str | None = None) -> None:
@@ -2682,7 +2682,7 @@ class MCPServerManager:
             for k in keys_to_remove:
                 cache_dict.pop(k, None)
         except Exception as e:
-            verbose_logger.warning(f"invalidate_toolset_cache: failed to evict in-memory entries: {e}")
+            verbose_logger.warning("invalidate_toolset_cache: failed to evict in-memory entries: %s", e)
 
     async def get_toolset_by_name_cached(
         self,
@@ -2760,11 +2760,11 @@ class MCPServerManager:
         try:
             server = self.get_mcp_server_by_id(server_id)
             if server is None:
-                verbose_logger.warning(f"MCP Server {server_id} not found")
+                verbose_logger.warning("MCP Server %s not found", server_id)
                 return []
             return await self._get_tools_from_server(server)
         except Exception as e:
-            verbose_logger.warning(f"Failed to get tools from server {server_id}: {e!s}")
+            verbose_logger.warning("Failed to get tools from server %s: %s", server_id, e)
             return []
 
     async def list_tools(
@@ -2793,7 +2793,7 @@ class MCPServerManager:
             """Fetch tools from a single server with error handling."""
             server = self.get_mcp_server_by_id(server_id)
             if server is None:
-                verbose_logger.warning(f"MCP Server {server_id} not found")
+                verbose_logger.warning("MCP Server %s not found", server_id)
                 return []
 
             # Get server-specific auth header if available
@@ -2822,7 +2822,7 @@ class MCPServerManager:
                 return tools
             except Exception as e:
                 verbose_logger.warning(
-                    f"Failed to list tools from server {server.name}: {e!s}. Continuing with other servers."
+                    "Failed to list tools from server %s: %s. Continuing with other servers.", server.name, e
                 )
                 return []
 
@@ -2833,7 +2833,7 @@ class MCPServerManager:
         # Flatten results into single list
         list_tools_result: list[MCPTool] = [tool for tools in results for tool in tools]
 
-        verbose_logger.info(f"Successfully fetched {len(list_tools_result)} tools total from all servers")
+        verbose_logger.info("Successfully fetched %s tools total from all servers", len(list_tools_result))
         return list_tools_result
 
     #########################################################
@@ -3345,8 +3345,8 @@ class MCPServerManager:
             global_mcp_tool_registry,
         )
 
-        verbose_logger.debug(f"Connecting to url: {server.url}")
-        verbose_logger.info(f"_get_tools_from_server for {server.name}...")
+        verbose_logger.debug("Connecting to url: %s", server.url)
+        verbose_logger.info("_get_tools_from_server for %s...", server.name)
 
         client = None
 
@@ -3476,12 +3476,12 @@ class MCPServerManager:
                     www_authenticate=None if server.is_dcr_bridge else challenge_header,
                     server_name=server.name,
                 ) from e
-            verbose_logger.warning(f"Failed to get tools from server {server.name}: {e!s}")
+            verbose_logger.warning("Failed to get tools from server %s: %s", server.name, e)
             raise MCPServerListError(ServerListFault(tag="internal", status_code=e.status_code), server.name) from e
         except MCPServerListError:
             raise
         except Exception as e:
-            verbose_logger.warning(f"Failed to get tools from server {server.name}: {e!s}")
+            verbose_logger.warning("Failed to get tools from server %s: %s", server.name, e)
             raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
 
     async def get_prompts_from_server(
@@ -3503,8 +3503,8 @@ class MCPServerManager:
             List[Prompt]: List of prompts available on the server with prefixed names
         """
 
-        verbose_logger.debug(f"Connecting to url: {server.url}")
-        verbose_logger.info(f"get_prompts_from_server for {server.name}...")
+        verbose_logger.debug("Connecting to url: %s", server.url)
+        verbose_logger.info("get_prompts_from_server for %s...", server.name)
 
         client = None
 
@@ -3532,7 +3532,7 @@ class MCPServerManager:
             return prefixed_or_original_prompts
 
         except Exception as e:
-            verbose_logger.warning(f"Failed to get prompts from server {server.name}: {e!s}")
+            verbose_logger.warning("Failed to get prompts from server %s: %s", server.name, e)
             return []
 
     async def get_resources_from_server(
@@ -3545,8 +3545,8 @@ class MCPServerManager:
     ) -> list[Resource]:
         """Fetch available resources from a single MCP server."""
 
-        verbose_logger.debug(f"Connecting to url: {server.url}")
-        verbose_logger.info(f"get_resources_from_server for {server.name}...")
+        verbose_logger.debug("Connecting to url: %s", server.url)
+        verbose_logger.info("get_resources_from_server for %s...", server.name)
 
         client = None
 
@@ -3574,7 +3574,7 @@ class MCPServerManager:
             return prefixed_resources
 
         except Exception as e:
-            verbose_logger.warning(f"Failed to get resources from server {server.name}: {e!s}")
+            verbose_logger.warning("Failed to get resources from server %s: %s", server.name, e)
             return []
 
     async def get_resource_templates_from_server(
@@ -3587,8 +3587,8 @@ class MCPServerManager:
     ) -> list[ResourceTemplate]:
         """Fetch available resource templates from a single MCP server."""
 
-        verbose_logger.debug(f"Connecting to url: {server.url}")
-        verbose_logger.info(f"get_resource_templates_from_server for {server.name}...")
+        verbose_logger.debug("Connecting to url: %s", server.url)
+        verbose_logger.info("get_resource_templates_from_server for %s...", server.name)
 
         client = None
 
@@ -3618,7 +3618,7 @@ class MCPServerManager:
             return prefixed_templates
 
         except Exception as e:
-            verbose_logger.warning(f"Failed to get resource templates from server {server.name}: {e!s}")
+            verbose_logger.warning("Failed to get resource templates from server %s: %s", server.name, e)
             return []
 
     async def read_resource_from_server(
@@ -3631,8 +3631,8 @@ class MCPServerManager:
     ) -> ReadResourceResult:
         """Read resource contents from a specific MCP server."""
 
-        verbose_logger.debug(f"Connecting to url: {server.url}")
-        verbose_logger.info(f"read_resource_from_server for {server.name}...")
+        verbose_logger.debug("Connecting to url: %s", server.url)
+        verbose_logger.info("read_resource_from_server for %s...", server.name)
 
         if server.static_headers:
             if extra_headers is None:
@@ -3663,8 +3663,8 @@ class MCPServerManager:
     ) -> GetPromptResult:
         """Fetch a specific prompt definition from a single MCP server."""
 
-        verbose_logger.debug(f"Connecting to url: {server.url}")
-        verbose_logger.info(f"get_prompt_from_server for {server.name}...")
+        verbose_logger.debug("Connecting to url: %s", server.url)
+        verbose_logger.info("get_prompt_from_server for %s...", server.name)
 
         if server.static_headers:
             if extra_headers is None:
@@ -4206,19 +4206,19 @@ class MCPServerManager:
         try:
             with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
                 tools = await client.list_tools(raise_on_error=True)
-                verbose_logger.debug(f"Tools from {server_name}: {tools}")
+                verbose_logger.debug("Tools from %s: %s", server_name, tools)
                 return tools
         except TimeoutError as e:
-            verbose_logger.warning(f"Timeout while listing tools from {server_name}")
+            verbose_logger.warning("Timeout while listing tools from %s", server_name)
             raise MCPServerListError(ServerListFault(tag="timeout"), server_name) from e
         except asyncio.CancelledError as e:
-            verbose_logger.warning(f"Task cancelled while listing tools from {server_name}")
+            verbose_logger.warning("Task cancelled while listing tools from %s", server_name)
             raise MCPServerListError(ServerListFault(tag="internal"), server_name) from e
         except ConnectionError as e:
-            verbose_logger.warning(f"Connection error while listing tools from {server_name}: {e!s}")
+            verbose_logger.warning("Connection error while listing tools from %s: %s", server_name, e)
             raise MCPServerListError(ServerListFault(tag="unreachable"), server_name) from e
         except Exception as e:
-            verbose_logger.warning(f"Error listing tools from {server_name}: {e!s}")
+            verbose_logger.warning("Error listing tools from %s: %s", server_name, e)
             raise_classified_list_failure(e, server_name)
 
     _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024
@@ -4315,7 +4315,7 @@ class MCPServerManager:
             for spelling in iter_known_tool_name_spellings(original_name, server):
                 self.tool_name_to_mcp_server_name_mapping[spelling] = prefix
 
-        verbose_logger.info(f"Successfully fetched {len(prefixed_tools)} tools from server {server.name}")
+        verbose_logger.info("Successfully fetched %s tools from server %s", len(prefixed_tools), server.name)
         return prefixed_tools
 
     def _create_prefixed_prompts(
@@ -4342,7 +4342,7 @@ class MCPServerManager:
             prompt.name = name_to_use
             prefixed_prompts.append(prompt)
 
-        verbose_logger.info(f"Successfully fetched {len(prefixed_prompts)} prompts from server {server.name}")
+        verbose_logger.info("Successfully fetched %s prompts from server %s", len(prefixed_prompts), server.name)
         return prefixed_prompts
 
     def _create_prefixed_resources(
@@ -4358,7 +4358,7 @@ class MCPServerManager:
             resource.name = name_to_use
             prefixed_resources.append(resource)
 
-        verbose_logger.info(f"Successfully fetched {len(prefixed_resources)} resources from server {server.name}")
+        verbose_logger.info("Successfully fetched %s resources from server %s", len(prefixed_resources), server.name)
         return prefixed_resources
 
     def _create_prefixed_resource_templates(
@@ -4380,7 +4380,7 @@ class MCPServerManager:
             prefixed_templates.append(resource_template)
 
         verbose_logger.info(
-            f"Successfully fetched {len(prefixed_templates)} resource templates from server {server.name}"
+            "Successfully fetched %s resource templates from server %s", len(prefixed_templates), server.name
         )
         return prefixed_templates
 
@@ -4533,7 +4533,7 @@ class MCPServerManager:
             return result
 
         except Exception as e:
-            error_msg = f"Error calling OpenAPI tool {tool_name}: {e!s}"
+            error_msg = f"Error calling OpenAPI tool {tool_name}: {e}"
             verbose_logger.error(error_msg)
             return CallToolResult(
                 content=[TextContent(type="text", text=error_msg)],
@@ -4639,7 +4639,7 @@ class MCPServerManager:
             HTTPException,
         ) as e:
             # Re-raise guardrail exceptions to properly fail the MCP call
-            verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {e!s}")
+            verbose_logger.error("Guardrail blocked MCP tool call pre call: %s", e)
             raise e
 
         return hook_result
@@ -4995,7 +4995,7 @@ class MCPServerManager:
             GuardrailRaisedException,
             HTTPException,
         ) as e:
-            verbose_logger.error(f"Guardrail blocked MCP tool call during result check: {e!s}")
+            verbose_logger.error("Guardrail blocked MCP tool call during result check: %s", e)
             raise e
 
         # If proxy_logging_obj is None, the tool call result is at index 0
@@ -5194,7 +5194,7 @@ class MCPServerManager:
             GuardrailRaisedException,
             HTTPException,
         ) as e:
-            verbose_logger.error(f"Guardrail blocked MCP tool call during result check: {e!s}")
+            verbose_logger.error("Guardrail blocked MCP tool call during result check: %s", e)
             raise e
 
     async def call_tool(
@@ -5345,7 +5345,7 @@ class MCPServerManager:
                 asyncio.create_task(self._initialize_tool_name_to_mcp_server_name_mapping())
         except RuntimeError as e:  # no running event loop
             verbose_logger.exception(
-                f"No running event loop - skipping tool name to MCP server name mapping initialization: {e!s}"
+                "No running event loop - skipping tool name to MCP server name mapping initialization: %s", e
             )
 
     async def _initialize_tool_name_to_mcp_server_name_mapping(self):
@@ -5364,12 +5364,12 @@ class MCPServerManager:
                 # at startup we have none, so an upstream 401 is normal.
                 # Swallow it so we keep mapping the remaining servers.
                 verbose_logger.debug(
-                    f"Skipping tool name mapping for server {server.name} due to upstream auth error: {e!s}"
+                    "Skipping tool name mapping for server %s due to upstream auth error: %s", server.name, e
                 )
                 continue
             except Exception as e:
                 verbose_logger.warning(
-                    f"Failed to get tools from server {server.name} during tool name mapping initialization: {e!s}"
+                    "Failed to get tools from server %s during tool name mapping initialization: %s", server.name, e
                 )
                 continue
             for tool in tools:
@@ -5449,7 +5449,7 @@ class MCPServerManager:
             }
         )
         db_mcp_servers = [LiteLLM_MCPServerTable.model_validate(r.model_dump()) for r in raw_rows]
-        verbose_logger.info(f"Found {len(db_mcp_servers)} MCP servers in database")
+        verbose_logger.info("Found %s MCP servers in database", len(db_mcp_servers))
 
         previous_registry = self.registry
         new_registry: dict[str, MCPServer] = {}
@@ -5481,7 +5481,7 @@ class MCPServerManager:
                     alias=getattr(server, "alias", None),
                     server_name=getattr(server, "server_name", None),
                 )
-                verbose_logger.debug(f"Building server from DB: {server.server_id} ({server.server_name})")
+                verbose_logger.debug("Building server from DB: %s (%s)", server.server_id, server.server_name)
                 # raw_rows come straight from the DB, so their global env var
                 # values (like credentials) are still encrypted here, unlike the
                 # already-decrypted records add_server/update_server are handed.
@@ -5776,7 +5776,7 @@ class MCPServerManager:
 
         server = self.get_mcp_server_by_id(server_id)
         if not server:
-            verbose_logger.warning(f"MCP Server {server_id} not found")
+            verbose_logger.warning("MCP Server %s not found", server_id)
             return LiteLLM_MCPServerTable(
                 server_id=server_id,
                 server_name=None,
@@ -5929,7 +5929,7 @@ class MCPServerManager:
         for server_id in allowed_server_ids:
             server = self.get_mcp_server_by_id(server_id)
             if not server:
-                verbose_logger.warning(f"MCP Server {server_id} not found in registry")
+                verbose_logger.warning("MCP Server %s not found in registry", server_id)
                 continue
 
             mcp_server_table = self._build_mcp_server_table(server)

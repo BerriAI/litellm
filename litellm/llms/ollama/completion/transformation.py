@@ -282,7 +282,7 @@ class OllamaConfig(BaseConfig):
                             content=None,
                             tool_calls=[
                                 {
-                                    "id": f"call_{uuid.uuid4()!s}",
+                                    "id": f"call_{uuid.uuid4()}",
                                     "function": {
                                         "name": function_call["name"],
                                         "arguments": json.dumps(function_call["arguments"]),
@@ -538,5 +538,5 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                 )
                 # raise Exception(f"Unable to parse ollama chunk - {chunk}")
         except Exception as e:
-            verbose_proxy_logger.error(f"Unable to parse ollama chunk - {chunk}")
+            verbose_proxy_logger.error("Unable to parse ollama chunk - %s", chunk)
             raise e

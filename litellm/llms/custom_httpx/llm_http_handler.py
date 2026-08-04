@@ -370,7 +370,7 @@ class BaseLLMHTTPHandler:
     ):
         if client is None:
             verbose_logger.debug(
-                f"Creating HTTP client with shared_session: {id(shared_session) if shared_session else None}"
+                "Creating HTTP client with shared_session: %s", id(shared_session) if shared_session else None
             )
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
@@ -2676,7 +2676,8 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             verbose_logger.debug(
-                f"Creating HTTP client for responses API with shared_session: {id(shared_session) if shared_session else None}"
+                "Creating HTTP client for responses API with shared_session: %s",
+                id(shared_session) if shared_session else None,
             )
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
@@ -2859,7 +2860,8 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             verbose_logger.debug(
-                f"Creating HTTP client for delete_response with shared_session: {id(shared_session) if shared_session else None}"
+                "Creating HTTP client for delete_response with shared_session: %s",
+                id(shared_session) if shared_session else None,
             )
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
@@ -3112,7 +3114,8 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             verbose_logger.debug(
-                f"Creating HTTP client for get_responses with shared_session: {id(shared_session) if shared_session else None}"
+                "Creating HTTP client for get_responses with shared_session: %s",
+                id(shared_session) if shared_session else None,
             )
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
@@ -3156,7 +3159,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(url=url, headers=headers, params=data)
             response.raise_for_status()
         except Exception as e:
-            verbose_logger.debug(f"Error retrieving response: {e}")
+            verbose_logger.debug("Error retrieving response: %s", e)
             raise self._handle_error(
                 e=e,
                 provider_config=responses_api_provider_config,
@@ -3275,7 +3278,8 @@ class BaseLLMHTTPHandler:
     ) -> dict:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             verbose_logger.debug(
-                f"Creating HTTP client for list_input_items with shared_session: {id(shared_session) if shared_session else None}"
+                "Creating HTTP client for list_input_items with shared_session: %s",
+                id(shared_session) if shared_session else None,
             )
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
@@ -3495,7 +3499,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
             except Exception as e:
-                verbose_logger.exception(f"Error creating file: {e}")
+                verbose_logger.exception("Error creating file: %s", e)
                 raise self._handle_error(e=e, provider_config=provider_config)
         elif isinstance(transformed_request, str) or isinstance(transformed_request, bytes):
             # Handle traditional file uploads
@@ -3626,7 +3630,7 @@ class BaseLLMHTTPHandler:
                 if initial_response_data:
                     litellm_params["initial_file_response"] = initial_response_data
             except Exception as e:
-                verbose_logger.exception(f"Error creating file: {e}")
+                verbose_logger.exception("Error creating file: %s", e)
                 raise self._handle_error(
                     e=e,
                     provider_config=provider_config,
@@ -3657,7 +3661,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
             except Exception as e:
-                verbose_logger.exception(f"Error creating file: {e}")
+                verbose_logger.exception("Error creating file: %s", e)
                 raise self._handle_error(e=e, provider_config=provider_config)
         elif isinstance(transformed_request, str) or isinstance(transformed_request, bytes):
             # Handle traditional file uploads
@@ -3868,7 +3872,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
         except Exception as e:
-            verbose_logger.exception(f"Error creating batch: {e}")
+            verbose_logger.exception("Error creating batch: %s", e)
             raise self._handle_error(
                 e=e,
                 provider_config=provider_config,
@@ -3960,7 +3964,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                 )
         except Exception as e:
-            verbose_logger.exception(f"Error retrieving batch: {e}")
+            verbose_logger.exception("Error retrieving batch: %s", e)
             raise self._handle_error(
                 e=e,
                 provider_config=provider_config,
@@ -4033,7 +4037,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
         except Exception as e:
-            verbose_logger.exception(f"Error creating batch: {e}")
+            verbose_logger.exception("Error creating batch: %s", e)
             raise self._handle_error(
                 e=e,
                 provider_config=provider_config,
@@ -4117,7 +4121,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                 )
         except Exception as e:
-            verbose_logger.exception(f"Error retrieving batch: {e}")
+            verbose_logger.exception("Error retrieving batch: %s", e)
             raise self._handle_error(
                 e=e,
                 provider_config=provider_config,
@@ -4230,7 +4234,8 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             verbose_logger.debug(
-                f"Creating HTTP client for cancel_response with shared_session: {id(shared_session) if shared_session else None}"
+                "Creating HTTP client for cancel_response with shared_session: %s",
+                id(shared_session) if shared_session else None,
             )
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
@@ -4404,7 +4409,8 @@ class BaseLLMHTTPHandler:
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
             verbose_logger.debug(
-                f"Creating HTTP client for compact_response with shared_session: {id(shared_session) if shared_session else None}"
+                "Creating HTTP client for compact_response with shared_session: %s",
+                id(shared_session) if shared_session else None,
             )
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
@@ -5659,7 +5665,7 @@ class BaseLLMHTTPHandler:
                     fingerprint=fingerprint,
                 )
             except Exception as e:
-                verbose_logger.exception(f"LiteLLM.AgenticHookError: Exception in chat completion agentic hooks: {e!s}")
+                verbose_logger.exception("LiteLLM.AgenticHookError: Exception in chat completion agentic hooks: %s", e)
 
         # Check if we need to convert response to fake stream for chat completions
         # This happens when:
@@ -5901,12 +5907,12 @@ class BaseLLMHTTPHandler:
                 await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
-            verbose_logger.exception(f"Error connecting to backend: {e}")
+            verbose_logger.exception("Error connecting to backend: %s", e)
             await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception as e:
-            verbose_logger.exception(f"Error connecting to backend: {e}")
+            verbose_logger.exception("Error connecting to backend: %s", e)
             try:
-                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e!s}"))
+                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e}"))
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(close_error):
                     # The WebSocket is already closed or the response is completed, so we can ignore this error
@@ -6298,12 +6304,12 @@ class BaseLLMHTTPHandler:
                 await streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
-            verbose_logger.exception(f"Error connecting to responses WS backend: {e}")
+            verbose_logger.exception("Error connecting to responses WS backend: %s", e)
             await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception as e:
-            verbose_logger.exception(f"Error in responses WS: {e}")
+            verbose_logger.exception("Error in responses WS: %s", e)
             try:
-                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e!s}"))
+                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e}"))
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(close_error):
                     pass

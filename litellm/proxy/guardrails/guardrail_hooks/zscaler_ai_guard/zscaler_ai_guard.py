@@ -70,9 +70,10 @@ class ZscalerAIGuard(CustomGuardrail):
         )
 
         verbose_proxy_logger.debug(
-            f"""send_user_api_key_alias: {self.send_user_api_key_alias}, 
-            send_user_api_key_user_id:{self.send_user_api_key_user_id}, 
-            send_user_api_key_team_id:{self.send_user_api_key_team_id}"""
+            "send_user_api_key_alias: %s, \n            send_user_api_key_user_id:%s, \n            send_user_api_key_team_id:%s",
+            self.send_user_api_key_alias,
+            self.send_user_api_key_user_id,
+            self.send_user_api_key_team_id,
         )
 
         super().__init__(**kwargs)
@@ -144,7 +145,7 @@ class ZscalerAIGuard(CustomGuardrail):
 
         texts = inputs.get("texts", [])
         try:
-            verbose_proxy_logger.debug(f"ZscalerAIGuard: Checking {len(texts)} text(s)")
+            verbose_proxy_logger.debug("ZscalerAIGuard: Checking %s text(s)", len(texts))
             metadata = request_data.get("metadata", {})
 
             user_api_key_metadata = metadata.get("user_api_key_metadata", {}) or {}
@@ -166,7 +167,7 @@ class ZscalerAIGuard(CustomGuardrail):
                     )
                 )
             )
-            verbose_proxy_logger.info(f"policy_id applied: {policy_id}")
+            verbose_proxy_logger.info("policy_id applied: %s", policy_id)
 
             kwargs = {}
             if self.send_user_api_key_alias:
@@ -179,11 +180,11 @@ class ZscalerAIGuard(CustomGuardrail):
                 kwargs["user_api_key_user_id"] = (
                     self._resolve_metadata_value(request_data, "user_api_key_user_id") or "N/A"
                 )
-            verbose_proxy_logger.debug(f"inside apply_guardrail kwargs: {kwargs}")
+            verbose_proxy_logger.debug("inside apply_guardrail kwargs: %s", kwargs)
 
             zscaler_ai_guard_result = None
             direction = "OUT" if input_type == "response" else "IN"
-            verbose_proxy_logger.debug(f"direction: {direction}")
+            verbose_proxy_logger.debug("direction: %s", direction)
             # Concatenate all texts and send to Zscaler AI Guard
             if texts:
                 concatenated_text = " ".join(texts)
@@ -195,7 +196,7 @@ class ZscalerAIGuard(CustomGuardrail):
                     content=concatenated_text,
                     **kwargs,
                 )
-                verbose_proxy_logger.debug(f"response from zscaler ai guards: {zscaler_ai_guard_result}")
+                verbose_proxy_logger.debug("response from zscaler ai guards: %s", zscaler_ai_guard_result)
             if zscaler_ai_guard_result and zscaler_ai_guard_result.get("action") == "BLOCK":
                 blocking_info = zscaler_ai_guard_result.get("zscaler_ai_guard_response")
                 error_message = f"Content blocked by Zscaler AI Guard: {self.extract_blocking_info(blocking_info)}"
@@ -241,9 +242,9 @@ class ZscalerAIGuard(CustomGuardrail):
         }
         extra_headers = headers.copy()
         if self.send_user_api_key_alias:
-            verbose_proxy_logger.debug(f"kwargs: {kwargs}")
+            verbose_proxy_logger.debug("kwargs: %s", kwargs)
             user_api_key_alias = kwargs.get("user_api_key_alias", "N/A")
-            verbose_proxy_logger.debug(f"kwargs user_api_key_alias: {user_api_key_alias}")
+            verbose_proxy_logger.debug("kwargs user_api_key_alias: %s", user_api_key_alias)
             extra_headers.update({"user-api-key-alias": user_api_key_alias})
 
         if self.send_user_api_key_team_id:
@@ -254,7 +255,7 @@ class ZscalerAIGuard(CustomGuardrail):
             user_api_key_user_id = kwargs.get("user_api_key_user_id", "N/A")
             extra_headers.update({"user-api-key-user-id": user_api_key_user_id})
 
-        verbose_proxy_logger.debug(f"extra_headers: {extra_headers}")
+        verbose_proxy_logger.debug("extra_headers: %s", extra_headers)
         return extra_headers
 
     async def _send_request(self, url, headers, data):
@@ -279,7 +280,7 @@ class ZscalerAIGuard(CustomGuardrail):
 
         if response.status_code >= 500:  # Server error
             verbose_proxy_logger.error(
-                f"Zscaler AI Guard service is unavailable (Status: {response.status_code}). Blocking request."
+                "Zscaler AI Guard service is unavailable (Status: %s). Blocking request.", response.status_code
             )
             user_facing_error = self._create_user_facing_error(f"Service is unavailable (HTTP {response.status_code})")
             raise HTTPException(status_code=500, detail=user_facing_error)
@@ -289,11 +290,11 @@ class ZscalerAIGuard(CustomGuardrail):
             statusCode_in_response = json_response.get("statusCode", None)
             if statusCode_in_response == 200:
                 guardrail_result = json_response.get("action", None)
-                verbose_proxy_logger.info(f"Zscaler AI Guard response: {json_response}")
+                verbose_proxy_logger.info("Zscaler AI Guard response: %s", json_response)
 
                 if guardrail_result == "BLOCK":
                     verbose_proxy_logger.info(
-                        f"Violated Zscaler AI Guard guardrail policy. zscaler_ai_guard_response: {json_response}"
+                        "Violated Zscaler AI Guard guardrail policy. zscaler_ai_guard_response: %s", json_response
                     )
                     return {
                         "action": "BLOCK",
@@ -301,7 +302,7 @@ class ZscalerAIGuard(CustomGuardrail):
                     }
                 elif guardrail_result == "ALLOW" or guardrail_result == "DETECT":
                     verbose_proxy_logger.debug(
-                        f"{direction} is allowed by Zscaler AI Guard. guardrail_result: {guardrail_result}"
+                        "%s is allowed by Zscaler AI Guard. guardrail_result: %s", direction, guardrail_result
                     )
                     return {
                         "action": "ALLOW",
@@ -310,7 +311,7 @@ class ZscalerAIGuard(CustomGuardrail):
                     }
                 else:
                     verbose_proxy_logger.error(
-                        f"Action field in response is {guardrail_result}, expecting 'ALLOW', 'BLOCK' or 'DETECT'"
+                        "Action field in response is %s, expecting 'ALLOW', 'BLOCK' or 'DETECT'", guardrail_result
                     )
                     user_facing_error = self._create_user_facing_error(
                         f"Action field in response is {guardrail_result}, expecting 'ALLOW', 'BLOCK' or 'DETECT'"
@@ -318,13 +319,13 @@ class ZscalerAIGuard(CustomGuardrail):
                     raise HTTPException(status_code=500, detail=user_facing_error)
             else:
                 errorMsg = json_response.get("errorMsg", None)
-                verbose_proxy_logger.error(f"statusCode in response: {statusCode_in_response}, errorMsg: {errorMsg}")
+                verbose_proxy_logger.error("statusCode in response: %s, errorMsg: %s", statusCode_in_response, errorMsg)
                 user_facing_error = self._create_user_facing_error(
                     f"statusCode in response: {statusCode_in_response}, errorMsg: {errorMsg}"
                 )
                 raise HTTPException(status_code=500, detail=user_facing_error)
         else:
-            verbose_proxy_logger.error(f"Zscaler AI Guard status_code - {response.status_code}")
+            verbose_proxy_logger.error("Zscaler AI Guard status_code - %s", response.status_code)
             user_facing_error = self._create_user_facing_error(f"Response status code: {response.status_code}")
             raise HTTPException(status_code=response.status_code, detail=user_facing_error)
 
@@ -350,8 +351,8 @@ class ZscalerAIGuard(CustomGuardrail):
             response = await self._send_request(zscaler_ai_guard_url, extra_headers, data)
             return self._handle_response(response, direction)
         except Exception as e:
-            verbose_proxy_logger.error(f"{e}. Blocking request.")
-            user_facing_error = self._create_user_facing_error(f"{e!s}")
+            verbose_proxy_logger.error("%s. Blocking request.", e)
+            user_facing_error = self._create_user_facing_error(f"{e}")
             raise HTTPException(status_code=500, detail=user_facing_error)
 
     @staticmethod

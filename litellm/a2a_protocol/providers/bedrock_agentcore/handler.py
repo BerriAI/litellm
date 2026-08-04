@@ -53,7 +53,7 @@ class BedrockAgentCoreA2AHandler:
             agent_extra_headers=agent_extra_headers,
         )
 
-        verbose_logger.info(f"BedrockAgentCore A2A: Sending non-streaming request to {url}")
+        verbose_logger.info("BedrockAgentCore A2A: Sending non-streaming request to %s", url)
 
         client = get_async_httpx_client(
             llm_provider=cast(Any, httpxSpecialProvider.A2AProvider),
@@ -67,7 +67,7 @@ class BedrockAgentCoreA2AHandler:
         response_data = response.json()
 
         if "error" in response_data:
-            verbose_logger.warning(f"BedrockAgentCore A2A: Agent returned error: {response_data['error']}")
+            verbose_logger.warning("BedrockAgentCore A2A: Agent returned error: %s", response_data["error"])
 
         return response_data
 
@@ -100,7 +100,7 @@ class BedrockAgentCoreA2AHandler:
             agent_extra_headers=agent_extra_headers,
         )
 
-        verbose_logger.info(f"BedrockAgentCore A2A: Sending streaming request to {url}")
+        verbose_logger.info("BedrockAgentCore A2A: Sending streaming request to %s", url)
 
         client = get_async_httpx_client(
             llm_provider=cast(Any, httpxSpecialProvider.A2AProvider),

@@ -45,7 +45,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
         try:
             self.validate_request(model, input)
 
-            verbose_logger.debug(f"Processing OpenAI CountTokens request for model: {model}")
+            verbose_logger.debug("Processing OpenAI CountTokens request for model: %s", model)
 
             request_body = self.transform_request_to_count_tokens(
                 model=model,
@@ -56,7 +56,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
 
             endpoint_url = self.get_openai_count_tokens_endpoint(api_base)
 
-            verbose_logger.debug(f"Making request to: {endpoint_url}")
+            verbose_logger.debug("Making request to: %s", endpoint_url)
 
             headers = self.get_required_headers(api_key)
 
@@ -71,31 +71,31 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
                 timeout=request_timeout,
             )
 
-            verbose_logger.debug(f"Response status: {response.status_code}")
+            verbose_logger.debug("Response status: %s", response.status_code)
 
             if response.status_code != 200:
                 error_text = response.text
-                verbose_logger.error(f"OpenAI API error: {error_text}")
+                verbose_logger.error("OpenAI API error: %s", error_text)
                 raise OpenAIError(
                     status_code=response.status_code,
                     message=error_text,
                 )
 
             openai_response = response.json()
-            verbose_logger.debug(f"OpenAI response: {openai_response}")
+            verbose_logger.debug("OpenAI response: %s", openai_response)
             return openai_response
 
         except OpenAIError:
             raise
         except httpx.HTTPStatusError as e:
-            verbose_logger.error(f"HTTP error in CountTokens handler: {e!s}")
+            verbose_logger.error("HTTP error in CountTokens handler: %s", e)
             raise OpenAIError(
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
         except (httpx.RequestError, json.JSONDecodeError, ValueError) as e:
-            verbose_logger.error(f"Error in CountTokens handler: {e!s}")
+            verbose_logger.error("Error in CountTokens handler: %s", e)
             raise OpenAIError(
                 status_code=500,
-                message=f"CountTokens processing error: {e!s}",
+                message=f"CountTokens processing error: {e}",
             )

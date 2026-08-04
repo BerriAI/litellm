@@ -43,14 +43,14 @@ class SpendLogCleanup:
 
         pod_lock_manager = proxy_logging_obj.db_spend_update_writer.pod_lock_manager
         self.pod_lock_manager = pod_lock_manager
-        verbose_proxy_logger.info(f"SpendLogCleanup initialized with batch size: {self.batch_size}")
+        verbose_proxy_logger.info("SpendLogCleanup initialized with batch size: %s", self.batch_size)
 
     def _should_delete_spend_logs(self) -> bool:
         """
         Determines if logs should be deleted based on the max retention period in settings.
         """
         retention_setting = self.general_settings.get("maximum_spend_logs_retention_period")
-        verbose_proxy_logger.info(f"Checking retention setting: {retention_setting}")
+        verbose_proxy_logger.info("Checking retention setting: %s", retention_setting)
 
         if retention_setting is None:
             verbose_proxy_logger.info("No retention setting found")
@@ -59,16 +59,16 @@ class SpendLogCleanup:
         try:
             if isinstance(retention_setting, int):
                 verbose_proxy_logger.warning(
-                    f"maximum_spend_logs_retention_period is an integer ({retention_setting}); treating as days. "
-                    "Use a string like '3d' to be explicit."
+                    "maximum_spend_logs_retention_period is an integer (%s); treating as days. Use a string like '3d' to be explicit.",
+                    retention_setting,
                 )
                 retention_setting = f"{retention_setting}d"
             self.retention_seconds = duration_in_seconds(retention_setting)
-            verbose_proxy_logger.info(f"Retention period set to {self.retention_seconds} seconds")
+            verbose_proxy_logger.info("Retention period set to %s seconds", self.retention_seconds)
             return True
         except ValueError as e:
             verbose_proxy_logger.warning(
-                f"Invalid maximum_spend_logs_retention_period value: {retention_setting}, error: {e!s}"
+                "Invalid maximum_spend_logs_retention_period value: %s, error: %s", retention_setting, e
             )
             return False
 
@@ -145,15 +145,16 @@ class SpendLogCleanup:
                 deleted_count = deleted_result
             else:
                 verbose_proxy_logger.error(
-                    f"Unexpected execute_raw return type for {table_name} cleanup: {type(deleted_result)}; "
-                    "aborting cleanup to avoid infinite loop"
+                    "Unexpected execute_raw return type for %s cleanup: %s; aborting cleanup to avoid infinite loop",
+                    table_name,
+                    type(deleted_result),
                 )
                 break
 
-            verbose_proxy_logger.info(f"Deleted {deleted_count} {table_name} rows in this batch")
+            verbose_proxy_logger.info("Deleted %s %s rows in this batch", deleted_count, table_name)
 
             if deleted_count == 0:
-                verbose_proxy_logger.info(f"No more {table_name} rows to delete. Total deleted: {total_deleted}")
+                verbose_proxy_logger.info("No more %s rows to delete. Total deleted: %s", table_name, total_deleted)
                 break
 
             total_deleted += deleted_count
@@ -192,7 +193,7 @@ class SpendLogCleanup:
         """
         lock_acquired = False
         try:
-            verbose_proxy_logger.info(f"Cleanup job triggered at {datetime.now()}")
+            verbose_proxy_logger.info("Cleanup job triggered at %s", datetime.now())
 
             if not self._should_delete_spend_logs():
                 return
@@ -210,7 +211,7 @@ class SpendLogCleanup:
                     or False
                 )
                 verbose_proxy_logger.info(
-                    f"Lock acquisition attempt: {'successful' if lock_acquired else 'failed'}  at {datetime.now()}"
+                    "Lock acquisition attempt: %s  at %s", "successful" if lock_acquired else "failed", datetime.now()
                 )
 
                 if not lock_acquired:
@@ -218,7 +219,7 @@ class SpendLogCleanup:
                     return
 
             cutoff_date = datetime.now(timezone.utc) - timedelta(seconds=float(self.retention_seconds))
-            verbose_proxy_logger.info(f"Removing logs older than {cutoff_date.isoformat()}")
+            verbose_proxy_logger.info("Removing logs older than %s", cutoff_date.isoformat())
 
             if self.general_settings.get(
                 "use_spend_logs_partitioning", False
@@ -235,13 +236,13 @@ class SpendLogCleanup:
                 # or in a partition that spans the cutoff, so retention must
                 # also delete those stragglers row-wise.
                 total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
-                verbose_proxy_logger.info(f"Deleted {total_deleted} expired logs not covered by dropped partitions")
+                verbose_proxy_logger.info("Deleted %s expired logs not covered by dropped partitions", total_deleted)
             else:
                 total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
-                verbose_proxy_logger.info(f"Deleted {total_deleted} logs")
+                verbose_proxy_logger.info("Deleted %s logs", total_deleted)
 
             index_deleted = await self._delete_old_tool_index_rows(prisma_client, cutoff_date)
-            verbose_proxy_logger.info(f"Deleted {index_deleted} expired tool index rows")
+            verbose_proxy_logger.info("Deleted %s expired tool index rows", index_deleted)
 
         except Exception as e:
             # .exception() captures the traceback; str(e) alone on a Prisma/DB
