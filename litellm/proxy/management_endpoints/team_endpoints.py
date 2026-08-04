@@ -76,6 +76,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import (
+    OrganizationNotFoundError,
     _cache_team_object,
     allowed_route_check_inside_route,
     can_org_access_model,
@@ -112,6 +113,10 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
+from litellm.proxy.management_helpers.team_metadata_validation import (
+    TEAM_METADATA_SCHEMA_REGISTRY,
+    validate_team_metadata_if_configured,
+)
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
@@ -146,6 +151,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamListResponse,
     TeamMemberAddResult,
     TeamMemberInfoResponse,
+    TeamMetadataSchemaResponse,
     UpdateTeamMemberPermissionsRequest,
 )
 
@@ -459,7 +465,11 @@ class TeamMemberBudgetHandler:
                 user_api_key_dict=user_api_key_dict,
             )
             verbose_proxy_logger.info(
-                f"Updated team member budget table: {budget_row.budget_id}, with team_member_budget={team_member_budget}, team_member_rpm_limit={team_member_rpm_limit}, team_member_tpm_limit={team_member_tpm_limit}"
+                "Updated team member budget table: %s, with team_member_budget=%s, team_member_rpm_limit=%s, team_member_tpm_limit=%s",
+                budget_row.budget_id,
+                team_member_budget,
+                team_member_rpm_limit,
+                team_member_tpm_limit,
             )
             if updated_kv.get("metadata") is None:
                 updated_kv["metadata"] = {}
@@ -1210,24 +1220,10 @@ async def new_team(
                     detail={"error": f"Team id = {data.team_id} already exists. Please use a different team id."},
                 )
 
-        # check org key limits - done here to handle inheriting org id from team
-        if data.organization_id is not None and prisma_client is not None:
-            org_table = await get_org_object(
-                org_id=data.organization_id,
-                user_api_key_cache=user_api_key_cache,
-                prisma_client=prisma_client,
-            )
-            if org_table is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Organization not found for organization_id={data.organization_id}",
-                )
-
-            await _check_org_team_limits(
-                org_table=org_table,
-                data=data,
-                prisma_client=prisma_client,
-            )
+        if data.organization_id is None:
+            default_organization_id = _get_default_team_param("organization_id")
+            if isinstance(default_organization_id, str):
+                data.organization_id = default_organization_id
 
         # Apply defaults from litellm.default_team_params for any fields
         # not explicitly provided in the request.
@@ -1255,6 +1251,29 @@ async def new_team(
                 if default_budget is not None:
                     data.max_budget = default_budget
 
+        # check org key limits - done here to handle inheriting org id from team
+        if data.organization_id is not None and prisma_client is not None:
+            try:
+                org_table = await get_org_object(
+                    org_id=data.organization_id,
+                    user_api_key_cache=user_api_key_cache,
+                    prisma_client=prisma_client,
+                    include_budget_table=True,
+                )
+            except OrganizationNotFoundError:
+                org_table = None
+            if org_table is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Organization not found for organization_id={data.organization_id}",
+                )
+
+            await _check_org_team_limits(
+                org_table=org_table,
+                data=data,
+                prisma_client=prisma_client,
+            )
+
         if (
             user_api_key_dict.user_role is None or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
         ):  # don't restrict proxy admin
@@ -1277,6 +1296,18 @@ async def new_team(
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
 
+        if isinstance(data.metadata, dict):
+            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
+
+        await validate_team_metadata_if_configured(
+            operation="create",
+            metadata=data.metadata,
+            existing_metadata=None,
+            team_id=data.team_id,
+            team_alias=data.team_alias,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         ## ADD TO MODEL TABLE
         _model_id = None
         if data.model_aliases is not None and isinstance(data.model_aliases, dict):
@@ -1291,9 +1322,6 @@ async def new_team(
 
             _model_id = model_dict.id
 
-        ## Create Team Member Budget Table
-        if isinstance(data.metadata, dict):
-            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
         data_json = data.json()
 
         ## Handle Object Permission - MCP, Vector Stores etc.
@@ -1955,6 +1983,25 @@ async def update_team(
         if isinstance(updated_kv.get("metadata"), dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(updated_kv["metadata"])
 
+        if "metadata" in updated_kv:
+            stored_metadata = (
+                {  # mutable-ok: the validator payload's isinstance guard requires a plain dict
+                    key: value
+                    for key, value in existing_team_row.metadata.items()
+                    if key not in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS
+                }
+                if isinstance(existing_team_row.metadata, dict)
+                else None
+            )
+            await validate_team_metadata_if_configured(
+                operation="update",
+                metadata=updated_kv.get("metadata"),
+                existing_metadata=stored_metadata,
+                team_id=data.team_id,
+                team_alias=data.team_alias if data.team_alias is not None else existing_team_row.team_alias,
+                user_api_key_dict=user_api_key_dict,
+            )
+
         # Check budget_duration and budget_reset_at
         _set_budget_reset_at(data, updated_kv)
 
@@ -2198,7 +2245,7 @@ async def handle_update_object_permission(data_json: dict, existing_team_row: Li
     # Add the object_permission_id to data_json if one was created/updated
     if object_permission_id is not None:
         data_json["object_permission_id"] = object_permission_id
-        verbose_proxy_logger.debug(f"updated object_permission_id: {object_permission_id}")
+        verbose_proxy_logger.debug("updated object_permission_id: %s", object_permission_id)
 
     return data_json
 
@@ -2290,7 +2337,9 @@ def team_member_add_duplication_check(
         )
     elif len(invalid_team_members) > 0:
         verbose_proxy_logger.info(
-            f"Some users are already in team. Existing members={existing_team_row.members_with_roles}. Duplicate members={invalid_team_members}",
+            "Some users are already in team. Existing members=%s. Duplicate members=%s",
+            existing_team_row.members_with_roles,
+            invalid_team_members,
         )
 
 
@@ -2411,7 +2460,7 @@ async def _process_team_members(
         except Exception as e:
             raise HTTPException(
                 status_code=500,
-                detail={"error": f"Unable to add user - {data.member}, to team - {data.team_id}, for reason - {e!s}"},
+                detail={"error": f"Unable to add user - {data.member}, to team - {data.team_id}, for reason - {e}"},
             )
         updated_users.append(updated_user)
         if updated_tm is not None:
@@ -2433,7 +2482,7 @@ async def _process_team_members(
             except Exception as e:
                 raise HTTPException(
                     status_code=500,
-                    detail={"error": f"Unable to add user - {m}, to team - {data.team_id}, for reason - {e!s}"},
+                    detail={"error": f"Unable to add user - {m}, to team - {data.team_id}, for reason - {e}"},
                 )
             updated_users.append(updated_user)
             if updated_tm is not None:
@@ -3794,7 +3843,7 @@ async def _add_team_member_budget_table(
         team_info_response_object.team_member_budget_table = team_budget
     except Exception:
         verbose_proxy_logger.info(
-            f"Team member budget table not found, passed team_member_budget_id={team_member_budget_id}"
+            "Team member budget table not found, passed team_member_budget_id=%s", team_member_budget_id
         )
 
     return team_info_response_object
@@ -3932,11 +3981,13 @@ async def team_info(
 
     except Exception as e:
         verbose_proxy_logger.error(
-            f"litellm.proxy.management_endpoints.team_endpoints.py::team_info - Exception occurred - {e}\n{traceback.format_exc()}"
+            "litellm.proxy.management_endpoints.team_endpoints.py::team_info - Exception occurred - %s\n%s",
+            e,
+            traceback.format_exc(),
         )
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -4167,6 +4218,24 @@ async def unblock_team(
     )
 
     return record
+
+
+@router.get(
+    "/team/metadata_schema",
+    tags=["team management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=TeamMetadataSchemaResponse,
+)
+async def get_team_metadata_schema():
+    """
+    Get the team metadata fields declared in ``general_settings.team_metadata_schema``.
+
+    The UI uses this to prepopulate the team metadata form with the declared
+    keys. Returns an empty ``fields`` list when no schema is configured. This
+    schema is advisory; server-side enforcement stays with
+    ``custom_team_metadata_validate``.
+    """
+    return TeamMetadataSchemaResponse(fields=TEAM_METADATA_SCHEMA_REGISTRY.get())
 
 
 @router.get("/team/available")
@@ -4808,7 +4877,7 @@ async def list_team(
             )
         except Exception as e:
             team_exception = f"""Invalid team object for team_id: {team.team_id}. team_object={team.model_dump()}.
-            Error: {e!s}
+            Error: {e}
             """
             verbose_proxy_logger.exception(team_exception)
             continue
@@ -4854,7 +4923,7 @@ async def get_paginated_teams(
         )
         return teams, total_count
     except Exception as e:
-        verbose_proxy_logger.exception(f"[Non-Blocking] Error getting paginated teams: {e}")
+        verbose_proxy_logger.exception("[Non-Blocking] Error getting paginated teams: %s", e)
         return [], 0
 
 
@@ -4925,7 +4994,7 @@ async def ui_view_teams(
         return teams
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error searching teams: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Error searching teams: {e}")
 
 
 def add_new_models_to_team(team_obj: LiteLLM_TeamTable, new_models: list[str]) -> list[str]:

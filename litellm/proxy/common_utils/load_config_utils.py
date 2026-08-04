@@ -20,9 +20,9 @@ def get_file_contents_from_s3(bucket_name, object_key):
             aws_secret_access_key=credentials.secret_key,
             aws_session_token=credentials.token,  # Optional, if using temporary credentials
         )
-        verbose_proxy_logger.debug(f"Retrieving {object_key} from S3 bucket: {bucket_name}")
+        verbose_proxy_logger.debug("Retrieving %s from S3 bucket: %s", object_key, bucket_name)
         response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
-        verbose_proxy_logger.debug(f"Response: {response}")
+        verbose_proxy_logger.debug("Response: %s", response)
 
         # Read the file contents and directly parse YAML
         file_contents = response["Body"].read().decode("utf-8")
@@ -34,9 +34,9 @@ def get_file_contents_from_s3(bucket_name, object_key):
 
     except ImportError as e:
         # this is most likely if a user is not using the litellm docker container
-        verbose_proxy_logger.error(f"ImportError: {e!s}")
+        verbose_proxy_logger.error("ImportError: %s", e)
     except Exception as e:
-        verbose_proxy_logger.error(f"Error retrieving file contents: {e!s}")
+        verbose_proxy_logger.error("Error retrieving file contents: %s", e)
         return None
 
 
@@ -57,7 +57,7 @@ async def get_config_file_contents_from_gcs(bucket_name, object_key):
         return config
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error retrieving file contents: {e!s}")
+        verbose_proxy_logger.error("Error retrieving file contents: %s", e)
         return None
 
 
@@ -93,12 +93,12 @@ def download_python_file_from_s3(
             aws_session_token=credentials.token,
         )
 
-        verbose_proxy_logger.debug(f"Downloading Python file {object_key} from S3 bucket: {bucket_name}")
+        verbose_proxy_logger.debug("Downloading Python file %s from S3 bucket: %s", object_key, bucket_name)
         response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
 
         # Read the file contents
         file_contents = response["Body"].read().decode("utf-8")
-        verbose_proxy_logger.debug(f"File contents: {file_contents}")
+        verbose_proxy_logger.debug("File contents: %s", file_contents)
 
         # Ensure directory exists
         os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
@@ -107,14 +107,14 @@ def download_python_file_from_s3(
         with open(local_file_path, "w") as f:
             f.write(file_contents)
 
-        verbose_proxy_logger.debug(f"Python file downloaded successfully to {local_file_path}")
+        verbose_proxy_logger.debug("Python file downloaded successfully to %s", local_file_path)
         return True
 
     except ImportError as e:
-        verbose_proxy_logger.error(f"ImportError: {e!s}")
+        verbose_proxy_logger.error("ImportError: %s", e)
         return False
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error downloading Python file: {e!s}")
+        verbose_proxy_logger.exception("Error downloading Python file: %s", e)
         return False
 
 
@@ -154,11 +154,11 @@ async def download_python_file_from_gcs(
         with open(local_file_path, "w") as f:
             f.write(file_contents)
 
-        verbose_proxy_logger.debug(f"Python file downloaded successfully to {local_file_path}")
+        verbose_proxy_logger.debug("Python file downloaded successfully to %s", local_file_path)
         return True
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error downloading Python file from GCS: {e!s}")
+        verbose_proxy_logger.exception("Error downloading Python file from GCS: %s", e)
         return False
 
 

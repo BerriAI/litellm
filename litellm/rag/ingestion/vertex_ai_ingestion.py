@@ -169,8 +169,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
                 "vertexPredictionEndpoint": {"endpoint": embedding_model}
             }
 
-        verbose_logger.debug(f"Creating RAG corpus: {url}")
-        verbose_logger.debug(f"Request body: {json.dumps(request_body, indent=2)}")
+        verbose_logger.debug("Creating RAG corpus: %s", url)
+        verbose_logger.debug("Request body: %s", json.dumps(request_body, indent=2))
 
         client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
@@ -191,7 +191,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             raise Exception(error_msg)
 
         response_data = response.json()
-        verbose_logger.debug(f"Create corpus response: {json.dumps(response_data, indent=2)}")
+        verbose_logger.debug("Create corpus response: %s", json.dumps(response_data, indent=2))
 
         # The response is a long-running operation
         # Check if it's already done or if we need to poll
@@ -201,13 +201,13 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         else:
             # Need to poll the operation
             operation_name = response_data.get("name", "")
-            verbose_logger.debug(f"Polling operation: {operation_name}")
+            verbose_logger.debug("Polling operation: %s", operation_name)
             corpus_name = await self._poll_operation(
                 operation_name=operation_name,
                 access_token=access_token,
             )
 
-        verbose_logger.debug(f"Created RAG corpus: {corpus_name}")
+        verbose_logger.debug("Created RAG corpus: %s", corpus_name)
         return corpus_name
 
     async def _poll_operation(
@@ -272,7 +272,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
                 else:
                     raise Exception(f"No corpus name in operation response: {operation_data}")
 
-            verbose_logger.debug(f"Operation not done yet, attempt {attempt + 1}/{max_retries}")
+            verbose_logger.debug("Operation not done yet, attempt %s/%s", attempt + 1, max_retries)
             await asyncio.sleep(retry_delay)
 
         raise Exception(f"Operation timed out after {max_retries} attempts")
@@ -342,8 +342,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
                 if chunk_overlap:
                     chunking_config["chunk_overlap"] = chunk_overlap
 
-        verbose_logger.debug(f"Uploading file to RAG corpus: {url}")
-        verbose_logger.debug(f"Metadata: {json.dumps(metadata, indent=2)}")
+        verbose_logger.debug("Uploading file to RAG corpus: %s", url)
+        verbose_logger.debug("Metadata: %s", json.dumps(metadata, indent=2))
 
         # Prepare multipart form data
         files = {
@@ -381,10 +381,10 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             if not file_id:
                 file_id = response_data.get("name", "")
 
-            verbose_logger.debug(f"Upload complete. File ID: {file_id}")
+            verbose_logger.debug("Upload complete. File ID: %s", file_id)
             return file_id
         except Exception as e:
-            verbose_logger.warning(f"Could not parse upload response: {e}")
+            verbose_logger.warning("Could not parse upload response: %s", e)
             return "uploaded"
 
     async def _import_files_from_gcs(
@@ -433,8 +433,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         if max_embedding_qpm:
             request_body["importRagFilesConfig"]["maxEmbeddingRequestsPerMin"] = max_embedding_qpm
 
-        verbose_logger.debug(f"Importing files from GCS: {url}")
-        verbose_logger.debug(f"Request body: {json.dumps(request_body, indent=2)}")
+        verbose_logger.debug("Importing files from GCS: %s", url)
+        verbose_logger.debug("Request body: %s", json.dumps(request_body, indent=2))
 
         client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
@@ -458,5 +458,5 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         response_data = response.json()
         operation_name = response_data.get("name", "")
 
-        verbose_logger.debug(f"Import operation started: {operation_name}")
+        verbose_logger.debug("Import operation started: %s", operation_name)
         return operation_name

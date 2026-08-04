@@ -190,8 +190,8 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
                 status_details=None,
             )
         except Exception as e:
-            verbose_logger.exception(f"Error parsing file upload response: {e!s}")
-            raise ValueError(f"Error parsing file upload response: {e!s}")
+            verbose_logger.exception("Error parsing file upload response: %s", e)
+            raise ValueError(f"Error parsing file upload response: {e}")
 
     def transform_retrieve_file_request(
         self,
@@ -263,9 +263,9 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         Transform Gemini's file retrieval response into OpenAI-style FileObject
         """
         try:
-            verbose_logger.debug(f"Retrieve file response: {raw_response.text}")
+            verbose_logger.debug("Retrieve file response: %s", raw_response.text)
             response_json = raw_response.json()
-            verbose_logger.debug(f"Response JSON: {response_json}")
+            verbose_logger.debug("Response JSON: %s", response_json)
             # Map Gemini state to OpenAI status
             gemini_state = response_json.get("state", "STATE_UNSPECIFIED")
             # Explicitly type status as the Literal union
@@ -294,8 +294,8 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
                 status_details=(str(response_json.get("error", "")) if gemini_state == "FAILED" else None),
             )
         except Exception as e:
-            verbose_logger.exception(f"Error parsing file retrieve response: {e!s}")
-            raise ValueError(f"Error parsing file retrieve response: {e!s}")
+            verbose_logger.exception("Error parsing file retrieve response: %s", e)
+            raise ValueError(f"Error parsing file retrieve response: {e}")
 
     def transform_delete_file_request(
         self,
@@ -362,8 +362,8 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             else:
                 raise ValueError(f"Failed to delete file: {raw_response.text}")
         except Exception as e:
-            verbose_logger.exception(f"Error parsing file delete response: {e!s}")
-            raise ValueError(f"Error parsing file delete response: {e!s}")
+            verbose_logger.exception("Error parsing file delete response: %s", e)
+            raise ValueError(f"Error parsing file delete response: {e}")
 
     def transform_list_files_request(
         self,

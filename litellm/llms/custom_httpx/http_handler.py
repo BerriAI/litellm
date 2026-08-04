@@ -215,19 +215,20 @@ def _create_ssl_context(
     if ssl_ecdh_curve and isinstance(ssl_ecdh_curve, str):
         try:
             custom_ssl_context.set_ecdh_curve(ssl_ecdh_curve)
-            verbose_logger.debug(f"SSL ECDH curve set to: {ssl_ecdh_curve}")
+            verbose_logger.debug("SSL ECDH curve set to: %s", ssl_ecdh_curve)
         except AttributeError:
             verbose_logger.warning(
-                f"SSL ECDH curve configuration not supported. "
-                f"Python version: {sys.version.split()[0]}, OpenSSL version: {ssl.OPENSSL_VERSION}. "
-                f"Requested curve: {ssl_ecdh_curve}. Continuing with default curves."
+                "SSL ECDH curve configuration not supported. Python version: %s, OpenSSL version: %s. Requested curve: %s. Continuing with default curves.",
+                sys.version.split()[0],
+                ssl.OPENSSL_VERSION,
+                ssl_ecdh_curve,
             )
         except ValueError as e:
             # Invalid curve name
             verbose_logger.warning(
-                f"Invalid SSL ECDH curve name: '{ssl_ecdh_curve}'. {e}. "
-                f"Common valid curves: X25519, prime256v1, secp384r1, secp521r1. "
-                f"Continuing with default curves (including PQC)."
+                "Invalid SSL ECDH curve name: '%s'. %s. Common valid curves: X25519, prime256v1, secp384r1, secp521r1. Continuing with default curves (including PQC).",
+                ssl_ecdh_curve,
+                e,
             )
 
     return custom_ssl_context
@@ -1033,7 +1034,7 @@ class AsyncHTTPHandler:
 
         # Use shared session if provided and valid
         if shared_session is not None and not shared_session.closed:
-            verbose_logger.debug(f"SHARED SESSION: Reusing existing ClientSession (ID: {id(shared_session)})")
+            verbose_logger.debug("SHARED SESSION: Reusing existing ClientSession (ID: %s)", id(shared_session))
             return LiteLLMAiohttpTransport(
                 client=shared_session,
                 ssl_verify=ssl_for_transport,
@@ -1411,6 +1412,7 @@ def get_async_httpx_client(
         key=_cache_key_name,
         value=_new_client,
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+        litellm_owned_client=True,
     )
     return _new_client
 
@@ -1456,5 +1458,6 @@ def _get_httpx_client(params: dict | None = None) -> HTTPHandler:
         key=_cache_key_name,
         value=_new_client,
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+        litellm_owned_client=True,
     )
     return _new_client

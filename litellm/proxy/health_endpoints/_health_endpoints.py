@@ -425,11 +425,11 @@ async def health_services_endpoint(
             }
 
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - {e!s}")
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -504,7 +504,7 @@ async def _save_health_check_to_db(
             checked_by=user_id,
         )
     except Exception as db_error:
-        verbose_proxy_logger.warning(f"Failed to save health check to database for model {model_name}: {db_error}")
+        verbose_proxy_logger.warning("Failed to save health check to database for model %s: %s", model_name, db_error)
         # Continue execution - don't let database save failure break health checks
 
 
@@ -708,7 +708,7 @@ async def _save_background_health_checks_to_db(
             checked_by,
         )
     except Exception as db_error:
-        verbose_proxy_logger.warning(f"Failed to save background health checks to database: {db_error}")
+        verbose_proxy_logger.warning("Failed to save background health checks to database: %s", db_error)
         # Continue execution - don't let database save failure break health checks
 
 
@@ -882,7 +882,7 @@ def _health_endpoint_resolve_target_model_name(
     try:
         deployment = llm_router.get_deployment(model_id=model_id)
     except Exception as e:
-        verbose_proxy_logger.error(f"Error getting deployment for model_id {model_id}: {e}")
+        verbose_proxy_logger.error("Error getting deployment for model_id %s: %s", model_id, e)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": f"Model with ID {model_id} not found"},
@@ -1069,7 +1069,7 @@ async def health_endpoint(
             )
             return _post_process(router_result)
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.py::health_endpoint(): Exception occured - {e!s}")
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.py::health_endpoint(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
 
@@ -1107,10 +1107,10 @@ async def health_check_history_endpoint(
             "offset": offset,
         }
     except Exception as e:
-        verbose_proxy_logger.error(f"Error getting health check history: {e}")
+        verbose_proxy_logger.error("Error getting health check history: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to retrieve health check history: {e!s}"},
+            detail={"error": f"Failed to retrieve health check history: {e}"},
         )
 
 
@@ -1139,10 +1139,10 @@ async def latest_health_checks_endpoint(
             "total_models": len(checks_data),
         }
     except Exception as e:
-        verbose_proxy_logger.error(f"Error getting latest health checks: {e}")
+        verbose_proxy_logger.error("Error getting latest health checks: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to retrieve latest health checks: {e!s}"},
+            detail={"error": f"Failed to retrieve latest health checks: {e}"},
         )
 
 
@@ -1182,10 +1182,10 @@ async def shared_health_check_status_endpoint(
         health_status = await shared_health_manager.get_health_check_status()
         return {"shared_health_check_enabled": True, "status": health_status}
     except Exception as e:
-        verbose_proxy_logger.error(f"Error getting shared health check status: {e}")
+        verbose_proxy_logger.error("Error getting shared health check status: %s", e)
         raise HTTPException(
             status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to retrieve shared health check status: {e!s}"},
+            detail={"error": f"Failed to retrieve shared health check status: {e}"},
         )
 
 
@@ -1473,7 +1473,7 @@ async def _get_health_readiness_details(
                 "is_detailed_debug": is_detailed_debug,
             }
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Service Unhealthy ({e!s})")
+        raise HTTPException(status_code=503, detail=f"Service Unhealthy ({e})")
 
 
 def _allow_public_health_readiness_details() -> bool:
@@ -1850,7 +1850,7 @@ async def test_model_connection(
                         loaded_model_info = dict(deployments[0].get("model_info") or {})
             except Exception as e:
                 verbose_proxy_logger.debug(
-                    f"Could not find model {model_name} in router: {e}. Proceeding with request params only."
+                    "Could not find model %s in router: %s. Proceeding with request params only.", model_name, e
                 )
 
         # Merge: config params (from proxy config) as base, request params override
@@ -1897,10 +1897,8 @@ async def test_model_connection(
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"litellm.proxy.health_endpoints.test_model_connection(): Exception occurred - {e!s}"
-        )
+        verbose_proxy_logger.debug("litellm.proxy.health_endpoints.test_model_connection(): Exception occurred - %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to test connection: {e!s}"},
+            detail={"error": f"Failed to test connection: {e}"},
         )

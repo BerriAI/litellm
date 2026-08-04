@@ -156,7 +156,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             user_api_key_dict: User API key authentication details
             additional_db_fields: Additional fields to store in database
         """
-        verbose_logger.info(f"Storing LiteLLM Managed {self.resource_type} with id={unified_resource_id} in cache")
+        verbose_logger.info("Storing LiteLLM Managed %s with id=%s in cache", self.resource_type, unified_resource_id)
 
         # Prepare cache data
         cache_data = {
@@ -215,7 +215,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         result = await table.create(data=db_data)
 
         verbose_logger.debug(
-            f"LiteLLM Managed {self.resource_type} with id={unified_resource_id} stored in db: {result}"
+            "LiteLLM Managed %s with id=%s stored in db: %s", self.resource_type, unified_resource_id, result
         )
 
     async def get_unified_resource_id(
@@ -579,7 +579,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
             except Exception as e:
                 verbose_logger.warning(
-                    f"Failed to parse {self.resource_type} object {resource.unified_resource_id}: {e}"
+                    "Failed to parse %s object %s: %s", self.resource_type, resource.unified_resource_id, e
                 )
                 continue
 

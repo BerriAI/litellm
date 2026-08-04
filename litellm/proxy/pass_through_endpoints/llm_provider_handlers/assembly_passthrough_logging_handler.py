@@ -203,7 +203,7 @@ class AssemblyAIPassthroughLoggingHandler:
 
             return response.json()
         except Exception as e:
-            verbose_proxy_logger.exception(f"[Non blocking logging error] Error getting AssemblyAI transcript: {e!s}")
+            verbose_proxy_logger.exception("[Non blocking logging error] Error getting AssemblyAI transcript: %s", e)
             return None
 
     def _poll_assembly_for_transcript_response(
@@ -275,7 +275,7 @@ class AssemblyAIPassthroughLoggingHandler:
 
             return None
         except Exception as e:
-            verbose_proxy_logger.exception(f"[Non blocking logging error] Error getting AssemblyAI model info: {e!s}")
+            verbose_proxy_logger.exception("[Non blocking logging error] Error getting AssemblyAI model info: %s", e)
             return None
 
     @staticmethod

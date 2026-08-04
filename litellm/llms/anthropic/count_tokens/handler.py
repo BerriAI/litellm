@@ -54,7 +54,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             # Validate the request
             self.validate_request(model, messages)
 
-            verbose_logger.debug(f"Processing Anthropic CountTokens request for model: {model}")
+            verbose_logger.debug("Processing Anthropic CountTokens request for model: %s", model)
 
             # Transform request to Anthropic format
             request_body = self.transform_request_to_count_tokens(
@@ -64,12 +64,12 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
                 system=system,
             )
 
-            verbose_logger.debug(f"Transformed request: {request_body}")
+            verbose_logger.debug("Transformed request: %s", request_body)
 
             # Get endpoint URL
             endpoint_url = api_base or self.get_anthropic_count_tokens_endpoint()
 
-            verbose_logger.debug(f"Making request to: {endpoint_url}")
+            verbose_logger.debug("Making request to: %s", endpoint_url)
 
             # Get required headers
             headers = self.get_required_headers(api_key)
@@ -87,11 +87,11 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
                 timeout=request_timeout,
             )
 
-            verbose_logger.debug(f"Response status: {response.status_code}")
+            verbose_logger.debug("Response status: %s", response.status_code)
 
             if response.status_code != 200:
                 error_text = response.text
-                verbose_logger.error(f"Anthropic API error: {error_text}")
+                verbose_logger.error("Anthropic API error: %s", error_text)
                 raise AnthropicError(
                     status_code=response.status_code,
                     message=error_text,
@@ -99,7 +99,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
 
             anthropic_response = response.json()
 
-            verbose_logger.debug(f"Anthropic response: {anthropic_response}")
+            verbose_logger.debug("Anthropic response: %s", anthropic_response)
 
             # Return Anthropic response directly - no transformation needed
             return anthropic_response
@@ -109,14 +109,14 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             raise
         except httpx.HTTPStatusError as e:
             # HTTP errors - preserve the actual status code
-            verbose_logger.error(f"HTTP error in CountTokens handler: {e!s}")
+            verbose_logger.error("HTTP error in CountTokens handler: %s", e)
             raise AnthropicError(
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
         except Exception as e:
-            verbose_logger.error(f"Error in CountTokens handler: {e!s}")
+            verbose_logger.error("Error in CountTokens handler: %s", e)
             raise AnthropicError(
                 status_code=500,
-                message=f"CountTokens processing error: {e!s}",
+                message=f"CountTokens processing error: {e}",
             )

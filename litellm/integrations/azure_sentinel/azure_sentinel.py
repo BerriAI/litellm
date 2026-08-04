@@ -203,7 +203,7 @@ class AzureSentinelLogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"Azure Sentinel Layer Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception("Azure Sentinel Layer Error - %s\n%s", e, traceback.format_exc())
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -233,7 +233,7 @@ class AzureSentinelLogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"Azure Sentinel Layer Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception("Azure Sentinel Layer Error - %s\n%s", e, traceback.format_exc())
 
     async def async_log_audit_log_event(self, audit_log: StandardAuditLogPayload) -> None:
         """
@@ -256,7 +256,7 @@ class AzureSentinelLogger(CustomBatchLogger):
                 await self.async_send_audit_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"Azure Sentinel Audit Log Layer Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception("Azure Sentinel Audit Log Layer Error - %s\n%s", e, traceback.format_exc())
 
     async def async_send_batch(self):
         """
@@ -323,7 +323,7 @@ class AzureSentinelLogger(CustomBatchLogger):
             )
 
         except Exception as e:
-            verbose_logger.exception(f"Azure Sentinel Error sending batch API - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception("Azure Sentinel Error sending batch API - %s\n%s", e, traceback.format_exc())
         finally:
             log_queue.clear()
 

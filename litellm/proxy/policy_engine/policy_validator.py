@@ -78,7 +78,7 @@ class PolicyValidator:
             guardrails = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
             return {g.get("guardrail_name", "") for g in guardrails if g.get("guardrail_name")}
         except Exception as e:
-            verbose_proxy_logger.warning(f"Could not get guardrails from registry: {e!s}")
+            verbose_proxy_logger.warning("Could not get guardrails from registry: %s", e)
             return set()
 
     async def check_team_alias_exists(self, team_alias: str) -> bool:
@@ -100,7 +100,7 @@ class PolicyValidator:
             )
             return team is not None
         except Exception as e:
-            verbose_proxy_logger.warning(f"Could not check team alias '{team_alias}': {e!s}")
+            verbose_proxy_logger.warning("Could not check team alias '%s': %s", team_alias, e)
             return True  # Assume valid on error
 
     async def check_key_alias_exists(self, key_alias: str) -> bool:
@@ -122,7 +122,7 @@ class PolicyValidator:
             )
             return key is not None
         except Exception as e:
-            verbose_proxy_logger.warning(f"Could not check key alias '{key_alias}': {e!s}")
+            verbose_proxy_logger.warning("Could not check key alias '%s': %s", key_alias, e)
             return True  # Assume valid on error
 
     def check_model_exists(self, model: str) -> bool:
@@ -151,7 +151,7 @@ class PolicyValidator:
 
             return False
         except Exception as e:
-            verbose_proxy_logger.warning(f"Could not check model '{model}': {e!s}")
+            verbose_proxy_logger.warning("Could not check model '%s': %s", model, e)
             return True  # Assume valid on error
 
     @staticmethod
@@ -436,7 +436,7 @@ class PolicyValidator:
                     PolicyValidationError(
                         policy_name=policy_name,
                         error_type=PolicyValidationErrorType.INVALID_SYNTAX,
-                        message=f"Failed to parse policy: {e!s}",
+                        message=f"Failed to parse policy: {e}",
                     )
                 )
 

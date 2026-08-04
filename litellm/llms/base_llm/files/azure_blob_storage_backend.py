@@ -129,11 +129,11 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
                     full_path=full_path,
                 )
 
-            verbose_logger.debug(f"Successfully uploaded file to Azure Blob Storage: {storage_url}")
+            verbose_logger.debug("Successfully uploaded file to Azure Blob Storage: %s", storage_url)
             return storage_url
 
         except Exception as e:
-            verbose_logger.exception(f"Error uploading file to Azure Blob Storage: {e!s}")
+            verbose_logger.exception("Error uploading file to Azure Blob Storage: %s", e)
             raise
 
     async def _upload_file_with_account_key(self, file_content: bytes, full_path: str) -> str:
@@ -145,7 +145,7 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         # Create filesystem (container) if it doesn't exist
         if not await file_system_client.exists():
             await file_system_client.create_file_system()
-            verbose_logger.debug(f"Created filesystem: {self.azure_storage_file_system}")
+            verbose_logger.debug("Created filesystem: %s", self.azure_storage_file_system)
 
         # Extract directory and filename (similar to logger's pattern)
         path_parts = full_path.split("/")
@@ -157,7 +157,7 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
             directory_client = file_system_client.get_directory_client(directory_path)
             if not await directory_client.exists():
                 await directory_client.create_directory()
-                verbose_logger.debug(f"Created directory: {directory_path}")
+                verbose_logger.debug("Created directory: %s", directory_path)
 
             # Get file client from directory (same pattern as logger)
             file_client = directory_client.get_file_client(file_name)
@@ -247,7 +247,7 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
                 return await self._download_file_with_azure_ad(file_path)
 
         except Exception as e:
-            verbose_logger.exception(f"Error downloading file from Azure Blob Storage: {e!s}")
+            verbose_logger.exception("Error downloading file from Azure Blob Storage: %s", e)
             raise
 
     async def _download_file_with_account_key(self, file_path: str) -> bytes:

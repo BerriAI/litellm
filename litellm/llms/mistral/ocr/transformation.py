@@ -175,7 +175,7 @@ class MistralOCRConfig(BaseOCRConfig):
         Returns:
             OCRRequestData with JSON data
         """
-        verbose_logger.debug(f"Mistral OCR transform_ocr_request - model: {model}")
+        verbose_logger.debug("Mistral OCR transform_ocr_request - model: %s", model)
 
         # Document parameter is the Mistral-format dict from the user
         # Just pass it through as-is to the Mistral API
@@ -226,7 +226,7 @@ class MistralOCRConfig(BaseOCRConfig):
         try:
             response_json = raw_response.json()
 
-            verbose_logger.debug(f"Mistral OCR response keys: {response_json.keys()}")
+            verbose_logger.debug("Mistral OCR response keys: %s", response_json.keys())
 
             # Return native Mistral format - no transformation
             return OCRResponse(
@@ -237,5 +237,5 @@ class MistralOCRConfig(BaseOCRConfig):
                 object="ocr",
             )
         except Exception as e:
-            verbose_logger.error(f"Error parsing Mistral OCR response: {e}")
+            verbose_logger.error("Error parsing Mistral OCR response: %s", e)
             raise e

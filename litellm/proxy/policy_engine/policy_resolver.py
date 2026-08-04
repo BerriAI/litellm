@@ -47,7 +47,7 @@ class PolicyResolver:
             visited = set()
 
         if policy_name in visited:
-            verbose_proxy_logger.warning(f"Circular inheritance detected for policy '{policy_name}'")
+            verbose_proxy_logger.warning("Circular inheritance detected for policy '%s'", policy_name)
             return []
 
         policy = policies.get(policy_name)
@@ -106,7 +106,7 @@ class PolicyResolver:
                     context=context,
                 ):
                     verbose_proxy_logger.debug(
-                        f"Policy '{chain_policy_name}' condition did not match, skipping guardrails"
+                        "Policy '%s' condition did not match, skipping guardrails", chain_policy_name
                     )
                     continue
 
@@ -163,8 +163,10 @@ class PolicyResolver:
 
         if not matching_policy_names:
             verbose_proxy_logger.debug(
-                f"No policies match context: team_alias={context.team_alias}, "
-                f"key_alias={context.key_alias}, model={context.model}"
+                "No policies match context: team_alias=%s, key_alias=%s, model=%s",
+                context.team_alias,
+                context.key_alias,
+                context.model,
             )
             return []
 
@@ -178,10 +180,10 @@ class PolicyResolver:
                 context=context,
             )
             all_guardrails.update(resolved.guardrails)
-            verbose_proxy_logger.debug(f"Policy '{policy_name}' contributes guardrails: {resolved.guardrails}")
+            verbose_proxy_logger.debug("Policy '%s' contributes guardrails: %s", policy_name, resolved.guardrails)
 
         result = list(all_guardrails)
-        verbose_proxy_logger.debug(f"Final guardrails for context: {result}")
+        verbose_proxy_logger.debug("Final guardrails for context: %s", result)
 
         return result
 
@@ -229,7 +231,7 @@ class PolicyResolver:
             if policy.pipeline is not None:
                 pipelines.append((policy_name, policy.pipeline))
                 verbose_proxy_logger.debug(
-                    f"Policy '{policy_name}' has pipeline with {len(policy.pipeline.steps)} steps"
+                    "Policy '%s' has pipeline with %s steps", policy_name, len(policy.pipeline.steps)
                 )
 
         return pipelines

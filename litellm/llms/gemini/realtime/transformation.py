@@ -154,7 +154,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if "parts" in model_turn:
             parts = model_turn["parts"]
             if len(parts) != 1:
-                verbose_logger.warning(f"Realtime: Expected 1 part, got {len(parts)} for Gemini model turn event.")
+                verbose_logger.warning("Realtime: Expected 1 part, got %s for Gemini model turn event.", len(parts))
             part = parts[0]
             if "text" in part:
                 return OpenAIRealtimeEventTypes.RESPONSE_TEXT_DELTA
@@ -472,7 +472,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         call_id = item.get("call_id", "")
         output = item.get("output", "{}")
 
-        verbose_logger.debug(f"Gemini Realtime: Transforming function_call_output for call_id={call_id}")
+        verbose_logger.debug("Gemini Realtime: Transforming function_call_output for call_id=%s", call_id)
 
         # Gemini functionResponses[].response must be a dict; wrap non-dicts.
         try:
@@ -487,8 +487,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             self._tool_call_id_to_name.move_to_end(call_id)
         else:
             verbose_logger.warning(
-                f"Gemini Realtime: Function name not found for call_id={call_id}. "
-                "This may cause Gemini to reject the response."
+                "Gemini Realtime: Function name not found for call_id=%s. This may cause Gemini to reject the response.",
+                call_id,
             )
 
         function_response: dict[str, Any] = {"response": output_dict}
@@ -868,7 +868,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         resolved_response_id = response_id or f"resp_{uuid.uuid4()}"
         resolved_output_item_id = output_item_id or f"item_{uuid.uuid4()}"
 
-        verbose_logger.debug(f"Gemini Realtime: Transforming {len(function_calls)} tool call(s) to OpenAI format")
+        verbose_logger.debug("Gemini Realtime: Transforming %s tool call(s) to OpenAI format", len(function_calls))
 
         events: list[OpenAIRealtimeFunctionCallArgumentsDone] = []
         for idx, fc in enumerate(function_calls):

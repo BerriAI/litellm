@@ -73,7 +73,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_router_logger.error(
-                f"litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - {e!s}"
+                "litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - %s", e
             )
             verbose_router_logger.debug(traceback.format_exc())
 
@@ -135,7 +135,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_router_logger.exception(
-                f"litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - {e!s}"
+                "litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - %s", e
             )
             verbose_router_logger.debug(traceback.format_exc())
 
@@ -151,7 +151,9 @@ class LowestTPMLoggingHandler(CustomLogger):
         """
         # get list of potential deployments
         verbose_router_logger.debug(
-            f"get_available_deployments - Usage Based. model_group: {model_group}, healthy_deployments: {healthy_deployments}"
+            "get_available_deployments - Usage Based. model_group: %s, healthy_deployments: %s",
+            model_group,
+            healthy_deployments,
         )
         current_minute = datetime.now().strftime("%H-%M")
         tpm_key = f"{model_group}:tpm:{current_minute}"
@@ -160,12 +162,12 @@ class LowestTPMLoggingHandler(CustomLogger):
         tpm_dict = self.router_cache.get_cache(key=tpm_key)
         rpm_dict = self.router_cache.get_cache(key=rpm_key)
 
-        verbose_router_logger.debug(f"tpm_key={tpm_key}, tpm_dict: {tpm_dict}, rpm_dict: {rpm_dict}")
+        verbose_router_logger.debug("tpm_key=%s, tpm_dict: %s, rpm_dict: %s", tpm_key, tpm_dict, rpm_dict)
         try:
             input_tokens = token_counter(messages=messages, text=input)
         except Exception:
             input_tokens = 0
-        verbose_router_logger.debug(f"input_tokens={input_tokens}")
+        verbose_router_logger.debug("input_tokens=%s", input_tokens)
         # -----------------------
         # Find lowest used model
         # ----------------------

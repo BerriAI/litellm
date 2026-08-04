@@ -171,7 +171,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 )
             return user_api_key_auth.model_copy(update={"object_permission": updated_op})
         except Exception as _e:
-            verbose_logger.debug(f"Could not apply toolset permissions: {_e}")
+            verbose_logger.debug("Could not apply toolset permissions: %s", _e)
             return user_api_key_auth
 
     @staticmethod
@@ -238,14 +238,16 @@ class LiteLLM_Proxy_MCP_Handler:
                                     # None means no grants configured → deny (consistent with
                                     # fetch_mcp_toolsets which returns [] for unconfigured keys)
                                     if granted is None or toolset.toolset_id not in granted:
-                                        verbose_logger.debug(f"Key does not have access to toolset '{name}', skipping.")
+                                        verbose_logger.debug(
+                                            "Key does not have access to toolset '%s', skipping.", name
+                                        )
                                         continue
                             resolved_toolset_ids.append(toolset.toolset_id)
                             # Don't add to resolved_mcp_servers — toolset scope
                             # restricts via object_permission, not server name filter.
                             continue
                 except Exception as _e:
-                    verbose_logger.debug(f"Could not resolve '{name}' as toolset: {_e}")
+                    verbose_logger.debug("Could not resolve '%s' as toolset: %s", name, _e)
             resolved_mcp_servers.append(name)
 
         # Apply all resolved toolsets at once (union), avoiding permission overwrite.
@@ -664,7 +666,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 ) = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
 
                 if not tool_name:
-                    verbose_logger.warning(f"Tool call missing name: {tool_call}")
+                    verbose_logger.warning("Tool call missing name: %s", tool_call)
                     continue
 
                 parsed_arguments = LiteLLM_Proxy_MCP_Handler._parse_tool_arguments(tool_arguments)
@@ -844,8 +846,8 @@ class LiteLLM_Proxy_MCP_Handler:
                     request_data=logging_request_data,
                     error=e,
                 )
-                verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {e!s}")
-                error_message = f"Tool call blocked: PII entity '{getattr(e, 'entity_type', 'unknown')}' detected by guardrail '{getattr(e, 'guardrail_name', 'unknown')}'. {e!s}"
+                verbose_logger.error("BlockedPiiEntityError in MCP tool call: %s", e)
+                error_message = f"Tool call blocked: PII entity '{getattr(e, 'entity_type', 'unknown')}' detected by guardrail '{getattr(e, 'guardrail_name', 'unknown')}'. {e}"
                 tool_results.append(
                     {
                         "tool_call_id": tool_call_id,
@@ -860,9 +862,9 @@ class LiteLLM_Proxy_MCP_Handler:
                     request_data=logging_request_data,
                     error=e,
                 )
-                verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {e!s}")
+                verbose_logger.error("GuardrailRaisedException in MCP tool call: %s", e)
                 error_message = (
-                    f"Tool call blocked: Guardrail '{getattr(e, 'guardrail_name', 'unknown')}' violation. {e!s}"
+                    f"Tool call blocked: Guardrail '{getattr(e, 'guardrail_name', 'unknown')}' violation. {e}"
                 )
                 tool_results.append(
                     {
@@ -878,7 +880,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     request_data=logging_request_data,
                     error=e,
                 )
-                verbose_logger.error(f"HTTPException in MCP tool call: {e!s}")
+                verbose_logger.error("HTTPException in MCP tool call: %s", e)
                 error_message = f"Tool call failed: {str(e.detail) if hasattr(e, 'detail') else str(e)}"
                 tool_results.append(
                     {
@@ -894,11 +896,11 @@ class LiteLLM_Proxy_MCP_Handler:
                     request_data=logging_request_data,
                     error=e,
                 )
-                verbose_logger.exception(f"Error executing MCP tool call: {e}")
+                verbose_logger.exception("Error executing MCP tool call: %s", e)
                 tool_results.append(
                     {
                         "tool_call_id": tool_call_id,
-                        "result": f"Error executing tool: {e!s}",
+                        "result": f"Error executing tool: {e}",
                         "name": tool_name,
                     }
                 )

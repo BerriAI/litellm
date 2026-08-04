@@ -68,8 +68,8 @@ def _trigger_met(
         messages=messages,
         tools=cast(Any, tools),
     )
-    verbose_logger.debug(f"context_management polyfill: current_tokens: {current_tokens}")
-    verbose_logger.debug(f"context_management polyfill: threshold: {threshold}")
+    verbose_logger.debug("context_management polyfill: current_tokens: %s", current_tokens)
+    verbose_logger.debug("context_management polyfill: threshold: %s", threshold)
     return current_tokens > threshold, current_tokens
 
 

@@ -199,7 +199,7 @@ class LangFuseLogger:
             )
         langfuse_client = Langfuse(**parameters)
         litellm.initialized_langfuse_clients += 1
-        verbose_logger.debug(f"Created langfuse client number {litellm.initialized_langfuse_clients}")
+        verbose_logger.debug("Created langfuse client number %s", litellm.initialized_langfuse_clients)
         return langfuse_client
 
     @staticmethod
@@ -226,9 +226,9 @@ class LangFuseLogger:
             if metadata_param_key.startswith("langfuse_"):
                 trace_param_key = metadata_param_key.replace("langfuse_", "", 1)
                 if trace_param_key in metadata:
-                    verbose_logger.warning(f"Overwriting Langfuse `{trace_param_key}` from request header")
+                    verbose_logger.warning("Overwriting Langfuse `%s` from request header", trace_param_key)
                 else:
-                    verbose_logger.debug(f"Found Langfuse `{trace_param_key}` in request header")
+                    verbose_logger.debug("Found Langfuse `%s` in request header", trace_param_key)
                 metadata[trace_param_key] = proxy_headers.get(metadata_param_key)
 
         return metadata
@@ -256,7 +256,7 @@ class LangFuseLogger:
         Logs a success or error event on Langfuse
         """
         try:
-            verbose_logger.debug(f"Langfuse Logging - Enters logging function for model {kwargs}")
+            verbose_logger.debug("Langfuse Logging - Enters logging function for model %s", kwargs)
 
             # set default values for input/output for langfuse logging
             input = None
@@ -295,7 +295,7 @@ class LangFuseLogger:
                 level=level,
                 status_message=status_message,
             )
-            verbose_logger.debug(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
+            verbose_logger.debug("OUTPUT IN LANGFUSE: %s; original: %s", output, response_obj)
             trace_id = None
             generation_id = None
             if self._is_langfuse_v2():
@@ -325,12 +325,12 @@ class LangFuseLogger:
                     input=input,
                     response_obj=response_obj,
                 )
-            verbose_logger.debug(f"Langfuse Layer Logging - final response object: {response_obj}")
+            verbose_logger.debug("Langfuse Layer Logging - final response object: %s", response_obj)
             verbose_logger.info("Langfuse Layer Logging - logging success")
 
             return {"trace_id": trace_id, "generation_id": generation_id}
         except Exception as e:
-            verbose_logger.exception(f"Langfuse Layer Error(): Exception occured - {e!s}")
+            verbose_logger.exception("Langfuse Layer Error(): Exception occured - %s", e)
             return {"trace_id": None, "generation_id": None}
 
     def _get_langfuse_input_output_content(
@@ -625,7 +625,7 @@ class LangFuseLogger:
                     trace_params["metadata"] = {"metadata_passed_to_litellm": metadata}
 
             cost = kwargs.get("response_cost", None)
-            verbose_logger.debug(f"trace: {cost}")
+            verbose_logger.debug("trace: %s", cost)
 
             clean_metadata["litellm_response_cost"] = cost
             if standard_logging_object is not None:
@@ -780,12 +780,13 @@ class LangFuseLogger:
             if hasattr(generation_client, "trace_id") and generation_client.trace_id:
                 if generation_client.trace_id != trace_id:
                     verbose_logger.warning(
-                        f"Langfuse trace_id mismatch: set {trace_id}, but langfuse returned {generation_client.trace_id}. "
-                        "Using our intended trace_id for consistency."
+                        "Langfuse trace_id mismatch: set %s, but langfuse returned %s. Using our intended trace_id for consistency.",
+                        trace_id,
+                        generation_client.trace_id,
                     )
             return trace_id, generation_id
         except Exception:
-            verbose_logger.error(f"Langfuse Layer Error - {traceback.format_exc()}")
+            verbose_logger.error("Langfuse Layer Error - %s", traceback.format_exc())
             return None, None
 
     @staticmethod
@@ -902,7 +903,7 @@ class LangFuseLogger:
                 # For other types, try to apply the function directly
                 return masking_function(data)
         except Exception as e:
-            verbose_logger.warning(f"Failed to apply masking function: {e}. Returning original data.")
+            verbose_logger.warning("Failed to apply masking function: %s. Returning original data.", e)
             return data
 
     @staticmethod
@@ -966,7 +967,7 @@ class LangFuseLogger:
                 end_time=guardrail_entry.get("end_time", None),  # type: ignore
             )
 
-            verbose_logger.debug(f"Logged guardrail information as span: {span}")
+            verbose_logger.debug("Logged guardrail information as span: %s", span)
             span.end()
 
 
@@ -1035,7 +1036,7 @@ def _add_prompt_to_generation_params(
         try:
             generation_params["prompt"] = langfuse_client.get_prompt(prompt_management_metadata["prompt_id"])
         except Exception as e:
-            verbose_logger.debug(f"[Non-blocking] Langfuse Logger: Error getting prompt client for logging: {e}")
+            verbose_logger.debug("[Non-blocking] Langfuse Logger: Error getting prompt client for logging: %s", e)
 
     else:
         generation_params["prompt"] = user_prompt

@@ -249,7 +249,7 @@ def batch_completion_models_all_responses(*args, **kwargs):
                 if result is not None:
                     responses.append(result)
             except Exception as e:
-                print_verbose(f"batch_completion_models_all_responses: model request failed: {e!s}")
+                print_verbose(f"batch_completion_models_all_responses: model request failed: {e}")
                 continue
 
     return responses

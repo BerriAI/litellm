@@ -53,7 +53,7 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
             api_key=_optional_params.api_key,
         )
     except Exception as e:
-        verbose_logger.debug(f"Error occurred in getting api base - {e!s}")
+        verbose_logger.debug("Error occurred in getting api base - %s", e)
         custom_llm_provider = None
         dynamic_api_base = None
 

@@ -161,10 +161,10 @@ async def get_cloudzero_settings(
         # Re-raise HTTPExceptions as-is
         raise e
     except Exception as e:
-        verbose_proxy_logger.error(f"Error retrieving CloudZero settings: {e!s}")
+        verbose_proxy_logger.error("Error retrieving CloudZero settings: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to retrieve CloudZero settings: {e!s}"},
+            detail={"error": f"Failed to retrieve CloudZero settings: {e}"},
         )
 
 
@@ -238,10 +238,10 @@ async def update_cloudzero_settings(
             )
         raise e
     except Exception as e:
-        verbose_proxy_logger.error(f"Error updating CloudZero settings: {e!s}")
+        verbose_proxy_logger.error("Error updating CloudZero settings: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to update CloudZero settings: {e!s}"},
+            detail={"error": f"Failed to update CloudZero settings: {e}"},
         )
 
 
@@ -275,7 +275,7 @@ async def is_cloudzero_setup_in_db() -> bool:
         return cloudzero_config is not None and cloudzero_config.param_value is not None
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error checking CloudZero status: {e!s}")
+        verbose_proxy_logger.error("Error checking CloudZero status: %s", e)
         return False
 
 
@@ -317,7 +317,7 @@ async def is_cloudzero_setup() -> bool:
         return False
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error checking CloudZero setup: {e!s}")
+        verbose_proxy_logger.error("Error checking CloudZero setup: %s", e)
         return False
 
 
@@ -364,10 +364,10 @@ async def init_cloudzero_settings(
         return CloudZeroInitResponse(message="CloudZero settings initialized successfully", status="success")
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error initializing CloudZero settings: {e!s}")
+        verbose_proxy_logger.error("Error initializing CloudZero settings: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to initialize CloudZero settings: {e!s}"},
+            detail={"error": f"Failed to initialize CloudZero settings: {e}"},
         )
 
 
@@ -422,10 +422,10 @@ async def cloudzero_dry_run_export(
         )
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error performing CloudZero dry run export: {e!s}")
+        verbose_proxy_logger.error("Error performing CloudZero dry run export: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to perform CloudZero dry run export: {e!s}"},
+            detail={"error": f"Failed to perform CloudZero dry run export: {e}"},
         )
 
 
@@ -487,10 +487,10 @@ async def cloudzero_export(
         )
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error performing CloudZero export: {e!s}")
+        verbose_proxy_logger.error("Error performing CloudZero export: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to perform CloudZero export: {e!s}"},
+            detail={"error": f"Failed to perform CloudZero export: {e}"},
         )
 
 
@@ -550,8 +550,8 @@ async def delete_cloudzero_settings(
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.error(f"Error deleting CloudZero settings: {e!s}")
+        verbose_proxy_logger.error("Error deleting CloudZero settings: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to delete CloudZero settings: {e!s}"},
+            detail={"error": f"Failed to delete CloudZero settings: {e}"},
         )

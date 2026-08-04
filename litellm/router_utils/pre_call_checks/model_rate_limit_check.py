@@ -75,8 +75,8 @@ class ModelRateLimitingCheck(CustomLogger):
                 return
             self._io_token_conflict_warned_ids.add(str(model_id))
         verbose_router_logger.warning(
-            f"Deployment '{model_id}' configures itpm/otpm alongside tpm/rpm; "
-            "both limit types are enforced on this deployment"
+            "Deployment '%s' configures itpm/otpm alongside tpm/rpm; both limit types are enforced on this deployment",
+            model_id,
         )
 
     def _refund_io_token_reservation_if_any(self) -> None:
@@ -212,7 +212,7 @@ class ModelRateLimitingCheck(CustomLogger):
                 self._refund_io_token_reservation_if_any()
             raise
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.pre_call_check: {e!s}")
+            verbose_router_logger.debug("Error in ModelRateLimitingCheck.pre_call_check: %s", e)
             # Don't fail the request if rate limit check fails
             return deployment
 
@@ -300,7 +300,7 @@ class ModelRateLimitingCheck(CustomLogger):
                 await self._async_refund_io_token_reservation_if_any(parent_otel_span=parent_otel_span)
             raise
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_pre_call_check: {e!s}")
+            verbose_router_logger.debug("Error in ModelRateLimitingCheck.async_pre_call_check: %s", e)
             # Don't fail the request if rate limit check fails
             return deployment
 
@@ -341,7 +341,7 @@ class ModelRateLimitingCheck(CustomLogger):
             model = standard_logging_object.get("hidden_params", {}).get("litellm_model_name")
 
             verbose_router_logger.debug(
-                f"[TPM TRACKING] model_id={model_id}, total_tokens={total_tokens}, model={model}"
+                "[TPM TRACKING] model_id=%s, total_tokens=%s, model=%s", model_id, total_tokens, model
             )
 
             if not model or not total_tokens:
@@ -351,7 +351,7 @@ class ModelRateLimitingCheck(CustomLogger):
             current_minute = dt.strftime("%H-%M")
             tpm_key = f"{model_id}:{model}:tpm:{current_minute}"
 
-            verbose_router_logger.debug(f"[TPM TRACKING] Incrementing {tpm_key} by {total_tokens}")
+            verbose_router_logger.debug("[TPM TRACKING] Incrementing %s by %s", tpm_key, total_tokens)
 
             await self.dual_cache.async_increment_cache(
                 key=tpm_key,
@@ -360,7 +360,7 @@ class ModelRateLimitingCheck(CustomLogger):
             )
 
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_log_success_event: {e!s}")
+            verbose_router_logger.debug("Error in ModelRateLimitingCheck.async_log_success_event: %s", e)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.litellm_core_utils.core_helpers import (
@@ -418,7 +418,7 @@ class ModelRateLimitingCheck(CustomLogger):
             )
 
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.log_success_event: {e!s}")
+            verbose_router_logger.debug("Error in ModelRateLimitingCheck.log_success_event: %s", e)
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         with contextlib.suppress(Exception):

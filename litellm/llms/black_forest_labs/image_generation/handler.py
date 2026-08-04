@@ -156,7 +156,7 @@ class BlackForestLabsImageGeneration:
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=500,
-                message=f"Request failed: {e!s}",
+                message=f"Request failed: {e}",
             )
 
         # Poll for result
@@ -262,7 +262,7 @@ class BlackForestLabsImageGeneration:
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=500,
-                message=f"Request failed: {e!s}",
+                message=f"Request failed: {e}",
             )
 
         # Poll for result
@@ -336,7 +336,7 @@ class BlackForestLabsImageGeneration:
         polling_headers = {"x-key": headers.get("x-key", "")}
 
         start_time = time.time()
-        verbose_logger.debug(f"BFL starting sync polling at {polling_url}")
+        verbose_logger.debug("BFL starting sync polling at %s", polling_url)
 
         while time.time() - start_time < max_wait:
             response = sync_client.get(
@@ -353,7 +353,7 @@ class BlackForestLabsImageGeneration:
             data = response.json()
             status = data.get("status")
 
-            verbose_logger.debug(f"BFL poll status: {status}")
+            verbose_logger.debug("BFL poll status: %s", status)
 
             if status == "Ready":
                 return response
@@ -427,7 +427,7 @@ class BlackForestLabsImageGeneration:
         polling_headers = {"x-key": headers.get("x-key", "")}
 
         start_time = time.time()
-        verbose_logger.debug(f"BFL starting async polling at {polling_url}")
+        verbose_logger.debug("BFL starting async polling at %s", polling_url)
 
         while time.time() - start_time < max_wait:
             response = await async_client.get(
@@ -444,7 +444,7 @@ class BlackForestLabsImageGeneration:
             data = response.json()
             status = data.get("status")
 
-            verbose_logger.debug(f"BFL poll status: {status}")
+            verbose_logger.debug("BFL poll status: %s", status)
 
             if status == "Ready":
                 return response

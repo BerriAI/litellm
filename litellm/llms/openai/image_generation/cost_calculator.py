@@ -20,7 +20,7 @@ def cost_calculator(
     """Calculate cost for OpenAI gpt-image models (token-based pricing)."""
     usage = getattr(image_response, "usage", None)
     if usage is None:
-        verbose_logger.debug(f"No usage data available for {model}, cannot calculate token-based cost")
+        verbose_logger.debug("No usage data available for %s, cannot calculate token-based cost", model)
         return 0.0
 
     provider = custom_llm_provider or "openai"

@@ -81,7 +81,7 @@ class OpikLogger(CustomBatchLogger):
             self.flush_lock: asyncio.Lock | None = asyncio.Lock()
         except Exception as e:
             verbose_logger.exception(
-                f"OpikLogger - Asynchronous processing not initialized as we are not running in an async context {e!s}"
+                "OpikLogger - Asynchronous processing not initialized as we are not running in an async context %s", e
             )
             self.flush_lock = None
 
@@ -154,14 +154,14 @@ class OpikLogger(CustomBatchLogger):
                 self.log_queue.append(span_payload.__dict__)
 
                 verbose_logger.debug(
-                    f"OpikLogger added event to log_queue - Will flush in {self.flush_interval} seconds..."
+                    "OpikLogger added event to log_queue - Will flush in %s seconds...", self.flush_interval
                 )
 
                 if len(self.log_queue) >= self.batch_size:
                     verbose_logger.debug("OpikLogger - Flushing batch")
                     await self.flush_queue()
         except Exception as e:
-            verbose_logger.exception(f"OpikLogger failed to log success event - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception("OpikLogger failed to log success event - %s\n%s", e, traceback.format_exc())
 
     def _sync_send(self, url: str, headers: dict[str, str], batch: dict[str, Any]) -> None:
         try:
@@ -174,7 +174,7 @@ class OpikLogger(CustomBatchLogger):
             if response.status_code != 204:
                 raise Exception(f"Response from opik API status_code: {response.status_code}, text: {response.text}")
         except Exception as e:
-            verbose_logger.exception(f"OpikLogger failed to send batch - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception("OpikLogger failed to send batch - %s\n%s", e, traceback.format_exc())
 
     def log_success_event(
         self,
@@ -245,7 +245,7 @@ class OpikLogger(CustomBatchLogger):
                     batch={"spans": [span_payload.__dict__]},
                 )
         except Exception as e:
-            verbose_logger.exception(f"OpikLogger failed to log success event - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception("OpikLogger failed to log success event - %s\n%s", e, traceback.format_exc())
 
     async def _submit_batch(self, url: str, headers: dict[str, str], batch: dict[str, Any]) -> None:
         try:
@@ -257,11 +257,11 @@ class OpikLogger(CustomBatchLogger):
             response.raise_for_status()
 
             if response.status_code >= 300:
-                verbose_logger.error(f"OpikLogger - Error: {response.status_code} - {response.text}")
+                verbose_logger.error("OpikLogger - Error: %s - %s", response.status_code, response.text)
             else:
-                verbose_logger.info(f"OpikLogger - {len(self.log_queue)} Opik events submitted")
+                verbose_logger.info("OpikLogger - %s Opik events submitted", len(self.log_queue))
         except Exception as e:
-            verbose_logger.exception(f"OpikLogger failed to send batch - {e!s}")
+            verbose_logger.exception("OpikLogger failed to send batch - %s", e)
 
     def _create_opik_headers(self) -> dict[str, str]:
         headers: dict[str, str] = {}
@@ -283,7 +283,7 @@ class OpikLogger(CustomBatchLogger):
         # Send trace batch
         if len(traces) > 0:
             await self._submit_batch(url=self.trace_url, headers=self.headers, batch={"traces": traces})
-            verbose_logger.info(f"Sent {len(traces)} traces")
+            verbose_logger.info("Sent %s traces", len(traces))
         if len(spans) > 0:
             await self._submit_batch(url=self.span_url, headers=self.headers, batch={"spans": spans})
-            verbose_logger.info(f"Sent {len(spans)} spans")
+            verbose_logger.info("Sent %s spans", len(spans))

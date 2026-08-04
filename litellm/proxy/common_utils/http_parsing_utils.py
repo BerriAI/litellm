@@ -72,7 +72,7 @@ async def _read_request_body(request: Request | None) -> dict:
                 # a later raw-body re-read sees the original payload —
                 # banned-param checks must see the same body the handler
                 # acts on.
-                verbose_proxy_logger.error(f"Invalid form payload: {e}")
+                verbose_proxy_logger.error("Invalid form payload: %s", e)
                 raise ProxyException(
                     message=f"Invalid form payload: {e}",
                     type="invalid_request_error",
@@ -98,9 +98,9 @@ async def _read_request_body(request: Request | None) -> dict:
                     # Above the configured size, skip the repair and raise the 400 now.
                     repair_limit_bytes = MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB * 1024 * 1024
                     if repair_limit_bytes > 0 and len(body) > repair_limit_bytes:
-                        verbose_proxy_logger.error(f"Invalid JSON payload received: {e!s}")
+                        verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
                         raise ProxyException(
-                            message=f"Invalid JSON payload: {e!s}",
+                            message=f"Invalid JSON payload: {e}",
                             type="invalid_request_error",
                             param="request_body",
                             code=status.HTTP_400_BAD_REQUEST,
@@ -120,9 +120,9 @@ async def _read_request_body(request: Request | None) -> dict:
                         parsed_body = json.loads(body_str)
                     except json.JSONDecodeError:
                         # If both orjson and json.loads fail, throw a proper error
-                        verbose_proxy_logger.error(f"Invalid JSON payload received: {e!s}")
+                        verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
                         raise ProxyException(
-                            message=f"Invalid JSON payload: {e!s}",
+                            message=f"Invalid JSON payload: {e}",
                             type="invalid_request_error",
                             param="request_body",
                             code=status.HTTP_400_BAD_REQUEST,
@@ -134,11 +134,11 @@ async def _read_request_body(request: Request | None) -> dict:
 
     except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException) as e:
         # Re-raise ProxyException as-is
-        verbose_proxy_logger.error(f"Invalid JSON payload received: {e!s}")
+        verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
         raise
     except Exception as e:
         # Catch unexpected errors to avoid crashes
-        verbose_proxy_logger.exception(f"Unexpected error reading request body - {e}")
+        verbose_proxy_logger.exception("Unexpected error reading request body - %s", e)
         return {}
 
 
@@ -159,7 +159,7 @@ def _safe_get_request_query_params(request: Request | None) -> dict:
             return dict(request.query_params)
         return {}
     except Exception as e:
-        verbose_proxy_logger.debug(f"Unexpected error reading request query params - {e}")
+        verbose_proxy_logger.debug("Unexpected error reading request query params - %s", e)
         return {}
 
 
@@ -172,7 +172,7 @@ def _safe_set_request_parsed_body(
             return
         request.scope["parsed_body"] = (tuple(parsed_body.keys()), parsed_body)
     except Exception as e:
-        verbose_proxy_logger.debug(f"Unexpected error setting request parsed body - {e}")
+        verbose_proxy_logger.debug("Unexpected error setting request parsed body - %s", e)
 
 
 def _safe_get_request_headers(request: Request | None) -> dict:
@@ -190,11 +190,11 @@ def _safe_get_request_headers(request: Request | None) -> dict:
     if isinstance(cached, dict):
         return cached
     if cached is not None:
-        verbose_proxy_logger.debug(f"Unexpected cached request headers type - {type(cached)}")
+        verbose_proxy_logger.debug("Unexpected cached request headers type - %s", type(cached))
     try:
         headers = dict(request.headers)
     except Exception as e:
-        verbose_proxy_logger.debug(f"Unexpected error reading request headers - {e}")
+        verbose_proxy_logger.debug("Unexpected error reading request headers - %s", e)
         headers = {}
     try:
         if state is not None:
@@ -393,7 +393,7 @@ def extract_nested_form_metadata(form_data: dict[str, Any], prefix: str = "litel
 
         # Skip UploadFile objects - they should not be in metadata
         if isinstance(value, UploadFile):
-            verbose_proxy_logger.warning(f"Skipping UploadFile in metadata extraction for key: {key}")
+            verbose_proxy_logger.warning("Skipping UploadFile in metadata extraction for key: %s", key)
             continue
 
         # Extract the nested path from bracket notation
@@ -406,7 +406,7 @@ def extract_nested_form_metadata(form_data: dict[str, Any], prefix: str = "litel
             parts = path_string.split("][")
 
             if not parts or not parts[0]:
-                verbose_proxy_logger.warning(f"Invalid metadata key format (empty path): {key}")
+                verbose_proxy_logger.warning("Invalid metadata key format (empty path): %s", key)
                 continue
 
             # Navigate/create nested dictionary structure
@@ -414,7 +414,7 @@ def extract_nested_form_metadata(form_data: dict[str, Any], prefix: str = "litel
             for part in parts[:-1]:
                 if not isinstance(current, dict):
                     verbose_proxy_logger.warning(
-                        f"Cannot create nested path - intermediate value is not a dict at: {part}"
+                        "Cannot create nested path - intermediate value is not a dict at: %s", part
                     )
                     break
                 current = current.setdefault(part, {})
@@ -423,10 +423,10 @@ def extract_nested_form_metadata(form_data: dict[str, Any], prefix: str = "litel
                 if isinstance(current, dict):
                     current[parts[-1]] = value
                 else:
-                    verbose_proxy_logger.warning(f"Cannot set value - parent is not a dict for key: {key}")
+                    verbose_proxy_logger.warning("Cannot set value - parent is not a dict for key: %s", key)
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error parsing metadata key '{key}': {e!s}")
+            verbose_proxy_logger.error("Error parsing metadata key '%s': %s", key, e)
             continue
 
     return metadata
@@ -505,7 +505,8 @@ def populate_request_with_path_params(request_data: dict, request: Request) -> d
                 continue
             request_data.setdefault(key, value)
         verbose_proxy_logger.debug(
-            f"populate_request_with_path_params: Found path_params, vector_store_ids={request_data.get('vector_store_ids')}"
+            "populate_request_with_path_params: Found path_params, vector_store_ids=%s",
+            request_data.get("vector_store_ids"),
         )
         return request_data
 
@@ -533,7 +534,7 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
     if vector_store_match:
         vector_store_id = vector_store_match.group(1)
         verbose_proxy_logger.debug(
-            f"populate_request_with_path_params: Extracted vector_store_id={vector_store_id} from path={path}"
+            "populate_request_with_path_params: Extracted vector_store_id=%s from path=%s", vector_store_id, path
         )
         request_data.setdefault("vector_store_id", vector_store_id)
         existing_ids = request_data.get("vector_store_ids")
@@ -543,7 +544,8 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
         else:
             request_data["vector_store_ids"] = [vector_store_id]
         verbose_proxy_logger.debug(
-            f"populate_request_with_path_params: Updated request_data with vector_store_ids={request_data.get('vector_store_ids')}"
+            "populate_request_with_path_params: Updated request_data with vector_store_ids=%s",
+            request_data.get("vector_store_ids"),
         )
     else:
-        verbose_proxy_logger.debug(f"populate_request_with_path_params: No vector_store_id present in path={path}")
+        verbose_proxy_logger.debug("populate_request_with_path_params: No vector_store_id present in path=%s", path)

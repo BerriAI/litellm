@@ -353,13 +353,13 @@ class Cache:
             if param in combined_kwargs:
                 param_value: str | None = self._get_param_value(param, kwargs)
                 if param_value is not None:
-                    cache_key += f"{param!s}: {param_value!s}"
+                    cache_key += f"{param}: {param_value}"
             elif param not in litellm_param_kwargs:  # check if user passed in optional param - e.g. top_k
                 if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
                     if kwargs[param] is None:
                         continue  # ignore None params
                     param_value = kwargs[param]
-                    cache_key += f"{param!s}: {param_value!s}"
+                    cache_key += f"{param}: {param_value}"
 
         if is_semantic_cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)
@@ -676,7 +676,7 @@ class Cache:
             cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {e!s}")
+            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
 
     async def async_add_cache(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
@@ -695,7 +695,7 @@ class Cache:
                 else:
                     await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {e!s}")
+            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
 
     def _convert_to_cached_embedding(
         self,
@@ -874,7 +874,7 @@ class Cache:
             else:
                 await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {e!s}")
+            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
 
     def should_use_cache(self, **kwargs):
         """

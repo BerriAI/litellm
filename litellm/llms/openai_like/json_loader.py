@@ -51,7 +51,7 @@ class JSONProviderRegistry:
 
             cls._loaded = True
         except Exception as e:
-            verbose_logger.warning(f"Warning: Failed to load JSON provider configs: {e}")
+            verbose_logger.warning("Warning: Failed to load JSON provider configs: %s", e)
             cls._loaded = True
 
     @classmethod

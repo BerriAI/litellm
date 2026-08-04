@@ -356,9 +356,7 @@ def _get_gcs_object_content_type(
             headers["Authorization"] = f"Bearer {access_token}"
         except Exception as e:
             raise litellm.BadRequestError(
-                message=(
-                    f"Unable to fetch GCS metadata with provided Vertex credentials/project. Original error: {e!s}"
-                ),
+                message=(f"Unable to fetch GCS metadata with provided Vertex credentials/project. Original error: {e}"),
                 model=None,
                 llm_provider="vertex_ai",
             )
@@ -844,7 +842,7 @@ def _gemini_convert_messages_with_history(
                                         f"{file_id or 'provided data'}, set this explicitly "
                                         f"using message[{msg_i}].content[{element_idx}].file.format "
                                         f"(or file.mime_type/content_type). "
-                                        f"Original error: {e!s}"
+                                        f"Original error: {e}"
                                     ),
                                     model=model,
                                     llm_provider="vertex_ai",

@@ -37,7 +37,10 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_validated_callback_metadata,
     convert_key_logging_metadata_to_callback,
 )
-from litellm.proxy.management_endpoints.team_endpoints import _verify_team_access
+from litellm.proxy.management_endpoints.team_endpoints import (
+    _refresh_cached_team,
+    _verify_team_access,
+)
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.repositories.team_repository import TeamRepository
 
@@ -262,7 +265,11 @@ async def add_team_callbacks(
     """
     try:
         from litellm.proxy._types import CommonProxyErrors
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
 
         if prisma_client is None:
             raise HTTPException(
@@ -316,6 +323,17 @@ async def add_team_callbacks(
         new_team_row = await TeamRepository(prisma_client).table.update(
             where={"team_id": team_id},
             data={"metadata": team_metadata_json},  # type: ignore
+            # `object_permission` is included so `_refresh_cached_team` doesn't
+            # write a cached team with the relation nulled out — see
+            # team_model_add for the full rationale.
+            include={"object_permission": True},  # mutable-ok: prisma include takes a dict literal
+        )
+
+        # Without this a newly registered callback stays dormant for existing keys.
+        await _refresh_cached_team(
+            team_row=new_team_row,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
         await _emit_team_callback_audit_log(
@@ -336,7 +354,7 @@ async def add_team_callbacks(
     except ProxyException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.add_team_callbacks(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.add_team_callbacks(): Exception occured - %s", e)
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
@@ -363,6 +381,9 @@ async def disable_team_logging(
     """
     Disable all logging callbacks for a team
 
+    Callbacks registered through POST /team/{team_id}/callback and the Admin UI are cleared, so
+    re-enabling logging means registering them again with their callback_vars
+
     Parameters:
     - team_id (str, required): The unique identifier for the team
 
@@ -375,7 +396,11 @@ async def disable_team_logging(
 
     """
     try:
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
 
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -408,6 +433,9 @@ async def disable_team_logging(
 
         # Update metadata
         team_metadata["callback_settings"] = team_callback_settings_obj.model_dump()
+        # _get_dynamic_logging_metadata stops at metadata["logging"], where the API
+        # and Admin UI register callbacks, without ever reading callback_settings.
+        team_metadata["logging"] = []  # mutable-ok: the disabled state is persisted as an empty JSON array
         team_metadata = encrypt_callback_vars(team_metadata)
         team_metadata_json = json.dumps(team_metadata)
 
@@ -415,6 +443,10 @@ async def disable_team_logging(
         updated_team = await TeamRepository(prisma_client).table.update(
             where={"team_id": team_id},
             data={"metadata": team_metadata_json},  # type: ignore
+            # `object_permission` is included so `_refresh_cached_team` doesn't
+            # write a cached team with the relation nulled out — see
+            # team_model_add for the full rationale.
+            include={"object_permission": True},  # mutable-ok: prisma include takes a dict literal
         )
 
         if updated_team is None:
@@ -422,6 +454,14 @@ async def disable_team_logging(
                 status_code=404,
                 detail={"error": f"Team id = {team_id} does not exist. Error updating team logging"},
             )
+
+        # Request-time callback resolution reads the cached team, so without this
+        # the DB says logging is off while live keys keep sending until it expires.
+        await _refresh_cached_team(
+            team_row=updated_team,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
         # Disabling a team's logging callbacks is itself a logging-control
         # action — emit an audit-log row so the action remains traceable
@@ -452,7 +492,7 @@ async def disable_team_logging(
     except ProxyException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.disable_team_logging(): Exception occurred - {e!s}")
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.disable_team_logging(): Exception occurred - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         raise ProxyException(
             message="Internal Server Error, " + str(e),
@@ -545,11 +585,11 @@ async def get_team_callbacks(
     except ProxyException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.get_team_callbacks(): Exception occurred - {e!s}")
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.get_team_callbacks(): Exception occurred - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Internal Server Error({e!s})"),
+                message=getattr(e, "detail", f"Internal Server Error({e})"),
                 type=ProxyErrorTypes.internal_server_error.value,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),

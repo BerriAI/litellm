@@ -97,5 +97,6 @@ def check_prisma_schema_diff(db_url: str | None = None) -> None:
     has_diff, message = check_prisma_schema_diff_helper(db_url)
     if has_diff:
         verbose_logger.exception(
-            f"🚨🚨🚨 prisma schema out of sync with db. Consider running these sql_commands to sync the two - {message}"
+            "🚨🚨🚨 prisma schema out of sync with db. Consider running these sql_commands to sync the two - %s",
+            message,
         )

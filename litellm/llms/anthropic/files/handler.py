@@ -270,7 +270,7 @@ class AnthropicFilesHandler:
                 transformed_content += "\n"  # Add trailing newline for JSONL format
             return transformed_content.encode("utf-8")
         except Exception as e:
-            verbose_logger.error(f"Error transforming Anthropic batch results to OpenAI format: {e}")
+            verbose_logger.error("Error transforming Anthropic batch results to OpenAI format: %s", e)
             # Return original content if transformation fails
             return anthropic_content
 
@@ -330,7 +330,7 @@ class AnthropicFilesHandler:
 
             return openai_body
         except Exception as e:
-            verbose_logger.error(f"Error transforming Anthropic message to OpenAI format: {e}")
+            verbose_logger.error("Error transforming Anthropic message to OpenAI format: %s", e)
             # Return a basic error response if transformation fails
             error_response: OpenAIChatCompletionResponse = {
                 "id": anthropic_message.get("id", ""),

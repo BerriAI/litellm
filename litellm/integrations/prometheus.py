@@ -34,6 +34,9 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
 )
+from litellm.litellm_core_utils.service_tier_utils import (
+    get_service_tier_from_standard_logging_payload,
+)
 from litellm.proxy._types import (
     LiteLLM_DeletedVerificationToken,
     LiteLLM_TeamTable,
@@ -96,16 +99,6 @@ class _ExcludedLabelMetric:
             value for name, value in zip(self._original_labelnames, values) if name not in self._excluded_labels
         )
         return self._metric.labels(*kept_values) if kept_values else self._metric
-
-
-# Tiers a caller may name in a request, across the providers that accept the
-# parameter: OpenAI ("auto", "default", "flex", "priority", "scale"), Bedrock and
-# Groq (subsets of those), Anthropic ("auto", "standard_only") and Vertex, which
-# maps "default" to "standard". Used to bound the caller-controlled fallback in
-# ``get_service_tier_from_standard_logging_payload``.
-KNOWN_REQUEST_SERVICE_TIERS = frozenset(
-    {"auto", "batch", "default", "flex", "priority", "scale", "standard", "standard_only"}
-)
 
 
 def _get_budget_metrics_per_request_timeout() -> float:
@@ -683,7 +676,7 @@ class PrometheusLogger(CustomLogger):
             )
 
         except Exception as e:
-            print_verbose(f"Got exception on init prometheus client {e!s}")
+            print_verbose(f"Got exception on init prometheus client {e}")
             raise e
 
     def _parse_prometheus_config(self) -> dict[str, list[str]]:
@@ -697,7 +690,7 @@ class PrometheusLogger(CustomLogger):
         if not config:
             return {}
 
-        verbose_logger.debug(f"prometheus config: {config}")
+        verbose_logger.debug("prometheus config: %s", config)
 
         # Parse and validate all configuration groups
         parsed_configs = []
@@ -963,7 +956,10 @@ class PrometheusLogger(CustomLogger):
         except ImportError:
             # Fallback to simple logging if rich is not available
             verbose_logger.error(
-                f"Invalid labels for metric '{metric_name}': {invalid_labels}. Valid labels: {sorted(valid_labels)}"
+                "Invalid labels for metric '%s': %s. Valid labels: %s",
+                metric_name,
+                invalid_labels,
+                sorted(valid_labels),
             )
 
     def _pretty_print_invalid_metric_error(self, invalid_metric_name: str, valid_metrics: tuple) -> None:
@@ -1003,7 +999,9 @@ class PrometheusLogger(CustomLogger):
 
         except ImportError:
             # Fallback to simple logging if rich is not available
-            verbose_logger.error(f"Invalid metric name: {invalid_metric_name}. Valid metrics: {sorted(valid_metrics)}")
+            verbose_logger.error(
+                "Invalid metric name: %s. Valid metrics: %s", invalid_metric_name, sorted(valid_metrics)
+            )
 
     #########################################################
     # End of pretty print functions
@@ -1078,9 +1076,10 @@ class PrometheusLogger(CustomLogger):
         except ImportError:
             # Fallback to simple logging if rich is not available
             verbose_logger.info(
-                f"Enabled metrics: {sorted(self.enabled_metrics) if hasattr(self, 'enabled_metrics') else 'All metrics'}"
+                "Enabled metrics: %s",
+                sorted(self.enabled_metrics) if hasattr(self, "enabled_metrics") else "All metrics",
             )
-            verbose_logger.info(f"Label filters: {label_filters}")
+            verbose_logger.info("Label filters: %s", label_filters)
 
     def _is_metric_enabled(self, metric_name: str) -> bool:
         """Check if a metric is enabled based on configuration"""
@@ -1866,7 +1865,9 @@ class PrometheusLogger(CustomLogger):
         for i, r in enumerate(results):
             if isinstance(r, Exception):
                 verbose_logger.debug(
-                    f"[Non-Blocking] Prometheus: Budget metric lookup {['key', 'team', 'user', 'org'][i]} failed: {r}"
+                    "[Non-Blocking] Prometheus: Budget metric lookup %s failed: %s",
+                    ["key", "team", "user", "org"][i],
+                    r,
                 )
 
     def _increment_top_level_request_and_spend_metrics(
@@ -2132,7 +2133,7 @@ class PrometheusLogger(CustomLogger):
                 response_cost=0,
             )
         except Exception as e:
-            verbose_logger.exception(f"prometheus Layer Error(): Exception occured - {e!s}")
+            verbose_logger.exception("prometheus Layer Error(): Exception occured - %s", e)
 
     def _extract_status_code(
         self,
@@ -2262,8 +2263,9 @@ class PrometheusLogger(CustomLogger):
 
         if self._is_invalid_api_key_request(status_code, exception=exception):
             verbose_logger.debug(
-                "Skipping Prometheus metrics for invalid API key request: "
-                f"status_code={status_code}, exception={type(exception).__name__ if exception else None}"
+                "Skipping Prometheus metrics for invalid API key request: status_code=%s, exception=%s",
+                status_code,
+                type(exception).__name__ if exception else None,
             )
             return True
 
@@ -2383,7 +2385,7 @@ class PrometheusLogger(CustomLogger):
             )
 
         except Exception as e:
-            verbose_logger.exception(f"prometheus Layer Error(): Exception occured - {e!s}")
+            verbose_logger.exception("prometheus Layer Error(): Exception occured - %s", e)
 
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
@@ -2608,7 +2610,7 @@ class PrometheusLogger(CustomLogger):
             )
 
         except Exception as e:
-            verbose_logger.debug(f"Prometheus Error: set_llm_deployment_failure_metrics. Exception occured - {e!s}")
+            verbose_logger.debug("Prometheus Error: set_llm_deployment_failure_metrics. Exception occured - %s", e)
 
     def _set_deployment_tpm_rpm_limit_metrics(
         self,
@@ -2722,9 +2724,7 @@ class PrometheusLogger(CustomLogger):
                 )
                 self.litellm_remaining_requests_metric.labels(**_labels).set(remaining_requests)
         except Exception as e:
-            verbose_logger.exception(
-                f"Prometheus Error: _async_set_router_remaining_metrics. Exception occured - {e!s}"
-            )
+            verbose_logger.exception("Prometheus Error: _async_set_router_remaining_metrics. Exception occured - %s", e)
 
     def set_llm_deployment_success_metrics(
         self,
@@ -2867,7 +2867,7 @@ class PrometheusLogger(CustomLogger):
                 self.litellm_deployment_latency_per_output_token.labels(**_labels).observe(latency_per_token)
 
         except Exception as e:
-            verbose_logger.exception(f"Prometheus Error: set_llm_deployment_success_metrics. Exception occured - {e!s}")
+            verbose_logger.exception("Prometheus Error: set_llm_deployment_success_metrics. Exception occured - %s", e)
             return
 
     def _record_guardrail_metrics(
@@ -2912,7 +2912,7 @@ class PrometheusLogger(CustomLogger):
                     hook_type=hook_type,
                 ).inc()
         except Exception as e:
-            verbose_logger.debug(f"Error recording guardrail metrics: {e!s}")
+            verbose_logger.debug("Error recording guardrail metrics: %s", e)
 
     ########################################
     # Managed Batch Metric Recording Methods
@@ -2935,7 +2935,7 @@ class PrometheusLogger(CustomLogger):
                 api_key_alias=api_key_alias,
             ).inc()
         except Exception as e:
-            verbose_logger.warning(f"Error recording batch created metric: {e}")
+            verbose_logger.warning("Error recording batch created metric: %s", e)
 
     def record_managed_file_size(
         self,
@@ -2956,7 +2956,7 @@ class PrometheusLogger(CustomLogger):
                 user=user or "",
             ).set(size_bytes)
         except Exception as e:
-            verbose_logger.warning(f"Error recording file size metric: {e}")
+            verbose_logger.warning("Error recording file size metric: %s", e)
 
     def record_managed_batch_duration(
         self,
@@ -2970,7 +2970,7 @@ class PrometheusLogger(CustomLogger):
                 api_provider=api_provider or "",
             ).observe(duration_seconds)
         except Exception as e:
-            verbose_logger.warning(f"Error recording batch duration metric: {e}")
+            verbose_logger.warning("Error recording batch duration metric: %s", e)
 
     def record_managed_file_created(
         self,
@@ -2989,14 +2989,14 @@ class PrometheusLogger(CustomLogger):
                 api_key_alias=api_key_alias,
             ).inc()
         except Exception as e:
-            verbose_logger.warning(f"Error recording file created metric: {e}")
+            verbose_logger.warning("Error recording file created metric: %s", e)
 
     def record_managed_file_deleted(self, result: str):
         """Record a managed file deletion attempt. result is 'success' or 'blocked'."""
         try:
             self.litellm_managed_file_deleted_total.labels(result=result).inc()
         except Exception as e:
-            verbose_logger.warning(f"Error recording file deleted metric: {e}")
+            verbose_logger.warning("Error recording file deleted metric: %s", e)
 
     def record_check_batch_cost_run(
         self,
@@ -3023,7 +3023,7 @@ class PrometheusLogger(CustomLogger):
                         api_provider=api_provider or "",
                     ).inc()
         except Exception as e:
-            verbose_logger.warning(f"Error recording check batch cost metrics: {e}")
+            verbose_logger.warning("Error recording check batch cost metrics: %s", e)
 
     def record_check_batch_cost_error(self, error_type: str):
         try:
@@ -3031,7 +3031,7 @@ class PrometheusLogger(CustomLogger):
                 error_type=error_type,
             ).inc()
         except Exception as e:
-            verbose_logger.warning(f"Error recording check batch cost error metric: {e}")
+            verbose_logger.warning("Error recording check batch cost error metric: %s", e)
 
     @staticmethod
     def _get_exception_class_name(exception: Exception) -> str:
@@ -3315,7 +3315,7 @@ class PrometheusLogger(CustomLogger):
                 await set_metrics_function(data)
 
         except Exception as e:
-            verbose_logger.exception(f"Error initializing {data_type} budget metrics: {e!s}")
+            verbose_logger.exception("Error initializing %s budget metrics: %s", data_type, e)
 
     async def _initialize_team_budget_metrics(self):
         """
@@ -3495,18 +3495,18 @@ class PrometheusLogger(CustomLogger):
             # Get total user count
             total_users = await UserRepository(prisma_client).table.count()
             self.litellm_total_users_metric.set(total_users)
-            verbose_logger.debug(f"Prometheus: set litellm_total_users to {total_users}")
+            verbose_logger.debug("Prometheus: set litellm_total_users to %s", total_users)
 
             billable_users = await UserRepository(prisma_client).count_billable_users()
             self.litellm_active_users_metric.set(billable_users)
-            verbose_logger.debug(f"Prometheus: set litellm_active_users to {billable_users}")
+            verbose_logger.debug("Prometheus: set litellm_active_users to %s", billable_users)
 
             # Get total team count
             total_teams = await TeamRepository(prisma_client).table.count()
             self.litellm_teams_count_metric.set(total_teams)
-            verbose_logger.debug(f"Prometheus: set litellm_teams_count to {total_teams}")
+            verbose_logger.debug("Prometheus: set litellm_teams_count to %s", total_teams)
         except Exception as e:
-            verbose_logger.exception(f"Error initializing user/team count metrics: {e!s}")
+            verbose_logger.exception("Error initializing user/team count metrics: %s", e)
 
     async def _set_key_list_budget_metrics(self, keys: list[str | UserAPIKeyAuth]):
         """Helper function to set budget metrics for a list of keys"""
@@ -3597,7 +3597,7 @@ class PrometheusLogger(CustomLogger):
                 user_api_key_cache=user_api_key_cache,
             )
         except Exception as e:
-            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting team info: {e!s}")
+            verbose_logger.debug("[Non-Blocking] Prometheus: Error getting team info: %s", e)
             return team_object
 
         if team_info:
@@ -3695,7 +3695,7 @@ class PrometheusLogger(CustomLogger):
                 include_budget_table=True,
             )
         except Exception as e:
-            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting org info: {e!s}")
+            verbose_logger.debug("[Non-Blocking] Prometheus: Error getting org info: %s", e)
             return
 
         if org_info is None:
@@ -3852,7 +3852,7 @@ class PrometheusLogger(CustomLogger):
                 if key_object:
                     user_api_key_dict.budget_reset_at = key_object.budget_reset_at
         except Exception as e:
-            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting key info: {e!s}")
+            verbose_logger.debug("[Non-Blocking] Prometheus: Error getting key info: %s", e)
 
         return user_api_key_dict
 
@@ -3917,7 +3917,7 @@ class PrometheusLogger(CustomLogger):
                 check_db_only=False,
             )
         except Exception as e:
-            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting user info: {e!s}")
+            verbose_logger.debug("[Non-Blocking] Prometheus: Error getting user info: %s", e)
             return user_object
 
         if user_info:
@@ -4172,44 +4172,6 @@ def get_custom_labels_from_metadata(metadata: dict) -> dict[str, str]:
             result[original_key.replace(".", "_")] = value
 
     return result
-
-
-def get_service_tier_from_standard_logging_payload(
-    standard_logging_payload: StandardLoggingPayload,
-) -> str | None:
-    """
-    Resolve the service tier a request ran on, for the ``service_tier`` label.
-
-    The tier the provider actually served wins over the tier the caller asked for,
-    so latency and spend stay segmentable when the request said ``auto`` and the
-    provider picked the concrete tier. Providers report the served tier either at
-    the top level of the response (OpenAI, Bedrock, Groq) or on the usage object
-    (Anthropic).
-
-    Streaming responses carry no served tier, so the requested tier is the
-    fallback. That value is caller-controlled and survives param mapping even
-    where the provider then ignores it (Bedrock and Groq accept the request and
-    drop an unrecognized tier), so it is only labelled when it names a known
-    tier; otherwise one caller could mint a Prometheus series per string. Values
-    the provider itself reports are not caller-controlled and stay unrestricted,
-    so a tier a provider adds later is still labelled correctly.
-    """
-    response = standard_logging_payload.get("response")
-    usage_object = standard_logging_payload.get("metadata", {}).get("usage_object")
-
-    served_candidates: tuple[object, ...] = (
-        response.get("service_tier") if isinstance(response, dict) else None,
-        usage_object.get("service_tier") if isinstance(usage_object, dict) else None,
-    )
-    served_tier = next((tier for tier in served_candidates if isinstance(tier, str) and tier), None)
-    if served_tier is not None:
-        return served_tier
-
-    model_parameters = standard_logging_payload.get("model_parameters")
-    requested_tier = model_parameters.get("service_tier") if isinstance(model_parameters, dict) else None
-    if isinstance(requested_tier, str) and requested_tier in KNOWN_REQUEST_SERVICE_TIERS:
-        return requested_tier
-    return None
 
 
 def _get_combined_custom_metadata_from_standard_logging_payload(

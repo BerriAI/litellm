@@ -250,7 +250,7 @@ class OvalixGuardrail(CustomGuardrail):
                 verbose_proxy_logger.exception("Ovalix apply_guardrail checkpoint call failed: %s", e)
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
-                    message=f"Ovalix guardrail error: {e!s}",
+                    message=f"Ovalix guardrail error: {e}",
                     should_wrap_with_default_message=False,
                 ) from e
 

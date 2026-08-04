@@ -379,8 +379,10 @@ class JWTHandler:
                     if not team_id:
                         return default_value
                     verbose_proxy_logger.debug(
-                        f"JWT Auth: team_id_jwt_field '{self.litellm_jwtauth.team_id_jwt_field}' "
-                        f"returned a list {team_id}; using first element '{team_id[0]}' automatically."
+                        "JWT Auth: team_id_jwt_field '%s' returned a list %s; using first element '%s' automatically.",
+                        self.litellm_jwtauth.team_id_jwt_field,
+                        team_id,
+                        team_id[0],
                     )
                     team_id = team_id[0]
                 return team_id  # type: ignore[return-value]
@@ -614,7 +616,7 @@ class JWTHandler:
         if cached_jwks_uri is not None:
             return cached_jwks_uri
 
-        verbose_proxy_logger.debug(f"JWT Auth: Fetching OIDC discovery document from {url}")
+        verbose_proxy_logger.debug("JWT Auth: Fetching OIDC discovery document from %s", url)
         response = await self.http_handler.get(url)
         if response.status_code != 200:
             raise Exception(
@@ -629,7 +631,7 @@ class JWTHandler:
         if not jwks_uri:
             raise Exception(f"JWT Auth: OIDC discovery document at {url} does not contain a 'jwks_uri' field.")
 
-        verbose_proxy_logger.debug(f"JWT Auth: Resolved OIDC discovery {url} -> jwks_uri={jwks_uri}")
+        verbose_proxy_logger.debug("JWT Auth: Resolved OIDC discovery %s -> jwks_uri=%s", url, jwks_uri)
         await self.user_api_key_cache.async_set_cache(
             key=cache_key,
             value=jwks_uri,
@@ -655,7 +657,7 @@ class JWTHandler:
             try:
                 response_json = response.json()
             except Exception as e:
-                verbose_proxy_logger.error(f"Error parsing response: {e}. Original Response: {response.text}")
+                verbose_proxy_logger.error("Error parsing response: %s. Original Response: %s", e, response.text)
                 raise Exception(f"Error parsing response: {e}. Check server logs for original response.")
 
             if "keys" in response_json:
@@ -749,7 +751,7 @@ class JWTHandler:
             verbose_proxy_logger.debug("Returning cached OIDC UserInfo")
             return cached_userinfo
 
-        verbose_proxy_logger.debug(f"Calling OIDC UserInfo endpoint: {self.litellm_jwtauth.oidc_userinfo_endpoint}")
+        verbose_proxy_logger.debug("Calling OIDC UserInfo endpoint: %s", self.litellm_jwtauth.oidc_userinfo_endpoint)
 
         try:
             # Call the UserInfo endpoint with the access token
@@ -765,7 +767,7 @@ class JWTHandler:
                 raise Exception(f"OIDC UserInfo endpoint returned status {response.status_code}: {response.text}")
 
             userinfo = response.json()
-            verbose_proxy_logger.debug(f"Received OIDC UserInfo: {userinfo}")
+            verbose_proxy_logger.debug("Received OIDC UserInfo: %s", userinfo)
 
             # Cache the userinfo response
             await self.user_api_key_cache.async_set_cache(
@@ -777,8 +779,8 @@ class JWTHandler:
             return userinfo
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error fetching OIDC UserInfo: {e!s}")
-            raise Exception(f"Failed to fetch OIDC UserInfo: {e!s}")
+            verbose_proxy_logger.error("Error fetching OIDC UserInfo: %s", e)
+            raise Exception(f"Failed to fetch OIDC UserInfo: {e}")
 
     _unscoped_jwt_warning_emitted = False
 
@@ -987,7 +989,7 @@ class JWTHandler:
                 code=status.HTTP_401_UNAUTHORIZED,
             )
         except Exception as e:
-            raise Exception(f"Validation fails: {e!s}")
+            raise Exception(f"Validation fails: {e}")
 
         return self._apply_issuer_claim_mappings(
             token=payload,
@@ -1032,7 +1034,7 @@ class JWTHandler:
                     code=status.HTTP_401_UNAUTHORIZED,
                 )
             except Exception as e:
-                raise Exception(f"Validation fails: {e!s}")
+                raise Exception(f"Validation fails: {e}")
 
         raise Exception("Invalid JWT Submitted")
 
@@ -1239,7 +1241,7 @@ class JWTAuthManager:
                 return None, None
 
         if team_alias:
-            verbose_proxy_logger.info(f"JWT Auth: Resolving team by alias: '{team_alias}'")
+            verbose_proxy_logger.info("JWT Auth: Resolving team by alias: '%s'", team_alias)
             team_object = await get_team_object_by_alias(
                 team_alias=team_alias,
                 prisma_client=prisma_client,
@@ -1250,7 +1252,7 @@ class JWTAuthManager:
             if team_object:
                 individual_team_id = team_object.team_id
                 verbose_proxy_logger.info(
-                    f"JWT Auth: Resolved team_alias='{team_alias}' to team_id='{individual_team_id}'"
+                    "JWT Auth: Resolved team_alias='%s' to team_id='%s'", team_alias, individual_team_id
                 )
                 return individual_team_id, team_object
 
@@ -1391,7 +1393,7 @@ class JWTAuthManager:
                             is_allowed = False
                             denied_auth_enforced_pass_through_route = True
                         verbose_proxy_logger.debug(
-                            f"JWT team route check: team_id={team_id}, route={route}, is_allowed={is_allowed}"
+                            "JWT team route check: team_id=%s, route=%s, is_allowed=%s", team_id, route, is_allowed
                         )
                         if is_allowed:
                             return team_id, team_object
@@ -1482,7 +1484,7 @@ class JWTAuthManager:
                 else None
             )
         elif org_alias:
-            verbose_proxy_logger.info(f"JWT Auth: Resolving org by alias: '{org_alias}'")
+            verbose_proxy_logger.info("JWT Auth: Resolving org by alias: '%s'", org_alias)
             org_object = await get_org_object_by_alias(
                 org_alias=org_alias,
                 prisma_client=prisma_client,
@@ -1492,7 +1494,7 @@ class JWTAuthManager:
             )
             if org_object:
                 verbose_proxy_logger.info(
-                    f"JWT Auth: Resolved org_alias='{org_alias}' to org_id='{org_object.organization_id}'"
+                    "JWT Auth: Resolved org_alias='%s' to org_id='%s'", org_alias, org_object.organization_id
                 )
 
         # Check if email domain is allowed before attempting to get/create user
@@ -1625,7 +1627,7 @@ class JWTAuthManager:
                 detail=f"Team '{header_team_id}' from x-litellm-team-id header is not in your JWT's allowed teams. Allowed teams: {list(allowed_team_ids)}",
             )
 
-        verbose_proxy_logger.debug(f"Using team_id from x-litellm-team-id header: {header_team_id}")
+        verbose_proxy_logger.debug("Using team_id from x-litellm-team-id header: %s", header_team_id)
         return header_team_id
 
     @staticmethod
@@ -1666,11 +1668,13 @@ class JWTAuthManager:
                     user_role=LitellmUserRoles.PROXY_ADMIN
                 ),  # [TODO]: expose an internal service role, for better tracking
             )
-            verbose_proxy_logger.debug(f"Successfully added user {user_object.user_id} to team {team_object.team_id}")
+            verbose_proxy_logger.debug(
+                "Successfully added user %s to team %s", user_object.user_id, team_object.team_id
+            )
         except ProxyException as e:
             if e.type == ProxyErrorTypes.team_member_already_in_team:
                 verbose_proxy_logger.debug(
-                    f"User {user_object.user_id} is already a member of team {team_object.team_id}"
+                    "User %s is already a member of team %s", user_object.user_id, team_object.team_id
                 )
                 return
             else:

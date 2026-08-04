@@ -153,7 +153,7 @@ try:
         "active_mcp_session", default=None
     )
 except ImportError as e:
-    verbose_logger.debug(f"MCP module not found: {e}")
+    verbose_logger.debug("MCP module not found: %s", e)
     MCP_AVAILABLE = False
     # When MCP is not available, we set these to None at module level
     # All code using these types is inside `if MCP_AVAILABLE:` blocks
@@ -657,7 +657,7 @@ if MCP_AVAILABLE:
             try:
                 await _purge_expired_stateful_session_auth_contexts()
             except Exception as e:
-                verbose_logger.exception(f"Error cleaning up expired MCP stateful sessions: {e}")
+                verbose_logger.exception("Error cleaning up expired MCP stateful sessions: %s", e)
 
     async def initialize_session_managers():
         """Initialize the session managers. Can be called from main app lifespan."""
@@ -713,7 +713,7 @@ if MCP_AVAILABLE:
                 if _sse_session_manager_cm:
                     await _sse_session_manager_cm.__aexit__(None, None, None)
             except Exception as e:
-                verbose_logger.exception(f"Error during session manager shutdown: {e}")
+                verbose_logger.exception("Error during session manager shutdown: %s", e)
 
             _session_manager_cm = None
             _session_manager_stateful_cm = None
@@ -765,10 +765,11 @@ if MCP_AVAILABLE:
                 raw_headers,
                 _client_ip,
             ) = await get_or_extract_auth_context()
-            verbose_logger.debug(f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}")
-            verbose_logger.debug(f"MCP list_tools - MCP servers from context: {mcp_servers}")
+            verbose_logger.debug("MCP list_tools - User API Key Auth from context: %s", user_api_key_auth)
+            verbose_logger.debug("MCP list_tools - MCP servers from context: %s", mcp_servers)
             verbose_logger.debug(
-                f"MCP list_tools - MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
+                "MCP list_tools - MCP server auth headers: %s",
+                list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None,
             )
             if getattr(
                 getattr(user_api_key_auth, "object_permission", None),
@@ -795,7 +796,7 @@ if MCP_AVAILABLE:
                 log_list_tools_to_spendlogs=True,
                 list_tools_log_source="mcp_protocol",
             )
-            verbose_logger.info(f"MCP list_tools - Successfully returned {len(listing.tools)} tools")
+            verbose_logger.info("MCP list_tools - Successfully returned %s tools", len(listing.tools))
             if not listing.outcomes:
                 return listing.tools
             outcome_meta = {
@@ -805,7 +806,7 @@ if MCP_AVAILABLE:
             }
             return ListToolsResult.model_validate({"tools": listing.tools, "_meta": outcome_meta})
         except Exception as e:
-            verbose_logger.exception(f"Error in list_tools endpoint: {e!s}")
+            verbose_logger.exception("Error in list_tools endpoint: %s", e)
             # Return empty list instead of failing completely
             # This prevents the HTTP stream from failing and allows the client to get a response
             return []
@@ -823,7 +824,7 @@ if MCP_AVAILABLE:
         try:
             host_ctx = host_server.request_context
         except Exception as e:
-            verbose_logger.warning(f"Could not capture host progress context: {e}")
+            verbose_logger.warning("Could not capture host progress context: %s", e)
             return None
 
         if not (host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta):
@@ -841,11 +842,11 @@ if MCP_AVAILABLE:
                     progress=progress,
                     total=total,
                 )
-                verbose_logger.debug(f"Forwarded progress {progress}/{total} to Host")
+                verbose_logger.debug("Forwarded progress %s/%s to Host", progress, total)
             except Exception as e:
-                verbose_logger.error(f"Failed to forward progress to Host: {e}")
+                verbose_logger.error("Failed to forward progress to Host: %s", e)
 
-        verbose_logger.debug(f"Host progressToken captured: {str(host_token)[:8]}...")
+        verbose_logger.debug("Host progressToken captured: %s...", str(host_token)[:8])
         return forward_progress
 
     async def _build_virtual_call_logging_obj(
@@ -1000,10 +1001,12 @@ if MCP_AVAILABLE:
                 _client_ip,
             ) = await get_or_extract_auth_context()
             verbose_logger.debug(
-                f"MCP mcp_server_tool_call - user_api_key_auth={user_api_key_auth}, user_role={getattr(user_api_key_auth, 'user_role', 'N/A')}"
+                "MCP mcp_server_tool_call - user_api_key_auth=%s, user_role=%s",
+                user_api_key_auth,
+                getattr(user_api_key_auth, "user_role", "N/A"),
             )
 
-            verbose_logger.debug(f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}")
+            verbose_logger.debug("MCP mcp_server_tool_call - User API Key Auth from context: %s", user_api_key_auth)
 
             try:
                 # Inside this try so virtual-tool errors convert to isError
@@ -1080,26 +1083,26 @@ if MCP_AVAILABLE:
                     isError=True,
                 )
             except BlockedPiiEntityError as e:
-                verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {e!s}")
+                verbose_logger.error("BlockedPiiEntityError in MCP tool call: %s", e)
                 return CallToolResult(
                     content=[
                         TextContent(
-                            text=f"Error: Blocked PII entity detected - {e!s}",
+                            text=f"Error: Blocked PII entity detected - {e}",
                             type="text",
                         )
                     ],
                     isError=True,
                 )
             except GuardrailRaisedException as e:
-                verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {e!s}")
+                verbose_logger.error("GuardrailRaisedException in MCP tool call: %s", e)
                 return CallToolResult(
-                    content=[TextContent(text=f"Error: Guardrail violation - {e!s}", type="text")],
+                    content=[TextContent(text=f"Error: Guardrail violation - {e}", type="text")],
                     isError=True,
                 )
             except HTTPException as e:
-                verbose_logger.error(f"HTTPException in MCP tool call: {e!s}")
+                verbose_logger.error("HTTPException in MCP tool call: %s", e)
                 return CallToolResult(
-                    content=[TextContent(text=f"Error: {e.detail!s}", type="text")],
+                    content=[TextContent(text=f"Error: {e.detail}", type="text")],
                     isError=True,
                 )
             except MCPUpstreamAuthError as e:
@@ -1108,7 +1111,7 @@ if MCP_AVAILABLE:
                 # call path and the connect-time preemptive check do. Return an explicit isError
                 # naming the upstream status (at info level, not a traceback) so the client still
                 # learns it must re-authenticate upstream and expected pass-through 401s don't spam.
-                verbose_logger.info(f"Upstream auth failure calling MCP tool: HTTP {e.status_code}")
+                verbose_logger.info("Upstream auth failure calling MCP tool: HTTP %s", e.status_code)
                 return CallToolResult(
                     content=[
                         TextContent(
@@ -1119,9 +1122,9 @@ if MCP_AVAILABLE:
                     isError=True,
                 )
             except Exception as e:
-                verbose_logger.exception(f"MCP mcp_server_tool_call - error: {e}")
+                verbose_logger.exception("MCP mcp_server_tool_call - error: %s", e)
                 return CallToolResult(
-                    content=[TextContent(text=f"Error: {e!s}", type="text")],
+                    content=[TextContent(text=f"Error: {e}", type="text")],
                     isError=True,
                 )
 
@@ -1155,10 +1158,11 @@ if MCP_AVAILABLE:
                 raw_headers,
                 _client_ip,
             ) = await get_or_extract_auth_context()
-            verbose_logger.debug(f"MCP list_prompts - User API Key Auth from context: {user_api_key_auth}")
-            verbose_logger.debug(f"MCP list_prompts - MCP servers from context: {mcp_servers}")
+            verbose_logger.debug("MCP list_prompts - User API Key Auth from context: %s", user_api_key_auth)
+            verbose_logger.debug("MCP list_prompts - MCP servers from context: %s", mcp_servers)
             verbose_logger.debug(
-                f"MCP list_prompts - MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
+                "MCP list_prompts - MCP server auth headers: %s",
+                list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None,
             )
             # Get mcp_servers from context variable
             verbose_logger.debug("MCP list_prompts - Calling _list_prompts")
@@ -1170,10 +1174,10 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
             )
-            verbose_logger.info(f"MCP list_prompts - Successfully returned {len(prompts)} prompts")
+            verbose_logger.info("MCP list_prompts - Successfully returned %s prompts", len(prompts))
             return prompts
         except Exception as e:
-            verbose_logger.exception(f"Error in list_prompts endpoint: {e!s}")
+            verbose_logger.exception("Error in list_prompts endpoint: %s", e)
             # Return empty list instead of failing completely
             # This prevents the HTTP stream from failing and allows the client to get a response
             return []
@@ -1213,7 +1217,7 @@ if MCP_AVAILABLE:
                 _client_ip,
             ) = await get_or_extract_auth_context()
 
-            verbose_logger.debug(f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}")
+            verbose_logger.debug("MCP mcp_server_tool_call - User API Key Auth from context: %s", user_api_key_auth)
             return await mcp_get_prompt(
                 name=name,
                 arguments=arguments,
@@ -1248,10 +1252,11 @@ if MCP_AVAILABLE:
                 raw_headers,
                 _client_ip,
             ) = await get_or_extract_auth_context()
-            verbose_logger.debug(f"MCP list_resources - User API Key Auth from context: {user_api_key_auth}")
-            verbose_logger.debug(f"MCP list_resources - MCP servers from context: {mcp_servers}")
+            verbose_logger.debug("MCP list_resources - User API Key Auth from context: %s", user_api_key_auth)
+            verbose_logger.debug("MCP list_resources - MCP servers from context: %s", mcp_servers)
             verbose_logger.debug(
-                f"MCP list_resources - MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
+                "MCP list_resources - MCP server auth headers: %s",
+                list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None,
             )
 
             resources = await _list_mcp_resources(
@@ -1262,10 +1267,10 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
             )
-            verbose_logger.info(f"MCP list_resources - Successfully returned {len(resources)} resources")
+            verbose_logger.info("MCP list_resources - Successfully returned %s resources", len(resources))
             return resources
         except Exception as e:
-            verbose_logger.exception(f"Error in list_resources endpoint: {e!s}")
+            verbose_logger.exception("Error in list_resources endpoint: %s", e)
             return []
         finally:
             if _session_reset_token is not None:
@@ -1291,10 +1296,11 @@ if MCP_AVAILABLE:
                 raw_headers,
                 _client_ip,
             ) = await get_or_extract_auth_context()
-            verbose_logger.debug(f"MCP list_resource_templates - User API Key Auth from context: {user_api_key_auth}")
-            verbose_logger.debug(f"MCP list_resource_templates - MCP servers from context: {mcp_servers}")
+            verbose_logger.debug("MCP list_resource_templates - User API Key Auth from context: %s", user_api_key_auth)
+            verbose_logger.debug("MCP list_resource_templates - MCP servers from context: %s", mcp_servers)
             verbose_logger.debug(
-                f"MCP list_resource_templates - MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
+                "MCP list_resource_templates - MCP server auth headers: %s",
+                list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None,
             )
 
             resource_templates = await _list_mcp_resource_templates(
@@ -1306,11 +1312,11 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
             )
             verbose_logger.info(
-                f"MCP list_resource_templates - Successfully returned {len(resource_templates)} resource templates"
+                "MCP list_resource_templates - Successfully returned %s resource templates", len(resource_templates)
             )
             return resource_templates
         except Exception as e:
-            verbose_logger.exception(f"Error in list_resource_templates endpoint: {e!s}")
+            verbose_logger.exception("Error in list_resource_templates endpoint: %s", e)
             return []
         finally:
             if _session_reset_token is not None:
@@ -1400,7 +1406,7 @@ if MCP_AVAILABLE:
                                 if server_id == server.server_id:
                                     filtered_server[server.server_id] = server
                     except Exception as e:
-                        verbose_logger.debug(f"Could not resolve '{server_or_group}' as access group: {e}")
+                        verbose_logger.debug("Could not resolve '%s' as access group: %s", server_or_group, e)
 
         if filtered_server:
             return list(filtered_server.values())
@@ -1659,7 +1665,7 @@ if MCP_AVAILABLE:
             creds = await list_user_oauth_credentials(prisma_client, user_id)
             return {c["server_id"]: c for c in creds if "server_id" in c}
         except Exception as e:
-            verbose_logger.warning(f"_prefetch_oauth_creds_for_user: failed to prefetch for user={user_id}: {e}")
+            verbose_logger.warning("_prefetch_oauth_creds_for_user: failed to prefetch for user=%s: %s", user_id, e)
             return {}
 
     def _prepare_mcp_server_headers(
@@ -2023,7 +2029,10 @@ if MCP_AVAILABLE:
                     filtered_tools = apply_tool_overrides(filtered_tools, server)
 
                     verbose_logger.debug(
-                        f"Successfully fetched {len(tools)} tools from server {server.name}, {len(filtered_tools)} after filtering"
+                        "Successfully fetched %s tools from server %s, %s after filtering",
+                        len(tools),
+                        server.name,
+                        len(filtered_tools),
                     )
                     return filtered_tools, ServerListOk(tool_count=len(filtered_tools))
                 except MCPUpstreamAuthError as e:
@@ -2033,10 +2042,10 @@ if MCP_AVAILABLE:
                     # 401 + WWW-Authenticate (the MCP session manager serializes it as a JSON-RPC
                     # error). Single-server routes surface it via the request-scope preemptive
                     # check in _raise_preemptive_401_for_unauthenticated_servers instead.
-                    verbose_logger.debug(f"MCP list_tools: omitting {server.name}; it needs upstream auth")
+                    verbose_logger.debug("MCP list_tools: omitting %s; it needs upstream auth", server.name)
                     return [], classify_list_exception(e)
                 except Exception as e:
-                    verbose_logger.exception(f"Error getting tools from server {server.name}: {e!s}")
+                    verbose_logger.exception("Error getting tools from server %s: %s", server.name, e)
                     return [], classify_list_exception(e)
 
             # Fetch tools from all servers in parallel
@@ -2089,7 +2098,7 @@ if MCP_AVAILABLE:
                         log_exc,
                     )
 
-            verbose_logger.info(f"Successfully fetched {len(all_tools)} tools total from all MCP servers")
+            verbose_logger.info("Successfully fetched %s tools total from all MCP servers", len(all_tools))
 
             return AggregateToolListing(tools=all_tools, outcomes=server_outcomes)
         except Exception as e:
@@ -2167,12 +2176,12 @@ if MCP_AVAILABLE:
 
                 all_prompts.extend(prompts)
 
-                verbose_logger.debug(f"Successfully fetched {len(prompts)} prompts from server {server.name}")
+                verbose_logger.debug("Successfully fetched %s prompts from server %s", len(prompts), server.name)
             except Exception as e:
-                verbose_logger.exception(f"Error getting prompts from server {server.name}: {e!s}")
+                verbose_logger.exception("Error getting prompts from server %s: %s", server.name, e)
                 # Continue with other servers instead of failing completely
 
-        verbose_logger.info(f"Successfully fetched {len(all_prompts)} prompts total from all MCP servers")
+        verbose_logger.info("Successfully fetched %s prompts total from all MCP servers", len(all_prompts))
 
         return all_prompts
 
@@ -2219,11 +2228,11 @@ if MCP_AVAILABLE:
                 )
                 all_resources.extend(resources)
 
-                verbose_logger.debug(f"Successfully fetched {len(resources)} resources from server {server.name}")
+                verbose_logger.debug("Successfully fetched %s resources from server %s", len(resources), server.name)
             except Exception as e:
-                verbose_logger.exception(f"Error getting resources from server {server.name}: {e!s}")
+                verbose_logger.exception("Error getting resources from server %s: %s", server.name, e)
 
-        verbose_logger.info(f"Successfully fetched {len(all_resources)} resources total from all MCP servers")
+        verbose_logger.info("Successfully fetched %s resources total from all MCP servers", len(all_resources))
 
         return all_resources
 
@@ -2356,10 +2365,10 @@ if MCP_AVAILABLE:
                 list_tools_log_source=list_tools_log_source,
                 client_ip=client_ip,
             )
-            verbose_logger.debug(f"Successfully fetched {len(listing.tools)} tools from managed MCP servers")
+            verbose_logger.debug("Successfully fetched %s tools from managed MCP servers", len(listing.tools))
             return listing
         except Exception as e:
-            verbose_logger.exception(f"Error getting tools from managed MCP servers: {e!s}")
+            verbose_logger.exception("Error getting tools from managed MCP servers: %s", e)
             # Continue with an empty listing instead of failing completely
             return AggregateToolListing(tools=[], outcomes={})
 
@@ -2396,9 +2405,9 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
             )
-            verbose_logger.debug(f"Successfully fetched {len(managed_prompts)} prompts from managed MCP servers")
+            verbose_logger.debug("Successfully fetched %s prompts from managed MCP servers", len(managed_prompts))
         except Exception as e:
-            verbose_logger.exception(f"Error getting tools from managed MCP servers: {e!s}")
+            verbose_logger.exception("Error getting tools from managed MCP servers: %s", e)
             # Continue with empty managed tools list instead of failing completely
 
         return managed_prompts
@@ -2426,9 +2435,9 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
             )
-            verbose_logger.debug(f"Successfully fetched {len(managed_resources)} resources from managed MCP servers")
+            verbose_logger.debug("Successfully fetched %s resources from managed MCP servers", len(managed_resources))
         except Exception as e:
-            verbose_logger.exception(f"Error getting resources from managed MCP servers: {e!s}")
+            verbose_logger.exception("Error getting resources from managed MCP servers: %s", e)
 
         return managed_resources
 
@@ -2814,7 +2823,7 @@ if MCP_AVAILABLE:
             if isinstance(hook_result, dict) and "arguments" in hook_result:
                 arguments = hook_result["arguments"]
 
-            verbose_logger.debug(f"Executing local registry tool: {name}")
+            verbose_logger.debug("Executing local registry tool: %s", name)
             # For BYOK servers the credential must be injected via a ContextVar
             # because the tool function has headers baked into its closure.
             # Pre-format the full Authorization header value using the server's
@@ -3335,8 +3344,8 @@ if MCP_AVAILABLE:
                 result = tool.handler(**arguments)
             return [TextContent(text=str(result), type="text")]
         except Exception as e:
-            verbose_logger.exception(f"Error executing local tool {name}: {e!s}")
-            return [TextContent(text=f"Error: {e!s}", type="text")]
+            verbose_logger.exception("Error executing local tool %s: %s", name, e)
+            return [TextContent(text=f"Error: {e}", type="text")]
 
     def _get_mcp_servers_in_path(path: str) -> list[str] | None:
         """
@@ -3986,7 +3995,7 @@ if MCP_AVAILABLE:
             # to the appropriate response.
             return exc.response.status_code, exc.response.headers.get("www-authenticate")
         except Exception as exc:
-            verbose_logger.debug(f"_probe_upstream_auth: probe to {url} failed ({exc}), allowing request through")
+            verbose_logger.debug("_probe_upstream_auth: probe to %s failed (%s), allowing request through", url, exc)
             return 200, None
 
     async def _check_passthrough_upstream_auth(
@@ -4124,9 +4133,9 @@ if MCP_AVAILABLE:
             # Extract client IP for MCP access control
             _client_ip = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
 
-            verbose_logger.debug(f"MCP request mcp_servers (header/path): {mcp_servers}")
+            verbose_logger.debug("MCP request mcp_servers (header/path): %s", mcp_servers)
             verbose_logger.debug(
-                f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
+                "MCP server auth headers: %s", list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None
             )
 
             # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
@@ -4413,7 +4422,7 @@ if MCP_AVAILABLE:
             # 500 that surfaces as a cancelled tool call.
             raise _proxy_exception_to_http_exception(e)
         except Exception as e:
-            verbose_logger.exception(f"Error handling MCP request: {e}")
+            verbose_logger.exception("Error handling MCP request: %s", e)
             # Try to send a graceful error response for non-HTTP exceptions
             try:
                 from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
@@ -4424,7 +4433,7 @@ if MCP_AVAILABLE:
                 )
                 await error_response(scope, receive, send)
             except Exception as response_error:
-                verbose_logger.exception(f"Failed to send error response: {response_error}")
+                verbose_logger.exception("Failed to send error response: %s", response_error)
                 # If we can't send a proper response, re-raise the original error
                 raise e
 
@@ -4445,9 +4454,9 @@ if MCP_AVAILABLE:
             # Extract client IP for MCP access control
             _sse_client_ip = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
 
-            verbose_logger.debug(f"MCP request mcp_servers (header/path): {mcp_servers}")
+            verbose_logger.debug("MCP request mcp_servers (header/path): %s", mcp_servers)
             verbose_logger.debug(
-                f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
+                "MCP server auth headers: %s", list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None
             )
 
             # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
@@ -4524,7 +4533,7 @@ if MCP_AVAILABLE:
             # 500 that surfaces as a cancelled tool call.
             raise _proxy_exception_to_http_exception(e)
         except Exception as e:
-            verbose_logger.exception(f"Error handling MCP request: {e}")
+            verbose_logger.exception("Error handling MCP request: %s", e)
             # Try to send a graceful error response for non-HTTP exceptions
             try:
                 # Send a proper HTTP error response instead of letting the exception bubble up
@@ -4537,7 +4546,7 @@ if MCP_AVAILABLE:
                 )
                 await error_response(scope, receive, send)
             except Exception as response_error:
-                verbose_logger.exception(f"Failed to send error response: {response_error}")
+                verbose_logger.exception("Failed to send error response: %s", response_error)
                 # If we can't send a proper response, re-raise the original error
                 raise e
 
