@@ -220,7 +220,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
             AttributeError,
         ) as e:
             raise litellm.utils.AuthenticationError(
-                message=f"Failed to load service account credentials from api_key: {e!s}",
+                message=f"Failed to load service account credentials from api_key: {e}",
                 llm_provider="gdc",
                 model=model,
             ) from e

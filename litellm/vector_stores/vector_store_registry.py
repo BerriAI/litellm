@@ -235,7 +235,7 @@ class VectorStoreRegistry:
                         self.add_vector_store_to_registry(vector_store=db_vector_store)
                         return db_vector_store
             except Exception as e:
-                verbose_logger.debug(f"Error fetching vector store from database: {e!s}")
+                verbose_logger.debug(f"Error fetching vector store from database: {e}")
 
         return None
 
@@ -346,7 +346,7 @@ class VectorStoreRegistry:
                         self.delete_vector_store_from_registry(vector_store_id=vector_store_id)
                         vector_store = None
                 except Exception as e:
-                    verbose_logger.debug(f"Error verifying vector store {vector_store_id} in database: {e!s}")
+                    verbose_logger.debug(f"Error verifying vector store {vector_store_id} in database: {e}")
 
             # Fall back to database if not found in memory (or was deleted)
             if vector_store is None and prisma_client is not None:
@@ -355,7 +355,7 @@ class VectorStoreRegistry:
                         vector_store_id=vector_store_id, prisma_client=prisma_client
                     )
                 except Exception as e:
-                    verbose_logger.debug(f"Error fetching vector store {vector_store_id} from database: {e!s}")
+                    verbose_logger.debug(f"Error fetching vector store {vector_store_id} from database: {e}")
 
             if vector_store is not None:
                 # Create a copy to avoid modifying the registry

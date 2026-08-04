@@ -146,7 +146,7 @@ class VectorStorePreCallHook(CustomLogger):
             return model, modified_messages, non_default_params
 
         except Exception as e:
-            verbose_logger.exception(f"Error in VectorStorePreCallHook: {e!s}")
+            verbose_logger.exception(f"Error in VectorStorePreCallHook: {e}")
             # Return original parameters on error
             return model, messages, non_default_params
 
@@ -275,7 +275,7 @@ class VectorStorePreCallHook(CustomLogger):
             return response
 
         except Exception as e:
-            verbose_logger.exception(f"Error adding search results to response: {e!s}")
+            verbose_logger.exception(f"Error adding search results to response: {e}")
             # Don't fail the request if search results fail to be added
             return None
 
@@ -322,6 +322,6 @@ class VectorStorePreCallHook(CustomLogger):
             return response_chunk
 
         except Exception as e:
-            verbose_logger.exception(f"Error adding search results to streaming chunk: {e!s}")
+            verbose_logger.exception(f"Error adding search results to streaming chunk: {e}")
             # Don't fail the request if search results fail to be added
             return response_chunk

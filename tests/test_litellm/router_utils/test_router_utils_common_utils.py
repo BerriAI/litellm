@@ -10,6 +10,7 @@ from litellm.router_utils.common_utils import (
     add_model_file_id_mappings,
     filter_team_based_models,
     filter_web_search_deployments,
+    resolve_model_group_alias,
 )
 
 
@@ -516,3 +517,44 @@ class TestAddModelFileIdMappings:
     def test_should_return_empty_mapping_when_given_empty_list(self):
         result = add_model_file_id_mappings([], [])
         assert result == {}
+
+
+class TestResolveModelGroupAlias:
+    """``model_group_alias`` maps reach this helper from validated config and
+    from key/team rows, so both entry shapes must resolve and malformed entries
+    must not raise mid-request."""
+
+    @pytest.mark.parametrize(
+        "alias_map, expected",
+        [
+            ({"group-a": "group-b"}, "group-b"),
+            ({"group-a": {"model": "group-b", "hidden": True}}, "group-b"),
+            ({"group-a": {"model": "group-b"}}, "group-b"),
+            ({"other": "group-b"}, None),
+            ({}, None),
+            (None, None),
+            ("not-a-map", None),
+            ({"group-a": {"hidden": True}}, None),
+            ({"group-a": {"model": 5}}, None),
+            ({"group-a": 5}, None),
+            ({"group-a": None}, None),
+            ({"group-a": ""}, None),
+        ],
+    )
+    def test_resolves_both_entry_shapes_and_tolerates_malformed_entries(self, alias_map, expected):
+        assert resolve_model_group_alias(alias_map, "group-a") == expected
+
+    def test_router_alias_resolution_uses_the_shared_helper(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "group-b",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                }
+            ],
+            model_group_alias={"group-a": "group-b", "group-item": {"model": "group-b", "hidden": True}},
+        )
+
+        assert router._get_model_from_alias("group-a") == "group-b"
+        assert router._get_model_from_alias("group-item") == "group-b"
+        assert router._get_model_from_alias("group-b") is None

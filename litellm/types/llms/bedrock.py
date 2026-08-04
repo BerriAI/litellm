@@ -301,7 +301,7 @@ class BedrockToolSpec(dict):
             "name": name,
             "description": description,
         }
-        if supports_strict_tools and strict is not None:
+        if supports_strict_tools and strict:
             tool_spec["strict"] = strict
 
         super().__init__(toolSpec=tool_spec)

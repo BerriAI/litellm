@@ -3341,7 +3341,7 @@ class PrismaClient:
                 reason=f"prisma_get_generic_data_{table_name}_lookup_failure",
             )
         except Exception as e:
-            error_msg = f"LiteLLM Prisma Client Exception get_generic_data: {e!s}"
+            error_msg = f"LiteLLM Prisma Client Exception get_generic_data: {e}"
             verbose_proxy_logger.error(error_msg)
             error_msg = error_msg + f"\nException Type: {type(e)}"
             error_traceback = error_msg + "\n" + traceback.format_exc()
@@ -3956,7 +3956,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception in insert_data: {e!s}"
+            error_msg = f"LiteLLM Prisma Client Exception in insert_data: {e}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
@@ -4205,7 +4205,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception - update_data: {e!s}"
+            error_msg = f"LiteLLM Prisma Client Exception - update_data: {e}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
@@ -4271,7 +4271,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception - delete_data: {e!s}"
+            error_msg = f"LiteLLM Prisma Client Exception - delete_data: {e}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
@@ -4304,7 +4304,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception connect(): {e!s}"
+            error_msg = f"LiteLLM Prisma Client Exception connect(): {e}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
@@ -4334,7 +4334,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception disconnect(): {e!s}"
+            error_msg = f"LiteLLM Prisma Client Exception disconnect(): {e}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
@@ -5023,7 +5023,7 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception disconnect(): {e!s}"
+            error_msg = f"LiteLLM Prisma Client Exception disconnect(): {e}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
@@ -5833,7 +5833,7 @@ def _raise_failed_update_spend_exception(e: Exception, start_time: float, proxy_
     """
     import traceback
 
-    error_msg = f"[Non-Blocking]LiteLLM Prisma Client Exception - update spend logs: {e!s}"
+    error_msg = f"[Non-Blocking]LiteLLM Prisma Client Exception - update spend logs: {e}"
     error_traceback = error_msg + "\n" + traceback.format_exc()
     end_time = time.time()
     _duration = end_time - start_time
@@ -6125,7 +6125,7 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
 
     if isinstance(e, HTTPException):
         return ProxyException(
-            message=getattr(e, "detail", f"error({e!s})"),
+            message=getattr(e, "detail", f"error({e})"),
             type=ProxyErrorTypes.internal_server_error,
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),

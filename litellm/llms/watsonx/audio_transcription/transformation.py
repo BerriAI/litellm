@@ -170,7 +170,7 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         try:
             raw_response_json = raw_response.json()
         except Exception as e:
-            raise ValueError(f"Error transforming response to json: {e!s}\nResponse: {raw_response.text}")
+            raise ValueError(f"Error transforming response to json: {e}\nResponse: {raw_response.text}")
 
         # Extract only valid fields for TranscriptionResponse.__init__()
         # TranscriptionResponse only accepts 'text' and 'usage' in __init__()

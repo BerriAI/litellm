@@ -330,7 +330,7 @@ class MistralConfig(OpenAIGPTConfig):
                         new_content = [{"type": "text", "text": reasoning_prompt + "\n\n"}] + existing_content
                     else:
                         # Fallback for any other type - convert to string
-                        new_content = f"{reasoning_prompt}\n\n{existing_content!s}"
+                        new_content = f"{reasoning_prompt}\n\n{existing_content}"
 
                     messages[i] = cast(AllMessageValues, {**msg, "content": new_content})
                     break

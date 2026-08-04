@@ -683,7 +683,7 @@ class PrometheusLogger(CustomLogger):
             )
 
         except Exception as e:
-            print_verbose(f"Got exception on init prometheus client {e!s}")
+            print_verbose(f"Got exception on init prometheus client {e}")
             raise e
 
     def _parse_prometheus_config(self) -> dict[str, list[str]]:
@@ -2132,7 +2132,7 @@ class PrometheusLogger(CustomLogger):
                 response_cost=0,
             )
         except Exception as e:
-            verbose_logger.exception(f"prometheus Layer Error(): Exception occured - {e!s}")
+            verbose_logger.exception(f"prometheus Layer Error(): Exception occured - {e}")
 
     def _extract_status_code(
         self,
@@ -2383,7 +2383,7 @@ class PrometheusLogger(CustomLogger):
             )
 
         except Exception as e:
-            verbose_logger.exception(f"prometheus Layer Error(): Exception occured - {e!s}")
+            verbose_logger.exception(f"prometheus Layer Error(): Exception occured - {e}")
 
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
@@ -2608,7 +2608,7 @@ class PrometheusLogger(CustomLogger):
             )
 
         except Exception as e:
-            verbose_logger.debug(f"Prometheus Error: set_llm_deployment_failure_metrics. Exception occured - {e!s}")
+            verbose_logger.debug(f"Prometheus Error: set_llm_deployment_failure_metrics. Exception occured - {e}")
 
     def _set_deployment_tpm_rpm_limit_metrics(
         self,
@@ -2722,9 +2722,7 @@ class PrometheusLogger(CustomLogger):
                 )
                 self.litellm_remaining_requests_metric.labels(**_labels).set(remaining_requests)
         except Exception as e:
-            verbose_logger.exception(
-                f"Prometheus Error: _async_set_router_remaining_metrics. Exception occured - {e!s}"
-            )
+            verbose_logger.exception(f"Prometheus Error: _async_set_router_remaining_metrics. Exception occured - {e}")
 
     def set_llm_deployment_success_metrics(
         self,
@@ -2867,7 +2865,7 @@ class PrometheusLogger(CustomLogger):
                 self.litellm_deployment_latency_per_output_token.labels(**_labels).observe(latency_per_token)
 
         except Exception as e:
-            verbose_logger.exception(f"Prometheus Error: set_llm_deployment_success_metrics. Exception occured - {e!s}")
+            verbose_logger.exception(f"Prometheus Error: set_llm_deployment_success_metrics. Exception occured - {e}")
             return
 
     def _record_guardrail_metrics(
@@ -2912,7 +2910,7 @@ class PrometheusLogger(CustomLogger):
                     hook_type=hook_type,
                 ).inc()
         except Exception as e:
-            verbose_logger.debug(f"Error recording guardrail metrics: {e!s}")
+            verbose_logger.debug(f"Error recording guardrail metrics: {e}")
 
     ########################################
     # Managed Batch Metric Recording Methods
@@ -3315,7 +3313,7 @@ class PrometheusLogger(CustomLogger):
                 await set_metrics_function(data)
 
         except Exception as e:
-            verbose_logger.exception(f"Error initializing {data_type} budget metrics: {e!s}")
+            verbose_logger.exception(f"Error initializing {data_type} budget metrics: {e}")
 
     async def _initialize_team_budget_metrics(self):
         """
@@ -3506,7 +3504,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_teams_count_metric.set(total_teams)
             verbose_logger.debug(f"Prometheus: set litellm_teams_count to {total_teams}")
         except Exception as e:
-            verbose_logger.exception(f"Error initializing user/team count metrics: {e!s}")
+            verbose_logger.exception(f"Error initializing user/team count metrics: {e}")
 
     async def _set_key_list_budget_metrics(self, keys: list[str | UserAPIKeyAuth]):
         """Helper function to set budget metrics for a list of keys"""
@@ -3597,7 +3595,7 @@ class PrometheusLogger(CustomLogger):
                 user_api_key_cache=user_api_key_cache,
             )
         except Exception as e:
-            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting team info: {e!s}")
+            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting team info: {e}")
             return team_object
 
         if team_info:
@@ -3695,7 +3693,7 @@ class PrometheusLogger(CustomLogger):
                 include_budget_table=True,
             )
         except Exception as e:
-            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting org info: {e!s}")
+            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting org info: {e}")
             return
 
         if org_info is None:
@@ -3852,7 +3850,7 @@ class PrometheusLogger(CustomLogger):
                 if key_object:
                     user_api_key_dict.budget_reset_at = key_object.budget_reset_at
         except Exception as e:
-            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting key info: {e!s}")
+            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting key info: {e}")
 
         return user_api_key_dict
 
@@ -3917,7 +3915,7 @@ class PrometheusLogger(CustomLogger):
                 check_db_only=False,
             )
         except Exception as e:
-            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting user info: {e!s}")
+            verbose_logger.debug(f"[Non-Blocking] Prometheus: Error getting user info: {e}")
             return user_object
 
         if user_info:

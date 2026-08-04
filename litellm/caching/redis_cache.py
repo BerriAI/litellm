@@ -346,7 +346,7 @@ class RedisCache(BaseCache):
                 verbose_logger.debug("Ignoring async redis ping. No running event loop.")
             else:
                 verbose_logger.error(
-                    f"Error connecting to Async Redis client - {e!s}",
+                    f"Error connecting to Async Redis client - {e}",
                     extra={"error": str(e)},
                 )
                 self._handle_async_ping_error(e)
@@ -483,7 +483,7 @@ class RedisCache(BaseCache):
             )
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
-            print_verbose(f"litellm.caching.caching: set() - Got exception from REDIS : {e!s}")
+            print_verbose(f"litellm.caching.caching: set() - Got exception from REDIS : {e}")
 
     def increment_cache(self, key, value: int, ttl: float | None = None, **kwargs) -> int:
         _redis_client = self.redis_client
@@ -1139,7 +1139,7 @@ class RedisCache(BaseCache):
 
             return decoded_results
         except Exception as e:
-            verbose_logger.error(f"Error occurred in batch get cache - {e!s}")
+            verbose_logger.error(f"Error occurred in batch get cache - {e}")
             return key_value_dict
 
     @_redis_circuit_breaker_guard
@@ -1185,7 +1185,7 @@ class RedisCache(BaseCache):
                     event_metadata={"key": key},
                 )
             )
-            print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {e!s}")
+            print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {e}")
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     @_redis_circuit_breaker_guard
@@ -1257,7 +1257,7 @@ class RedisCache(BaseCache):
                     parent_otel_span=parent_otel_span,
                 )
             )
-            verbose_logger.error(f"Error occurred in async batch get cache - {e!s}")
+            verbose_logger.error(f"Error occurred in async batch get cache - {e}")
             _record_swallowed_redis_failure(self._circuit_breaker, e)
             return key_value_dict
 
@@ -1292,7 +1292,7 @@ class RedisCache(BaseCache):
                 error=e,
                 call_type=f"sync_ping <- {_get_call_stack_info()}",
             )
-            verbose_logger.error(f"LiteLLM Redis Cache PING: - Got exception from REDIS : {e!s}")
+            verbose_logger.error(f"LiteLLM Redis Cache PING: - Got exception from REDIS : {e}")
             raise e
 
     async def ping(self) -> bool:
@@ -1326,7 +1326,7 @@ class RedisCache(BaseCache):
                     call_type=f"async_ping <- {_get_call_stack_info()}",
                 )
             )
-            verbose_logger.error(f"LiteLLM Redis Cache PING: - Got exception from REDIS : {e!s}")
+            verbose_logger.error(f"LiteLLM Redis Cache PING: - Got exception from REDIS : {e}")
             raise e
 
     @_redis_circuit_breaker_guard
@@ -1388,10 +1388,10 @@ class RedisCache(BaseCache):
             else:
                 return {"status": "failed", "message": "Redis ping returned False"}
         except Exception as e:
-            verbose_logger.error(f"Redis connection test failed: {e!s}")
+            verbose_logger.error(f"Redis connection test failed: {e}")
             return {
                 "status": "failed",
-                "message": f"Redis connection failed: {e!s}",
+                "message": f"Redis connection failed: {e}",
                 "error": str(e),
             }
 
@@ -1565,7 +1565,7 @@ class RedisCache(BaseCache):
                     call_type=f"async_rpush <- {_get_call_stack_info()}",
                 )
             )
-            verbose_logger.error(f"LiteLLM Redis Cache RPUSH: - Got exception from REDIS : {e!s}")
+            verbose_logger.error(f"LiteLLM Redis Cache RPUSH: - Got exception from REDIS : {e}")
             raise e
 
     async def _pipeline_rpush_helper(
@@ -1711,7 +1711,7 @@ class RedisCache(BaseCache):
                     call_type=f"async_lpop <- {_get_call_stack_info()}",
                 )
             )
-            verbose_logger.error(f"LiteLLM Redis Cache LPOP: - Got exception from REDIS : {e!s}")
+            verbose_logger.error(f"LiteLLM Redis Cache LPOP: - Got exception from REDIS : {e}")
             raise e
 
     async def _pipeline_lpop_helper(

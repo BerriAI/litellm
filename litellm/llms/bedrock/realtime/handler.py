@@ -175,7 +175,7 @@ class BedrockRealtime(BaseAWSLLM):
         except Exception as e:
             verbose_proxy_logger.exception(f"Error in BedrockRealtime.async_realtime: {e}")
             try:
-                await websocket.close(code=1011, reason=_redact_string(f"Internal error: {e!s}"))
+                await websocket.close(code=1011, reason=_redact_string(f"Internal error: {e}"))
             except Exception:
                 pass
             raise

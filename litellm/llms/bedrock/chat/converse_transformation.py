@@ -2073,7 +2073,7 @@ class AmazonConverseConfig(BaseConfig):
             completion_response = ConverseResponseBlock(**response.json())  # type: ignore
         except Exception as e:
             raise BedrockError(
-                message=f"Error converting to valid response block={e!s}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues",
+                message=f"Error converting to valid response block={e}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues",
                 status_code=422,
             )
 

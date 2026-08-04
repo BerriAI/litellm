@@ -273,7 +273,7 @@ class CustomOpenAPISpec:
 
         except Exception as e:
             # If schema addition fails, continue without it
-            verbose_proxy_logger.debug(f"Failed to add {operation_name} request schema: {e!s}")
+            verbose_proxy_logger.debug(f"Failed to add {operation_name} request schema: {e}")
 
         return openapi_schema
 
@@ -302,7 +302,7 @@ class CustomOpenAPISpec:
                 operation_name="chat completion",
             )
         except ImportError as e:
-            verbose_proxy_logger.debug(f"Failed to import ProxyChatCompletionRequest: {e!s}")
+            verbose_proxy_logger.debug(f"Failed to import ProxyChatCompletionRequest: {e}")
             return openapi_schema
 
     @staticmethod
@@ -328,7 +328,7 @@ class CustomOpenAPISpec:
                 operation_name="embedding",
             )
         except ImportError as e:
-            verbose_proxy_logger.debug(f"Failed to import EmbeddingRequest: {e!s}")
+            verbose_proxy_logger.debug(f"Failed to import EmbeddingRequest: {e}")
             return openapi_schema
 
     @staticmethod
@@ -356,7 +356,7 @@ class CustomOpenAPISpec:
                 operation_name="responses API",
             )
         except ImportError as e:
-            verbose_proxy_logger.debug(f"Failed to import ResponsesAPIRequestParams: {e!s}")
+            verbose_proxy_logger.debug(f"Failed to import ResponsesAPIRequestParams: {e}")
             return openapi_schema
 
     @staticmethod

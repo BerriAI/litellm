@@ -439,10 +439,10 @@ async def create_model_group(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error creating access group '{data.access_group}': {e!s}")
+        verbose_proxy_logger.exception(f"Error creating access group '{data.access_group}': {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to create access group: {e!s}"},
+            detail={"error": f"Failed to create access group: {e}"},
         )
 
 
@@ -489,10 +489,10 @@ async def list_access_groups(
         return ListAccessGroupsResponse(access_groups=access_groups_list)
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error listing access groups: {e!s}")
+        verbose_proxy_logger.exception(f"Error listing access groups: {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to list access groups: {e!s}"},
+            detail={"error": f"Failed to list access groups: {e}"},
         )
 
 
@@ -546,10 +546,10 @@ async def get_access_group_info(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting access group info for '{access_group}': {e!s}")
+        verbose_proxy_logger.exception(f"Error getting access group info for '{access_group}': {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to get access group info: {e!s}"},
+            detail={"error": f"Failed to get access group info: {e}"},
         )
 
 
@@ -627,7 +627,7 @@ async def update_access_group(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to check access group existence: {e!s}"},
+            detail={"error": f"Failed to check access group existence: {e}"},
         )
 
     # Validation: Check if all new models exist (only if using model_names path)
@@ -699,10 +699,10 @@ async def update_access_group(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating access group '{access_group}': {e!s}")
+        verbose_proxy_logger.exception(f"Error updating access group '{access_group}': {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to update access group: {e!s}"},
+            detail={"error": f"Failed to update access group: {e}"},
         )
 
 
@@ -759,7 +759,7 @@ async def delete_access_group(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to check access group existence: {e!s}"},
+            detail={"error": f"Failed to check access group existence: {e}"},
         )
 
     try:
@@ -800,8 +800,8 @@ async def delete_access_group(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error deleting access group '{access_group}': {e!s}")
+        verbose_proxy_logger.exception(f"Error deleting access group '{access_group}': {e}")
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to delete access group: {e!s}"},
+            detail={"error": f"Failed to delete access group: {e}"},
         )

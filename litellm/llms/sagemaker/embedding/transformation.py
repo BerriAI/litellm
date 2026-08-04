@@ -97,7 +97,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
             response_data = raw_response.json()
         except Exception as e:
             raise SagemakerError(
-                message=f"Failed to parse response: {e!s}",
+                message=f"Failed to parse response: {e}",
                 status_code=raw_response.status_code,
             )
 

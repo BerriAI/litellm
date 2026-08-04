@@ -113,7 +113,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             BaseAWSLLM.__init__(self)
 
         except Exception as e:
-            print_verbose(f"Got exception on init sqs client {e!s}")
+            print_verbose(f"Got exception on init sqs client {e}")
             raise e
 
     def _init_sqs_params(
@@ -215,7 +215,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                 self.batch_size,
             )
         except Exception as e:
-            verbose_logger.exception(f"sqs Layer Error - {e!s}")
+            verbose_logger.exception(f"sqs Layer Error - {e}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -233,7 +233,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             )
 
         except Exception as e:
-            verbose_logger.exception(f"Datadog Layer Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception(f"Datadog Layer Error - {e}\n{traceback.format_exc()}")
 
     async def async_send_batch(self) -> None:
         verbose_logger.debug(f"sqs logger - sending batch of {len(self.log_queue)}")
@@ -305,7 +305,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             )
             response.raise_for_status()
         except Exception as e:
-            verbose_logger.exception(f"Error sending to SQS: {e!s}")
+            verbose_logger.exception(f"Error sending to SQS: {e}")
 
     async def async_health_check(self) -> IntegrationHealthCheckStatus:
         """
