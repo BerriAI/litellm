@@ -26211,6 +26211,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Output Bucket Name */
+            s3_output_bucket_name?: string | null;
             /** Search Context Cost Per Query */
             search_context_cost_per_query?: {
                 [key: string]: unknown;
@@ -34369,6 +34371,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Output Bucket Name */
+            s3_output_bucket_name?: string | null;
             /** Search Context Cost Per Query */
             search_context_cost_per_query?: {
                 [key: string]: unknown;

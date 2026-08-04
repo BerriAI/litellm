@@ -166,19 +166,19 @@ class ModelInfo(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    def __contains__(self, key):
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: str, value) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -211,6 +211,12 @@ class CredentialLiteLLMParams(BaseModel):
     aws_bedrock_runtime_endpoint: Optional[str] = None
     aws_bedrock_project_id: Optional[str] = None
     s3_bucket_name: Optional[str] = None
+    # Like the fields above, must be declared here or the strict dump in
+    # ``get_deployment_credentials_with_provider`` drops it from the trusted
+    # snapshot, so per-model output-bucket config never reaches Bedrock
+    # file-content retrieval and output-bucket file ids are wrongly rejected
+    # (#26335).
+    s3_output_bucket_name: Optional[str] = None
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str] = None
 
@@ -311,19 +317,19 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
             return filtered
         return data
 
-    def __contains__(self, key):
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: str, value) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -336,19 +342,19 @@ class LiteLLM_Params(GenericLiteLLMParams):
     model: str
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
-    def __contains__(self, key):
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: str, value) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -483,19 +489,19 @@ class Deployment(BaseModel):
             # if using pydantic v1
             return self.dict(**kwargs)
 
-    def __contains__(self, key):
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: str, value) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 

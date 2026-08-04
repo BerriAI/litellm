@@ -143,3 +143,71 @@ class TestRouterCredentialResolution:
         assert credentials is not None
         assert credentials.get("api_key") == "sk-static-key"
         assert "azure_ad_token" not in credentials
+
+
+class TestRouterCredentialResolutionS3OutputBucket:
+    """Same strict-dump trap as azure_ad_token (#30235), for Bedrock batch
+    file retrieval (#26335). Bedrock batch outputs land in a per-model
+    ``s3_output_bucket_name`` when it differs from the input bucket. The
+    file-content retrieval path validates a file id against the buckets in the
+    trusted credential snapshot, and that snapshot is built by round-tripping
+    the deployment's ``litellm_params`` through ``CredentialLiteLLMParams``. If
+    the field is undeclared it is dropped, so the output bucket never reaches
+    retrieval and output-bucket file ids are rejected as foreign."""
+
+    def test_credentials_preserve_s3_output_bucket_name(self):
+        from litellm import Router
+
+        deployment_id = "bedrock-batch-output-bucket-fixed-uuid"
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "bedrock-batch",
+                    "litellm_params": {
+                        "model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+                        "s3_bucket_name": "in-bucket",
+                        "s3_output_bucket_name": "out-bucket",
+                        "aws_region_name": "us-west-2",
+                    },
+                    "model_info": {"id": deployment_id},
+                }
+            ]
+        )
+
+        credentials = router.get_deployment_credentials_with_provider(
+            model_id=deployment_id
+        )
+        assert credentials is not None
+        assert credentials.get("s3_output_bucket_name") == "out-bucket", (
+            "Router credential resolution dropped s3_output_bucket_name; "
+            "Bedrock batch file-content retrieval will reject output-bucket "
+            "file ids as foreign for model-routed deployments (#26335)"
+        )
+        assert credentials.get("s3_bucket_name") == "in-bucket"
+
+    def test_credentials_without_output_bucket_unaffected(self):
+        """A deployment that configures only the input bucket keeps it and does
+        not gain a phantom output bucket in the resolved credentials."""
+        from litellm import Router
+
+        deployment_id = "bedrock-batch-input-only-fixed-uuid"
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "bedrock-batch-input-only",
+                    "litellm_params": {
+                        "model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+                        "s3_bucket_name": "in-bucket",
+                        "aws_region_name": "us-west-2",
+                    },
+                    "model_info": {"id": deployment_id},
+                }
+            ]
+        )
+
+        credentials = router.get_deployment_credentials_with_provider(
+            model_id=deployment_id
+        )
+        assert credentials is not None
+        assert credentials.get("s3_bucket_name") == "in-bucket"
+        assert "s3_output_bucket_name" not in credentials
