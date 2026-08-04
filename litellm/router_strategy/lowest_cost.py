@@ -1,13 +1,37 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
 from datetime import datetime, timedelta
-from typing import Final
+from typing import Final, TypedDict, cast
 
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+
+
+class _ModelCostInfo(TypedDict, total=False):
+    input_cost_per_token: float | None
+    output_cost_per_token: float | None
+
+
+def _get_model_cost_info(model_name: str | None) -> _ModelCostInfo:
+    if model_name is None:
+        return {}  # mutable-ok: each unresolved model gets an independent cost map
+
+    model_cost = cast(  # cast-ok: model_cost values come from the typed model cost JSON
+        dict[str, _ModelCostInfo], litellm.model_cost
+    )
+    exact_model_cost = model_cost.get(model_name)
+    if exact_model_cost is not None:
+        return exact_model_cost
+
+    try:
+        return cast(  # cast-ok: only the two declared numeric fields are read below
+            _ModelCostInfo, litellm.get_model_info(model_name)
+        )
+    except Exception:
+        return {}  # mutable-ok: each unresolved model gets an independent cost map
 
 
 class LowestCostLoggingHandler(CustomLogger):
@@ -245,7 +269,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 or float("inf")
             )
             item_litellm_model_name = _deployment.get("litellm_params", {}).get("model")
-            item_litellm_model_cost_map = litellm.model_cost.get(item_litellm_model_name, {})
+            item_litellm_model_cost_map = _get_model_cost_info(item_litellm_model_name)
 
             # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
             item_input_cost = None
@@ -257,10 +281,12 @@ class LowestCostLoggingHandler(CustomLogger):
                 item_output_cost = _deployment.get("litellm_params", {}).get("output_cost_per_token")
 
             if item_input_cost is None:
-                item_input_cost = item_litellm_model_cost_map.get("input_cost_per_token", 5.0)
+                model_input_cost = item_litellm_model_cost_map.get("input_cost_per_token")
+                item_input_cost = model_input_cost if model_input_cost is not None else 5.0
 
             if item_output_cost is None:
-                item_output_cost = item_litellm_model_cost_map.get("output_cost_per_token", 5.0)
+                model_output_cost = item_litellm_model_cost_map.get("output_cost_per_token")
+                item_output_cost = model_output_cost if model_output_cost is not None else 5.0
 
             # if litellm["model"] is not in model_cost map -> use item_cost = $10
 
