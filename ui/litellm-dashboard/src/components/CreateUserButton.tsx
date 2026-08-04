@@ -21,7 +21,13 @@ import { AdDirectoryUserSearch } from "./common_components/AdDirectoryUserSearch
 import TeamDropdown from "./common_components/team_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import NotificationsManager from "./molecules/notifications_manager";
-import { getProxyBaseUrl, getProxyUISettings, invitationCreateCall, modelAvailableCall, userCreateCall } from "./networking";
+import {
+  getProxyBaseUrl,
+  getProxyUISettings,
+  invitationCreateCall,
+  modelAvailableCall,
+  userCreateCall,
+} from "./networking";
 import OnboardingModal, { InvitationLink } from "./onboarding_link";
 const { Option } = Select;
 const { Text, Link, Title } = Typography;
@@ -119,15 +125,24 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     form.resetFields();
   };
 
-  const userEmailFormItem = uiSettings?.MICROSOFT_DIRECTORY_SEARCH_ENABLED ? (
-    <AdDirectoryUserSearch
-      accessToken={accessToken}
-      resetSignal={directorySearchResetSignal}
-      onSelectUser={(user) => form.setFieldsValue({ user_email: user.email })}
-    />
-  ) : (
-    <Form.Item label="User Email" name="user_email">
-      {isEmbedded ? <TextInput placeholder="" /> : <Input />}
+  const userEmailInput = () => {
+    if (uiSettings?.MICROSOFT_DIRECTORY_SEARCH_ENABLED) {
+      return <AdDirectoryUserSearch key={directorySearchResetSignal} accessToken={accessToken} />;
+    }
+    return isEmbedded ? <TextInput placeholder="" /> : <Input />;
+  };
+
+  const userEmailFormItem = (
+    <Form.Item
+      label="User Email"
+      name="user_email"
+      rules={
+        uiSettings?.MICROSOFT_DIRECTORY_SEARCH_ENABLED
+          ? [{ required: true, message: "Select a user from the directory search results" }]
+          : []
+      }
+    >
+      {userEmailInput()}
     </Form.Item>
   );
 

@@ -66,7 +66,10 @@ export function AdDirectoryUserSearch({ accessToken, value, onChange, id }: AdDi
       inputId={id ?? INPUT_ID}
       options={options}
       value={value}
-      onValueChange={(email) => onChange?.(email)}
+      onValueChange={(email) => {
+        setOptions([]);
+        onChange?.(email);
+      }}
       onSearchChange={handleSearchChange}
       onLoadMore={() => {}}
       isLoading={isLoading}

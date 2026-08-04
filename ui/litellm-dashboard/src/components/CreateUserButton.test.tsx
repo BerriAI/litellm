@@ -233,7 +233,7 @@ describe("CreateUserButton", () => {
   });
 
   describe("standalone mode submission", () => {
-    it("should search directory users and populate user email when a result is selected", async () => {
+    it("should search directory users and populate the merged user email field when a result is selected", async () => {
       const user = userEvent.setup();
       mockGetProxyUISettings.mockResolvedValue({
         PROXY_BASE_URL: null,
@@ -261,7 +261,8 @@ describe("CreateUserButton", () => {
       await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
 
       const dialog = screen.getByRole("dialog", { name: /invite user/i });
-      await user.type(within(dialog).getByRole("combobox", { name: /user email/i }), "ali");
+      const emailField = within(dialog).getByLabelText(/user email/i);
+      await user.type(emailField, "ali");
 
       await waitFor(() => {
         expect(mockDirectoryUsersSearchCall).toHaveBeenCalledWith("token", "ali");
@@ -275,11 +276,43 @@ describe("CreateUserButton", () => {
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {
-        expect(mockUserCreateCall).toHaveBeenCalledWith("token", null, expect.objectContaining({
-          user_email: "alice@example.com",
-          user_role: "proxy_user",
-        }));
+        expect(mockUserCreateCall).toHaveBeenCalledWith(
+          "token",
+          null,
+          expect.objectContaining({
+            user_email: "alice@example.com",
+            user_role: "proxy_user",
+          }),
+        );
       });
+    });
+
+    it("should block submit with an inline error when no directory user is selected", async () => {
+      const user = userEvent.setup();
+      mockGetProxyUISettings.mockResolvedValue({
+        PROXY_BASE_URL: null,
+        PROXY_LOGOUT_URL: null,
+        DEFAULT_TEAM_DISABLED: false,
+        SSO_ENABLED: false,
+        MICROSOFT_DIRECTORY_SEARCH_ENABLED: true,
+      });
+
+      renderWithProviders(
+        <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+      const dialog = screen.getByRole("dialog", { name: /invite user/i });
+      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
+      await user.click(screen.getByText("User"));
+      await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+      expect(await within(dialog).findByText(/select a user from the directory search results/i)).toBeInTheDocument();
+      expect(mockUserCreateCall).not.toHaveBeenCalled();
     });
 
     it("should not show a stale selected directory user after the modal is reopened", async () => {
@@ -303,7 +336,7 @@ describe("CreateUserButton", () => {
       await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
 
       let dialog = screen.getByRole("dialog", { name: /invite user/i });
-      await user.type(within(dialog).getByRole("combobox", { name: /user email/i }), "ali");
+      await user.type(within(dialog).getByLabelText(/user email/i), "ali");
       await user.click(await screen.findByText("Alice Example"));
       expect(within(dialog).getByLabelText(/user email/i)).toHaveValue("alice@example.com");
 
@@ -317,7 +350,7 @@ describe("CreateUserButton", () => {
       expect(within(dialog).getByLabelText(/user email/i)).toHaveValue("");
     });
 
-    it("should not render the directory-backed email input when the feature is disabled", async () => {
+    it("should render a plain email input with no required validation when directory search is disabled", async () => {
       const user = userEvent.setup();
       mockGetProxyUISettings.mockResolvedValue({
         PROXY_BASE_URL: null,
@@ -326,8 +359,16 @@ describe("CreateUserButton", () => {
         SSO_ENABLED: false,
         MICROSOFT_DIRECTORY_SEARCH_ENABLED: false,
       });
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "manual-user" } });
+      mockInvitationCreateCall.mockResolvedValue({
+        id: "inv-manual",
+        user_id: "manual-user",
+        has_user_setup_sso: false,
+      } as any);
 
-      renderWithProviders(<CreateUserButton {...defaultProps} />);
+      renderWithProviders(
+        <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} />,
+      );
 
       await waitFor(() => {
         expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
@@ -336,6 +377,21 @@ describe("CreateUserButton", () => {
 
       const dialog = screen.getByRole("dialog", { name: /invite user/i });
       expect(within(dialog).queryByRole("combobox", { name: /user email/i })).not.toBeInTheDocument();
+
+      await user.type(within(dialog).getByLabelText(/user email/i), "manual@example.com");
+      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
+      await user.click(screen.getByText("User"));
+      await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalledWith(
+          "token",
+          null,
+          expect.objectContaining({
+            user_email: "manual@example.com",
+          }),
+        );
+      });
       expect(mockDirectoryUsersSearchCall).not.toHaveBeenCalled();
     });
 

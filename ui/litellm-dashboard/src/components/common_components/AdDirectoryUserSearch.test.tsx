@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { AdDirectoryUserSearch } from "./AdDirectoryUserSearch";
 import * as networking from "../networking";
@@ -70,6 +71,24 @@ describe("AdDirectoryUserSearch", () => {
     expect(onChange).toHaveBeenCalledWith("alice@example.com");
   });
 
+  it("should display the raw email, not the display name, after selecting a result", async () => {
+    const user = userEvent.setup();
+    mockDirectoryUsersSearchCall.mockResolvedValue([
+      { id: "aad-user-id", display_name: "Alice Example", email: "alice@example.com" },
+    ]);
+
+    function Controlled() {
+      const [value, setValue] = useState("");
+      return <AdDirectoryUserSearch accessToken="token" value={value} onChange={setValue} />;
+    }
+    render(<Controlled />);
+
+    await user.type(screen.getByRole("combobox"), "ali");
+    await user.click(await screen.findByText("Alice Example"));
+
+    expect(screen.getByRole("combobox")).toHaveValue("alice@example.com");
+  });
+
   it("should show the controlled value in the input", () => {
     render(<AdDirectoryUserSearch accessToken="token" value="bob@example.com" />);
     expect(screen.getByRole("combobox")).toHaveValue("bob@example.com");
@@ -96,9 +115,9 @@ describe("AdDirectoryUserSearch", () => {
     const firstSearch = new Promise<any[]>((resolve) => {
       resolveFirstSearch = resolve;
     });
-    mockDirectoryUsersSearchCall.mockImplementationOnce(() => firstSearch).mockResolvedValueOnce([
-      { id: "bob-id", display_name: "Bob Example", email: "bob@example.com" },
-    ]);
+    mockDirectoryUsersSearchCall
+      .mockImplementationOnce(() => firstSearch)
+      .mockResolvedValueOnce([{ id: "bob-id", display_name: "Bob Example", email: "bob@example.com" }]);
 
     render(<AdDirectoryUserSearch accessToken="token" />);
 
