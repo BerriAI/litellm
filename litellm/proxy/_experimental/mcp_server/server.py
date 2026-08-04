@@ -184,15 +184,32 @@ def _mcp_session_id_from_headers(
     return None
 
 
-def _request_tags_from_raw_headers(
-    raw_headers: dict[str, str] | None,
-) -> list[str] | None:
-    """The caller's ``x-litellm-tags``, parsed by the same helper the LLM routes use so an
-    MCP operation and a chat completion attribute an identical header identically."""
+def _request_tags_header(
+    raw_headers: Mapping[str, str] | None,
+) -> str | None:
+    """The caller's ``x-litellm-tags`` value, read case-insensitively like the other header
+    lookups in this module. ``None`` when the caller sent no tags."""
     if not raw_headers:
         return None
-    headers = {key.lower(): value for key, value in raw_headers.items() if isinstance(key, str)}
-    return LiteLLMProxyRequestSetup.add_request_tag_to_metadata(llm_router=None, headers=headers, data={})
+    for key, value in raw_headers.items():
+        if isinstance(key, str) and key.lower() == "x-litellm-tags":
+            return value or None
+    return None
+
+
+def _request_tags_from_raw_headers(
+    raw_headers: Mapping[str, str] | None,
+) -> Sequence[str] | None:
+    """The caller's tags, parsed by the same helper the LLM routes use so an MCP operation and a
+    chat completion attribute an identical header identically."""
+    header_value = _request_tags_header(raw_headers)
+    if header_value is None:
+        return None
+    return LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
+        llm_router=None,
+        headers={"x-litellm-tags": header_value},  # mutable-ok: the shared parser reads a plain dict
+        data={},  # mutable-ok: no request body to read tags from on this path
+    )
 
 
 def _jsonrpc_text_has_top_level_method(text: str) -> bool:
@@ -1045,24 +1062,23 @@ if MCP_AVAILABLE:
 
                 host_progress_callback: Final = _capture_host_progress_callback(server)
                 # Create a body date for logging
-                request_tags: Final = _request_tags_from_raw_headers(raw_headers)
-                body_data: Final = {
-                    "name": name,
-                    "arguments": arguments,
-                    **({"tags": request_tags} if request_tags else {}),
-                }
+                body_data: Final = {"name": name, "arguments": arguments}
                 # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
                 chain_id: Final = get_chain_id_from_headers(raw_headers)
                 if chain_id:
                     body_data["litellm_trace_id"] = chain_id
                     body_data["litellm_session_id"] = chain_id
 
+                tags_header: Final = _request_tags_header(raw_headers)
+                tags_scope_header: Final = (
+                    ((b"x-litellm-tags", tags_header.encode("latin-1")),) if tags_header is not None else ()
+                )
                 request: Final = Request(
                     scope={
                         "type": "http",
                         "method": "POST",
                         "path": "/mcp/tools/call",
-                        "headers": [(b"content-type", b"application/json")],
+                        "headers": [(b"content-type", b"application/json"), *tags_scope_header],
                     }
                 )
                 if user_api_key_auth is not None:
