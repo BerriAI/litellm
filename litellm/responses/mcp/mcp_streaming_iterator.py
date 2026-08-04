@@ -64,7 +64,7 @@ async def create_mcp_list_tools_events(
         # Convert tools to dict format for the event
         mcp_tools_dict = []
         for tool in filtered_mcp_tools:
-            if hasattr(tool, "model_dump") and callable(getattr(tool, "model_dump")):
+            if hasattr(tool, "model_dump") and callable(tool.model_dump):
                 # Type cast to help mypy understand this is safe after hasattr check
                 mcp_tools_dict.append(cast(Any, tool).model_dump())
             elif hasattr(tool, "__dict__"):
@@ -103,9 +103,9 @@ async def create_mcp_list_tools_events(
 
             # Add input_schema if available
             if hasattr(tool, "inputSchema"):
-                tool_dict["input_schema"] = getattr(tool, "inputSchema")
+                tool_dict["input_schema"] = tool.inputSchema
             elif hasattr(tool, "input_schema"):
-                tool_dict["input_schema"] = getattr(tool, "input_schema")
+                tool_dict["input_schema"] = tool.input_schema
 
             formatted_tools.append(tool_dict)
 

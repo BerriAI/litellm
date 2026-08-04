@@ -137,7 +137,7 @@ class ResponsesSessionHandler:
             model_response = ModelResponse(**_response_output)
             for choice in model_response.choices:
                 if hasattr(choice, "message"):
-                    chat_completion_message_history.append(getattr(choice, "message"))
+                    chat_completion_message_history.append(choice.message)
         return chat_completion_message_history
 
     @staticmethod

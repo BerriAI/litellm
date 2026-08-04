@@ -1,17 +1,24 @@
 import base64
 import time
-from typing import TYPE_CHECKING, Any, Union, cast
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Literal
+
+from pydantic import TypeAdapter
+from typing_extensions import Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ChatCompletionAssistantContentValue,
     ChatCompletionAudioDelta,
+    ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
 )
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     ChatCompletionAudioResponse,
+    ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
-    Choices,
     CompletionTokensDetails,
     CompletionTokensDetailsWrapper,
     Function,
@@ -20,57 +27,158 @@ from litellm.types.utils import (
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     ServerToolUse,
+    StreamingChoices,
     Usage,
 )
 from litellm.utils import print_verbose, token_counter
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.litellm_core_utils.streaming_chunk_builder_utils import (
         UsagePerChunk,
     )
-    from litellm.types.llms.openai import (
-        ChatCompletionRedactedThinkingBlock,
-        ChatCompletionThinkingBlock,
-    )
+
+
+RawHiddenParamsDict = dict[str, object]
+
+
+class ChunkHiddenParamsDict(TypedDict, total=False):
+    created_at: int | float
+    custom_llm_provider: str | None
+
+
+class UsageDict(TypedDict, total=False):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    reasoning_tokens: int | None
+    cache_creation_input_tokens: int | None
+    cache_read_input_tokens: int | None
+    cost: float | None
+    prompt_tokens_details: dict[str, object] | None
+    completion_tokens_details: dict[str, object] | None
+    server_tool_use: dict[str, object] | None
+
+
+class ToolCallFunctionDict(TypedDict, total=False):
+    name: str | None
+    arguments: str
+    provider_specific_fields: dict[str, object] | None
+
+
+class ToolCallDict(TypedDict, total=False):
+    id: str | None
+    type: str | None
+    index: int
+    function: ToolCallFunctionDict | Function | None
+    provider_specific_fields: dict[str, object] | None
+
+
+class DeltaDict(TypedDict, total=False):
+    role: str | None
+    content: str | None
+    reasoning_content: str | None
+    function_call: FunctionCall | None
+    tool_calls: list[ToolCallDict | ChatCompletionDeltaToolCall] | None
+    audio: ChatCompletionAudioDelta | None
+    thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None
+
+
+class ChoiceDict(TypedDict, total=False):
+    index: int
+    delta: Required[DeltaDict]
+    finish_reason: str | None
+
+
+class ChunkDict(TypedDict, total=False):
+    id: Required[str]
+    object: Required[str]
+    created: Required[int]
+    model: Required[str]
+    choices: Required[list[ChoiceDict | StreamingChoices]]
+    system_fingerprint: str | None
+    usage: Usage | UsageDict | None
+    _hidden_params: RawHiddenParamsDict
+
+
+class AccumulatedToolCallDict(TypedDict):
+    id: str | None
+    name: str | None
+    type: str | None
+    arguments: list[str]
+    provider_specific_fields: dict[str, object] | None
+
+
+class UsageChunkCalculationDict(TypedDict):
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    cache_creation_input_tokens: int | None
+    cache_read_input_tokens: int | None
+    completion_tokens_details: CompletionTokensDetails | None
+    prompt_tokens_details: PromptTokensDetailsWrapper | None
+    cost: float | None
+
+
+class CompletionTokensDetailsDumpDict(TypedDict, total=False):
+    accepted_prediction_tokens: int | None
+    audio_tokens: int | None
+    reasoning_tokens: int | None
+    rejected_prediction_tokens: int | None
+    text_tokens: int | None
+    image_tokens: int | None
+    video_tokens: int | None
+
+
+class UsageDumpDict(TypedDict, total=False):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    completion_tokens_details: dict[str, object] | None
+    prompt_tokens_details: dict[str, object] | None
+    server_tool_use: dict[str, object] | None
+    cost: float | None
+    cache_creation_input_tokens: int
+    cache_read_input_tokens: int
+
+
+_CHUNK_HIDDEN_PARAMS_ADAPTER: TypeAdapter[ChunkHiddenParamsDict] = TypeAdapter(ChunkHiddenParamsDict)
+_AUDIO_DELTA_ADAPTER: TypeAdapter[ChatCompletionAudioDelta | None] = TypeAdapter(ChatCompletionAudioDelta | None)
+_COMPLETION_TOKENS_DETAILS_DUMP_ADAPTER: TypeAdapter[CompletionTokensDetailsDumpDict] = TypeAdapter(
+    CompletionTokensDetailsDumpDict
+)
+_USAGE_DUMP_ADAPTER: TypeAdapter[UsageDumpDict] = TypeAdapter(UsageDumpDict)
 
 
 class ChunkProcessor:
-    def __init__(self, chunks: list, messages: list | None = None):
+    def __init__(self, chunks: list[ChunkDict], messages: list[AllMessageValues] | None = None):
         self.chunks = self._sort_chunks(chunks)
         self.messages = messages
         self.first_chunk = chunks[0]
 
-    def _sort_chunks(self, chunks: list) -> list:
+    @staticmethod
+    def _chunk_hidden_params(chunk: "ChunkDict | ModelResponseStream") -> ChunkHiddenParamsDict:
+        candidate: object = (
+            chunk.get("_hidden_params", {}) if isinstance(chunk, dict) else getattr(chunk, "_hidden_params", {})
+        )
+        if isinstance(candidate, dict):
+            return _CHUNK_HIDDEN_PARAMS_ADAPTER.validate_python(candidate)
+        return {}
+
+    @staticmethod
+    def _chunk_created_at(chunk: "ChunkDict | ModelResponseStream") -> int | float:
+        return ChunkProcessor._chunk_hidden_params(chunk).get("created_at", float("inf"))
+
+    def _sort_chunks(self, chunks: list[ChunkDict]) -> list[ChunkDict]:
         if not chunks:
             return []
 
-        first_chunk = chunks[0]
-        first_hidden_params: dict[str, Any] = {}
-        if isinstance(first_chunk, dict):
-            candidate = first_chunk.get("_hidden_params", {})
-            if isinstance(candidate, dict):
-                first_hidden_params = candidate
-        else:
-            candidate = getattr(first_chunk, "_hidden_params", {})
-            if isinstance(candidate, dict):
-                first_hidden_params = candidate
-
+        first_hidden_params = self._chunk_hidden_params(chunks[0])
         if first_hidden_params.get("created_at"):
-
-            def _created_at(chunk: Any) -> int | float:
-                if isinstance(chunk, dict):
-                    params = chunk.get("_hidden_params", {})
-                else:
-                    params = getattr(chunk, "_hidden_params", {})
-                if isinstance(params, dict):
-                    return cast(int | float, params.get("created_at", float("inf")))
-                return float("inf")
-
-            return sorted(chunks, key=_created_at)
+            return sorted(chunks, key=self._chunk_created_at)
         return chunks
 
     def update_model_response_with_hidden_params(
-        self, model_response: ModelResponse, chunk: dict[str, Any] | None = None
+        self, model_response: ModelResponse, chunk: ChunkDict | None = None
     ) -> ModelResponse:
         if chunk is None:
             return model_response
@@ -82,17 +190,17 @@ class ChunkProcessor:
     @staticmethod
     def apply_provider_assembled_streaming_metadata(
         response: ModelResponse,
-        chunks: list[Any],
-        logging_obj: Any | None = None,
+        chunks: list[ChunkDict],
+        logging_obj: "Logging | None" = None,
     ) -> None:
         if not chunks:
             return
 
-        model = getattr(response, "model", None)
+        model: str | None = getattr(response, "model", None)
         if not model:
             return
 
-        custom_llm_provider = None
+        custom_llm_provider: str | None = None
         if logging_obj is not None:
             custom_llm_provider = logging_obj.model_call_details.get("custom_llm_provider")
 
@@ -126,7 +234,7 @@ class ChunkProcessor:
             )
 
     @staticmethod
-    def _get_chunk_id(chunks: list[dict[str, Any]]) -> str:
+    def _get_chunk_id(chunks: Sequence[ChunkDict]) -> str:
         """
         Chunks:
         [{"id": ""}, {"id": "1"}, {"id": "1"}]
@@ -137,7 +245,7 @@ class ChunkProcessor:
         return ""
 
     @staticmethod
-    def _get_model_from_chunks(chunks: list[dict[str, Any]], first_chunk_model: str) -> str:
+    def _get_model_from_chunks(chunks: Sequence[ChunkDict], first_chunk_model: str) -> str:
         """
         Get the actual model from chunks, preferring a model that differs from the first chunk.
 
@@ -153,7 +261,7 @@ class ChunkProcessor:
         # Fall back to first chunk's model if no different model found
         return first_chunk_model
 
-    def build_base_response(self, chunks: list[dict[str, Any]]) -> ModelResponse:
+    def build_base_response(self, chunks: Sequence[ChunkDict]) -> ModelResponse:
         chunk = self.first_chunk
         id = ChunkProcessor._get_chunk_id(chunks)
         object = chunk["object"]
@@ -164,15 +272,19 @@ class ChunkProcessor:
         system_fingerprint = chunk.get("system_fingerprint", None)
 
         first_chunk_with_choices = next((c for c in chunks if c.get("choices")), chunk)
-        role = first_chunk_with_choices["choices"][0]["delta"]["role"]
+        first_choice = first_chunk_with_choices["choices"][0]
+        if isinstance(first_choice, dict):
+            role = first_choice["delta"].get("role")
+        else:
+            role = first_choice.delta.role
         finish_reason = "stop"
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
-                chunk_finish_reason = None
-                if hasattr(chunk["choices"][0], "finish_reason"):
-                    chunk_finish_reason = chunk["choices"][0].finish_reason
-                elif "finish_reason" in chunk["choices"][0]:
-                    chunk_finish_reason = chunk["choices"][0]["finish_reason"]
+                finish_reason_choice = chunk["choices"][0]
+                if isinstance(finish_reason_choice, dict):
+                    chunk_finish_reason = finish_reason_choice.get("finish_reason")
+                else:
+                    chunk_finish_reason = finish_reason_choice.finish_reason
                 if chunk_finish_reason is not None:
                     finish_reason = chunk_finish_reason
 
@@ -202,15 +314,18 @@ class ChunkProcessor:
         response = self.update_model_response_with_hidden_params(model_response=response, chunk=chunk)
         return response
 
-    def get_combined_tool_content(self, tool_call_chunks: list[dict[str, Any]]) -> list[ChatCompletionMessageToolCall]:
+    def get_combined_tool_content(self, tool_call_chunks: Sequence[ChunkDict]) -> list[ChatCompletionMessageToolCall]:
         tool_calls_list: list[ChatCompletionMessageToolCall] = []
-        tool_call_map: dict[int, dict[str, Any]] = {}  # Map to store tool calls by index
+        tool_call_map: dict[int, AccumulatedToolCallDict] = {}  # Map to store tool calls by index
 
         for chunk in tool_call_chunks:
             choices = chunk["choices"]
             for choice in choices:
-                delta = choice.get("delta", {})
-                tool_calls = delta.get("tool_calls", [])
+                tool_calls: Sequence[ToolCallDict | ChatCompletionDeltaToolCall]
+                if isinstance(choice, dict):
+                    tool_calls = choice.get("delta", {}).get("tool_calls") or []
+                else:
+                    tool_calls = choice.delta.tool_calls or []
 
                 for tool_call in tool_calls:
                     # Handle both dict and object formats
@@ -222,7 +337,7 @@ class ChunkProcessor:
                     if isinstance(tool_call, dict):
                         has_function = "function" in tool_call and tool_call["function"] is not None
                     else:
-                        has_function = hasattr(tool_call, "function") and tool_call.function is not None
+                        has_function = getattr(tool_call, "function", None) is not None
 
                     if not has_function:
                         continue
@@ -244,22 +359,26 @@ class ChunkProcessor:
 
                     # Extract id, type, and function data (handle both dict and object)
                     if isinstance(tool_call, dict):
-                        if tool_call.get("id"):
-                            tool_call_map[index]["id"] = tool_call["id"]
-                        if tool_call.get("type"):
-                            tool_call_map[index]["type"] = tool_call["type"]
+                        tool_call_id = tool_call.get("id")
+                        if tool_call_id:
+                            tool_call_map[index]["id"] = tool_call_id
+                        tool_call_type = tool_call.get("type")
+                        if tool_call_type:
+                            tool_call_map[index]["type"] = tool_call_type
 
                         function = tool_call.get("function", {})
                         if isinstance(function, dict):
-                            if function.get("name"):
-                                tool_call_map[index]["name"] = function["name"]
-                            if function.get("arguments"):
-                                tool_call_map[index]["arguments"].append(function["arguments"])
+                            function_name = function.get("name")
+                            if function_name:
+                                tool_call_map[index]["name"] = function_name
+                            function_arguments = function.get("arguments")
+                            if function_arguments:
+                                tool_call_map[index]["arguments"].append(function_arguments)
                         else:
                             # function is an object
-                            if hasattr(function, "name") and function.name:
+                            if function is not None and hasattr(function, "name") and function.name:
                                 tool_call_map[index]["name"] = function.name
-                            if hasattr(function, "arguments") and function.arguments:
+                            if function is not None and hasattr(function, "arguments") and function.arguments:
                                 tool_call_map[index]["arguments"].append(function.arguments)
                     else:
                         # tool_call is an object
@@ -274,27 +393,24 @@ class ChunkProcessor:
                                 tool_call_map[index]["arguments"].append(tool_call.function.arguments)
 
                     # Preserve provider_specific_fields from streaming chunks
-                    provider_fields = None
+                    provider_fields: dict[str, object] | None = None
                     if isinstance(tool_call, dict):
                         provider_fields = tool_call.get("provider_specific_fields")
-                        if not provider_fields and isinstance(tool_call.get("function"), dict):
-                            provider_fields = tool_call["function"].get("provider_specific_fields")
+                        if not provider_fields:
+                            function_value = tool_call.get("function")
+                            if isinstance(function_value, dict):
+                                provider_fields = function_value.get("provider_specific_fields")
                     else:
-                        if hasattr(tool_call, "provider_specific_fields") and tool_call.provider_specific_fields:
-                            provider_fields = tool_call.provider_specific_fields
-                        elif (
-                            hasattr(tool_call, "function")
-                            and hasattr(tool_call.function, "provider_specific_fields")
-                            and tool_call.function.provider_specific_fields
-                        ):
-                            provider_fields = tool_call.function.provider_specific_fields
+                        object_provider_fields = getattr(tool_call, "provider_specific_fields", None) or getattr(
+                            getattr(tool_call, "function", None), "provider_specific_fields", None
+                        )
+                        if isinstance(object_provider_fields, dict) and object_provider_fields:
+                            provider_fields = object_provider_fields
 
-                    if provider_fields:
+                    if isinstance(provider_fields, dict) and provider_fields:
                         # Merge provider_specific_fields if multiple chunks have them
-                        if tool_call_map[index]["provider_specific_fields"] is None:
-                            tool_call_map[index]["provider_specific_fields"] = {}
-                        if isinstance(provider_fields, dict):
-                            tool_call_map[index]["provider_specific_fields"].update(provider_fields)
+                        existing_fields = tool_call_map[index]["provider_specific_fields"] or {}
+                        tool_call_map[index]["provider_specific_fields"] = {**existing_fields, **provider_fields}
 
         # Convert the map to a list of tool calls
         for index in sorted(tool_call_map.keys()):
@@ -308,39 +424,48 @@ class ChunkProcessor:
                     name=tool_call_data["name"],
                 )
 
-                # Prepare params for ChatCompletionMessageToolCall
-                tool_call_params = {
-                    "id": tool_call_data["id"],
-                    "function": function,
-                    "type": tool_call_data["type"] or "function",
-                }
-
                 # Add provider_specific_fields if present (for thought signatures in Gemini 3)
-                if tool_call_data.get("provider_specific_fields"):
-                    tool_call_params["provider_specific_fields"] = tool_call_data["provider_specific_fields"]
-
-                tool_call = ChatCompletionMessageToolCall(**tool_call_params)
-                tool_calls_list.append(tool_call)
+                provider_specific_fields = tool_call_data["provider_specific_fields"]
+                if provider_specific_fields:
+                    tool_calls_list.append(
+                        ChatCompletionMessageToolCall(
+                            id=tool_call_data["id"],
+                            function=function,
+                            type=tool_call_data["type"] or "function",
+                            provider_specific_fields=provider_specific_fields,
+                        )
+                    )
+                else:
+                    tool_calls_list.append(
+                        ChatCompletionMessageToolCall(
+                            id=tool_call_data["id"],
+                            function=function,
+                            type=tool_call_data["type"] or "function",
+                        )
+                    )
 
         return tool_calls_list
 
-    def get_combined_function_call_content(self, function_call_chunks: list[dict[str, Any]]) -> FunctionCall:
-        argument_list = []
-        delta = function_call_chunks[0]["choices"][0]["delta"]
-        function_call = delta.get("function_call", "")
-        function_call_name = function_call.name
+    def get_combined_function_call_content(self, function_call_chunks: Sequence[ChunkDict]) -> FunctionCall:
+        argument_list: list[str] = []
+        first_choice = function_call_chunks[0]["choices"][0]
+        if isinstance(first_choice, dict):
+            first_function_call = first_choice["delta"].get("function_call")
+        else:
+            first_function_call = getattr(first_choice.delta, "function_call", None)
+        function_call_name = first_function_call.name
 
         for chunk in function_call_chunks:
             choices = chunk["choices"]
             for choice in choices:
-                delta = choice.get("delta", {})
-                function_call = delta.get("function_call", "")
+                if isinstance(choice, dict):
+                    function_call = choice.get("delta", {}).get("function_call")
+                else:
+                    function_call = getattr(choice.delta, "function_call", None)
 
                 # Check if a function call is present
                 if function_call:
-                    # Now, function_call is expected to be a dictionary
-                    arguments = function_call.arguments
-                    argument_list.append(arguments)
+                    argument_list.append(function_call.arguments)
 
         combined_arguments = "".join(argument_list)
 
@@ -350,14 +475,16 @@ class ChunkProcessor:
         )
 
     def get_combined_content(
-        self, chunks: list[dict[str, Any]], delta_key: str = "content"
+        self, chunks: Sequence[ChunkDict], delta_key: Literal["content", "reasoning_content"] = "content"
     ) -> ChatCompletionAssistantContentValue:
         content_list: list[str] = []
         for chunk in chunks:
             choices = chunk["choices"]
             for choice in choices:
-                delta = choice.get("delta", {})
-                content = delta.get(delta_key, "")
+                if isinstance(choice, dict):
+                    content = choice.get("delta", {}).get(delta_key, "")
+                else:
+                    content = getattr(choice.delta, delta_key, "")
                 if content is None:
                     continue  # openai v1.0.0 sets content = None for chunks
                 content_list.append(content)
@@ -369,13 +496,8 @@ class ChunkProcessor:
         return combined_content
 
     def get_combined_thinking_content(
-        self, chunks: list[dict[str, Any]]
-    ) -> list[Union["ChatCompletionThinkingBlock", "ChatCompletionRedactedThinkingBlock"]] | None:
-        from litellm.types.llms.openai import (
-            ChatCompletionRedactedThinkingBlock,
-            ChatCompletionThinkingBlock,
-        )
-
+        self, chunks: Sequence[ChunkDict]
+    ) -> list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None:
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
         current_thinking_text_parts: list[str] = []
         current_signature: str | None = None
@@ -396,12 +518,13 @@ class ChunkProcessor:
         for chunk in chunks:
             choices = chunk["choices"]
             for choice in choices:
-                delta = choice.get("delta", {})
-                thinking = delta.get("thinking_blocks", None)
-                if thinking and isinstance(thinking, list):
+                if isinstance(choice, dict):
+                    thinking = choice.get("delta", {}).get("thinking_blocks", None)
+                else:
+                    thinking = getattr(choice.delta, "thinking_blocks", None)
+                if isinstance(thinking, list) and thinking:
                     for thinking_block in thinking:
-                        thinking_type = thinking_block.get("type", None)
-                        if thinking_type and thinking_type == "redacted_thinking":
+                        if thinking_block.get("type", None) == "redacted_thinking":
                             _flush_thinking_block()
                             redacted_data = thinking_block.get("data", None)
                             if redacted_data:
@@ -426,10 +549,10 @@ class ChunkProcessor:
             return thinking_blocks
         return None
 
-    def get_combined_reasoning_content(self, chunks: list[dict[str, Any]]) -> ChatCompletionAssistantContentValue:
+    def get_combined_reasoning_content(self, chunks: Sequence[ChunkDict]) -> ChatCompletionAssistantContentValue:
         return self.get_combined_content(chunks, delta_key="reasoning_content")
 
-    def get_combined_audio_content(self, chunks: list[dict[str, Any]]) -> ChatCompletionAudioResponse:
+    def get_combined_audio_content(self, chunks: Sequence[ChunkDict]) -> ChatCompletionAudioResponse:
         base64_data_list: list[str] = []
         transcript_list: list[str] = []
         expires_at: int | None = None
@@ -438,8 +561,12 @@ class ChunkProcessor:
         for chunk in chunks:
             choices = chunk["choices"]
             for choice in choices:
-                delta = choice.get("delta") or {}
-                audio: ChatCompletionAudioDelta | None = delta.get("audio")
+                audio: ChatCompletionAudioDelta | None
+                if isinstance(choice, dict):
+                    delta: DeltaDict = choice.get("delta") or {}
+                    audio = delta.get("audio")
+                else:
+                    audio = _AUDIO_DELTA_ADAPTER.validate_python(getattr(choice.delta, "audio", None))
                 if audio is not None:
                     for k, v in audio.items():
                         if k == "data" and v is not None and isinstance(v, str):
@@ -459,9 +586,9 @@ class ChunkProcessor:
             id=id,
         )
 
-    def _usage_chunk_calculation_helper(self, usage_chunk: Usage) -> dict:
-        prompt_tokens = 0
-        completion_tokens = 0
+    def _usage_chunk_calculation_helper(self, usage_chunk: Usage) -> UsageChunkCalculationDict:
+        prompt_tokens: int = 0
+        completion_tokens: int = 0
         ## anthropic prompt caching information ##
         cache_creation_input_tokens: int | None = None
         cache_read_input_tokens: int | None = None
@@ -503,30 +630,30 @@ class ChunkProcessor:
     def count_reasoning_tokens(self, response: ModelResponse) -> int | None:
         reasoning_tokens: int | None = None
         for choice in response.choices:
-            if (
-                hasattr(cast(Choices, choice).message, "reasoning_content")
-                and cast(Choices, choice).message.reasoning_content is not None
-            ):
+            if hasattr(choice.message, "reasoning_content") and choice.message.reasoning_content is not None:
                 if reasoning_tokens is None:
                     reasoning_tokens = 0
                 reasoning_tokens += token_counter(
-                    text=cast(Choices, choice).message.reasoning_content,
+                    text=choice.message.reasoning_content,
                     count_response_tokens=True,
                 )
 
         return reasoning_tokens
 
     @staticmethod
-    def _extract_usage_chunk(chunk: dict[str, Any] | ModelResponse | ModelResponseStream) -> Usage | None:
-        usage_chunk: Usage | dict[str, Any] | None = None
-        if hasattr(chunk, "usage") and chunk.usage is not None:
-            usage_chunk = chunk.usage
-        elif "usage" in chunk:
-            usage_chunk = chunk["usage"]
-        elif (isinstance(chunk, ModelResponse) or isinstance(chunk, ModelResponseStream)) and hasattr(
-            chunk, "_hidden_params"
-        ):
-            usage_chunk = chunk._hidden_params.get("usage", None)
+    def _extract_usage_chunk(chunk: ChunkDict | ModelResponse | ModelResponseStream) -> Usage | None:
+        usage_chunk: Usage | UsageDict | None = None
+        if isinstance(chunk, dict):
+            usage_chunk = chunk.get("usage")
+        elif hasattr(chunk, "usage"):
+            usage_chunk = getattr(chunk, "usage", None)
+        elif hasattr(chunk, "_hidden_params"):
+            hidden_usage: object = chunk._hidden_params.get("usage", None)
+            if isinstance(hidden_usage, Usage):
+                return hidden_usage
+            if isinstance(hidden_usage, dict):
+                return Usage(**hidden_usage)
+            return None
 
         if isinstance(usage_chunk, dict):
             return Usage(**usage_chunk)
@@ -534,7 +661,7 @@ class ChunkProcessor:
 
     def _calculate_usage_per_chunk(
         self,
-        chunks: list[dict[str, Any] | ModelResponse],
+        chunks: Sequence[ChunkDict],
     ) -> "UsagePerChunk":
         from litellm.types.litellm_core_utils.streaming_chunk_builder_utils import (
             UsagePerChunk,
@@ -601,24 +728,15 @@ class ChunkProcessor:
                         server_tool_use = usage_chunk.server_tool_use
                     else:
                         server_tool_use = ServerToolUse.model_validate(usage_chunk.server_tool_use)
-                if (
-                    usage_chunk_dict["prompt_tokens_details"] is not None
-                    and getattr(
-                        usage_chunk_dict["prompt_tokens_details"],
-                        "web_search_requests",
-                        None,
-                    )
-                    is not None
-                ):
-                    web_search_requests = getattr(
-                        usage_chunk_dict["prompt_tokens_details"],
-                        "web_search_requests",
-                    )
-
-                prompt_tokens_details = cast(
-                    PromptTokensDetailsWrapper | None,
+                web_search_requests_value: int | None = getattr(
                     usage_chunk_dict["prompt_tokens_details"],
+                    "web_search_requests",
+                    None,
                 )
+                if usage_chunk_dict["prompt_tokens_details"] is not None and web_search_requests_value is not None:
+                    web_search_requests = web_search_requests_value
+
+                prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"]
 
                 cache_creation_token_details = self._capture_cache_creation_token_details(
                     prompt_tokens_details, cache_creation_token_details
@@ -654,9 +772,10 @@ class ChunkProcessor:
         prompt_tokens_details: PromptTokensDetailsWrapper | None,
         current: CacheCreationTokenDetails | None,
     ) -> CacheCreationTokenDetails | None:
-        incoming = cast(
-            CacheCreationTokenDetails | None,
-            getattr(prompt_tokens_details, "cache_creation_token_details", None),
+        if prompt_tokens_details is None:
+            return current
+        incoming: CacheCreationTokenDetails | None = getattr(
+            prompt_tokens_details, "cache_creation_token_details", None
         )
         if incoming is not None:
             return incoming
@@ -669,9 +788,8 @@ class ChunkProcessor:
     ) -> PromptTokensDetailsWrapper | None:
         if prompt_tokens_details is None or cache_creation_token_details is None:
             return prompt_tokens_details
-        existing = cast(
-            CacheCreationTokenDetails | None,
-            getattr(prompt_tokens_details, "cache_creation_token_details", None),
+        existing: CacheCreationTokenDetails | None = getattr(
+            prompt_tokens_details, "cache_creation_token_details", None
         )
         if existing is not None:
             return prompt_tokens_details
@@ -679,7 +797,7 @@ class ChunkProcessor:
 
     @staticmethod
     def _reset_anthropic_cursor_completion_tokens(
-        chunks: list[dict[str, Any] | ModelResponse],
+        chunks: Sequence[ChunkDict],
         completion_tokens: int,
         completion_usage_updates: int,
     ) -> int:
@@ -704,13 +822,7 @@ class ChunkProcessor:
 
         custom_llm_provider: str | None = None
         if chunks:
-            first_chunk = chunks[0]
-            if isinstance(first_chunk, dict):
-                hp = first_chunk.get("_hidden_params")
-            else:
-                hp = getattr(first_chunk, "_hidden_params", None)
-            if isinstance(hp, dict):
-                custom_llm_provider = hp.get("custom_llm_provider")
+            custom_llm_provider = ChunkProcessor._chunk_hidden_params(chunks[0]).get("custom_llm_provider")
 
         if custom_llm_provider == "anthropic" and completion_tokens == 1:
             return 0
@@ -718,10 +830,10 @@ class ChunkProcessor:
 
     def calculate_usage(
         self,
-        chunks: list[dict[str, Any] | ModelResponse],
+        chunks: Sequence[ChunkDict],
         model: str,
         completion_output: str,
-        messages: list | None = None,
+        messages: list[AllMessageValues] | None = None,
         reasoning_tokens: int | None = None,
     ) -> Usage:
         """
@@ -773,7 +885,7 @@ class ChunkProcessor:
         if completion_tokens_details is not None:
             if isinstance(completion_tokens_details, CompletionTokensDetails):
                 returned_usage.completion_tokens_details = CompletionTokensDetailsWrapper(
-                    **completion_tokens_details.model_dump()
+                    **_COMPLETION_TOKENS_DETAILS_DUMP_ADAPTER.validate_python(completion_tokens_details.model_dump())
                 )
             else:
                 returned_usage.completion_tokens_details = completion_tokens_details
@@ -806,12 +918,12 @@ class ChunkProcessor:
 
         # Return a new usage object with the new values
 
-        returned_usage = Usage(**returned_usage.model_dump())
+        returned_usage = Usage(**_USAGE_DUMP_ADAPTER.validate_python(returned_usage.model_dump()))
 
         return returned_usage
 
 
-def concatenate_base64_list(base64_strings: list[str]) -> str:
+def concatenate_base64_list(base64_strings: Sequence[str]) -> str:
     """
     Concatenates a list of base64-encoded strings.
 

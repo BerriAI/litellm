@@ -5,10 +5,11 @@ import json
 import posixpath
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
+from functools import partial
 from itertools import groupby
-from typing import Any, cast
+from typing import Literal, Protocol, TypedDict, cast, runtime_checkable
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -23,7 +24,9 @@ from fastapi import (
     WebSocket,
     status,
 )
+from fastapi import params as fastapi_params
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.websockets import WebSocketState
 from websockets.asyncio.client import connect
@@ -91,13 +94,94 @@ router = APIRouter()
 
 pass_through_endpoint_logging = PassThroughEndpointLogging()
 
+
+@runtime_checkable
+class RouteRegistrableApp(Protocol):
+    @property
+    def routes(self) -> Sequence[object]: ...
+
+    def add_api_route(
+        self,
+        path: str,
+        endpoint: Callable[..., object],
+        *,
+        methods: list[str] | None = None,
+        dependencies: Sequence[fastapi_params.Depends] | None = None,
+    ) -> None: ...
+
+
+@runtime_checkable
+class TeamTableClient(Protocol):
+    def find_unique(self, where: dict[str, str]) -> Awaitable[object]: ...
+
+
+class RegisteredPassthroughParams(TypedDict):
+    target: str
+    custom_headers: dict[str, object] | None
+    forward_headers: bool | None
+    merge_query_params: bool | None
+    default_query_params: dict[str, object] | None
+    dependencies: Sequence[object] | None
+    cost_per_request: float | None
+    guardrails: dict[str, object] | None
+    timeout: float | None
+
+
+class RegisteredPassthroughRoute(TypedDict):
+    endpoint_id: str
+    path: str
+    type: Literal["exact", "subpath"]
+    methods: list[str]
+    auth: bool
+    passthrough_params: RegisteredPassthroughParams
+
+
 # Global registry to track registered pass-through routes and prevent memory leaks
-_registered_pass_through_routes: dict[str, dict[str, str | bool | list[str] | dict[str, Any]]] = {}
+_registered_pass_through_routes: dict[str, RegisteredPassthroughRoute] = {}
+
+_OBJECT_DICT_ADAPTER: TypeAdapter[dict[str, object]] = TypeAdapter(dict[str, object])
+_OPTIONAL_OBJECT_DICT_ADAPTER: TypeAdapter[dict[str, object] | None] = TypeAdapter(dict[str, object] | None)
+
+_EMPTY_ROUTE_PARAMS: Mapping[str, object] = {}
+_JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
+_JSON_DICT_ADAPTER: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
+_CUSTOM_LOGGER_ADAPTER: TypeAdapter[CustomLogger] = TypeAdapter(
+    CustomLogger, config=ConfigDict(arbitrary_types_allowed=True)
+)
+_APP_ADAPTER: TypeAdapter[RouteRegistrableApp] = TypeAdapter(
+    RouteRegistrableApp, config=ConfigDict(arbitrary_types_allowed=True)
+)
+_TEAM_TABLE_ADAPTER: TypeAdapter[TeamTableClient] = TypeAdapter(
+    TeamTableClient, config=ConfigDict(arbitrary_types_allowed=True)
+)
+_TEAM_METADATA_ADAPTER: TypeAdapter[dict[str, JsonValue] | None] = TypeAdapter(dict[str, JsonValue] | None)
+_ALLOWED_ROUTES_ADAPTER: TypeAdapter[list[JsonValue] | dict[str, JsonValue] | str | None] = TypeAdapter(
+    list[JsonValue] | dict[str, JsonValue] | str | None
+)
+_ENDPOINT_LIST_ADAPTER: TypeAdapter[list[dict[str, object] | PassThroughGenericEndpoint] | None] = TypeAdapter(
+    list[dict[str, object] | PassThroughGenericEndpoint] | None
+)
 
 
-def get_response_body(response: httpx.Response) -> dict | None:
+def _parse_json_value(raw: str | bytes) -> JsonValue:
+    return _JSON_VALUE_ADAPTER.validate_python(json.loads(raw))
+
+
+def _json_dict_or_none(value: JsonValue) -> dict[str, JsonValue] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _truthiness_or_none(value: JsonValue) -> bool | None:
+    return None if value is None else bool(value)
+
+
+def _read_header(headers: Mapping[str, str], key: str) -> str | None:
+    return headers.get(key)
+
+
+def get_response_body(response: httpx.Response) -> dict[str, object] | None:
     try:
-        return response.json()
+        return _OBJECT_DICT_ADAPTER.validate_python(response.json())
     except Exception:
         return None
 
@@ -174,9 +258,9 @@ async def chat_completion_pass_through_endpoint(
         body = await request.body()
         body_str = body.decode()
         try:
-            data = ast.literal_eval(body_str)
+            data = _OBJECT_DICT_ADAPTER.validate_python(ast.literal_eval(body_str))
         except Exception:
-            data = json.loads(body_str)
+            data = _OBJECT_DICT_ADAPTER.validate_python(json.loads(body_str))
 
         data["adapter_id"] = adapter_id
 
@@ -848,7 +932,7 @@ async def pass_through_request(
         # parsed dict (hooks mutate it, breaking the signature / Content-Length).
         # Tolerate request objects without `state` (test fixtures) and only honor
         # values httpx accepts for `content=`.
-        _request_state = getattr(request, "state", None)
+        _request_state = request.state if hasattr(request, "state") else None
         state_raw_body: str | bytes | None = (
             getattr(_request_state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, None)
             if _request_state is not None
@@ -1125,15 +1209,17 @@ async def pass_through_request(
             else:
                 # SigV4-signed callers (Bedrock) supply the exact pre-signed bytes;
                 # otherwise httpx encodes the parsed JSON dict as before.
-                body_kwargs: dict[str, Any] = (
-                    {"content": state_raw_body} if state_raw_body is not None else {"json": _parsed_body}
-                )
-                req = async_client.build_request(
+                build_streaming_request = partial(
+                    async_client.build_request,
                     request.method,
                     url,
                     params=requested_query_params,
                     headers=headers,
-                    **body_kwargs,
+                )
+                req = (
+                    build_streaming_request(content=state_raw_body)
+                    if state_raw_body is not None
+                    else build_streaming_request(json=_OPTIONAL_OBJECT_DICT_ADAPTER.validate_python(_parsed_body))
                 )
 
                 response = await async_client.send(req, stream=stream)
@@ -1583,7 +1669,12 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
 
 async def _parse_request_data_by_content_type(
     request: Request,
-) -> tuple[Any | None, Any | None, Any | None, Any | None]:
+) -> tuple[
+    dict[str, JsonValue] | dict[str, str] | str | StarletteUploadFile | None,
+    dict[str, JsonValue] | str | StarletteUploadFile | None,
+    None,
+    bool | None,
+]:
     """
     Parse request data based on content type.
 
@@ -1594,18 +1685,18 @@ async def _parse_request_data_by_content_type(
     """
     content_type = request.headers.get("content-type", "")
 
-    query_params_data = None
-    custom_body_data = None
+    query_params_data: dict[str, JsonValue] | dict[str, str] | str | StarletteUploadFile | None = None
+    custom_body_data: dict[str, JsonValue] | str | StarletteUploadFile | None = None
     file_data = None
-    stream = None
+    stream: bool | None = None
 
     if "application/json" in content_type:
         # ✅ Handle JSON
         try:
-            body = await request.json()
-            query_params_data = body.get("query_params")
-            custom_body_data = body.get("custom_body")
-            stream = body.get("stream")
+            body = _JSON_DICT_ADAPTER.validate_python(await request.json())
+            query_params_data = _json_dict_or_none(body.get("query_params"))
+            custom_body_data = _json_dict_or_none(body.get("custom_body"))
+            stream = _truthiness_or_none(body.get("stream"))
         except json.JSONDecodeError:
             # Handle requests with no body (e.g., DELETE requests)
             pass
@@ -1613,13 +1704,14 @@ async def _parse_request_data_by_content_type(
         # ✅ Try to parse as JSON first (handles misconfigured clients sending JSON with multipart content-type)
         # If that fails, skip parsing - pass_through_request will handle actual multipart
         try:
-            body = await request.json()
+            body = _JSON_DICT_ADAPTER.validate_python(await request.json())
             # Successfully parsed as JSON - treat as JSON body
-            query_params_data = body.get("query_params")
-            custom_body_data = body.get("custom_body")
-            stream = body.get("stream")
+            raw_custom_body = body.get("custom_body")
+            query_params_data = _json_dict_or_none(body.get("query_params"))
+            custom_body_data = _json_dict_or_none(raw_custom_body)
+            stream = _truthiness_or_none(body.get("stream"))
             # If custom_body is not set, use the entire body
-            if custom_body_data is None and body:
+            if raw_custom_body is None and body:
                 custom_body_data = body
         except (json.JSONDecodeError, Exception):
             # Not JSON - this is actual multipart data
@@ -1643,17 +1735,17 @@ async def _parse_request_data_by_content_type(
 def create_pass_through_route(
     endpoint,
     target: str,
-    custom_headers: Mapping[str, Any] | None = None,
+    custom_headers: Mapping[str, object] | None = None,
     _forward_headers: bool | None = False,
     _merge_query_params: bool | None = False,
-    dependencies: list | None = None,
+    dependencies: Sequence[fastapi_params.Depends] | None = None,
     include_subpath: bool | None = False,
     cost_per_request: float | None = None,
     custom_llm_provider: str | None = None,
     is_streaming_request: bool | None = False,
     query_params: dict | None = None,
     default_query_params: dict | None = None,
-    guardrails: dict[str, Any] | None = None,
+    guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
 ):
@@ -1665,7 +1757,9 @@ def create_pass_through_route(
         if isinstance(target, CustomLogger):
             adapter = target
         else:
-            adapter = get_instance_fn(value=target, config_file_path=config_file_path)
+            adapter = _CUSTOM_LOGGER_ADAPTER.validate_python(
+                get_instance_fn(value=target, config_file_path=config_file_path)
+            )
         adapter_id = str(uuid.uuid4())
         litellm.adapters = [{"id": adapter_id, "adapter": adapter}]
 
@@ -1725,7 +1819,7 @@ def create_pass_through_route(
                     status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
                     detail=f"Method {request.method} is not allowed for pass-through endpoint {path}.",
                 )
-            target_params = {
+            target_params: dict[str, object] = {
                 "target": target,
                 "custom_headers": custom_headers,
                 "forward_headers": _forward_headers,
@@ -1736,7 +1830,7 @@ def create_pass_through_route(
             }
 
             if passthrough_params is not None:
-                target_params.update(passthrough_params.get("passthrough_params", {}))
+                target_params.update(passthrough_params.get("passthrough_params", _EMPTY_ROUTE_PARAMS))
 
             # Extract and cast parameters with proper types
             param_target = target_params.get("target") or target
@@ -1757,12 +1851,18 @@ def create_pass_through_route(
 
             # Ensure custom_headers is a dict. Botocore returns a HeadersDict
             # for SigV4-prepared requests, which is a Mapping but not a dict.
-            headers_dict = dict(param_custom_headers) if isinstance(param_custom_headers, Mapping) else {}
+            headers_dict = (
+                _OBJECT_DICT_ADAPTER.validate_python(param_custom_headers)
+                if isinstance(param_custom_headers, Mapping)
+                else {}
+            )
 
             # Ensure query_params and custom_body are dicts or None
-            final_query_params = query_params_data if isinstance(query_params_data, dict) else {}
+            final_query_params: dict[str, object] = (
+                {key: value for key, value in query_params_data.items()} if isinstance(query_params_data, dict) else {}
+            )
             if query_params:
-                final_query_params.update(query_params)
+                final_query_params.update(_OBJECT_DICT_ADAPTER.validate_python(query_params))
             # Programmatic callers set LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY on
             # request.state (see Bedrock proxy). Parsed JSON envelope otherwise.
             state_custom_body: dict | None = getattr(
@@ -1884,7 +1984,7 @@ async def websocket_passthrough_request(
 
     # Initialize tracking variables
     start_time = datetime.now()
-    websocket_messages: list[dict[str, Any]] = []
+    websocket_messages: list[JsonValue] = []
     litellm_call_id = str(uuid.uuid4())
 
     verbose_proxy_logger.info(f"WebSocket passthrough ({endpoint}): Starting WebSocket connection to {target}")
@@ -1977,10 +2077,9 @@ async def websocket_passthrough_request(
     )
 
     ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-    websocket_data: dict[str, Any] = {}
-    websocket_data = await proxy_logging_obj.pre_call_hook(
+    await proxy_logging_obj.pre_call_hook(
         user_api_key_dict=user_api_key_dict,
-        data=websocket_data,
+        data={},
         call_type="pass_through_endpoint",
     )
 
@@ -2007,14 +2106,14 @@ async def websocket_passthrough_request(
                         text_data = message.get("text")
                         bytes_data = message.get("bytes")
 
-                        if text_data is not None:
+                        if isinstance(text_data, str):
                             # Try to extract model from client setup message for Vertex AI Live
                             if endpoint and "/vertex_ai/live" in endpoint:
                                 verbose_proxy_logger.debug(
                                     f"WebSocket passthrough ({endpoint}): Processing client message for model extraction"
                                 )
                                 try:
-                                    client_message = json.loads(text_data)
+                                    client_message = _parse_json_value(text_data)
                                     if isinstance(client_message, dict) and "setup" in client_message:
                                         setup_data = client_message["setup"]
                                         verbose_proxy_logger.debug(
@@ -2044,14 +2143,14 @@ async def websocket_passthrough_request(
                                         verbose_proxy_logger.debug(
                                             f"WebSocket passthrough ({endpoint}): Client message does not contain setup data"
                                         )
-                                except (json.JSONDecodeError, KeyError, TypeError) as e:
+                                except (json.JSONDecodeError, ValidationError, KeyError, TypeError) as e:
                                     verbose_proxy_logger.debug(
                                         f"WebSocket passthrough ({endpoint}): Client message is not a valid setup message: {e}"
                                     )
                                     # Not a JSON message or doesn't contain setup data
 
                             await upstream_ws.send(text_data)
-                        elif bytes_data is not None:
+                        elif isinstance(bytes_data, bytes):
                             await upstream_ws.send(bytes_data)
                 except asyncio.CancelledError:
                     raise
@@ -2069,7 +2168,7 @@ async def websocket_passthrough_request(
                     # Ensure raw_response is bytes before decoding
                     if isinstance(raw_response, str):
                         raw_response = raw_response.encode("ascii")
-                    setup_response = json.loads(raw_response.decode("ascii"))
+                    setup_response = _parse_json_value(raw_response.decode("ascii"))
                     verbose_proxy_logger.debug(f"Setup response: {setup_response}")
 
                     # Extract model and provider from setup response for Vertex AI Live
@@ -2106,17 +2205,17 @@ async def websocket_passthrough_request(
                             await websocket.send_bytes(upstream_message)
                             # Parse and collect for cost tracking
                             try:
-                                message_data = json.loads(upstream_message.decode())
+                                message_data = _parse_json_value(upstream_message.decode())
                                 websocket_messages.append(message_data)
-                            except (json.JSONDecodeError, UnicodeDecodeError):
+                            except (json.JSONDecodeError, ValidationError, UnicodeDecodeError):
                                 pass
                         else:
                             await websocket.send_text(upstream_message)
                             # Parse and collect for cost tracking
                             try:
-                                message_data = json.loads(upstream_message)
+                                message_data = _parse_json_value(upstream_message)
                                 websocket_messages.append(message_data)
-                            except json.JSONDecodeError:
+                            except (json.JSONDecodeError, ValidationError):
                                 pass
 
                 except (ConnectionClosedOK, ConnectionClosedError) as e:
@@ -2272,7 +2371,7 @@ async def websocket_passthrough_request(
 
 
 def _is_streaming_response(response: httpx.Response) -> bool:
-    _content_type = response.headers.get("content-type")
+    _content_type = _read_header(response.headers, "content-type")
     if _content_type is not None and "text/event-stream" in _content_type:
         return True
     return False
@@ -2290,7 +2389,7 @@ def _should_buffer_passthrough_response(response: httpx.Response) -> bool:
     """
     if response.status_code >= 400:
         return True
-    media_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+    media_type = (_read_header(response.headers, "content-type") or "").split(";")[0].strip().lower()
     return media_type in ("", "application/json") or media_type.endswith("+json")
 
 
@@ -2342,7 +2441,7 @@ async def _relay_passthrough_response_bytes(
         )
 
 
-def _extract_model_from_vertex_ai_setup(setup_response: dict) -> str | None:
+def _extract_model_from_vertex_ai_setup(setup_response: JsonValue) -> str | None:
     """
     Extract the model name from Vertex AI Live setup response.
 
@@ -2381,7 +2480,7 @@ class SafeRouteAdder:
     """
 
     @staticmethod
-    def _is_path_registered(app: FastAPI, path: str, methods: list[str]) -> bool:
+    def _is_path_registered(app: RouteRegistrableApp, path: str, methods: list[str]) -> bool:
         """
         Check if a path with any of the specified methods is already registered on the app.
 
@@ -2406,11 +2505,11 @@ class SafeRouteAdder:
 
     @staticmethod
     def add_api_route_if_not_exists(
-        app: FastAPI,
+        app: RouteRegistrableApp,
         path: str,
-        endpoint: Any,
+        endpoint: Callable[..., object],
         methods: list[str],
-        dependencies: list | None = None,
+        dependencies: Sequence[fastapi_params.Depends] | None = None,
     ) -> bool:
         """
         Add an API route to the app only if it doesn't already exist.
@@ -2450,13 +2549,13 @@ class SafeRouteAdder:
 class InitPassThroughEndpointHelpers:
     @staticmethod
     def add_exact_path_route(
-        app: FastAPI,
+        app: RouteRegistrableApp,
         path: str,
         target: str,
         custom_headers: dict | None,
         forward_headers: bool | None,
         merge_query_params: bool | None,
-        dependencies: list | None,
+        dependencies: Sequence[fastapi_params.Depends] | None,
         cost_per_request: float | None,
         endpoint_id: str,
         guardrails: dict | None = None,
@@ -2533,13 +2632,13 @@ class InitPassThroughEndpointHelpers:
 
     @staticmethod
     def add_subpath_route(
-        app: FastAPI,
+        app: RouteRegistrableApp,
         path: str,
         target: str,
         custom_headers: dict | None,
         forward_headers: bool | None,
         merge_query_params: bool | None,
-        dependencies: list | None,
+        dependencies: Sequence[fastapi_params.Depends] | None,
         cost_per_request: float | None,
         endpoint_id: str,
         guardrails: dict | None = None,
@@ -2624,15 +2723,14 @@ class InitPassThroughEndpointHelpers:
         ]
         for key in keys_to_remove:
             route_info = _registered_pass_through_routes[key]
-            path = route_info.get("path")
-            if isinstance(path, str):
-                openai_routes = LiteLLMRoutes.openai_routes.value
-                if path in openai_routes:
-                    openai_routes.remove(path)
-                if route_info.get("type") == "subpath":
-                    wildcard_path = path.rstrip("/") + "/*"
-                    if wildcard_path in openai_routes:
-                        openai_routes.remove(wildcard_path)
+            path = route_info["path"]
+            openai_routes = LiteLLMRoutes.openai_routes.value
+            if path in openai_routes:
+                openai_routes.remove(path)
+            if route_info.get("type") == "subpath":
+                wildcard_path = path.rstrip("/") + "/*"
+                if wildcard_path in openai_routes:
+                    openai_routes.remove(wildcard_path)
             del _registered_pass_through_routes[key]
             verbose_proxy_logger.debug("Removed pass-through route from registry: %s", key)
 
@@ -2699,7 +2797,7 @@ class InitPassThroughEndpointHelpers:
         return False
 
     @staticmethod
-    def get_registered_pass_through_route(route: str, method: str | None = None) -> dict[str, Any] | None:
+    def get_registered_pass_through_route(route: str, method: str | None = None) -> RegisteredPassthroughRoute | None:
         """Get passthrough params for a given route and optionally filter by HTTP method"""
         comparison_route = InitPassThroughEndpointHelpers._route_for_registry_lookup(route)
         for key in _registered_pass_through_routes:
@@ -2712,7 +2810,7 @@ class InitPassThroughEndpointHelpers:
                 # but keep supporting test fixtures / older registry entries that
                 # only encoded methods in the route key.
                 methods_entry = _registered_pass_through_routes[key].get("methods", [])
-                route_methods: list[str] = methods_entry if isinstance(methods_entry, list) else []
+                route_methods: list[str] = methods_entry if methods_entry else []
                 if not route_methods and len(parts) == 4:
                     route_methods = parts[3].split(",")
 
@@ -2740,14 +2838,27 @@ def _get_combined_pass_through_endpoints(
     return pass_through_endpoints + config_pass_through_endpoints
 
 
+class _RegisteredEndpointFields(BaseModel):
+    path: str | None = None
+    target: str | None = None
+    headers: dict[str, object] | None = None
+    forward_headers: bool | None = None
+    merge_query_params: bool | None = None
+    default_query_params: dict[str, object] | None = None
+    guardrails: dict[str, object] | None = None
+    methods: list[str] | None = None
+    cost_per_request: float | None = None
+    timeout: float | None = None
+
+
 async def _register_pass_through_endpoint(
-    endpoint: dict[str, Any] | PassThroughGenericEndpoint,
+    endpoint: dict[str, object] | PassThroughGenericEndpoint,
     app: FastAPI,
     premium_user: bool,
     visited_endpoints: set[str],
     config_file_path: str | None = None,
 ) -> None:
-    endpoint_data: dict[str, Any]
+    endpoint_data: dict[str, object]
     if isinstance(endpoint, PassThroughGenericEndpoint):
         endpoint_data = endpoint.model_dump()
     else:
@@ -2757,17 +2868,18 @@ async def _register_pass_through_endpoint(
         endpoint_data["id"] = str(uuid.uuid4())
     endpoint_id = cast(str, endpoint_data["id"])
 
-    target = endpoint_data.get("target")
-    path = endpoint_data.get("path")
+    endpoint_fields = _RegisteredEndpointFields.model_validate(endpoint_data)
+    target = endpoint_fields.target
+    path = endpoint_fields.path
     if path is None:
         raise ValueError("Path is required for pass-through endpoint")
 
-    custom_headers = await set_env_variables_in_header(custom_headers=endpoint_data.get("headers"))
-    forward_headers = endpoint_data.get("forward_headers")
-    merge_query_params = endpoint_data.get("merge_query_params")
-    default_query_params = endpoint_data.get("default_query_params")
+    custom_headers = await set_env_variables_in_header(custom_headers=endpoint_fields.headers)
+    forward_headers = endpoint_fields.forward_headers
+    merge_query_params = endpoint_fields.merge_query_params
+    default_query_params = endpoint_fields.default_query_params
     auth = endpoint_data.get("auth")
-    dependencies = None
+    dependencies: list[fastapi_params.Depends] | None = None
     auth_enforced = auth is not None and str(auth).lower() == "true"
 
     if auth_enforced:
@@ -2782,10 +2894,10 @@ async def _register_pass_through_endpoint(
     if target is None:
         return
 
-    guardrails = endpoint_data.get("guardrails")
-    methods = endpoint_data.get("methods")
-    cost_per_request = endpoint_data.get("cost_per_request")
-    timeout = endpoint_data.get("timeout")
+    guardrails = endpoint_fields.guardrails
+    methods = endpoint_fields.methods
+    cost_per_request = endpoint_fields.cost_per_request
+    timeout = endpoint_fields.timeout
 
     verbose_proxy_logger.debug("Initializing pass through endpoint: %s (ID: %s)", path, endpoint_id)
     InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -2925,12 +3037,12 @@ def _get_pass_through_endpoints_from_config() -> list[PassThroughGenericEndpoint
             if isinstance(endpoint, dict):
                 endpoint_dict = dict(endpoint)
                 endpoint_dict["is_from_config"] = True
-                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
+                returned_endpoints.append(PassThroughGenericEndpoint.model_validate(endpoint_dict))
             elif isinstance(endpoint, PassThroughGenericEndpoint):
                 # Create a copy with is_from_config=True
                 endpoint_dict = endpoint.model_dump()
                 endpoint_dict["is_from_config"] = True
-                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
+                returned_endpoints.append(PassThroughGenericEndpoint.model_validate(endpoint_dict))
         except ValidationError as e:
             verbose_proxy_logger.warning(
                 "Skipping malformed pass-through endpoint from config: %s",
@@ -2954,10 +3066,10 @@ async def _get_pass_through_endpoints_from_db(
         response: ConfigFieldInfo = await get_config_general_settings(
             field_name="pass_through_endpoints", user_api_key_dict=user_api_key_dict
         )
+        pass_through_endpoint_data = _ENDPOINT_LIST_ADAPTER.validate_python(getattr(response, "field_value"))
     except Exception:
         return []
 
-    pass_through_endpoint_data: list | None = response.field_value
     if pass_through_endpoint_data is None:
         return []
 
@@ -2965,14 +3077,11 @@ async def _get_pass_through_endpoints_from_db(
     if endpoint_id is None:
         # Return all endpoints from DB, mark as not from config
         for endpoint in pass_through_endpoint_data:
-            if isinstance(endpoint, dict):
-                endpoint_dict = dict(endpoint)
-                endpoint_dict["is_from_config"] = False
-                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
-            elif isinstance(endpoint, PassThroughGenericEndpoint):
-                endpoint_dict = endpoint.model_dump()
-                endpoint_dict["is_from_config"] = False
-                returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
+            endpoint_dict = (
+                endpoint.model_dump() if isinstance(endpoint, PassThroughGenericEndpoint) else dict(endpoint)
+            )
+            endpoint_dict["is_from_config"] = False
+            returned_endpoints.append(PassThroughGenericEndpoint.model_validate(endpoint_dict))
     else:
         # Find specific endpoint by ID
         found_endpoint = _find_endpoint_by_id(pass_through_endpoint_data, endpoint_id)
@@ -2983,7 +3092,7 @@ async def _get_pass_through_endpoints_from_db(
                 else dict(found_endpoint)
             )
             endpoint_dict["is_from_config"] = False
-            returned_endpoints.append(PassThroughGenericEndpoint(**endpoint_dict))
+            returned_endpoints.append(PassThroughGenericEndpoint.model_validate(endpoint_dict))
 
     return returned_endpoints
 
@@ -3008,9 +3117,8 @@ async def _filter_endpoints_by_team_allowed_routes(
         HTTPException: If team is not found
     """
     # retrieve team from db
-    team = await TeamRepository(prisma_client).table.find_unique(
-        where={"team_id": team_id},
-    )
+    team_table = _TEAM_TABLE_ADAPTER.validate_python(getattr(TeamRepository(prisma_client), "table"))
+    team = await team_table.find_unique(where={"team_id": team_id})
     if team is None:
         raise HTTPException(
             status_code=404,
@@ -3018,14 +3126,15 @@ async def _filter_endpoints_by_team_allowed_routes(
         )
 
     # retrieve team metadata
-    team_metadata = team.metadata
-    if team_metadata is not None and team_metadata.get("allowed_passthrough_routes") is not None:
+    team_metadata = _TEAM_METADATA_ADAPTER.validate_python(getattr(team, "metadata"))
+    allowed_routes = (
+        _ALLOWED_ROUTES_ADAPTER.validate_python(team_metadata.get("allowed_passthrough_routes"))
+        if team_metadata is not None
+        else None
+    )
+    if allowed_routes is not None:
         ## FILTER pass_through_endpoints by allowed_passthrough_routes
-        pass_through_endpoints = [
-            endpoint
-            for endpoint in pass_through_endpoints
-            if endpoint.path in team_metadata.get("allowed_passthrough_routes")
-        ]
+        pass_through_endpoints = [endpoint for endpoint in pass_through_endpoints if endpoint.path in allowed_routes]
 
     return pass_through_endpoints
 
@@ -3115,7 +3224,7 @@ async def update_pass_through_endpoints(
             detail={"error": "No pass-through endpoints found"},
         )
 
-    pass_through_endpoint_data: list | None = response.field_value
+    pass_through_endpoint_data = _ENDPOINT_LIST_ADAPTER.validate_python(getattr(response, "field_value"))
     if pass_through_endpoint_data is None:
         raise HTTPException(
             status_code=404,
@@ -3134,7 +3243,7 @@ async def update_pass_through_endpoints(
     # Find the index for updating the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -3165,7 +3274,7 @@ async def update_pass_through_endpoints(
     endpoint_dict.pop("is_from_config", None)
 
     # Create updated endpoint object
-    updated_endpoint = PassThroughGenericEndpoint(**endpoint_dict)
+    updated_endpoint = PassThroughGenericEndpoint.model_validate(endpoint_dict)
 
     # Update the list
     pass_through_endpoint_data[endpoint_index] = endpoint_dict
@@ -3186,9 +3295,10 @@ async def update_pass_through_endpoints(
     _custom_headers: dict | None = updated_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
+    request_app = _APP_ADAPTER.validate_python(getattr(request, "app"))
     if updated_endpoint.include_subpath:
         InitPassThroughEndpointHelpers.add_subpath_route(
-            app=request.app,
+            app=request_app,
             path=updated_endpoint.path,
             target=updated_endpoint.target,
             custom_headers=_custom_headers,
@@ -3205,7 +3315,7 @@ async def update_pass_through_endpoints(
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
-            app=request.app,
+            app=request_app,
             path=updated_endpoint.path,
             target=updated_endpoint.target,
             custom_headers=_custom_headers,
@@ -3257,29 +3367,28 @@ async def create_pass_through_endpoints(
     if data_dict.get("id") is None:
         data_dict["id"] = str(uuid.uuid4())
 
-    if response.field_value is None:
-        response.field_value = [data_dict]
-    elif isinstance(response.field_value, list):
-        response.field_value.append(data_dict)
+    existing_field_value = _ENDPOINT_LIST_ADAPTER.validate_python(getattr(response, "field_value"))
+    updated_field_value = [data_dict] if existing_field_value is None else [*existing_field_value, data_dict]
 
     ## Update db
     updated_data = ConfigFieldUpdate(
         field_name="pass_through_endpoints",
-        field_value=response.field_value,
+        field_value=updated_field_value,
         config_type="general_settings",
     )
     await update_config_general_settings(data=updated_data, user_api_key_dict=user_api_key_dict)
 
     # Return the created endpoint with the generated ID
-    created_endpoint = PassThroughGenericEndpoint(**data_dict)
+    created_endpoint = PassThroughGenericEndpoint.model_validate(data_dict)
 
     # Register the new route
     _custom_headers: dict | None = created_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
+    request_app = _APP_ADAPTER.validate_python(getattr(request, "app"))
     if created_endpoint.include_subpath:
         InitPassThroughEndpointHelpers.add_subpath_route(
-            app=request.app,
+            app=request_app,
             path=created_endpoint.path,
             target=created_endpoint.target,
             custom_headers=_custom_headers,
@@ -3296,7 +3405,7 @@ async def create_pass_through_endpoints(
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
-            app=request.app,
+            app=request_app,
             path=created_endpoint.path,
             target=created_endpoint.target,
             custom_headers=_custom_headers,
@@ -3344,8 +3453,8 @@ async def delete_pass_through_endpoints(
         response = ConfigFieldInfo(field_name="pass_through_endpoints", field_value=None)
 
     ## Update field by removing endpoint
-    pass_through_endpoint_data: list | None = response.field_value
-    if response.field_value is None or pass_through_endpoint_data is None:
+    pass_through_endpoint_data = _ENDPOINT_LIST_ADAPTER.validate_python(getattr(response, "field_value"))
+    if pass_through_endpoint_data is None:
         raise HTTPException(
             status_code=400,
             detail={"error": "There are no pass-through endpoints setup."},
@@ -3363,7 +3472,7 @@ async def delete_pass_through_endpoints(
     # Find the index for deleting from the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -3393,7 +3502,7 @@ async def delete_pass_through_endpoints(
 
 
 def _find_endpoint_by_id(
-    endpoints_data: list,
+    endpoints_data: list[dict[str, object] | PassThroughGenericEndpoint],
     endpoint_id: str,
 ) -> PassThroughGenericEndpoint | None:
     """
@@ -3407,14 +3516,14 @@ def _find_endpoint_by_id(
         Found endpoint or None if not found
     """
     for endpoint in endpoints_data:
-        _endpoint: PassThroughGenericEndpoint | None = None
-        if isinstance(endpoint, dict):
-            _endpoint = PassThroughGenericEndpoint(**endpoint)
-        elif isinstance(endpoint, PassThroughGenericEndpoint):
-            _endpoint = endpoint
+        _endpoint = (
+            endpoint
+            if isinstance(endpoint, PassThroughGenericEndpoint)
+            else PassThroughGenericEndpoint.model_validate(endpoint)
+        )
 
         # Only compare IDs to IDs
-        if _endpoint is not None and _endpoint.id == endpoint_id:
+        if _endpoint.id == endpoint_id:
             return _endpoint
 
     return None

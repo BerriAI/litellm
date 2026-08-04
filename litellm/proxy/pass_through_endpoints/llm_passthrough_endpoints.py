@@ -725,7 +725,7 @@ async def handle_bedrock_passthrough_router_model(
     user_max_tokens: int | None,
     user_api_base: str | None,
     version: str | None,
-) -> Response | StreamingResponse:
+) -> object:
     """
     Handle Bedrock passthrough for router models (models defined in config.yaml).
 

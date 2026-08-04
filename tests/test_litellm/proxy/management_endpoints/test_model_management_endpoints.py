@@ -2649,7 +2649,7 @@ class _TxProxyModelTable:
 
 
 class _TxPrismaClient:
-    """Minimal prisma stub whose ``db.tx()`` yields a transaction and records commit."""
+    """Minimal prisma stub whose ``tx()`` yields a transaction and records commit."""
 
     def __init__(self, rows):
         self.events: list = []
@@ -2668,6 +2668,7 @@ class _TxPrismaClient:
 
         self.db = MagicMock()
         self.db.tx = MagicMock(return_value=_TxCM())
+        self.tx = self.db.tx
 
 
 class _RecordingRouter:
