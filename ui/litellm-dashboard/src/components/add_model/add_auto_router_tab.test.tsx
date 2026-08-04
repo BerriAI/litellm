@@ -290,6 +290,19 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
+  // Custom is the escape hatch, not the headline choice, so it's listed after every bundled preset
+  // rather than first.
+  it("lists Custom Configuration after the bundled presets", () => {
+    renderWithProviders(<Harness />);
+    openTemplateDropdown();
+
+    const labels = Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option")).map(
+      (option) => option.querySelector(".font-medium")?.textContent,
+    );
+
+    expect(labels).toEqual(["Anthropic Family", "OpenAI Family", "Custom Configuration"]);
+  });
+
   describe("template presets", () => {
     // Opens the dropdown once, then waits out the useQuery load: an open antd Select re-renders its
     // already-mounted options in place as state changes, so polling only re-reads the DOM here.

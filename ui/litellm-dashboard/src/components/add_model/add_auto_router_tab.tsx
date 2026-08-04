@@ -378,12 +378,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               optionLabelProp="label"
               data-testid="template-selector"
             >
-              <AntdSelect.Option value="custom" label="Custom Configuration">
-                <div>
-                  <div className="font-medium">Custom Configuration</div>
-                  <div className="text-xs text-gray-500">Define your auto router from scratch</div>
-                </div>
-              </AntdSelect.Option>
               {presets.map((preset) => {
                 const availability = presetAvailability(preset);
                 const disabledHint = presetDisabledHint(availability);
@@ -406,6 +400,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   </AntdSelect.Option>
                 );
               })}
+              <AntdSelect.Option value="custom" label="Custom Configuration">
+                <div>
+                  <div className="font-medium">Custom Configuration</div>
+                  <div className="text-xs text-gray-500">Define your auto router from scratch</div>
+                </div>
+              </AntdSelect.Option>
             </AntdSelect>
             {modelsUnverifiable && (
               <div className="text-xs mt-1 text-red-500">
@@ -434,7 +434,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             <button
               type="button"
               onClick={() => setDetailsExpanded((expanded) => !expanded)}
-              className="w-full flex items-center justify-between gap-2 px-4 py-3 text-left hover:bg-gray-50"
+              className="w-full flex flex-col gap-1 px-4 py-3 text-left hover:bg-gray-50"
               data-testid="detailed-configuration-toggle"
             >
               <span className="flex items-center gap-2 font-medium text-gray-900">
@@ -446,7 +446,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 Detailed Configuration
               </span>
               {!detailsExpanded && (
-                <span className="text-xs text-gray-500 truncate">
+                <span className="text-xs text-gray-500 line-clamp-2">
                   {tierConfigSummary(complexityRouterConfig.tiers)}
                 </span>
               )}
