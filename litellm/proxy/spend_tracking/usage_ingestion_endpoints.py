@@ -237,7 +237,9 @@ async def reserve_spend_log_atomic(
     if ProxyUpdateSpend.disable_spend_updates() is True:
         return "disabled"
 
-    payload: Final = prisma_client.jsonify_object(build_spend_log_payload(record, request_id, hashed_token, key, cost))
+    spend_payload: Final = build_spend_log_payload(record, request_id, hashed_token, key, cost)
+    payload: Final = prisma_client.jsonify_object(spend_payload)
+    request_tags: Final = spend_payload.get("request_tags")
     from prisma.errors import UniqueViolationError
 
     writer: Final = proxy_logging_obj.db_spend_update_writer
@@ -258,6 +260,7 @@ async def reserve_spend_log_atomic(
                 response_cost=cost, team_id=key.team_id, user_id=key.user_id, prisma_client=shim
             )
             await writer._update_org_db(response_cost=cost, org_id=key.organization_id, prisma_client=shim)
+            await writer._update_tag_db(response_cost=cost, request_tags=request_tags, prisma_client=shim)
     except UniqueViolationError:
         return "duplicate"
     return "reserved"
