@@ -1880,7 +1880,7 @@ class Router:
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
-                self._set_failed_deployment_id_on_exception(e, deployment)
+                self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
 
     def _get_silent_experiment_kwargs(self, **kwargs) -> dict:
@@ -2943,7 +2943,7 @@ class Router:
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
-                self._set_failed_deployment_id_on_exception(e, deployment)
+                self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
         except Exception as e:
             verbose_router_logger.info("litellm.acompletion(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
@@ -2952,7 +2952,7 @@ class Router:
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
-                self._set_failed_deployment_id_on_exception(e, deployment)
+                self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
 
     def _update_kwargs_before_fallbacks(
@@ -3016,6 +3016,16 @@ class Router:
                 exception.failed_deployment_id = deployment_id
             except Exception:
                 pass
+
+    def _stamp_failed_deployment_id_with_effective_model_info(
+        self, exception: Exception, deployment: Mapping[str, Any], kwargs: Mapping[str, Any]
+    ) -> None:
+        # A client-side-credential call gets a dynamic deployment id generated inside
+        # _update_kwargs_with_deployment and stamped into kwargs["model_info"]; stamping
+        # the static shared deployment's id instead would let one tenant's bad credentials
+        # cool down the deployment every other tenant sharing this config relies on.
+        effective_model_info: Final = kwargs.get("model_info") or deployment.get("model_info") or MappingProxyType({})
+        self._set_failed_deployment_id_on_exception(exception, MappingProxyType({"model_info": effective_model_info}))
 
     def _update_kwargs_with_default_litellm_params(
         self, kwargs: dict, metadata_variable_name: str | None = "metadata"
@@ -4585,14 +4595,7 @@ class Router:
             if model is not None:
                 self.fail_calls[model] += 1
             if deployment is not None:
-                # A client-side-credential call gets a dynamic deployment id generated inside
-                # _update_kwargs_with_deployment and stamped into kwargs["model_info"]; stamping
-                # the static shared deployment's id instead would let one tenant's bad credentials
-                # cool down the deployment every other tenant sharing this config relies on.
-                effective_model_info: Final = (
-                    kwargs.get("model_info") or deployment.get("model_info") or MappingProxyType({})
-                )
-                self._set_failed_deployment_id_on_exception(e, MappingProxyType({"model_info": effective_model_info}))
+                self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
 
     async def _aresponses_with_streaming_fallbacks(

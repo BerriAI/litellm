@@ -96,6 +96,43 @@ def test_set_failed_deployment_id_on_exception():
     assert exc.failed_deployment_id == "dep-a"
 
 
+def test_stamp_failed_deployment_id_with_effective_model_info_prefers_kwargs():
+    """kwargs["model_info"] (the dynamic client-side-credential id, when present) must win
+    over the static deployment's model_info, so a bad-credential tenant's failures are
+    attributed to their own dynamic deployment id, not the shared static one."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key"},
+                "model_info": {"id": "dep-a"},
+            }
+        ],
+    )
+    exc = Exception("fail")
+    router._stamp_failed_deployment_id_with_effective_model_info(
+        exc, _make_dep("dep-a"), {"model_info": {"id": "dynamic-dep"}}
+    )
+    assert exc.failed_deployment_id == "dynamic-dep"
+
+
+def test_stamp_failed_deployment_id_with_effective_model_info_falls_back_to_deployment():
+    """With no dynamic id in kwargs (the common, non-client-side-credential case), the
+    static deployment's own model_info.id must still be stamped."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key"},
+                "model_info": {"id": "dep-a"},
+            }
+        ],
+    )
+    exc = Exception("fail")
+    router._stamp_failed_deployment_id_with_effective_model_info(exc, _make_dep("dep-a"), {})
+    assert exc.failed_deployment_id == "dep-a"
+
+
 @pytest.mark.asyncio
 async def test_ageneric_api_call_with_fallbacks_helper_stamps_failed_deployment_id():
     """_ageneric_api_call_with_fallbacks_helper must stamp failed_deployment_id on a
@@ -150,6 +187,62 @@ async def test_ageneric_api_call_with_fallbacks_helper_stamps_dynamic_id_for_cli
             api_key="tenant-supplied-key",
             litellm_metadata={"model_group": "test-model"},
         )
+
+    failed_deployment_id = getattr(exc_info.value, "failed_deployment_id", None)
+    assert failed_deployment_id is not None
+    assert failed_deployment_id != "dep-a"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_stamps_dynamic_id_for_clientside_credentials():
+    """Same bug as the generic-API-call helper above, but in the regular completion
+    path: _acompletion's exception handlers must stamp the dynamic client-side-credential
+    deployment id, not the shared static deployment's id."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "test-key"},
+                "model_info": {"id": "dep-a"},
+            }
+        ],
+    )
+
+    with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError) as exc_info:
+            await router._acompletion(
+                model="test-model",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="tenant-supplied-key",
+                metadata={"model_group": "test-model"},
+            )
+
+    failed_deployment_id = getattr(exc_info.value, "failed_deployment_id", None)
+    assert failed_deployment_id is not None
+    assert failed_deployment_id != "dep-a"
+
+
+def test_completion_stamps_dynamic_id_for_clientside_credentials():
+    """Sync counterpart: _completion's exception handler must stamp the dynamic
+    client-side-credential deployment id, not the shared static deployment's id."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "test-key"},
+                "model_info": {"id": "dep-a"},
+            }
+        ],
+    )
+
+    with patch("litellm.completion", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError) as exc_info:
+            router._completion(
+                model="test-model",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="tenant-supplied-key",
+                metadata={"model_group": "test-model"},
+            )
 
     failed_deployment_id = getattr(exc_info.value, "failed_deployment_id", None)
     assert failed_deployment_id is not None
