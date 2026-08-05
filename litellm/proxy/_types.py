@@ -18,7 +18,6 @@ from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.constants import (
-    LITELLM_LOGGING_CREDENTIAL_NAME_KEY,
     MCP_STDIO_ALLOWED_COMMANDS,
 )
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -1931,7 +1930,7 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
     @classmethod
     def validate_callback_vars(cls, values):
         callback_vars = values.get("callback_vars", {})
-        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys()) | {LITELLM_LOGGING_CREDENTIAL_NAME_KEY}
+        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
         for key, value in callback_vars.items():
             if key not in valid_keys:
                 raise ValueError(f"Invalid callback variable: {key}. Must be one of {valid_keys}")
@@ -1970,7 +1969,7 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
                 "callbacks": [],
                 "callback_vars": {},
             }
-        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys()) | {LITELLM_LOGGING_CREDENTIAL_NAME_KEY}
+        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
         if callback_vars is not None:
             for key in callback_vars:
                 if key not in valid_keys:

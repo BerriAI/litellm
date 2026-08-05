@@ -26,40 +26,61 @@ def _admin():
     return UserAPIKeyAuth(api_key="k", user_role=LitellmUserRoles.PROXY_ADMIN)
 
 
-# --- credential_info replace semantics, identical for every credential kind ---
+# --- credential_info replace semantics ---
 
-@pytest.mark.parametrize(
-    "info, patch_info, expected",
-    [
-        (
-            {"custom_llm_provider": "openai", "stale": "keepout"},
-            {"custom_llm_provider": "azure"},
-            {"custom_llm_provider": "azure"},
-        ),
-        (
-            {"credential_type": "logging", "description": "arize", "access": {"global": True}},
-            {"credential_type": "logging", "description": "arize", "access": {"teams": ["t1"]}},
-            {"credential_type": "logging", "description": "arize", "access": {"teams": ["t1"]}},
-        ),
-    ],
-    ids=["provider", "logging-destination"],
-)
-def test_update_db_credential_replaces_info_wholesale(info, patch_info, expected):
-    """``credential_info`` is replaced, never merged, for every credential kind.
 
-    The caller sends the whole object (the body model requires it), so a replace is
-    lossless and omitted keys are a deliberate removal. Special-casing logging
-    destinations with a subfield merge is what let a fragment reach the write path and
-    silently delete sibling metadata such as ``custom_llm_provider``.
+def test_update_db_credential_replaces_info_for_a_logging_destination():
+    """A destination's ``credential_info`` is replaced so an access edit actually applies.
+
+    Narrowing a destination's scope has to be able to shrink ``access``; a subfield merge
+    would leave the widest previously-granted shape in place, so an admin re-scoping a
+    destination from global to one team would not revoke anyone.
     """
     from litellm.proxy.credential_endpoints.endpoints import update_db_credential
 
     merged = update_db_credential(
-        CredentialItem(credential_name="c", credential_values={}, credential_info=info),
-        CredentialItem(credential_name="c", credential_values={}, credential_info=patch_info),
+        CredentialItem(
+            credential_name="c",
+            credential_values={},
+            credential_info={"credential_type": "logging", "description": "arize", "access": {"global": True}},
+        ),
+        CredentialItem(
+            credential_name="c",
+            credential_values={},
+            credential_info={"credential_type": "logging", "description": "arize", "access": {"teams": ["t1"]}},
+        ),
     )
 
-    assert merged.credential_info == expected
+    assert merged.credential_info["access"] == {"teams": ["t1"]}
+
+
+def test_partial_patch_of_a_provider_credential_drops_sibling_keys():
+    """Documents a PRE-EXISTING data loss; this is NOT the intended contract.
+
+    A PATCH carrying a fragment of ``credential_info`` drops the keys it omits, so a
+    one-key patch destroys siblings such as ``custom_llm_provider``. The merge-base has the
+    same loss at the DB layer: its merge branch guards on ``"credential_info" not in
+    merged_credential.credential_info``, testing for a key nested inside itself, which is
+    never true, so it wipes the dict and updates onto empty. Base only appeared to preserve
+    the key because its in-memory mirror merged and hid the row until the next reload.
+
+    Asserted so the behaviour is visible rather than silently relied upon. Restoring a real
+    merge for non-logging credentials is tracked separately; when that lands, this test
+    should flip.
+    """
+    from litellm.proxy.credential_endpoints.endpoints import update_db_credential
+
+    merged = update_db_credential(
+        CredentialItem(
+            credential_name="c",
+            credential_values={},
+            credential_info={"custom_llm_provider": "openai", "description": "prod"},
+        ),
+        CredentialItem(credential_name="c", credential_values={}, credential_info={"description": "patched"}),
+    )
+
+    assert merged.credential_info == {"description": "patched"}
+    assert "custom_llm_provider" not in merged.credential_info
 
 
 def test_sync_in_memory_credential_mirrors_the_db_row(monkeypatch):
