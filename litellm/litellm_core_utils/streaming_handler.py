@@ -6,13 +6,14 @@ import logging
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, NoReturn, TypeVar, Union, cast
 
 import anyio
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
+from typing_extensions import NotRequired, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -54,7 +55,96 @@ _SYNC_ITER_EXHAUSTED: Final = object()
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 
 
-def _next_sync_or_exhausted(it: Any) -> Any:
+def _load_json(payload: str) -> object:
+    return json.loads(payload)
+
+
+class _PredibaseToken(TypedDict, total=False):
+    text: str | None
+
+
+class _PredibaseDetails(TypedDict, total=False):
+    finish_reason: str | None
+
+
+class _PredibasePayload(TypedDict, total=False):
+    token: _PredibaseToken | None
+    details: _PredibaseDetails | None
+    generated_text: str | None
+    error: str | None
+
+
+_PREDIBASE_ADAPTER: Final = TypeAdapter(_PredibasePayload)
+
+
+class _AI21Data(TypedDict):
+    text: str
+
+
+class _AI21Completion(TypedDict):
+    data: _AI21Data
+
+
+class _AI21Payload(TypedDict):
+    completions: Sequence[_AI21Completion]
+
+
+_AI21_ADAPTER: Final = TypeAdapter(_AI21Payload)
+
+
+class _MaritalkPayload(TypedDict):
+    answer: str
+
+
+_MARITALK_ADAPTER: Final = TypeAdapter(_MaritalkPayload)
+
+
+class _NlpCloudPayload(TypedDict):
+    generated_text: str
+
+
+_NLP_CLOUD_ADAPTER: Final = TypeAdapter(_NlpCloudPayload)
+
+
+class _AlephAlphaCompletion(TypedDict):
+    completion: str
+
+
+class _AlephAlphaPayload(TypedDict):
+    completions: Sequence[_AlephAlphaCompletion]
+
+
+_ALEPH_ALPHA_ADAPTER: Final = TypeAdapter(_AlephAlphaPayload)
+
+
+class _AzureChoiceDelta(TypedDict, total=False):
+    content: str | None
+
+
+class _AzureChoice(TypedDict):
+    delta: _AzureChoiceDelta | None
+    finish_reason: NotRequired[str | None]
+
+
+class _AzureChunkPayload(TypedDict):
+    choices: Sequence[_AzureChoice]
+
+
+_AZURE_CHUNK_ADAPTER: Final = TypeAdapter(_AzureChunkPayload)
+
+
+class _TritonPayload(TypedDict, total=False):
+    text_output: str | None
+    stop_reason: str | None
+    is_finished: bool | None
+    input_token_count: int | None
+    generated_token_count: int | None
+
+
+_TRITON_ADAPTER: Final = TypeAdapter(_TritonPayload)
+
+
+def _next_sync_or_exhausted(it: Any) -> object:  # any-ok: caller's completion_stream is dynamically typed per-provider
     """
     Call next(it) from a thread and return _SYNC_ITER_EXHAUSTED on StopIteration.
 
@@ -68,7 +158,7 @@ def _next_sync_or_exhausted(it: Any) -> Any:
         return _SYNC_ITER_EXHAUSTED
 
 
-def is_async_iterable(obj: Any) -> bool:
+def is_async_iterable(obj: Any) -> bool:  # any-ok: self.completion_stream's type is inherently dynamic per-provider
     """
     Check if an object is an async iterable (can be used with 'async for').
 
@@ -107,7 +197,7 @@ class CustomStreamWrapper:
         self,
         completion_stream,
         model,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObject,
         custom_llm_provider: str | None = None,
         stream_options=None,
         make_call: Callable | None = None,
@@ -340,7 +430,7 @@ class CustomStreamWrapper:
             self.holding_chunk = ""
         return hold, curr_chunk
 
-    def handle_predibase_chunk(self, chunk):
+    def handle_predibase_chunk(self, chunk) -> Mapping[str, str | bool | None]:
         try:
             if not isinstance(chunk, str):
                 chunk = chunk.decode("utf-8")  # DO NOT REMOVE this: This is required for HF inference API + Streaming
@@ -349,18 +439,20 @@ class CustomStreamWrapper:
             finish_reason = ""
             print_verbose(f"chunk: {chunk}")
             if chunk.startswith("data:"):
-                data_json: Final = json.loads(chunk[5:])
+                data_json: Final = _PREDIBASE_ADAPTER.validate_python(_load_json(chunk[5:]))
                 print_verbose(f"data json: {data_json}")
-                if "token" in data_json and "text" in data_json["token"]:
-                    text = data_json["token"]["text"]
-                if data_json.get("details", False) and data_json["details"].get("finish_reason", False):
+                token: Final = data_json.get("token")
+                if token is not None and "text" in token:
+                    text = token.get("text", "")
+                details: Final = data_json.get("details")
+                if details and details.get("finish_reason"):
                     is_finished = True
-                    finish_reason = data_json["details"]["finish_reason"]
-                elif data_json.get("generated_text", False):  # if full generated text exists, then stream is complete
+                    finish_reason = details.get("finish_reason", "")
+                elif data_json.get("generated_text"):  # if full generated text exists, then stream is complete
                     text = ""  # don't return the final bos token
                     is_finished = True
                     finish_reason = "stop"
-                elif data_json.get("error", False):
+                elif data_json.get("error"):
                     raise Exception(data_json.get("error"))
                 return {
                     "text": text,
@@ -377,10 +469,11 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_ai21_chunk(self, chunk):  # fake streaming
+    def handle_ai21_chunk(self, chunk) -> Mapping[str, str | bool]:  # fake streaming
         chunk = chunk.decode("utf-8")
-        data_json: Final = json.loads(chunk)
+        raw: Final = _load_json(chunk)
         try:
+            data_json: Final = _AI21_ADAPTER.validate_python(raw)
             text: Final = data_json["completions"][0]["data"]["text"]
             is_finished: Final = True
             finish_reason: Final = "stop"
@@ -392,10 +485,11 @@ class CustomStreamWrapper:
         except Exception:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
-    def handle_maritalk_chunk(self, chunk):  # fake streaming
+    def handle_maritalk_chunk(self, chunk) -> Mapping[str, str | bool]:  # fake streaming
         chunk = chunk.decode("utf-8")
-        data_json: Final = json.loads(chunk)
+        raw: Final = _load_json(chunk)
         try:
+            data_json: Final = _MARITALK_ADAPTER.validate_python(raw)
             text: Final = data_json["answer"]
             is_finished: Final = True
             finish_reason: Final = "stop"
@@ -407,7 +501,7 @@ class CustomStreamWrapper:
         except Exception:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
-    def handle_nlp_cloud_chunk(self, chunk):
+    def handle_nlp_cloud_chunk(self, chunk) -> Mapping[str, str | bool]:
         text = ""
         is_finished = False
         finish_reason = ""
@@ -415,7 +509,7 @@ class CustomStreamWrapper:
             if self.model and "dolphin" in self.model:
                 chunk = self.process_chunk(chunk=chunk)
             else:
-                data_json: Final = json.loads(chunk)
+                data_json: Final = _NLP_CLOUD_ADAPTER.validate_python(_load_json(chunk))
                 chunk = data_json["generated_text"]
             text = chunk
             if "[DONE]" in text:
@@ -430,10 +524,11 @@ class CustomStreamWrapper:
         except Exception:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
-    def handle_aleph_alpha_chunk(self, chunk):
+    def handle_aleph_alpha_chunk(self, chunk) -> Mapping[str, str | bool]:
         chunk = chunk.decode("utf-8")
-        data_json: Final = json.loads(chunk)
+        raw: Final = _load_json(chunk)
         try:
+            data_json: Final = _ALEPH_ALPHA_ADAPTER.validate_python(raw)
             text: Final = data_json["completions"][0]["completion"]
             is_finished: Final = True
             finish_reason: Final = "stop"
@@ -445,7 +540,7 @@ class CustomStreamWrapper:
         except Exception:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
-    def handle_azure_chunk(self, chunk):
+    def handle_azure_chunk(self, chunk) -> Mapping[str, str | bool | None]:
         is_finished = False
         finish_reason = ""
         text = ""
@@ -460,14 +555,15 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
             }
         elif chunk.startswith("data:"):
-            data_json: Final = json.loads(chunk[5:])  # chunk.startswith("data:"):
+            raw: Final = _load_json(chunk[5:])  # chunk.startswith("data:"):
             try:
+                data_json: Final = _AZURE_CHUNK_ADAPTER.validate_python(raw)
                 if len(data_json["choices"]) > 0:
                     delta: Final = data_json["choices"][0]["delta"]
                     text = "" if delta is None else delta.get("content", "")
-                    if data_json["choices"][0].get("finish_reason", None):
+                    if data_json["choices"][0].get("finish_reason"):
                         is_finished = True
-                        finish_reason = data_json["choices"][0]["finish_reason"]
+                        finish_reason = data_json["choices"][0].get("finish_reason", "")
                 print_verbose(f"text: {text}; is_finished: {is_finished}; finish_reason: {finish_reason}")
                 return {
                     "text": text,
@@ -619,17 +715,17 @@ class CustomStreamWrapper:
             verbose_logger.exception("litellm.CustomStreamWrapper.handle_baseten_chunk(): Exception occured - %s", e)
             return ""
 
-    def handle_triton_stream(self, chunk):
+    def handle_triton_stream(self, chunk) -> Mapping[str, str | bool | int | None]:
         try:
             if isinstance(chunk, dict):
-                parsed_response = chunk
+                parsed_response = _TRITON_ADAPTER.validate_python(chunk)
             elif isinstance(chunk, (str, bytes)):
                 if isinstance(chunk, bytes):
                     chunk = chunk.decode("utf-8")
                 if "text_output" in chunk:
                     response = CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
                     response = response.strip()
-                    parsed_response = json.loads(response)
+                    parsed_response = _TRITON_ADAPTER.validate_python(_load_json(response))
                 else:
                     return {
                         "text": "",
