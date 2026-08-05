@@ -95,6 +95,38 @@ def test_old_node_switches_via_fnm_when_nvm_is_absent(tmp_path):
     assert "via fnm" in proc.stderr
 
 
+def _nvm_home(tmp_path, nvm_sh: str) -> Path:
+    home = tmp_path / "home"
+    nvm_dir = home / ".nvm"
+    nvm_dir.mkdir(parents=True)
+    (nvm_dir / "nvm.sh").write_text(nvm_sh)
+    return home
+
+
+def test_failing_nvm_load_stops_before_running_the_command(tmp_path):
+    old = _fake_node(tmp_path / "old-bin", _bump_major(_floor(), -1))
+    proc = _run([old], _nvm_home(tmp_path, "false\n"))
+    assert proc.returncode == 1
+    assert "could not load nvm" in proc.stderr
+    assert proc.stdout == ""
+
+
+def test_failing_nvm_install_stops_before_running_the_command(tmp_path):
+    old = _fake_node(tmp_path / "old-bin", _bump_major(_floor(), -1))
+    proc = _run([old], _nvm_home(tmp_path, 'nvm() { [ "$1" = install ] && return 1; return 0; }\n'))
+    assert proc.returncode == 1
+    assert "nvm install" in proc.stderr
+    assert proc.stdout == ""
+
+
+def test_failing_nvm_use_stops_before_running_the_command(tmp_path):
+    old = _fake_node(tmp_path / "old-bin", _bump_major(_floor(), -1))
+    proc = _run([old], _nvm_home(tmp_path, 'nvm() { [ "$1" = use ] && return 1; return 0; }\n'))
+    assert proc.returncode == 1
+    assert "nvm use" in proc.stderr
+    assert proc.stdout == ""
+
+
 def test_no_command_is_a_usage_error(tmp_path):
     proc = subprocess.run(
         [str(SCRIPT)],
