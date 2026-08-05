@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.url_utils import (
     validate_url,
 )
 from litellm.proxy._types import *
+from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_metadata
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 from litellm.types.utils import CustomPricingLiteLLMParams
 
@@ -440,6 +441,18 @@ def is_request_body_safe(
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
             _check_banned_params(metadata, general_settings, llm_router, model)
+        if any(
+            isinstance(key, str) and key.startswith(f"{metadata_key}[")
+            for key in request_body
+        ):
+            _check_banned_params(
+                extract_nested_form_metadata(
+                    form_data=request_body, prefix=f"{metadata_key}["
+                ),
+                general_settings,
+                llm_router,
+                model,
+            )
     for target in iter_request_fallback_targets(request_body):
         if isinstance(target, dict):
             _check_banned_params(target, general_settings, llm_router, model)
