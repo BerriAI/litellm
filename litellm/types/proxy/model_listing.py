@@ -10,9 +10,10 @@ class ModelInfoMetadata(TypedDict):
 
 
 class ModelInfoResponse(TypedDict):
-    """OpenAI-compatible model object. `mode`, `max_input_tokens`, and
-    `max_output_tokens` are attached when the cost map knows them; `metadata`
-    is present only when the endpoint is called with include_metadata=true.
+    """OpenAI-compatible model object. `mode`, `max_input_tokens`,
+    `max_output_tokens`, and `max_model_len` are attached when configured or
+    known to the cost map; `metadata` is present only when the endpoint is
+    called with include_metadata=true.
     """
 
     id: str
@@ -22,4 +23,5 @@ class ModelInfoResponse(TypedDict):
     mode: NotRequired[str]
     max_input_tokens: NotRequired[int]
     max_output_tokens: NotRequired[int]
+    max_model_len: NotRequired[int]
     metadata: NotRequired[ModelInfoMetadata]
