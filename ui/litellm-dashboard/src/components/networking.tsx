@@ -6447,7 +6447,10 @@ interface UiAuditLogsParams {
   changed_by?: string;
   changed_by_api_key?: string;
   object_team_id?: string;
+  object_team?: string;
   object_key_hash?: string;
+  start_date?: string;
+  end_date?: string;
   sort_by?: string;
   sort_order?: "asc" | "desc";
 }

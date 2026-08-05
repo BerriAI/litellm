@@ -2,6 +2,7 @@
 
 import { ColumnFiltersState, OnChangeFn, PaginationState } from "@tanstack/react-table";
 import { ScrollText } from "lucide-react";
+import moment from "moment";
 import { useMemo, useState } from "react";
 
 import {
@@ -46,9 +47,11 @@ const TABLE_OPTIONS = [
 ] as const;
 
 const FILTER_LABELS: Record<string, string> = {
+  start_date: "Start Date",
+  end_date: "End Date",
   object_id: "Object ID",
   changed_by: "Changed By",
-  team_id: "Team ID",
+  object_team: "Team",
   key_hash: "Key Hash",
   action: "Action",
   table_name: "Table",
@@ -61,6 +64,9 @@ const formatFilterValue = (columnId: string, value: unknown): string => {
   }
   if (columnId === "table_name") {
     return AUDIT_TABLE_NAME_DISPLAY[raw] ?? raw;
+  }
+  if (columnId === "start_date" || columnId === "end_date") {
+    return moment(raw).format("MMM D, YYYY HH:mm");
   }
   return raw;
 };
@@ -96,7 +102,7 @@ export function AuditLogsTable({
   onViewLog,
 }: AuditLogsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const columns = useMemo(() => getAuditLogsTableColumns({ onViewLog }), [onViewLog]);
+  const columns = useMemo(() => getAuditLogsTableColumns(), []);
 
   return (
     <DataTable
@@ -114,6 +120,7 @@ export function AuditLogsTable({
       loadingMessage="Loading audit logs…"
       noDataMessage={<AuditLogsEmptyState filtered={columnFilters.length > 0} />}
       size="compact"
+      onRowClick={onViewLog}
       toolbar={(table) => (
         <>
           <DataTableToolbar
@@ -134,6 +141,23 @@ export function AuditLogsTable({
           >
             {({ get, set }) => (
               <>
+                <DataTableFilterField label="Date Range">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="datetime-local"
+                      data-testid="audit-filter-start-date"
+                      value={(get("start_date") as string) ?? ""}
+                      onChange={(event) => set("start_date", event.target.value)}
+                    />
+                    <span className="text-sm text-muted-foreground">to</span>
+                    <Input
+                      type="datetime-local"
+                      data-testid="audit-filter-end-date"
+                      value={(get("end_date") as string) ?? ""}
+                      onChange={(event) => set("end_date", event.target.value)}
+                    />
+                  </div>
+                </DataTableFilterField>
                 <DataTableFilterField label="Object ID">
                   <Input
                     value={(get("object_id") as string) ?? ""}
@@ -148,11 +172,11 @@ export function AuditLogsTable({
                     placeholder="Enter user ID…"
                   />
                 </DataTableFilterField>
-                <DataTableFilterField label="Team ID">
+                <DataTableFilterField label="Team">
                   <Input
-                    value={(get("team_id") as string) ?? ""}
-                    onChange={(event) => set("team_id", event.target.value)}
-                    placeholder="Enter team ID…"
+                    value={(get("object_team") as string) ?? ""}
+                    onChange={(event) => set("object_team", event.target.value)}
+                    placeholder="Team ID or alias…"
                   />
                 </DataTableFilterField>
                 <DataTableFilterField label="Key Hash">
