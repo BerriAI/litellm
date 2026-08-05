@@ -17,7 +17,7 @@ import itertools
 import json
 import logging
 import os
-import random  # type: ignore
+import random
 import re
 import struct
 import subprocess
@@ -182,7 +182,7 @@ from litellm.types.utils import (
     Delta,
     Embedding,
     EmbeddingResponse,
-    FileTypes,  # type: ignore
+    FileTypes,
     Function,
     ImageResponse,
     LlmProviders,
@@ -612,7 +612,7 @@ def get_dynamic_callbacks(
 ) -> list:
     returned_callbacks: Final = litellm.callbacks.copy()
     if dynamic_callbacks:
-        returned_callbacks.extend(dynamic_callbacks)  # type: ignore
+        returned_callbacks.extend(dynamic_callbacks)
     return returned_callbacks
 
 
@@ -743,35 +743,35 @@ def function_setup(
             for callback in all_callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
-                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
+                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
                         callback,
                         internal_usage_cache=None,
-                        llm_router=None,  # type: ignore
+                        llm_router=None,
                     )
                     if callback is None or any(
                         type(cb) is type(callback) for cb in litellm._async_success_callback
                     ):  # don't double add a callback
                         continue
                 if callback not in litellm.input_callback:
-                    litellm.input_callback.append(callback)  # type: ignore
+                    litellm.input_callback.append(callback)
                 if callback not in litellm.success_callback:
-                    litellm.logging_callback_manager.add_litellm_success_callback(callback)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_success_callback(callback)
                 if callback not in litellm.failure_callback:
-                    litellm.logging_callback_manager.add_litellm_failure_callback(callback)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_failure_callback(callback)
                 if callback not in litellm._async_success_callback:
-                    litellm.logging_callback_manager.add_litellm_async_success_callback(callback)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
                 if callback not in litellm._async_failure_callback:
-                    litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
             print_verbose(f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}")
 
         if (
             len(litellm.input_callback) > 0 or len(litellm.success_callback) > 0 or len(litellm.failure_callback) > 0
         ) and len(
-            callback_list  # type: ignore
-        ) == 0:  # type: ignore
+            callback_list
+        ) == 0:
             callback_list = list(
                 set(
-                    litellm.input_callback  # type: ignore
+                    litellm.input_callback
                     + litellm.success_callback
                     + litellm.failure_callback
                 )
@@ -781,7 +781,7 @@ def function_setup(
         ## ASYNC CALLBACKS - safety net for callbacks added via direct append
         if len(litellm.input_callback) > 0:
             removed_async_items = []
-            for index, callback in enumerate(litellm.input_callback):  # type: ignore
+            for index, callback in enumerate(litellm.input_callback):
                 if coroutine_checker.is_async_callable(callback):
                     litellm._async_input_callback.append(callback)
                     removed_async_items.append(index)
@@ -791,7 +791,7 @@ def function_setup(
                 litellm.input_callback.pop(index)
         if len(litellm.success_callback) > 0:
             removed_async_items = []
-            for index, callback in enumerate(litellm.success_callback):  # type: ignore
+            for index, callback in enumerate(litellm.success_callback):
                 if coroutine_checker.is_async_callable(callback):
                     litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
                     removed_async_items.append(index)
@@ -809,7 +809,7 @@ def function_setup(
 
         if len(litellm.failure_callback) > 0:
             removed_async_items = []
-            for index, callback in enumerate(litellm.failure_callback):  # type: ignore
+            for index, callback in enumerate(litellm.failure_callback):
                 if coroutine_checker.is_async_callable(callback):
                     litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
                     removed_async_items.append(index)
@@ -1010,7 +1010,7 @@ def function_setup(
             stream = True
         get_litellm_logging_class: Final = getattr(sys.modules[__name__], "get_litellm_logging_class")
         logging_obj: Final = get_litellm_logging_class()(  # Victim for object pool
-            model=model,  # type: ignore
+            model=model,
             messages=messages,
             stream=stream,
             litellm_call_id=kwargs["litellm_call_id"],
@@ -1187,7 +1187,7 @@ def post_call_processing(
                     pass
                 else:
                     if isinstance(original_response, ModelResponse) and len(original_response.choices) > 0:
-                        model_response: Final[str | None] = original_response.choices[0].message.content  # type: ignore
+                        model_response: Final[str | None] = original_response.choices[0].message.content
                         if model_response is not None:
                             ### POST-CALL RULES ###
                             rules_obj.post_call_rules(input=model_response, model=model)
@@ -1220,7 +1220,7 @@ def post_call_processing(
                                         ):
                                             json_response_format = optional_params["response_format"]
                                         elif _parsing._completions.is_basemodel_type(
-                                            optional_params["response_format"]  # type: ignore
+                                            optional_params["response_format"]
                                         ):
                                             json_response_format = type_to_response_format_param(
                                                 response_format=optional_params["response_format"]
@@ -1521,7 +1521,7 @@ def client(original_function):
                     and not _is_litellm_router_call
                 ):
                     if len(args) > 0:
-                        args[0] = context_window_fallback_dict[model]  # type: ignore
+                        args[0] = context_window_fallback_dict[model]
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
                     return original_function(*args, **kwargs)
@@ -1740,7 +1740,7 @@ def client(original_function):
                             )
                         )
 
-                    logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging  # type: ignore
+                    logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging
                 else:
                     asyncio.create_task(
                         _client_async_logging_helper(
@@ -1825,7 +1825,7 @@ def client(original_function):
                     and not _is_litellm_router_call
                 ):
                     if len(args) > 0:
-                        args[0] = context_window_fallback_dict[model]  # type: ignore
+                        args[0] = context_window_fallback_dict[model]
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
                     return await original_function(*args, **kwargs)
@@ -1996,7 +1996,7 @@ def encode(model="", text="", custom_tokenizer: dict | None = None):
     # Normalize: HuggingFace Tokenizer.encode() returns an Encoding object;
     # extract .ids so the return type is always List[int].
     if hasattr(enc, "ids"):
-        return enc.ids  # type: ignore
+        return enc.ids
     return enc
 
 
@@ -2055,7 +2055,7 @@ def create_pretrained_tokenizer(identifier: str, revision="main", auth_token: st
         tokenizer = Tokenizer.from_pretrained(
             identifier,
             revision=revision,
-            auth_token=auth_token,  # type: ignore
+            auth_token=auth_token,
         )
     except Exception as e:
         verbose_logger.error("Error creating pretrained tokenizer: %s. Defaulting to version without 'auth_token'.", e)
@@ -4313,7 +4313,7 @@ def get_optional_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=_azure_detection_model,
-                api_version=api_version,  # type: ignore
+                api_version=api_version,
                 drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
             )
     elif provider_config is not None:
@@ -4776,9 +4776,9 @@ def get_utc_datetime():
     from datetime import datetime
 
     if hasattr(dt, "UTC"):
-        return datetime.now(dt.UTC)  # type: ignore
+        return datetime.now(dt.UTC)
     else:
-        return datetime.utcnow()  # type: ignore
+        return datetime.utcnow()
 
 
 def get_max_tokens(model: str) -> int | None:
@@ -5283,7 +5283,7 @@ def _get_model_info_helper(
             max_tokens: Final = _get_max_position_embeddings(model_name=model)
             return ModelInfoBase(
                 key=model,
-                max_tokens=max_tokens,  # type: ignore
+                max_tokens=max_tokens,
                 max_input_tokens=None,
                 max_output_tokens=None,
                 input_cost_per_token=0,
@@ -5516,7 +5516,7 @@ def _get_model_info_helper(
                 citation_cost_per_token=_model_info.get("citation_cost_per_token", None),
                 tiered_pricing=_model_info.get("tiered_pricing", None),
                 litellm_provider=_model_info.get("litellm_provider", custom_llm_provider),
-                mode=_model_info.get("mode"),  # type: ignore
+                mode=_model_info.get("mode"),
                 supports_system_messages=_model_info.get("supports_system_messages", None),
                 supports_response_schema=_model_info.get("supports_response_schema", None),
                 supports_vision=_model_info.get("supports_vision", None),
@@ -5556,7 +5556,7 @@ def _get_model_info_helper(
             )
             for cost_key, cost_value in _model_info.items():
                 if cost_key not in returned_model_info and _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None:
-                    returned_model_info[cost_key] = cost_value  # type: ignore[literal-required]
+                    returned_model_info[cost_key] = cost_value
             return returned_model_info
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)
@@ -5584,7 +5584,7 @@ def _build_model_info(
     if provider_info:
         for key, value in provider_info.items():
             if value is not None:
-                _model_info[key] = value  # type: ignore
+                _model_info[key] = value
 
     # if verbose_logger.isEnabledFor(logging.DEBUG):
     # verbose_logger.debug(f"model_info: {_model_info}")
@@ -5684,8 +5684,8 @@ def get_model_info(
     return _cached_get_model_info(model, custom_llm_provider, api_base)
 
 
-get_model_info.cache_clear = _cached_get_model_info.cache_clear  # type: ignore[attr-defined]
-get_model_info.cache_info = _cached_get_model_info.cache_info  # type: ignore[attr-defined]
+get_model_info.cache_clear = _cached_get_model_info.cache_clear
+get_model_info.cache_info = _cached_get_model_info.cache_info
 
 
 def json_schema_type(python_type_name: str):
@@ -6315,7 +6315,7 @@ def prompt_token_calculator(model, messages):
         from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic
 
         anthropic_obj: Final = Anthropic()
-        num_tokens = anthropic_obj.count_tokens(text)  # type: ignore
+        num_tokens = anthropic_obj.count_tokens(text)
     else:
         num_tokens = len(_get_default_encoding().encode(text))
     return num_tokens
@@ -6402,11 +6402,11 @@ def _get_retry_after_from_exception_header(
             try:
                 retry_after = int(retry_header)
             except Exception:
-                retry_date_tuple: Final = email.utils.parsedate_tz(retry_header)  # type: ignore
+                retry_date_tuple: Final = email.utils.parsedate_tz(retry_header)
                 if retry_date_tuple is None:
                     retry_after = -1
                 else:
-                    retry_date: Final = email.utils.mktime_tz(retry_date_tuple)  # type: ignore
+                    retry_date: Final = email.utils.mktime_tz(retry_date_tuple)
                     retry_after = int(retry_date - time.time())
         else:
             retry_after = -1
@@ -7151,7 +7151,7 @@ class ModelResponseIterator:
     def __init__(self, model_response: ModelResponse, convert_to_delta: bool = False):
         if convert_to_delta is True:
             _stream_response: Final = ModelResponseStream()
-            _stream_response.choices[0].delta.content = model_response.choices[0].message.content  # type: ignore
+            _stream_response.choices[0].delta.content = model_response.choices[0].message.content
             self.model_response: ModelResponse | ModelResponseStream = _stream_response
         else:
             self.model_response = model_response
@@ -7400,7 +7400,7 @@ def convert_to_dict(message: BaseModel | dict) -> dict:
         dict: The converted message.
     """
     if isinstance(message, BaseModel):
-        return message.model_dump(exclude_none=True)  # type: ignore
+        return message.model_dump(exclude_none=True)
     elif isinstance(message, dict):
         return message
     else:
@@ -7879,9 +7879,9 @@ class ProviderConfigManager:
         if config_entry is not None:
             config_factory, needs_model = config_entry
             if needs_model:
-                return config_factory(model)  # type: ignore
+                return config_factory(model)
             else:
-                return config_factory()  # type: ignore
+                return config_factory()
 
         # Fall back to JSON providers (generic OpenAI-compatible)
         from litellm.llms.openai_like.dynamic_config import create_config_class

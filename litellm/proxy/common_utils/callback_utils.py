@@ -309,7 +309,7 @@ def initialize_callbacks_on_proxy(
         if isinstance(litellm.callbacks, list):
             litellm.callbacks.extend(imported_list)
         else:
-            litellm.callbacks = imported_list  # type: ignore
+            litellm.callbacks = imported_list
 
         if "prometheus" in value:
             from litellm.integrations.prometheus import PrometheusLogger

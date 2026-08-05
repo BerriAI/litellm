@@ -476,9 +476,9 @@ class OCIChatConfig(BaseConfig):
             if target in selected_params:
                 continue
             if openai_key in optional_params:
-                selected_params[target] = optional_params[openai_key]  # type: ignore[index]
+                selected_params[target] = optional_params[openai_key]
             elif oci_alias in optional_params:
-                selected_params[target] = optional_params[oci_alias]  # type: ignore[index]
+                selected_params[target] = optional_params[oci_alias]
 
         # OCI's server-side default token cap is tiny (~20 tokens), so an
         # omitted max_tokens silently truncates the response mid-string. Most
@@ -499,13 +499,11 @@ class OCIChatConfig(BaseConfig):
 
         if "tools" in selected_params:
             if vendor == OCIVendors.COHERE:
-                selected_params["tools"] = adapt_tool_definitions_to_cohere_standard(  # type: ignore[assignment]
-                    selected_params["tools"]  # type: ignore[arg-type]
-                )
+                selected_params["tools"] = adapt_tool_definitions_to_cohere_standard(selected_params["tools"])
             else:
-                selected_params["tools"] = adapt_tool_definition_to_oci_standard(  # type: ignore[assignment]
+                selected_params["tools"] = adapt_tool_definition_to_oci_standard(
                     selected_params["tools"],
-                    vendor,  # type: ignore[arg-type]
+                    vendor,
                 )
 
         # Normalise tool_choice to OCI's flat uppercase dict form

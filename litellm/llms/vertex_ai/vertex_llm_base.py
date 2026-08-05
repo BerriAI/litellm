@@ -342,7 +342,7 @@ class VertexBase:
     def refresh_auth(self, credentials: Any) -> None:
         try:
             from google.auth.transport.requests import (
-                Request,  # type: ignore[import-untyped]
+                Request,
             )
         except ImportError:
             raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
@@ -643,7 +643,7 @@ class VertexBase:
                         "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
                     )
                 if gemini_api_key is not None:
-                    auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
+                    auth_header = {"x-goog-api-key": gemini_api_key}
             else:
                 # For Vertex AI
                 if use_psc_endpoint_format:
@@ -707,7 +707,7 @@ class VertexBase:
                 model=model,
                 stream=stream,
             )
-            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
+            auth_header = {"x-goog-api-key": gemini_api_key}
         else:
             vertex_location = self.get_vertex_region(
                 vertex_region=vertex_location,

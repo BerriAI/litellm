@@ -537,7 +537,7 @@ class PrismaWrapper:
         `_safe_refresh_token`, which double-checks token freshness under the
         lock) don't re-acquire it — `asyncio.Lock` is not reentrant.
         """
-        from prisma import Prisma  # type: ignore
+        from prisma import Prisma
 
         if expected_generation is not None and expected_generation != self._engine_generation:
             verbose_proxy_logger.info(

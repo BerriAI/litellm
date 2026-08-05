@@ -246,7 +246,7 @@ class CohereV2ModelResponseIterator:
                     "name": tool_calls[0].get("name", ""),
                     "arguments": tool_calls[0].get("arguments", ""),
                 },
-            }  # type: ignore
+            }
         return None
 
     def _parse_tool_plan_delta(self, chunk: dict) -> dict | None:

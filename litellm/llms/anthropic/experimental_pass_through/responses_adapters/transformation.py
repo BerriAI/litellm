@@ -342,7 +342,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         output_format: Any = anthropic_request.get("output_format")
         output_config = anthropic_request.get("output_config")
         if not isinstance(output_format, dict) and isinstance(output_config, dict):
-            output_format = output_config.get("format")  # type: ignore[assignment]
+            output_format = output_config.get("format")
         if isinstance(output_format, dict) and output_format.get("type") == "json_schema":
             schema: Final = output_format.get("schema")
             if schema:
@@ -469,7 +469,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             role="assistant",
             model=response.model or "unknown-model",
             stop_sequence=None,
-            usage=anthropic_usage,  # type: ignore
-            content=content,  # type: ignore
+            usage=anthropic_usage,
+            content=content,
             stop_reason=stop_reason,
         )

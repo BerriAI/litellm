@@ -524,7 +524,7 @@ def _get_count_function(
     from litellm.utils import _select_tokenizer, print_verbose
 
     if model is not None or custom_tokenizer is not None:
-        tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)  # type: ignore
+        tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)
         if tokenizer_json["type"] == "huggingface_tokenizer":
 
             def count_tokens(text: str) -> int:
@@ -532,7 +532,7 @@ def _get_count_function(
                 return len(enc.ids)
 
         elif tokenizer_json["type"] == "openai_tokenizer":
-            model_to_use: Final = _fix_model_name(model)  # type: ignore
+            model_to_use: Final = _fix_model_name(model)
             try:
                 if "gpt-4o" in model_to_use:
                     encoding = tiktoken.get_encoding("o200k_base")
@@ -561,7 +561,7 @@ def _fix_model_name(model: str) -> str:
         # azure llms use gpt-35-turbo instead of gpt-3.5-turbo 🙃
         return model.replace("-35", "-3.5")
     elif model in litellm.open_ai_chat_completion_models:
-        return model  # type: ignore
+        return model
     else:
         return "gpt-3.5-turbo"
 
@@ -592,7 +592,7 @@ def _count_image_tokens(
             raise ValueError("Missing required key 'url' in image_url dict.")
         return calculate_img_tokens(
             data=url,
-            mode=detail,  # type: ignore
+            mode=detail,
             use_default_image_token_count=use_default_image_token_count,
         )
     elif isinstance(image_url, str):
@@ -669,7 +669,7 @@ def _count_anthropic_content(
             elif isinstance(field_value, list):
                 tokens += _count_content_list(
                     count_function,
-                    field_value,  # type: ignore
+                    field_value,
                     use_default_image_token_count,
                     default_token_count,
                 )

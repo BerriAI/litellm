@@ -121,7 +121,7 @@ def initialize_standard_callback_dynamic_params(
             if param in kwargs:
                 _param_value = kwargs.get(param)
                 validate_no_callback_env_reference(param, _param_value, source="request body")
-                standard_callback_dynamic_params[param] = _param_value  # type: ignore
+                standard_callback_dynamic_params[param] = _param_value
 
         for slot_label, metadata in iter_client_callback_metadata_dicts(kwargs):
             for param in _supported_callback_params:
@@ -130,6 +130,6 @@ def initialize_standard_callback_dynamic_params(
                 if param not in standard_callback_dynamic_params and param in metadata:
                     _param_value = metadata.get(param)
                     validate_no_callback_env_reference(param, _param_value, source=slot_label)
-                    standard_callback_dynamic_params[param] = _param_value  # type: ignore
+                    standard_callback_dynamic_params[param] = _param_value
 
     return standard_callback_dynamic_params

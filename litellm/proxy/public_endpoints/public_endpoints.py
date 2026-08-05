@@ -404,7 +404,7 @@ async def get_supported_endpoints() -> SupportedEndpointsResponse:
     """
     global _cached_endpoints
     if _cached_endpoints is None:
-        _cached_endpoints = SupportedEndpointsResponse(endpoints=_load_endpoints())  # type: ignore[arg-type]
+        _cached_endpoints = SupportedEndpointsResponse(endpoints=_load_endpoints())
     return _cached_endpoints
 
 
