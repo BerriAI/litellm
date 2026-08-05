@@ -381,3 +381,40 @@ def test_non_pem_private_key_value_redacted():
 def test_normal_vertex_log_not_redacted():
     msg = "Vertex: Loading vertex credentials, is_file_path=True, current dir /app"
     assert redact_string(msg) == msg
+
+
+# ── ReDoS / catastrophic-backtracking regression ──
+
+
+def test_connection_string_credentials_redacted():
+    """The scheme://user:pass@host pattern must still redact userinfo,
+    including the empty-user (scheme://:pass@host) form."""
+    cases = [
+        ("postgres://user:pass@host:5432/db", "user:pass"),
+        ("postgresql://admin:s3cr3t!@db.internal/prod", "admin:s3cr3t!"),
+        ("mysql://u:p:with:colons@host", "u:p:with:colons"),
+        ("redis://:onlypass@host", ":onlypass"),
+    ]
+    for line, secret in cases:
+        result = redact_string(line)
+        assert secret not in result, f"credentials not redacted in {line!r}"
+        assert "REDACTED" in result
+
+
+def test_redact_string_no_catastrophic_backtracking_on_large_input():
+    """Regression for the connection-string pattern ReDoS: a large ':'-heavy
+    string with no trailing '@' used to trigger O(n^2) backtracking that froze
+    the event loop for minutes. redact_string must stay near-linear."""
+    import time
+
+    # ~1.6MB of "://a:a:a:..." with no '@' anywhere, mimicking a large provider
+    # error body embedded in an exception string.
+    payload = "x://" + "a:" * 400_000
+
+    start = time.perf_counter()
+    result = redact_string(payload)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 5.0, f"redact_string took {elapsed:.1f}s (catastrophic backtracking)"
+    # Nothing to redact (no '@'), so the string must pass through unchanged.
+    assert result == payload
