@@ -62,7 +62,10 @@ if TYPE_CHECKING:
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
-from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.proxy.litellm_pre_call_utils import (
+    add_litellm_data_to_request,
+    reject_url_valued_destination,
+)
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
 # Datadog streaming spans are a no-op when ddtrace is not enabled, but the
@@ -894,6 +897,9 @@ class ProxyBaseLLMRequestProcessing:
             self.data[_metadata_variable_name][
                 "queue_time_seconds"
             ] = queue_time_seconds
+
+        if isinstance(model, str):
+            reject_url_valued_destination("model", model)
 
         self.data["model"] = (
             general_settings.get("completion_model", None)  # server default
