@@ -640,6 +640,7 @@ aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
 dashscope_models: Set = set()
+xiaomi_mimo_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
@@ -889,6 +890,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
             dashscope_models.add(key)
+        elif value.get("litellm_provider") == "xiaomi_mimo":
+            xiaomi_mimo_models.add(key)
         elif value.get("litellm_provider") == "modelscope":
             modelscope_models.add(key)
         elif value.get("litellm_provider") == "moonshot":
@@ -1043,6 +1046,7 @@ model_list = list(
     | deepgram_models
     | elevenlabs_models
     | dashscope_models
+    | xiaomi_mimo_models
     | moonshot_models
     | publicai_models
     | darkbloom_models
@@ -1148,6 +1152,7 @@ models_by_provider: dict = {
     "elevenlabs": elevenlabs_models,
     "heroku": heroku_models,
     "dashscope": dashscope_models,
+    "xiaomi_mimo": xiaomi_mimo_models,
     "modelscope": modelscope_models,
     "moonshot": moonshot_models,
     "publicai": publicai_models,
@@ -1974,6 +1979,9 @@ if TYPE_CHECKING:
     )
     from .llms.dashscope.rerank.transformation import (
         DashScopeRerankConfig as DashScopeRerankConfig,
+    )
+    from .llms.xiaomi_mimo.chat.transformation import (
+        XiaomiMiMoChatConfig as XiaomiMiMoChatConfig,
     )
     from .llms.modelscope.chat.transformation import (
         ModelScopeChatConfig as ModelScopeChatConfig,
