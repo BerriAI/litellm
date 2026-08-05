@@ -60,7 +60,7 @@ def is_advisor_orchestration_failure(exception: BaseException | None) -> bool:
     return bool(getattr(exception, _ADVISOR_ORCHESTRATION_FAILURE_ATTR, False))
 
 
-_EXCEPTION_POLICY_FIELDS: tuple[tuple[type, str], ...] = (
+_EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
     # ContentPolicyViolationError subclasses BadRequestError, so it must be checked first.
     (litellm.ContentPolicyViolationError, "ContentPolicyViolationErrorAllowedFails"),
     (litellm.BadRequestError, "BadRequestErrorAllowedFails"),
@@ -100,13 +100,13 @@ def _get_deployment_cooldown_policy(
     field placed there would leak into the outgoing LLM request instead of staying
     router-internal.
     """
-    dep = litellm_router_instance.get_model_info(id=deployment)
+    dep: Final = litellm_router_instance.get_model_info(id=deployment)
     if dep is None:
         return None, None
-    mi: Mapping[str, Any] = dep.get("model_info") or MappingProxyType({})
-    raw = mi.get("allowed_fails_policy")
-    policy: Mapping[str, int] | None = raw if isinstance(raw, dict) else None
-    allowed: int | None = mi.get("allowed_fails")
+    mi: Final[Mapping[str, Any]] = dep.get("model_info") or MappingProxyType({})
+    raw: Final = mi.get("allowed_fails_policy")
+    policy: Final[Mapping[str, int] | None] = raw if isinstance(raw, dict) else None
+    allowed: Final[int | None] = mi.get("allowed_fails")
     return policy, allowed
 
 
@@ -146,23 +146,25 @@ def _should_cooldown_based_on_deployment_policy(
     explicit, named-exception-type `allowed_fails_policy` entry is unambiguous enough to
     override that safety net, matching `_has_explicit_allowed_fails_policy_for_exception`.
     """
-    allowed_fails_from_policy = _resolve_allowed_fails_from_policy(dep_policy, original_exception)
-    if allowed_fails_from_policy is not None:
-        allowed_fails_override: int | None = allowed_fails_from_policy
-        cache_key_suffix: str | None = type(original_exception).__name__
-    elif dep_allowed_fails is not None:
-        if is_single_deployment_model_group:
-            return False
-        allowed_fails_override = dep_allowed_fails
-        cache_key_suffix = "generic"
-    else:
-        allowed_fails_override = None
-        cache_key_suffix = None
+    allowed_fails_from_policy: Final = _resolve_allowed_fails_from_policy(dep_policy, original_exception)
+    if allowed_fails_from_policy is None and dep_allowed_fails is not None and is_single_deployment_model_group:
+        return False
 
-    dep = litellm_router_instance.get_model_info(id=deployment)
-    cooldown_time_override: float | None = None
-    if dep is not None:
-        cooldown_time_override = _first_present(dep.get("model_info"), dep.get("litellm_params"), key="cooldown_time")
+    allowed_fails_override: Final[int | None] = (
+        allowed_fails_from_policy if allowed_fails_from_policy is not None else dep_allowed_fails
+    )
+    cache_key_suffix: Final[str | None] = (
+        type(original_exception).__name__
+        if allowed_fails_from_policy is not None
+        else ("generic" if dep_allowed_fails is not None else None)
+    )
+
+    dep: Final = litellm_router_instance.get_model_info(id=deployment)
+    cooldown_time_override: Final = (
+        _first_present(dep.get("model_info"), dep.get("litellm_params"), key="cooldown_time")
+        if dep is not None
+        else None
+    )
 
     return should_cooldown_based_on_allowed_fails_policy(
         litellm_router_instance=litellm_router_instance,
@@ -336,7 +338,7 @@ def _should_cooldown_deployment(
 
     - v1 logic (Legacy): if allowed fails or allowed fail policy set, coolsdown if num fails in this minute > allowed fails
     """
-    model_group = litellm_router_instance.get_model_group(id=deployment)
+    model_group: Final = litellm_router_instance.get_model_group(id=deployment)
     is_single_deployment_model_group = False
     if model_group is not None and len(model_group) == 1:
         is_single_deployment_model_group = True
