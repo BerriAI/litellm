@@ -263,6 +263,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_token: Optional[float]  # for gemini omni models with video output
     output_vector_size: Optional[int]
     output_cost_per_reasoning_token: Optional[float]
+    output_cost_per_reasoning_token_flex: Optional[float]
+    output_cost_per_reasoning_token_priority: Optional[float]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
@@ -3308,6 +3310,8 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_image_token: Optional[float] = None
     output_cost_per_video_token: Optional[float] = None
     output_cost_per_reasoning_token: Optional[float] = None
+    output_cost_per_reasoning_token_flex: Optional[float] = None
+    output_cost_per_reasoning_token_priority: Optional[float] = None
     output_cost_per_video_per_second: Optional[float] = None
     output_cost_per_audio_per_second: Optional[float] = None
     search_context_cost_per_query: Optional[Dict[str, Any]] = None
