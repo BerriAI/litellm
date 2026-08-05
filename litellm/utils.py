@@ -766,16 +766,8 @@ def function_setup(
 
         if (
             len(litellm.input_callback) > 0 or len(litellm.success_callback) > 0 or len(litellm.failure_callback) > 0
-        ) and len(
-            callback_list
-        ) == 0:
-            callback_list = list(
-                set(
-                    litellm.input_callback
-                    + litellm.success_callback
-                    + litellm.failure_callback
-                )
-            )
+        ) and len(callback_list) == 0:
+            callback_list = list(set(litellm.input_callback + litellm.success_callback + litellm.failure_callback))
             get_set_callbacks: Final = getattr(sys.modules[__name__], "get_set_callbacks")
             get_set_callbacks()(callback_list=callback_list, function_id=function_id)
         ## ASYNC CALLBACKS - safety net for callbacks added via direct append

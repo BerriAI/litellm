@@ -61,6 +61,61 @@ def test_get_request_model_budget_config(budget_limiter):
     assert config is None
 
 
+def test_get_request_model_budget_config_strips_entry_prefix(budget_limiter):
+    """Key/end-user entries keyed provider/model must bind bare (and cross-prefixed)
+    requests; only the request side was normalized before, so an openai/gpt-4
+    entry never matched a gpt-4 request and the cap was inert (Greptile finding,
+    key-side sibling of the team matcher fix)."""
+    internal_budget = {"openai/gpt-4": GenericBudgetInfo(budget_limit=100.0, time_period="1d")}
+    matched = budget_limiter._get_request_model_budget_config(
+        model="gpt-4", internal_model_max_budget=internal_budget
+    )
+    assert matched is not None and matched.max_budget == 100.0
+    cross = budget_limiter._get_request_model_budget_config(
+        model="azure/gpt-4", internal_model_max_budget=internal_budget
+    )
+    assert cross is not None and cross.max_budget == 100.0
+    assert (
+        budget_limiter._get_request_model_budget_config(
+            model="claude-3", internal_model_max_budget=internal_budget
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_is_key_within_model_budget_prefixed_entry_bare_request(budget_limiter):
+    """A key cap keyed openai/gpt-4 must enforce on a bare gpt-4 request."""
+    user_api_key = UserAPIKeyAuth(
+        token="test-key",
+        key_alias="test-alias",
+        model_max_budget={"openai/gpt-4": {"budget_limit": 100.0, "time_period": "1d"}},
+    )
+    with patch.object(budget_limiter, "_get_virtual_key_spend_for_model", return_value=150.0):
+        with pytest.raises(litellm.BudgetExceededError):
+            await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4")
+
+
+@pytest.mark.asyncio
+async def test_team_check_skipped_for_prefixed_key_entry_on_bare_request(budget_limiter):
+    """A key whose own entry is keyed openai/gpt-4 is exempt from the team cap for
+    a bare gpt-4 request; before the fix it charged, and was blocked by, the
+    shared team counter."""
+    with patch.object(
+        budget_limiter, "_get_team_spend_for_model", AsyncMock(return_value=10_000.0)
+    ) as mock_team_spend:
+        assert (
+            await budget_limiter.is_team_within_model_budget(
+                team_id="team-1",
+                team_model_max_budget={"gpt-4": {"budget_limit": 100.0, "time_period": "1d"}},
+                model="gpt-4",
+                key_model_max_budget={"openai/gpt-4": {"budget_limit": 50.0, "time_period": "1d"}},
+            )
+            is True
+        )
+    mock_team_spend.assert_not_called()
+
+
 # Test is_key_within_model_budget
 @pytest.mark.asyncio
 async def test_is_key_within_model_budget(budget_limiter):

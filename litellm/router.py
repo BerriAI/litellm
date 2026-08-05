@@ -3410,9 +3410,7 @@ class Router:
 
         # Await the first task to complete successfully
         while pending_tasks:
-            done, pending_tasks = await asyncio.wait(
-                pending_tasks, return_when=asyncio.FIRST_COMPLETED
-            )
+            done, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
             for completed_task in done:
                 result = await check_response(completed_task)
 
@@ -5240,9 +5238,7 @@ class Router:
                     # Update kwargs with the current model name or any other model-specific adjustments
                     ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
                     if not custom_llm_provider:
-                        _, custom_llm_provider, _, _ = get_llm_provider(
-                            model=model
-                        )
+                        _, custom_llm_provider, _, _ = get_llm_provider(model=model)
                     new_kwargs: Final = safe_deep_copy(kwargs)
                     self._update_kwargs_with_deployment(
                         deployment=cast(dict, model_name),
@@ -6029,9 +6025,7 @@ class Router:
                 raise Exception(
                     "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
                 )
-        return await original_function(
-            custom_llm_provider=custom_llm_provider, client=client, **kwargs
-        )
+        return await original_function(custom_llm_provider=custom_llm_provider, client=client, **kwargs)
 
     #### [END] ASSISTANTS API ####
 
@@ -6364,9 +6358,7 @@ class Router:
                 mask_sensitive_structure(fallback_model_group),
             )
             if len(fallback_failure_exception_str) > 0:
-                original_exception.message += (
-                    f"\nError doing the fallback: {fallback_failure_exception_str}"
-                )
+                original_exception.message += f"\nError doing the fallback: {fallback_failure_exception_str}"
 
         raise original_exception
 
@@ -9124,9 +9116,7 @@ class Router:
                     and model_info["supports_parallel_function_calling"] is True
                 ):
                     model_group_info.supports_parallel_function_calling = True
-                if (
-                    model_info.get("supports_vision", None) is not None and model_info["supports_vision"] is True
-                ):
+                if model_info.get("supports_vision", None) is not None and model_info["supports_vision"] is True:
                     model_group_info.supports_vision = True
                 if (
                     model_info.get("supports_function_calling", None) is not None
@@ -9144,9 +9134,7 @@ class Router:
                 ):
                     model_group_info.supports_url_context = True
 
-                if (
-                    model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True
-                ):
+                if model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True:
                     model_group_info.supports_reasoning = True
                 if (
                     model_info.get("supported_openai_params", None) is not None
@@ -10876,9 +10864,7 @@ class Router:
                         args=(e, traceback_exception),
                     ).start()  # log response
                     # Handle any exceptions that might occur during streaming
-                    asyncio.create_task(
-                        logging_obj.async_failure_handler(e, traceback_exception)
-                    )
+                    asyncio.create_task(logging_obj.async_failure_handler(e, traceback_exception))
             raise e
 
     async def async_get_available_deployment_for_pass_through(
@@ -11003,9 +10989,7 @@ class Router:
                         target=logging_obj.failure_handler,
                         args=(e, traceback_exception),
                     ).start()
-                    asyncio.create_task(
-                        logging_obj.async_failure_handler(e, traceback_exception)
-                    )
+                    asyncio.create_task(logging_obj.async_failure_handler(e, traceback_exception))
             raise e
 
     async def _run_routing_plugins(

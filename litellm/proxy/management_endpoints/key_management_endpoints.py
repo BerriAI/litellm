@@ -425,7 +425,7 @@ def _team_key_model_max_budget_check(
         return
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
-    team_member_object = _get_user_in_team(team_table=team_table, user_id=user_api_key_dict.user_id)
+    team_member_object: Final = _get_user_in_team(team_table=team_table, user_id=user_api_key_dict.user_id)
     if team_member_object is not None and team_member_object.role == "admin":
         return
     raise HTTPException(

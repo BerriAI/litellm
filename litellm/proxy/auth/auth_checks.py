@@ -4081,14 +4081,14 @@ async def _team_model_max_budget_check(
     """
     if team_object is None or team_object.team_id is None or model is None:
         return
-    team_model_max_budget = team_object.model_max_budget
+    team_model_max_budget: Final = team_object.model_max_budget
     if not isinstance(team_model_max_budget, dict) or len(team_model_max_budget) == 0:
         return
 
     from litellm.proxy.proxy_server import model_max_budget_limiter
 
-    models = (model,) if isinstance(model, str) else tuple(model)
-    key_model_max_budget = valid_token.model_max_budget if valid_token is not None else None
+    models: Final = (model,) if isinstance(model, str) else tuple(model)
+    key_model_max_budget: Final = valid_token.model_max_budget if valid_token is not None else None
     for model_name in models:
         await model_max_budget_limiter.is_team_within_model_budget(
             team_id=team_object.team_id,

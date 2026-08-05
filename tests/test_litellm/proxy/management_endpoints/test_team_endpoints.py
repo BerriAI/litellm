@@ -11108,3 +11108,16 @@ class TestValidateTeamModelMaxBudget:
         with pytest.raises(ProxyException) as exc_info:
             self._validate({"gpt-4": {"budget_limit": "not-a-number", "time_period": "1d"}})
         assert exc_info.value.code == "400"
+
+    @pytest.mark.parametrize("bad_limit", [0.0, -5.0, float("inf")])
+    def test_non_positive_cap_rejected(self, bad_limit):
+        """Enforcement skips non-positive caps, so accepting one silently uncaps the
+        model; a team admin could exploit that by lowering an imposed cap to zero
+        (Veria finding). Validation now rejects the value outright."""
+        from litellm.proxy._types import ProxyException
+
+        with pytest.raises(ProxyException) as exc_info:
+            self._validate({"gpt-4": {"budget_limit": bad_limit, "time_period": "1d"}})
+        assert exc_info.value.code == "400"
+        assert "gpt-4" in exc_info.value.message
+        assert "budget_limit" in exc_info.value.message

@@ -71,11 +71,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 model=model,
                 key_budget_config=_current_model_budget_info,
             )
-            if (
-                _current_spend is not None
-                and _current_model_budget_info.max_budget is not None
-                and _current_spend > _current_model_budget_info.max_budget
-            ):
+            if _current_spend is not None and _current_spend > _current_model_budget_info.max_budget:
                 raise litellm.BudgetExceededError(
                     message=f"LiteLLM Virtual Key: {user_api_key_dict.token}, key_alias: {user_api_key_dict.key_alias}, exceeded budget for model={model}",
                     current_cost=_current_spend,
@@ -137,11 +133,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 model=model,
                 key_budget_config=_current_model_budget_info,
             )
-            if (
-                _current_spend is not None
-                and _current_model_budget_info.max_budget is not None
-                and _current_spend > _current_model_budget_info.max_budget
-            ):
+            if _current_spend is not None and _current_spend > _current_model_budget_info.max_budget:
                 raise litellm.BudgetExceededError(
                     message=f"LiteLLM End User: {end_user_id}, exceeded budget for model={model}",
                     current_cost=_current_spend,
@@ -170,7 +162,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         """
         if model in internal_model_max_budget:
             return model
-        stripped_model = self._get_model_without_custom_llm_provider(model)
+        stripped_model: Final = self._get_model_without_custom_llm_provider(model)
         if stripped_model in internal_model_max_budget:
             return stripped_model
         return next(
@@ -195,7 +187,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         """
         if not key_model_max_budget:
             return False
-        budget_config = self._get_request_model_budget_config(
+        budget_config: Final = self._get_request_model_budget_config(
             model=model, internal_model_max_budget=self._coerce_budget_configs(key_model_max_budget)
         )
         return (
@@ -226,22 +218,22 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             verbose_proxy_logger.debug("Team model budget check skipped for model=%s: key has its own entry", model)
             return True
 
-        internal_model_max_budget = self._coerce_budget_configs(team_model_max_budget)
+        internal_model_max_budget: Final = self._coerce_budget_configs(team_model_max_budget)
 
         verbose_proxy_logger.debug("team internal_model_max_budget %s", internal_model_max_budget)
 
-        matched_model = self._get_matched_budget_model_name(
+        matched_model: Final = self._get_matched_budget_model_name(
             model=model, internal_model_max_budget=internal_model_max_budget
         )
         if matched_model is None:
             verbose_proxy_logger.debug("Model %s not found in team_model_max_budget", model)
             return True
-        budget_config = internal_model_max_budget[matched_model]
+        budget_config: Final = internal_model_max_budget[matched_model]
 
         if not budget_config.max_budget or budget_config.max_budget <= 0:
             return True
 
-        current_spend = await self._get_team_spend_for_model(
+        current_spend: Final = await self._get_team_spend_for_model(
             team_id=team_id,
             matched_model=matched_model,
             budget_config=budget_config,
@@ -276,7 +268,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         write always address one counter regardless of how the request spelled the
         model.
         """
-        team_model_spend_cache_key = (
+        team_model_spend_cache_key: Final = (
             f"{TEAM_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{matched_model}:{budget_config.budget_duration}"
         )
         return await self.dual_cache.async_get_cache(
@@ -304,20 +296,22 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if self._key_already_covers_model(key_model_max_budget, model):
             return
 
-        internal_model_max_budget = self._coerce_budget_configs(team_model_max_budget)
-        matched_model = self._get_matched_budget_model_name(
+        internal_model_max_budget: Final = self._coerce_budget_configs(team_model_max_budget)
+        matched_model: Final = self._get_matched_budget_model_name(
             model=model, internal_model_max_budget=internal_model_max_budget
         )
         if matched_model is None:
             return
-        budget_config = internal_model_max_budget[matched_model]
+        budget_config: Final = internal_model_max_budget[matched_model]
         if not budget_config.budget_duration:
             return
 
-        team_spend_key = (
+        team_spend_key: Final = (
             f"{TEAM_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{matched_model}:{budget_config.budget_duration}"
         )
-        team_start_time_key = f"team_model_budget_start_time:{team_id}:{matched_model}:{budget_config.budget_duration}"
+        team_start_time_key: Final = (
+            f"team_model_budget_start_time:{team_id}:{matched_model}:{budget_config.budget_duration}"
+        )
         await self._increment_spend_for_key(
             budget_config=budget_config,
             spend_key=team_spend_key,
@@ -382,14 +376,14 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         self, model: str, internal_model_max_budget: Mapping[str, BudgetConfig]
     ) -> BudgetConfig | None:
         """
-        Get the budget config for the request model
-
-        1. Check if `model` is in `internal_model_max_budget`
-        2. If not, check if `model` without custom llm provider is in `internal_model_max_budget`
+        Get the budget config for the request model via _get_matched_budget_model_name,
+        so request and config-entry names are both `{provider}/`-normalized and a
+        prefixed entry like `openai/gpt-4` binds a bare `gpt-4` request.
         """
-        return internal_model_max_budget.get(model, None) or internal_model_max_budget.get(
-            self._get_model_without_custom_llm_provider(model), None
+        matched_model: Final = self._get_matched_budget_model_name(
+            model=model, internal_model_max_budget=internal_model_max_budget
         )
+        return internal_model_max_budget[matched_model] if matched_model is not None else None
 
     @staticmethod
     def _get_model_without_custom_llm_provider(model: str) -> str:
@@ -427,7 +421,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         user_api_key_end_user_model_max_budget: Final[dict | None] = _metadata.get(
             "user_api_key_end_user_model_max_budget", None
         )
-        user_api_key_team_model_max_budget: Mapping[str, Mapping[str, str | float]] | None = _metadata.get(
+        user_api_key_team_model_max_budget: Final[Mapping[str, Mapping[str, str | float]] | None] = _metadata.get(
             "user_api_key_team_model_max_budget", None
         )
         if (
@@ -503,7 +497,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     response_cost=response_cost,
                 )
 
-        user_api_key_team_id: str | None = _metadata.get("user_api_key_team_id", None)
+        user_api_key_team_id: Final[str | None] = _metadata.get("user_api_key_team_id", None)
         if (
             user_api_key_team_id is not None
             and user_api_key_team_model_max_budget is not None

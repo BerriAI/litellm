@@ -1056,11 +1056,11 @@ def _check_team_model_max_budget_update_authority(
 
     from litellm.types.utils import BudgetConfig
 
-    existing_configs = MappingProxyType(
+    existing_configs: Final = MappingProxyType(
         {_model: BudgetConfig(**_info) for _model, _info in existing_model_max_budget.items()}
     )
-    requested_items = data.model_max_budget.items() if data.model_max_budget else ()
-    requested_configs = MappingProxyType({_model: BudgetConfig(**_info) for _model, _info in requested_items})
+    requested_items: Final = data.model_max_budget.items() if data.model_max_budget else ()
+    requested_configs: Final = MappingProxyType({_model: BudgetConfig(**_info) for _model, _info in requested_items})
     for model_name, existing_config in existing_configs.items():
         requested_config = requested_configs.get(model_name)
         if requested_config is None:
@@ -1111,11 +1111,11 @@ def _validate_team_model_max_budget(
             code="400",
         )
 
-    normalized_names = tuple(
+    normalized_names: Final = tuple(
         _PROXY_VirtualKeyModelMaxBudgetLimiter._get_model_without_custom_llm_provider(entry_name)
         for entry_name in model_max_budget
     )
-    colliding_entries = tuple(
+    colliding_entries: Final = tuple(
         sorted(
             entry_name
             for entry_name, normalized_name in zip(model_max_budget, normalized_names)
@@ -1128,6 +1128,32 @@ def _validate_team_model_max_budget(
                 f"model_max_budget entries {colliding_entries} refer to the same model "
                 "after the provider prefix is stripped; keep one entry per model so spend "
                 "accrues to a single counter"
+            ),
+            type=ProxyErrorTypes.bad_request_error,
+            param="model_max_budget",
+            code="400",
+        )
+
+    from types import MappingProxyType
+
+    from litellm.types.utils import BudgetConfig
+
+    entry_configs: Final = MappingProxyType(
+        {entry_name: BudgetConfig(**entry_info) for entry_name, entry_info in model_max_budget.items()}
+    )
+    non_enforceable: Final = tuple(
+        sorted(
+            entry_name
+            for entry_name, config in entry_configs.items()
+            if config.max_budget is None or not math.isfinite(config.max_budget) or config.max_budget <= 0
+        )
+    )
+    if non_enforceable:
+        raise ProxyException(
+            message=(
+                f"model_max_budget entries {non_enforceable} have no enforceable budget_limit; "
+                "enforcement skips non-positive caps, so a zero or negative value would leave the "
+                "model uncapped. Use a positive finite budget_limit, or remove the entry"
             ),
             type=ProxyErrorTypes.bad_request_error,
             param="model_max_budget",
