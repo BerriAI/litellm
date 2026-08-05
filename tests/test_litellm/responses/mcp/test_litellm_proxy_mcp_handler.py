@@ -648,3 +648,33 @@ def test_extract_tool_call_details_still_prefers_openai_arguments():
     assert name == "get_weather"
     assert call_id == "call_123"
     assert arguments == '{"city": "Paris"}'
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_threads_logging_obj_into_call_tool(monkeypatch):
+    """The Responses-API MCP path builds its own logging object; call_tool must receive it
+    or the pre/during guardrail records for these tool calls are written into a throwaway
+    and the spend-log row reports guardrail_information as null."""
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    sentinel_logging_obj = MagicMock()
+    sentinel_logging_obj.model_call_details = {}
+    monkeypatch.setattr(
+        sys.modules["litellm.responses.mcp.litellm_proxy_mcp_handler"],
+        "function_setup",
+        MagicMock(return_value=(sentinel_logging_obj, {})),
+    )
+    tool_name = "read_wiki_structure"
+    tool_calls = [
+        {
+            "id": "call-1",
+            "function": {"name": tool_name, "arguments": "{}"},
+        }
+    ]
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert call_tool_mock.await_args.kwargs["litellm_logging_obj"] is sentinel_logging_obj

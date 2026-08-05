@@ -632,9 +632,18 @@ class ProxyLogging:
                 return user_api_key_auth_obj.__dict__
         return {}
 
-    def _convert_mcp_to_llm_format(self, request_obj, kwargs: dict) -> dict:
+    def _convert_mcp_to_llm_format(
+        self,
+        request_obj,
+        kwargs: dict,
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> dict:
         """
         Convert MCP tool call to LLM message format for existing guardrail validation.
+
+        ``litellm_logging_obj`` is the request's logging object, seeded onto the synthetic
+        request so a guardrail's recorded evaluation reaches the object that builds the
+        spend-log payload — the MCP equivalent of what every LLM route already carries.
         """
         from litellm.types.llms.openai import ChatCompletionUserMessage
 
@@ -663,6 +672,7 @@ class ProxyLogging:
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
             # before re-signing an outbound token (FR-5 verify+re-sign).
             "incoming_bearer_token": kwargs.get("incoming_bearer_token"),
+            "litellm_logging_obj": litellm_logging_obj,
         }
 
         return synthetic_data
@@ -2480,9 +2490,13 @@ class ProxyLogging:
         response: "CallToolResult",
         request_data: Mapping[str, Any],
         user_api_key_dict: UserAPIKeyAuth | None = None,
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> "CallToolResult":
         """
         Run guardrails configured for ``post_mcp_call`` against an MCP tool result.
+
+        ``litellm_logging_obj`` is supplied by the caller rather than read out of
+        ``request_data``, which on this path is ``model_call_details`` and never carries it.
 
         The MCP counterpart of ``post_call_success_hook``: guardrails that
         implement ``apply_guardrail`` see the tool result's text through the
@@ -2520,7 +2534,7 @@ class ProxyLogging:
                 handler_cls().process_output_response(
                     response=response,
                     guardrail_to_apply=callback,
-                    litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                    litellm_logging_obj=litellm_logging_obj,
                     user_api_key_dict=user_api_key_dict,
                     request_data=request_data,
                 ),

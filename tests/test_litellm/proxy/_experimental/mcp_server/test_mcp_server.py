@@ -7977,6 +7977,7 @@ async def test_post_mcp_call_guardrails_return_the_rewritten_result():
     hook_kwargs = proxy_logging_mock.post_mcp_call_hook.await_args.kwargs
     assert hook_kwargs["response"] is raw_result
     assert hook_kwargs["request_data"] is logging_obj.model_call_details
+    assert hook_kwargs["litellm_logging_obj"] is logging_obj
 
 
 @pytest.mark.asyncio
@@ -8236,3 +8237,157 @@ class TestListFiltersHonorThePrefixBoundary:
 
         assert listed == callable_, f"grants={grants!r} listed={listed} callable={callable_}"
         assert listed is expected, f"grants={grants!r} expected={expected} got={listed}"
+
+
+class TestExecuteMCPToolForwardsLoggingObject:
+    """Every dispatch branch must hand the request's logging object downstream.
+
+    The guardrail hooks record their evaluation into the object they are given; a branch
+    that drops it writes the record into a throwaway and the spend-log row for that tool
+    call reports guardrail_information as null.
+    """
+
+    @staticmethod
+    def _fake_server(name="guardrail-info-server"):
+        fake_server = MagicMock()
+        fake_server.name = name
+        fake_server.is_byok = False
+        fake_server.auth_type = None
+        fake_server.mcp_info = None
+        fake_server.server_id = "srv-guardrail-info"
+        fake_server.server_name = name
+        fake_server.alias = None
+        fake_server.short_prefix = None
+        return fake_server
+
+    @pytest.mark.asyncio
+    async def test_local_prefixed_tool_branch_forwards_logging_obj(self):
+        from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+        fake_server = self._fake_server()
+        sentinel = _mock_mcp_logging_obj()
+
+        with (
+            patch.object(
+                mcp_module.global_mcp_server_manager,
+                "_get_mcp_server_from_tool_name",
+                return_value=fake_server,
+            ),
+            patch.object(
+                mcp_module.global_mcp_server_manager,
+                "pre_call_tool_check",
+                new=AsyncMock(return_value={}),
+            ) as pre_check,
+            patch.object(mcp_module.global_mcp_tool_registry, "get_tool", return_value=MagicMock()),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+                return_value=True,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._run_post_mcp_call_guardrails",
+                new=AsyncMock(side_effect=lambda result, **_: result),
+            ),
+        ):
+            await mcp_module.execute_mcp_tool(
+                name="list_pets",
+                arguments={},
+                allowed_mcp_servers=[fake_server],
+                start_time=datetime.now(),
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u-1"),
+                litellm_logging_obj=sentinel,
+            )
+
+        assert pre_check.await_args.kwargs["litellm_logging_obj"] is sentinel
+
+    @pytest.mark.asyncio
+    async def test_unprefixed_local_registry_fallback_forwards_logging_obj(self):
+        """The prefix-stripped local-registry fallback: no server resolves from the tool
+        name, so the branch re-resolves the server from allowed_mcp_servers and runs the
+        pre-call check itself. It must forward the logging object like the others."""
+        from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+        fake_server = self._fake_server(name="legacysrv")
+        sentinel = _mock_mcp_logging_obj()
+
+        def _get_tool(tool_name):
+            return MagicMock() if tool_name == "echo" else None
+
+        with (
+            patch.object(
+                mcp_module.global_mcp_server_manager,
+                "_get_mcp_server_from_tool_name",
+                return_value=None,
+            ),
+            patch.object(
+                mcp_module.global_mcp_server_manager,
+                "pre_call_tool_check",
+                new=AsyncMock(return_value={}),
+            ) as pre_check,
+            patch.object(mcp_module.global_mcp_tool_registry, "get_tool", side_effect=_get_tool),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+                return_value=True,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._run_post_mcp_call_guardrails",
+                new=AsyncMock(side_effect=lambda result, **_: result),
+            ),
+        ):
+            await mcp_module.execute_mcp_tool(
+                name="legacysrv-echo",
+                arguments={},
+                allowed_mcp_servers=[fake_server],
+                start_time=datetime.now(),
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u-1"),
+                litellm_logging_obj=sentinel,
+            )
+
+        assert pre_check.await_args.kwargs["litellm_logging_obj"] is sentinel
+
+    @pytest.mark.asyncio
+    async def test_managed_server_branch_forwards_logging_obj(self):
+        """The customer's route: a managed HTTP MCP server dispatched through call_tool."""
+        from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+        fake_server = self._fake_server()
+        sentinel = _mock_mcp_logging_obj()
+
+        with (
+            patch.object(
+                mcp_module.global_mcp_server_manager,
+                "_get_mcp_server_from_tool_name",
+                return_value=fake_server,
+            ),
+            patch.object(
+                mcp_module.global_mcp_server_manager,
+                "call_tool",
+                new=AsyncMock(return_value=_call_tool_result(False, "ok")),
+            ) as call_tool,
+            patch.object(mcp_module.global_mcp_tool_registry, "get_tool", return_value=None),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+                return_value=True,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._run_post_mcp_call_guardrails",
+                new=AsyncMock(side_effect=lambda result, **_: result),
+            ),
+        ):
+            await mcp_module.execute_mcp_tool(
+                name="list_pets",
+                arguments={},
+                allowed_mcp_servers=[fake_server],
+                start_time=datetime.now(),
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u-1"),
+                litellm_logging_obj=sentinel,
+            )
+
+        assert call_tool.await_args.kwargs["litellm_logging_obj"] is sentinel

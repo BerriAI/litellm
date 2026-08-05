@@ -9793,3 +9793,196 @@ class TestToolAuthorizationIsNotConditionalOnLogging:
             )
 
         upstream.assert_awaited_once()
+
+
+class TestMCPGuardrailInformationReachesLoggingObject:
+    """MCP guardrail evaluations must land on the request's logging object.
+
+    The spend-log payload is built from ``logging_obj.litellm_params["metadata"]``.
+    The guardrail writes its record into the synthetic request dict the MCP gateway
+    hands it, so unless that dict carries ``litellm_logging_obj`` the record is written
+    into a throwaway object and MCP rows report ``guardrail_information: null``.
+    """
+
+    @pytest.fixture
+    def restore_callbacks(self):
+        import litellm
+        from litellm.proxy.utils import ProxyLogging
+
+        original = list(litellm.callbacks)
+        yield
+        litellm.callbacks = original
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    @staticmethod
+    def _make_logging_obj():
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        logging_obj = Logging(
+            model="MCP: search",
+            messages=[],
+            stream=False,
+            call_type="call_mcp_tool",
+            start_time=datetime.now(),
+            litellm_call_id="mcp-guardrail-info-test",
+            function_id="mcp-guardrail-info-test",
+        )
+        logging_obj.update_environment_variables(
+            litellm_params={"metadata": {}},
+            optional_params={},
+        )
+        assert logging_obj.model_call_details["litellm_params"] is logging_obj.litellm_params
+        return logging_obj
+
+    @staticmethod
+    def _recorded_entries(logging_obj):
+        return logging_obj.litellm_params["metadata"].get(
+            "standard_logging_guardrail_information", []
+        )
+
+    @staticmethod
+    def _make_direct_hook_guardrail(event_hook, hook_name):
+        from litellm.integrations.custom_guardrail import (
+            CustomGuardrail,
+            log_guardrail_information,
+        )
+
+        class _DirectHookGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="mcp-direct-hook-guardrail",
+                    event_hook=event_hook,
+                    default_on=True,
+                )
+
+            @log_guardrail_information
+            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+                return data
+
+            @log_guardrail_information
+            async def async_moderation_hook(self, data, user_api_key_dict, call_type):
+                return data
+
+        guardrail = _DirectHookGuardrail()
+        assert hook_name in type(guardrail).__dict__
+        return guardrail
+
+    @staticmethod
+    def _make_open_server():
+        return MCPServer(
+            server_id="guardrail-info-server",
+            name="guardrail-info-server",
+            transport=MCPTransport.stdio,
+            allowed_tools=None,
+            disallowed_tools=None,
+        )
+
+    @staticmethod
+    def _make_user_api_key_auth():
+        return UserAPIKeyAuth(
+            api_key="sk-guardrail-info-test",
+            user_id="u-1",
+            team_id="t-1",
+            object_permission=None,
+            object_permission_id=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_pre_call_tool_check_records_guardrail_info_on_logging_obj(self, restore_callbacks):
+        """A pre_mcp_call guardrail's evaluation must reach the logging object that builds the
+        spend-log payload. Drop litellm_logging_obj at any hop between pre_call_tool_check and
+        the guardrail and this fails with guardrail_information null, which is the bug."""
+        import litellm
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = self._make_direct_hook_guardrail(
+            GuardrailEventHooks.pre_mcp_call, "async_pre_call_hook"
+        )
+        litellm.callbacks = [guardrail]
+        ProxyLogging._callback_capabilities_cache.clear()
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        logging_obj = self._make_logging_obj()
+
+        await MCPServerManager().pre_call_tool_check(
+            name="search",
+            arguments={"q": "hello"},
+            server_name="guardrail-info-server",
+            user_api_key_auth=self._make_user_api_key_auth(),
+            proxy_logging_obj=proxy_logging_obj,
+            server=self._make_open_server(),
+            litellm_logging_obj=logging_obj,
+        )
+
+        entries = self._recorded_entries(logging_obj)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_name"] == guardrail.guardrail_name
+
+    @pytest.mark.asyncio
+    async def test_during_hook_records_guardrail_info_on_logging_obj(self, restore_callbacks):
+        """during_mcp_call runs on the same synthetic dict and must record the same way."""
+        import litellm
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = self._make_direct_hook_guardrail(
+            GuardrailEventHooks.during_mcp_call, "async_moderation_hook"
+        )
+        litellm.callbacks = [guardrail]
+        ProxyLogging._callback_capabilities_cache.clear()
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        logging_obj = self._make_logging_obj()
+
+        await MCPServerManager()._create_during_hook_task(
+            name="search",
+            arguments={"q": "hello"},
+            server_name_from_prefix="guardrail-info-server",
+            user_api_key_auth=self._make_user_api_key_auth(),
+            proxy_logging_obj=proxy_logging_obj,
+            start_time=datetime.now(),
+            litellm_logging_obj=logging_obj,
+        )
+
+        entries = self._recorded_entries(logging_obj)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_name"] == guardrail.guardrail_name
+
+    @pytest.mark.asyncio
+    async def test_call_tool_forwards_logging_obj_to_both_hooks(self):
+        """call_tool is the single funnel for the managed-server route; it must hand the
+        logging object to both the pre-call check and the during-call task."""
+        manager = MCPServerManager()
+        manager.tool_name_to_mcp_server_name_mapping = {}
+        sentinel = object()
+        proxy_logging_obj = MagicMock()
+
+        with (
+            patch.object(
+                manager,
+                "_resolve_mcp_server_for_tool_call",
+                return_value=self._make_open_server(),
+            ),
+            patch.object(
+                manager, "pre_call_tool_check", new=AsyncMock(return_value={})
+            ) as pre_check,
+            patch.object(manager, "_create_during_hook_task") as during_task,
+            patch.object(
+                manager,
+                "_call_regular_mcp_tool",
+                new=AsyncMock(return_value=CallToolResult(content=[], isError=False)),
+            ),
+        ):
+            during_task.return_value = MagicMock()
+            await manager.call_tool(
+                server_name="guardrail-info-server",
+                name="search",
+                arguments={"q": "hello"},
+                user_api_key_auth=self._make_user_api_key_auth(),
+                proxy_logging_obj=proxy_logging_obj,
+                litellm_logging_obj=sentinel,
+            )
+
+        assert pre_check.await_args.kwargs["litellm_logging_obj"] is sentinel
+        assert during_task.call_args.kwargs["litellm_logging_obj"] is sentinel

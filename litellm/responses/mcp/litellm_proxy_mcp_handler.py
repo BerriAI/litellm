@@ -791,6 +791,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     proxy_logging_obj=proxy_logging_obj,
+                    litellm_logging_obj=litellm_logging_obj,
                 )
 
                 if proxy_logging_obj:
@@ -802,6 +803,7 @@ class LiteLLM_Proxy_MCP_Handler:
                             else {"mcp_tool_name": tool_name}
                         ),
                         user_api_key_dict=user_api_key_auth,
+                        litellm_logging_obj=litellm_logging_obj,
                     )
 
                 if litellm_logging_obj:
