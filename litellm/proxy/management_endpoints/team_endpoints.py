@@ -72,6 +72,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.management_endpoints.common_utils import (
     _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
@@ -1156,6 +1157,11 @@ async def new_team(  # noqa: PLR0915
         )
         complete_team_data_dict["router_settings"] = router_settings_json
 
+        if complete_team_data_dict.get("metadata") is not None:
+            complete_team_data_dict["metadata"] = encrypt_callback_vars(
+                complete_team_data_dict["metadata"]
+            )
+
         complete_team_data_dict = prisma_client.jsonify_team_object(
             db_data=complete_team_data_dict
         )
@@ -1827,6 +1833,9 @@ async def update_team(  # noqa: PLR0915
 
         # update team metadata fields
         _update_metadata_fields(updated_kv=updated_kv)
+
+        if updated_kv.get("metadata") is not None:
+            updated_kv["metadata"] = encrypt_callback_vars(updated_kv["metadata"])
 
         if "model_aliases" in updated_kv:
             updated_kv.pop("model_aliases")

@@ -201,6 +201,11 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_total_tokens_metric",
     "litellm_input_tokens_metric",
     "litellm_output_tokens_metric",
+    "litellm_input_cached_tokens_metric",
+    "litellm_input_cache_creation_tokens_metric",
+    "litellm_input_audio_tokens_metric",
+    "litellm_output_reasoning_tokens_metric",
+    "litellm_output_audio_tokens_metric",
     "litellm_deployment_successful_fallbacks",
     "litellm_deployment_failed_fallbacks",
     "litellm_remaining_team_budget_metric",
@@ -450,6 +455,17 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
     ]
+
+    # Token-type detail metrics — reuse the same label set as
+    # litellm_input_tokens_metric / litellm_output_tokens_metric so dashboards
+    # can join across them. Only emitted when the underlying usage detail is
+    # populated by the provider (e.g. Anthropic cache_read_input_tokens,
+    # OpenAI prompt_tokens_details.cached_tokens, reasoning_tokens, audio_tokens).
+    litellm_input_cached_tokens_metric = litellm_input_tokens_metric
+    litellm_input_cache_creation_tokens_metric = litellm_input_tokens_metric
+    litellm_input_audio_tokens_metric = litellm_input_tokens_metric
+    litellm_output_reasoning_tokens_metric = litellm_output_tokens_metric
+    litellm_output_audio_tokens_metric = litellm_output_tokens_metric
 
     litellm_deployment_state = [
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,

@@ -671,6 +671,37 @@ async def _resolve_jwt_to_virtual_key(
         return None
 
 
+def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
+    """Idempotently create the OTEL SERVER span and stash it on
+    ``request.state.parent_otel_span``. Safe to call multiple times.
+
+    Called both at the top of ``user_api_key_auth`` (so body-parse failures
+    have a span to close) and inside ``_user_api_key_auth_builder`` (for
+    callers that bypass ``user_api_key_auth``, e.g. MCP).
+    """
+    from litellm.proxy.proxy_server import open_telemetry_logger
+
+    if open_telemetry_logger is None:
+        return
+    if getattr(request.state, "parent_otel_span", None) is not None:
+        return
+    start_time = datetime.now()
+    try:
+        request.state.litellm_received_at = start_time
+    except Exception:
+        pass
+    parent_otel_span = open_telemetry_logger.create_litellm_proxy_request_started_span(
+        start_time=start_time,
+        headers=_safe_get_request_headers(request),
+    )
+    open_telemetry_logger.set_proxy_request_route_attributes(
+        parent_otel_span,
+        url_path=get_request_route(request=request),
+        http_route=get_request_route_template(request),
+    )
+    request.state.parent_otel_span = parent_otel_span
+
+
 async def _user_api_key_auth_builder(  # noqa: PLR0915
     request: Request,
     api_key: str,
@@ -697,9 +728,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     )
 
     parent_otel_span: Optional[Span] = None
-    start_time = datetime.now()
-    # Stash the proxy-receive instant for the pre-request latency calc —
-    # the OTel Span API exposes no start-time getter, so propagate it.
+    # Prefer the receive-instant stamped by the early helper in
+    # user_api_key_auth (before body parse) — overwriting it would shorten
+    # the preprocessing-duration measurement by the body-parse window.
+    start_time = getattr(request.state, "litellm_received_at", None) or datetime.now()
     try:
         request.state.litellm_received_at = start_time
     except Exception:
@@ -739,18 +771,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         if open_telemetry_logger is not None:
-            parent_otel_span = (
-                open_telemetry_logger.create_litellm_proxy_request_started_span(
-                    start_time=start_time,
-                    headers=_safe_get_request_headers(request),
-                )
-            )
-            # `route` is the literal path; template from the matched route.
-            open_telemetry_logger.set_proxy_request_route_attributes(
-                parent_otel_span,
-                url_path=route,
-                http_route=get_request_route_template(request),
-            )
+            # Reuse the span created by user_api_key_auth (before body parse)
+            # so it survives _read_request_body failures. For callers that
+            # bypass user_api_key_auth (e.g. MCP), create it lazily.
+            _ensure_parent_otel_span_on_request_state(request)
+            parent_otel_span = getattr(request.state, "parent_otel_span", None)
 
         ### USER-DEFINED AUTH FUNCTION ###
         if enterprise_custom_auth is not None:
@@ -2148,6 +2173,12 @@ async def user_api_key_auth(
     """
     Parent function to authenticate user api key / jwt token.
     """
+
+    # Create the SERVER span and stash it on request.state BEFORE reading the
+    # body. _read_request_body can raise ProxyException for malformed JSON;
+    # without this, that path leaves no span for the exception handler to
+    # close, and the trace never reaches the backend.
+    _ensure_parent_otel_span_on_request_state(request)
 
     request_data = await _read_request_body(request=request)
     request_data = populate_request_with_path_params(

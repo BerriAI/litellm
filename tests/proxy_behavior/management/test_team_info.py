@@ -68,3 +68,19 @@ async def test_team_info_authz_matrix(
         body = resp.json()
         assert body["team_id"] == target_team_id
         assert body["team_info"]["team_id"] == target_team_id
+
+
+# Phase 4 F6 — explicit pin on the `_verify_team_access` 403 message string.
+# alpha/org_b_admin already covers the branch in the matrix; this guard
+# turns a silent rename of the exception detail into a CI red, which is the
+# behavior tripwire that the matrix's status-only assertion cannot catch.
+async def test_team_info_org_admin_cross_org_rejection_detail(proxy_client, world):
+    resp = await proxy_client.get(
+        f"/team/info?team_id={world.team_alpha_id}",
+        headers={"Authorization": f"Bearer {world.keys[Actor.ORG_B_ADMIN].cleartext}"},
+    )
+    assert resp.status_code == 403, resp.text
+    # validate_membership() at GET /team/info raises with this exact phrase.
+    # Pinning it lock-step locks down the visible auth message — a rename
+    # would flip CI red even when the status stays 403.
+    assert "not authorized to access this team" in resp.text, resp.text
