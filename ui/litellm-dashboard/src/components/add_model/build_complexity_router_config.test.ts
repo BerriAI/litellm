@@ -3,6 +3,8 @@ import {
   getKeywordTierRulesError,
   getMissingTiersError,
   getSemanticConfigError,
+  getTierLabelsError,
+  hydrateTierLabels,
   BuildComplexityRouterConfigParams,
 } from "./build_complexity_router_config";
 
@@ -15,6 +17,7 @@ const tiers = {
 
 const baseParams: BuildComplexityRouterConfigParams = {
   tiers,
+  tierLabels: undefined,
   classifierType: "heuristic",
   classifierLlmConfig: undefined,
   classifierContextWindowSize: undefined,
@@ -397,5 +400,91 @@ describe("buildComplexityRouterConfig assistant turns", () => {
   it("omits it when unset, leaving the backend default", () => {
     const config = buildComplexityRouterConfig(llmParams);
     expect(config.classifier_context_include_assistant_turns).toBeUndefined();
+  });
+});
+
+describe("tier labels", () => {
+  it("omits tier_labels entirely when the operator renamed nothing", () => {
+    expect(buildComplexityRouterConfig(baseParams).tier_labels).toBeUndefined();
+  });
+
+  it("omits a label that only restates the default, so a later default change still reaches this router", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tierLabels: { SIMPLE: "Simple", MEDIUM: "Medium", COMPLEX: "Complex", REASONING: "Reasoning" },
+    });
+    expect(config.tier_labels).toBeUndefined();
+  });
+
+  it("emits only the renamed tiers, trimmed, and leaves the tier keys canonical", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tierLabels: { SIMPLE: "  Cheap  ", REASONING: "Deep" },
+    });
+    expect(config.tier_labels).toEqual({ SIMPLE: "Cheap", REASONING: "Deep" });
+    expect(Object.keys(config.tiers)).toEqual(["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]);
+  });
+
+  it("treats a whitespace-only label as no rename rather than sending a blank the backend rejects", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, tierLabels: { SIMPLE: "   " } });
+    expect(config.tier_labels).toBeUndefined();
+  });
+});
+
+describe("getTierLabelsError", () => {
+  it("accepts an unrenamed router", () => {
+    expect(getTierLabelsError(undefined)).toBeNull();
+  });
+
+  it("accepts a full distinct rename", () => {
+    expect(
+      getTierLabelsError({ SIMPLE: "Cheap", MEDIUM: "Standard", COMPLEX: "Premium", REASONING: "Deep" }),
+    ).toBeNull();
+  });
+
+  it("rejects two tiers sharing a name, which would be ambiguous in the logs", () => {
+    expect(getTierLabelsError({ SIMPLE: "Cheap", MEDIUM: "Cheap" })).toMatch(/unique/i);
+  });
+
+  it("rejects names that differ only by case, since the logs would not tell them apart", () => {
+    expect(getTierLabelsError({ SIMPLE: "Cheap", MEDIUM: "cheap" })).toMatch(/unique/i);
+  });
+
+  // A rename can collide with a tier the operator left alone, not just with another rename.
+  it("rejects a rename that collides with an untouched tier's name", () => {
+    expect(getTierLabelsError({ SIMPLE: "Medium" })).toMatch(/another tier's name/i);
+  });
+
+  it("rejects a label that is another tier's canonical name", () => {
+    expect(getTierLabelsError({ SIMPLE: "COMPLEX" })).toMatch(/another tier's name/i);
+  });
+
+  it("allows a label equal to that tier's own canonical name, which is a no-op", () => {
+    expect(getTierLabelsError({ SIMPLE: "SIMPLE" })).toBeNull();
+  });
+});
+
+describe("hydrateTierLabels", () => {
+  it("returns undefined for a config that never set labels", () => {
+    expect(hydrateTierLabels(undefined)).toBeUndefined();
+  });
+
+  it("keeps the stored labels", () => {
+    expect(hydrateTierLabels({ SIMPLE: "Cheap", REASONING: "Deep" })).toEqual({ SIMPLE: "Cheap", REASONING: "Deep" });
+  });
+
+  it("drops non-string and blank values a hand-edited config could hold", () => {
+    expect(hydrateTierLabels({ SIMPLE: 7, MEDIUM: "  ", COMPLEX: null, REASONING: "Deep" })).toEqual({
+      REASONING: "Deep",
+    });
+  });
+
+  it("ignores keys that are not tiers", () => {
+    expect(hydrateTierLabels({ CHEAP: "Cheap" })).toBeUndefined();
+  });
+
+  it("returns undefined for a value that is not an object", () => {
+    expect(hydrateTierLabels("Cheap")).toBeUndefined();
+    expect(hydrateTierLabels(["Cheap"])).toBeUndefined();
   });
 });

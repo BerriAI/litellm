@@ -21,6 +21,7 @@ import {
   getKeywordTierRulesError,
   getMissingTiersError,
   getSemanticConfigError,
+  getTierLabelsError,
 } from "./build_complexity_router_config";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
@@ -99,11 +100,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   // Why the submit is unavailable, or null when it is available. The button reads this to disable
   // itself and to say what is missing, so the two can never give different answers.
   const submitBlockedReason =
-    getMissingTiersError(complexityRouterConfig.tiers) ?? getKeywordTierRulesError(keywordTierRules);
+    getMissingTiersError(complexityRouterConfig.tiers) ??
+    getTierLabelsError(complexityRouterConfig.tier_labels) ??
+    getKeywordTierRulesError(keywordTierRules);
 
   const submitRecommendedRouter = (name: string) => {
     const {
       tiers,
+      tier_labels: tierLabels,
       classifier_type: classifierType,
       classifier_llm_config: classifierLlmConfig,
       classifier_context_window_size: classifierContextWindowSize,
@@ -121,6 +125,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     if (missingTiersError) {
       setShowValidationErrors(true);
       NotificationManager.fromBackend(missingTiersError);
+      return;
+    }
+
+    const tierLabelsError = getTierLabelsError(tierLabels);
+    if (tierLabelsError) {
+      setShowValidationErrors(true);
+      NotificationManager.fromBackend(tierLabelsError);
       return;
     }
 
@@ -158,6 +169,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       .then((values) => {
         const complexityRouterConfigParams = {
           tiers,
+          tierLabels,
           classifierType,
           classifierLlmConfig,
           classifierContextWindowSize,

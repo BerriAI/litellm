@@ -1,5 +1,5 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Select as AntdSelect, Card, Collapse, Divider, Space, Switch, Tooltip, Typography } from "antd";
+import { Select as AntdSelect, Card, Collapse, Divider, Input, Space, Switch, Tooltip, Typography } from "antd";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
@@ -39,8 +39,11 @@ export const DEFAULT_ADAPTIVE_WEIGHTS: AdaptiveRouterWeights = { quality: 0.3, c
 
 export type AdaptiveEligible = "all" | "classified_tier";
 
+export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>>;
+
 export interface ComplexityRouterConfigValue {
   tiers: ComplexityTiers;
+  tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
   classifier_context_window_size?: number;
@@ -75,7 +78,10 @@ interface ComplexityRouterConfigProps {
   showValidationErrors?: boolean;
 }
 
-const TIER_DESCRIPTIONS: Record<keyof ComplexityTiers, { label: string; description: string; examples: string }> = {
+export const TIER_DESCRIPTIONS: Record<
+  keyof ComplexityTiers,
+  { label: string; description: string; examples: string }
+> = {
   SIMPLE: {
     label: "Simple",
     description: "Basic questions, greetings, simple factual queries",
@@ -97,6 +103,12 @@ const TIER_DESCRIPTIONS: Record<keyof ComplexityTiers, { label: string; descript
     examples: '"Think step by step...", "Analyze the pros and cons..."',
   },
 };
+
+export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof ComplexityTiers>;
+
+// The name shown for a tier: the operator's own label when they set one, else LiteLLM's default.
+export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
+  tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
 
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   modelInfo,
@@ -131,6 +143,13 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
     });
   };
 
+  const handleTierLabelChange = (tier: keyof ComplexityTiers, label: string) => {
+    onChange({
+      ...value,
+      tier_labels: { ...value.tier_labels, [tier]: label },
+    });
+  };
+
   return (
     <div className="w-full max-w-none">
       <Space align="center" style={{ marginBottom: 16 }}>
@@ -147,9 +166,17 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
         &lt;1ms latency). Configure which model(s) handle each tier.
       </Text>
 
+      <Text type="secondary" style={{ display: "block", marginBottom: 16, fontSize: 12 }}>
+        Rename a tier to use your own vocabulary in the dashboard and your spend logs. Renaming doesn&apos;t change how
+        requests are classified, and callers never see these names.
+        {value.classifier_type === "llm" &&
+          " Your classifier model reads these names, so clearer ones can sharpen its choices."}
+      </Text>
+
       <Card>
-        {(Object.keys(TIER_DESCRIPTIONS) as Array<keyof ComplexityTiers>).map((tier, index) => {
+        {TIER_KEYS.map((tier, index) => {
           const tierInfo = TIER_DESCRIPTIONS[tier];
+          const label = effectiveTierLabel(tier, value.tier_labels);
           const tierMissing = showValidationErrors && value.tiers[tier].length === 0;
           return (
             <div key={tier}>
@@ -157,20 +184,33 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
               <div className="mb-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Text strong style={{ fontSize: 16 }}>
-                    {tierInfo.label} Tier
+                    {label} Tier
                   </Text>
                   <Tooltip title={tierInfo.description}>
                     <InfoCircleOutlined className="text-gray-400" />
                   </Tooltip>
+                  {/* Tiers are an ordered ladder, not a set of categories: escalation means "bump one
+                      tier", so the rung and its canonical name stay visible through any rename. */}
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
+                  </Text>
                 </div>
                 <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
                   Examples: {tierInfo.examples}
                 </Text>
+                <Input
+                  value={value.tier_labels?.[tier] ?? ""}
+                  onChange={(event) => handleTierLabelChange(tier, event.target.value)}
+                  placeholder={`Display name (default: ${tierInfo.label})`}
+                  aria-label={`Display name for the ${tierInfo.label} tier`}
+                  style={{ marginBottom: 8 }}
+                  allowClear
+                />
                 <AntdSelect
                   mode="multiple"
                   value={value.tiers[tier]}
                   onChange={(models) => handleTierChange(tier, models)}
-                  placeholder={`Select model(s) for ${tierInfo.label.toLowerCase()} queries`}
+                  placeholder={`Select model(s) for ${label.toLowerCase()} queries`}
                   showSearch
                   style={{ width: "100%" }}
                   options={modelOptions}
@@ -184,7 +224,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 )}
                 {tierMissing && (
                   <Text type="danger" style={{ fontSize: 12 }}>
-                    This tier is required
+                    The {label} tier is required
                   </Text>
                 )}
               </div>
@@ -299,7 +339,11 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   children: (
                     <>
                       {onKeywordTierRulesChange && (
-                        <KeywordTierRules rules={keywordTierRules} onChange={onKeywordTierRulesChange} />
+                        <KeywordTierRules
+                          rules={keywordTierRules}
+                          onChange={onKeywordTierRulesChange}
+                          tierLabels={value.tier_labels}
+                        />
                       )}
                       {onKeywordTierRulesChange && onSemanticMatchingEnabledChange && (
                         <Divider style={{ margin: "16px 0" }} />

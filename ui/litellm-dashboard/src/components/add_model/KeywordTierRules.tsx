@@ -17,19 +17,29 @@ export interface KeywordTierRule {
 interface KeywordTierRulesProps {
   rules: KeywordTierRule[];
   onChange: (rules: KeywordTierRule[]) => void;
+  // Display names for the tiers, so a renamed router shows the operator's vocabulary here too.
+  // Only the visible text changes; the stored rule keeps the canonical tier as its value.
+  tierLabels?: Partial<Record<ComplexityTier, string>>;
 }
 
-const TIER_OPTIONS: { value: ComplexityTier; label: string }[] = [
-  { value: "SIMPLE", label: "Simple" },
-  { value: "MEDIUM", label: "Medium" },
-  { value: "COMPLEX", label: "Complex" },
-  { value: "REASONING", label: "Reasoning" },
-];
+const DEFAULT_TIER_LABELS: Record<ComplexityTier, string> = {
+  SIMPLE: "Simple",
+  MEDIUM: "Medium",
+  COMPLEX: "Complex",
+  REASONING: "Reasoning",
+};
+
+const TIER_ORDER: ComplexityTier[] = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
+
+export const tierOptions = (
+  tierLabels: Partial<Record<ComplexityTier, string>> | undefined,
+): { value: ComplexityTier; label: string }[] =>
+  TIER_ORDER.map((tier) => ({ value: tier, label: tierLabels?.[tier]?.trim() || DEFAULT_TIER_LABELS[tier] }));
 
 // A row exists only because the caller asked for it, so it reports its own gap straight away
 // rather than waiting for a submit; the submit button is disabled while one is outstanding, so
 // there is no failed attempt left to surface it.
-const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange }) => {
+const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, tierLabels }) => {
   const emptyRuleIndexes = new Set(emptyKeywordTierRuleIndexes(rules));
   const [drafts, setDrafts] = React.useState<Record<string, string>>({});
 
@@ -130,7 +140,7 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange }) 
                   <AntdSelect
                     value={rule.tier}
                     onChange={(tier: ComplexityTier) => updateRule(rule.id, { tier })}
-                    options={TIER_OPTIONS}
+                    options={tierOptions(tierLabels)}
                     style={{ width: "100%" }}
                   />
                 </div>

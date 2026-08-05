@@ -17,6 +17,9 @@ export interface RoutingDecision {
   routed_model?: string;
   cause?: string;
   tier?: string;
+  // Present only when the router renamed this tier. `tier` stays canonical so rows from before and
+  // after a rename still compare.
+  tier_label?: string;
   request_type?: string;
   score?: number;
   signals?: string[];
@@ -37,8 +40,16 @@ const ROUTER_TYPE_LABELS: Record<string, string> = {
  * The tier the score alone would have produced, given the boundaries in effect when
  * the decision was made. Rendered as the bracket that explains a score, so it must
  * use the snapshot rather than today's config.
+ *
+ * A row carries a label for the tier it was routed to and for no other, so a renamed
+ * router gets the numeric range without a tier name rather than three of LiteLLM's
+ * names next to one of the operator's.
  */
-function describeScoreAgainstBoundaries(score: number, boundaries?: RoutingDecisionTierBoundaries): string | null {
+function describeScoreAgainstBoundaries(
+  score: number,
+  boundaries?: RoutingDecisionTierBoundaries,
+  renamed?: boolean,
+): string | null {
   if (!boundaries) return null;
   const {
     simple_medium: simpleMedium,
@@ -47,20 +58,21 @@ function describeScoreAgainstBoundaries(score: number, boundaries?: RoutingDecis
   } = boundaries;
   if (simpleMedium === undefined || mediumComplex === undefined || complexReasoning === undefined) return null;
 
-  if (score < simpleMedium) return `below ${simpleMedium}, SIMPLE`;
-  if (score < mediumComplex) return `${simpleMedium} to ${mediumComplex}, MEDIUM`;
-  if (score < complexReasoning) return `${mediumComplex} to ${complexReasoning}, COMPLEX`;
-  return `at or above ${complexReasoning}, REASONING`;
+  const named = (range: string, tier: string): string => (renamed ? range : `${range}, ${tier}`);
+  if (score < simpleMedium) return named(`below ${simpleMedium}`, "SIMPLE");
+  if (score < mediumComplex) return named(`${simpleMedium} to ${mediumComplex}`, "MEDIUM");
+  if (score < complexReasoning) return named(`${mediumComplex} to ${complexReasoning}`, "COMPLEX");
+  return named(`at or above ${complexReasoning}`, "REASONING");
 }
 
 function describeCause(decision: RoutingDecision): string {
-  const { cause, classifier_model: classifierModel, matched_keyword: matchedKeyword } = decision;
+  const { cause, classifier_model: classifierModel, matched_keyword: matchedKeyword, tier_label: tierLabel } = decision;
 
   switch (cause) {
     case "heuristic_scorer":
       return "Heuristic scorer";
     case "reasoning_override":
-      return "Heuristic, REASONING override (2 or more reasoning markers)";
+      return `Heuristic, ${tierLabel ?? "REASONING"} override (2 or more reasoning markers)`;
     case "llm_classifier":
       return classifierModel ? `LLM classifier (${classifierModel})` : "LLM classifier";
     case "literal_keyword_match":
@@ -118,6 +130,7 @@ export function RoutingDecisionCard({
     router_type: routerType,
     routed_model: routedModel,
     tier,
+    tier_label: tierLabel,
     request_type: requestType,
     score,
     signals,
@@ -131,7 +144,7 @@ export function RoutingDecisionCard({
   // inside `signals`, which redaction can remove.
   const scoreExplanation =
     score !== undefined && decision.cause !== "reasoning_override"
-      ? describeScoreAgainstBoundaries(score, tierBoundaries)
+      ? describeScoreAgainstBoundaries(score, tierBoundaries, tierLabel !== undefined)
       : null;
 
   return (
@@ -153,7 +166,7 @@ export function RoutingDecisionCard({
         {tier && (
           <Row label="Tier">
             <Badge variant="secondary" className="font-normal">
-              {tier}
+              {tierLabel ?? tier}
             </Badge>
           </Row>
         )}

@@ -5,6 +5,7 @@ Contains default keyword lists, weights, tier boundaries, and configuration clas
 All values are configurable via proxy config.yaml.
 """
 
+from collections import Counter
 from enum import Enum
 from typing import Final, Literal
 
@@ -263,10 +264,25 @@ class ComplexityRouterConfig(BaseModel):
         ),
     )
 
+    tier_labels: dict[ComplexityTier, str] = Field(
+        default_factory=dict,
+        description=(
+            "Display names for the complexity tiers, so a deployment can use its own vocabulary "
+            "(e.g. Cheap/Standard/Premium/Deep) in the dashboard, spend logs, and the LLM classifier "
+            "rubric. Purely operator-facing: config keys stay canonical (tiers, keyword_tier_rules[].tier, "
+            "tier_boundaries), API callers never see these names, and the heuristic scorer never reads them. "
+            "Unlisted tiers keep their canonical name. Partial maps are allowed."
+        ),
+    )
+
     # Tier boundaries (normalized scores)
     tier_boundaries: dict[str, float] = Field(
         default_factory=lambda: DEFAULT_TIER_BOUNDARIES.copy(),
-        description="Score boundaries between tiers",
+        description=(
+            "Score boundaries between tiers. These keys (simple_medium, medium_complex, complex_reasoning) "
+            "name the gaps between the default tier names and are not renameable by tier_labels; they are "
+            "scorer knobs persisted by name on every routing decision"
+        ),
     )
 
     # Token count thresholds
@@ -500,6 +516,39 @@ class ComplexityRouterConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_tier_labels(self) -> "ComplexityRouterConfig":
+        if not self.tier_labels:
+            return self
+        blank: Final = tuple(sorted(tier.value for tier, label in self.tier_labels.items() if not label.strip()))
+        if blank:
+            raise ValueError(f"tier_labels values must be non-empty; blank labels for tiers: {', '.join(blank)}")
+        shadowed: Final = tuple(
+            sorted(
+                f"{tier.value} -> {label.strip()}"
+                for tier, label in self.tier_labels.items()
+                if label.strip().upper() in ComplexityTier.__members__ and label.strip().upper() != tier.value
+            )
+        )
+        if shadowed:
+            raise ValueError(
+                "tier_labels values must not reuse another tier's canonical name, which would make logs "
+                f"and the classifier rubric ambiguous: {', '.join(shadowed)}"
+            )
+        label_counts: Final = Counter(label.casefold() for _, label in self.labeled_tiers())
+        duplicated: Final = tuple(
+            sorted(
+                " and ".join(tier.value for tier, label in self.labeled_tiers() if label.casefold() == folded)
+                for folded, count in label_counts.items()
+                if count > 1
+            )
+        )
+        if duplicated:
+            raise ValueError(
+                f"tier_labels values must be unique across tiers; shared labels for: {'; '.join(duplicated)}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_plugins_adaptive_combo(self) -> "ComplexityRouterConfig":
         if self.plugins and self.adaptive:
             raise ValueError(
@@ -507,6 +556,23 @@ class ComplexityRouterConfig(BaseModel):
                 "consume plugin-narrowed candidate pools. Disable adaptive or remove plugins."
             )
         return self
+
+    def tier_label(self, tier: ComplexityTier) -> str:
+        """Operator-facing display name for a tier, falling back to its canonical name."""
+        return self.tier_labels.get(tier, "").strip() or tier.value
+
+    def labeled_tiers(self) -> tuple[tuple[ComplexityTier, str], ...]:
+        """Every tier paired with its display name, in ascending severity order."""
+        return tuple((tier, self.tier_label(tier)) for tier in TIER_SEVERITY_ORDER)
+
+    def tier_for_label(self, label: str) -> ComplexityTier | None:
+        """Resolve a display name back to its tier, case-insensitively, then canonical names."""
+        folded: Final = label.strip().casefold()
+        labeled: Final = self.labeled_tiers()
+        return next(
+            (tier for tier, tier_label in labeled if tier_label.casefold() == folded),
+            next((tier for tier in TIER_SEVERITY_ORDER if tier.value.casefold() == folded), None),
+        )
 
 
 # Combined default config
