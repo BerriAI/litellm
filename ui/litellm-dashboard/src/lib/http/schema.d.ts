@@ -31330,6 +31330,14 @@ export interface components {
              */
             reasoning_keywords?: string[] | null;
             /**
+             * Reminder Markers
+             * @description Override the (open, close) marker pair used to recognize and strip harness-injected reminder blocks before classification. Defaults to Claude Code's convention, ('<system-reminder>', '</system-reminder>'), when unset. Matching is case-insensitive.
+             */
+            reminder_markers?: [
+                string,
+                string
+            ] | null;
+            /**
              * Return Raw Model Name
              * @description Return the resolved raw model name in the response model field instead of the client-requested complexity-router alias
              * @default false
