@@ -434,7 +434,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         guardrail_response: Final = metadata.get("_model_armor_response", {})
 
         # Determine status – default to "success" but prefer the explicit value if present.
-        guardrail_status: Final[GuardrailStatus] = metadata.get("_model_armor_status", "success")  # type: ignore
+        guardrail_status: Final[GuardrailStatus] = metadata.get("_model_armor_status", "success")
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,
@@ -923,7 +923,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     else:
                         error_obj = {"message": str(error_value)}
                     error_obj["code"] = str(e.status_code)
-                    yield f"data: {json.dumps({'error': error_obj})}\n\n"  # type: ignore[misc]
+                    yield f"data: {json.dumps({'error': error_obj})}\n\n"
                     return
                 except Exception as e:
                     verbose_proxy_logger.error("Model Armor streaming error: %s", str(e), exc_info=True)

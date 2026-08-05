@@ -188,13 +188,13 @@ class StandardBuiltInToolCostTracking:
 
             if storage_gb_val is not None:
                 try:
-                    storage_gb = float(storage_gb_val)  # type: ignore
+                    storage_gb = float(storage_gb_val)
                 except (TypeError, ValueError):
                     storage_gb = None
 
             if days_val is not None:
                 try:
-                    days = float(days_val)  # type: ignore
+                    days = float(days_val)
                 except (TypeError, ValueError):
                     days = None
 
@@ -286,7 +286,7 @@ class StandardBuiltInToolCostTracking:
         """Safely convert a value to int."""
         if value is not None:
             try:
-                return int(value)  # type: ignore
+                return int(value)
             except (TypeError, ValueError):
                 return None
         return None

@@ -25,6 +25,7 @@ import {
   getKeywordTierRulesError,
   getMissingTiersError,
   getSemanticConfigError,
+  getTierLabelsError,
 } from "./build_complexity_router_config";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
@@ -100,6 +101,21 @@ const tierConfigSummary = (tiers: ComplexityTiers): string => {
     .map(([label, models]) => `${label}: ${models.join(", ")}`);
   return parts.length > 0 ? parts.join(" · ") : "No tiers configured yet";
 };
+
+// Why the submit is unavailable, or null when it is available. The button reads this to disable
+// itself and to say what is missing, so the two can never give different answers. Checks the
+// config actually being built, not which preset (if any) it came from: a preset only ever
+// prefills once (handlePresetChange), and everything after that is edited exactly like Custom.
+const getSubmitBlockedReason = (
+  config: ComplexityRouterConfigValue,
+  keywordTierRules: KeywordTierRule[],
+  referencedModelsParams: Parameters<typeof getReferencedModelsError>[0],
+  availableModelSet: Set<string>,
+): string | null =>
+  getMissingTiersError(config.tiers) ??
+  getTierLabelsError(config.tier_labels) ??
+  getKeywordTierRulesError(keywordTierRules) ??
+  getReferencedModelsError(referencedModelsParams, availableModelSet);
 
 const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   handleOk,
@@ -221,17 +237,16 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     embeddingModel,
   };
 
-  // Why the submit is unavailable, or null when it is available. The button reads this to disable
-  // itself and to say what is missing, so the two can never give different answers. Checks the
-  // config actually being built, not which preset (if any) it came from: a preset only ever
-  // prefills once (handlePresetChange), and everything after that is edited exactly like Custom.
-  const submitBlockedReason =
-    getMissingTiersError(complexityRouterConfig.tiers) ??
-    getKeywordTierRulesError(keywordTierRules) ??
-    getReferencedModelsError(referencedModelsParams, availableModelSet);
+  const submitBlockedReason = getSubmitBlockedReason(
+    complexityRouterConfig,
+    keywordTierRules,
+    referencedModelsParams,
+    availableModelSet,
+  );
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
     tiers: complexityRouterConfig.tiers,
+    tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
     classifierContextWindowSize: complexityRouterConfig.classifier_context_window_size,
@@ -252,12 +267,19 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const submitRecommendedRouter = (name: string) => {
-    const { tiers, classifierType, classifierLlmConfig } = complexityRouterConfigParams;
+    const { tiers, tierLabels, classifierType, classifierLlmConfig } = complexityRouterConfigParams;
 
     const missingTiersError = getMissingTiersError(tiers);
     if (missingTiersError) {
       setShowValidationErrors(true);
       NotificationManager.fromBackend(missingTiersError);
+      return;
+    }
+
+    const tierLabelsError = getTierLabelsError(tierLabels);
+    if (tierLabelsError) {
+      setShowValidationErrors(true);
+      NotificationManager.fromBackend(tierLabelsError);
       return;
     }
 

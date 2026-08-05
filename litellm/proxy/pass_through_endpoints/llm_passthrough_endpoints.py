@@ -841,7 +841,7 @@ async def handle_bedrock_count_tokens(
                 # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
                 for key, value in model_litellm_params.items():
                     if key != "user_api_key_dict":  # Don't overwrite user_api_key_dict
-                        litellm_params[key] = value  # type: ignore
+                        litellm_params[key] = value
 
         verbose_proxy_logger.debug("Count tokens litellm_params: %s", litellm_params)
         verbose_proxy_logger.debug("Resolved model: %s", resolved_model)
@@ -1039,7 +1039,7 @@ async def bedrock_proxy_route(
     from litellm.llms.bedrock.chat import BedrockConverseLLM
 
     bedrock_llm: Final = BedrockConverseLLM()
-    credentials: Final[Credentials] = bedrock_llm.get_credentials()  # type: ignore
+    credentials: Final[Credentials] = bedrock_llm.get_credentials()
     sigv4: Final = SigV4Auth(credentials, "bedrock", aws_region_name)
     headers: Final = {"Content-Type": "application/json"}
     # Assuming the body contains JSON data, parse it
@@ -1060,7 +1060,7 @@ async def bedrock_proxy_route(
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(prepped.url),
-        custom_headers=prepped.headers,  # type: ignore
+        custom_headers=prepped.headers,
         is_streaming_request=is_streaming_request,
         _forward_headers=True,
     )  # dynamically construct pass-through endpoint based on incoming path
@@ -1729,7 +1729,7 @@ async def _base_vertex_proxy_route(
         headers_passed_through,
         vertex_project,
         vertex_location,
-    ) = await _prepare_vertex_auth_headers(  # type: ignore
+    ) = await _prepare_vertex_auth_headers(
         request=request,
         vertex_credentials=vertex_credentials,
         router_credentials=router_credentials,
@@ -1971,7 +1971,7 @@ class BaseOpenAIPassThroughHandler:
             custom_headers=BaseOpenAIPassThroughHandler._assemble_headers(
                 api_key=api_key, request=request, extra_headers=extra_headers
             ),
-            is_streaming_request=is_streaming_request,  # type: ignore
+            is_streaming_request=is_streaming_request,
             custom_llm_provider=(
                 custom_llm_provider.value
                 if hasattr(custom_llm_provider, "value")

@@ -173,13 +173,13 @@ class RealTimeStreaming:
         try:
             event_type: Final = message_obj.get("type", "")
             if event_type in self._SESSION_EVENT_TYPES:
-                typed_obj: OpenAIRealtimeEvents = OpenAIRealtimeStreamSessionEvents(**message_obj)  # type: ignore
+                typed_obj: OpenAIRealtimeEvents = OpenAIRealtimeStreamSessionEvents(**message_obj)
             else:
                 # Catch-all base object so unknown/new event names never raise.
-                typed_obj = OpenAIRealtimeStreamResponseBaseObject(**message_obj)  # type: ignore
+                typed_obj = OpenAIRealtimeStreamResponseBaseObject(**message_obj)
         except Exception as e:
             verbose_logger.debug("Error parsing message for logging: %s", e)
-            self.messages.append(message_obj)  # type: ignore[arg-type]
+            self.messages.append(message_obj)
             return
         self.messages.append(typed_obj)
 
@@ -346,7 +346,7 @@ class RealTimeStreaming:
                         verbose_logger.debug("Dropping follow-up setup after content was already sent to backend")
                         continue
                     msg = self._maybe_inject_guardrail_auto_response_disable(msg)
-                    await self.backend_ws.send(msg)  # type: ignore[union-attr, attr-defined]
+                    await self.backend_ws.send(msg)
                     self._cache_session_configuration_request(msg)
                     sent = True
                 else:
@@ -357,13 +357,13 @@ class RealTimeStreaming:
                     # content before send would leave the session believing the
                     # backend received a setup/content frame it never got, causing
                     # subsequent client session.update messages to be dropped.
-                    await self.backend_ws.send(msg)  # type: ignore[union-attr, attr-defined]
+                    await self.backend_ws.send(msg)
                     self._cache_session_configuration_request(msg)
                     if is_content_message:
                         self._content_sent_after_setup = True
                     sent = True
             return sent
-        await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
+        await self.backend_ws.send(message)
         return True
 
     def _enforce_transcription_session_model(self, message: str) -> str:
@@ -816,7 +816,7 @@ class RealTimeStreaming:
                         "[realtime guardrail] ending session after violation %d",
                         self._violation_count,
                     )
-                    await self.backend_ws.close()  # type: ignore[union-attr, attr-defined]
+                    await self.backend_ws.close()
 
                 verbose_logger.warning(
                     "[realtime guardrail] BLOCKED transcript (violation %d): %r",
@@ -828,7 +828,7 @@ class RealTimeStreaming:
 
     async def _handle_provider_config_message(self, raw_response) -> None:
         """Process a backend message when a provider_config is set (transformed path)."""
-        returned_object: Final = self.provider_config.transform_realtime_response(  # type: ignore[union-attr]
+        returned_object: Final = self.provider_config.transform_realtime_response(
             raw_response,
             self.model,
             self.logging_obj,
@@ -964,11 +964,9 @@ class RealTimeStreaming:
         try:
             while True:
                 try:
-                    raw_response = await self.backend_ws.recv(  # type: ignore[union-attr]
-                        decode=False
-                    )
+                    raw_response = await self.backend_ws.recv(decode=False)
                 except TypeError:
-                    raw_response = await self.backend_ws.recv()  # type: ignore[union-attr, assignment]
+                    raw_response = await self.backend_ws.recv()
 
                 if isinstance(raw_response, bytes):
                     try:
@@ -1007,7 +1005,7 @@ class RealTimeStreaming:
                         continue
                     await self.websocket.send_text(json.dumps(translated))
 
-        except websockets.exceptions.ConnectionClosed as e:  # type: ignore
+        except websockets.exceptions.ConnectionClosed as e:
             verbose_logger.exception("Connection closed in backend to client send messages - %s", e)
         except Exception as e:
             verbose_logger.exception("Error in backend to client send messages: %s", e)
@@ -1410,7 +1408,7 @@ class RealTimeStreaming:
         forward_task: Final = asyncio.create_task(self.backend_to_client_send_messages())
         try:
             await self.client_ack_messages()
-        except self.websocket.exceptions.ConnectionClosed:  # type: ignore
+        except self.websocket.exceptions.ConnectionClosed:
             verbose_logger.debug("Connection closed")
             forward_task.cancel()
         finally:

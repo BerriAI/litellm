@@ -2928,13 +2928,13 @@ async def view_spend_logs(
 
             if api_key is not None and isinstance(api_key, str):
                 if api_key.startswith("sk-"):
-                    filter_query["api_key"] = prisma_client.hash_token(token=api_key)  # type: ignore
+                    filter_query["api_key"] = prisma_client.hash_token(token=api_key)
                 else:
-                    filter_query["api_key"] = api_key  # type: ignore
+                    filter_query["api_key"] = api_key
             if request_id is not None and isinstance(request_id, str):
-                filter_query["request_id"] = request_id  # type: ignore
+                filter_query["request_id"] = request_id
             if user_id is not None and isinstance(user_id, str):
-                filter_query["user"] = user_id  # type: ignore
+                filter_query["user"] = user_id
 
             # Check if user wants unsummarized data
             if not summarize:
@@ -2950,7 +2950,7 @@ async def view_spend_logs(
             # SQL query
             response: Final = await SpendLogsRepository(prisma_client).table.group_by(
                 by=["api_key", "user", "model", "startTime"],
-                where=filter_query,  # type: ignore
+                where=filter_query,
                 sum={
                     "spend": True,
                 },
@@ -2959,13 +2959,13 @@ async def view_spend_logs(
             if isinstance(response, list) and len(response) > 0 and isinstance(response[0], dict):
                 result: Final[dict] = {}
                 for record in response:
-                    dt_object = datetime.strptime(str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ")  # type: ignore
+                    dt_object = datetime.strptime(str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ")
                     date = dt_object.date()
                     if date not in result:
                         result[date] = {"users": {}, "models": {}}
-                    api_key = record["api_key"]  # type: ignore
-                    user_id = record["user"]  # type: ignore
-                    model = record["model"]  # type: ignore
+                    api_key = record["api_key"]
+                    user_id = record["user"]
+                    model = record["model"]
                     result[date]["spend"] = result[date].get("spend", 0) + record.get("_sum", {}).get("spend", 0)
                     result[date][api_key] = result[date].get(api_key, 0) + record.get("_sum", {}).get("spend", 0)
                     result[date]["users"][user_id] = result[date]["users"].get(user_id, 0) + record.get("_sum", {}).get(
@@ -4107,7 +4107,7 @@ async def _build_ui_spend_logs_response(
         # v2 path: return raw Prisma model instances so FastAPI applies its
         # own Pydantic-aware serialisation (preserves alias handling, custom
         # serializers, etc.).
-        response_data = data  # type: ignore[assignment]
+        response_data = data
 
     return {
         "data": response_data,

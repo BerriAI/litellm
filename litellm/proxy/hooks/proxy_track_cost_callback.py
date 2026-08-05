@@ -304,7 +304,7 @@ class _ProxyDBLogger(CustomLogger):
                 ):
                     if sl_object is not None:
                         cost_tracking_failure_debug_info: dict | str = (
-                            sl_object["response_cost_failure_debug_info"]  # type: ignore
+                            sl_object["response_cost_failure_debug_info"]
                             or "response_cost_failure_debug_info is None in standard_logging_object"
                         )
                     else:

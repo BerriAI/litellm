@@ -1,20 +1,19 @@
 import os
 import re
+from collections.abc import Iterator
 
 # Define the base directory for the litellm repository and documentation path
 repo_base = "./litellm"  # Change this to your actual path
 
-# Regular expressions to capture the keys used in os.getenv() and litellm.get_secret()
-getenv_pattern = re.compile(r'os\.getenv\(\s*[\'"]([^\'"]+)[\'"]\s*(?:,\s*[^)]*)?\)')
-get_secret_pattern = re.compile(
-    r'litellm\.get_secret\(\s*[\'"]([^\'"]+)[\'"]\s*(?:,\s*[^)]*|,\s*default_value=[^)]*)?\)'
-)
-get_secret_str_pattern = re.compile(
-    r'litellm\.get_secret_str\(\s*[\'"]([^\'"]+)[\'"]\s*(?:,\s*[^)]*|,\s*default_value=[^)]*)?\)'
-)
+_GETENV_ARGS = r"""\(\s*['"]([^'"]+)['"]\s*(?:,\s*[^)]*)?\)"""
+_GET_SECRET_ARGS = r"""\(\s*['"]([^'"]+)['"]\s*(?:,\s*[^)]*|,\s*default_value=[^)]*)?\)"""
 
-# Set to store unique keys from the code
-env_keys = set()
+ENV_KEY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"os\.getenv" + _GETENV_ARGS),
+    re.compile(r"litellm\.get_secret" + _GET_SECRET_ARGS),
+    re.compile(r"litellm\.get_secret_str" + _GET_SECRET_ARGS),
+    re.compile(r"(?<![\w.])(?:litellm\.)?get_secret_bool" + _GET_SECRET_ARGS),
+)
 
 # Terminal/environment detection variables that should not be documented
 # These are internal variables used for terminal detection, not user-configurable settings
@@ -48,6 +47,8 @@ EXCLUDED_TERMINAL_VARS = {
     "ALACRITTY_SOCKET",
 }
 
+EXCLUDED_KEYS = frozenset(EXCLUDED_TERMINAL_VARS | EXCLUDED_GUARD_ONLY_VARS | EXCLUDED_ROLLOUT_FLAGS)
+
 # Directories to skip (dependencies, venvs, caches) - only scan litellm source
 SKIP_DIRS = {
     ".venv",
@@ -61,88 +62,69 @@ SKIP_DIRS = {
     "build",
 }
 
-# Walk through all files in the litellm repo to find references of os.getenv() and litellm.get_secret()
-for root, dirs, files in os.walk(repo_base):
-    # Skip dependency/venv directories - prevents picking up env vars from installed packages
-    dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-    for file in files:
-        if file.endswith(".py"):  # Only process Python files
-            file_path = os.path.join(root, file)
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
 
-                # Find all keys using os.getenv()
-                getenv_matches = getenv_pattern.findall(content)
-                env_keys.update(
-                    match
-                    for match in getenv_matches
-                    if match not in EXCLUDED_TERMINAL_VARS
-                    and match not in EXCLUDED_GUARD_ONLY_VARS
-                    and match not in EXCLUDED_ROLLOUT_FLAGS
-                )  # Extract only the key part, excluding terminal vars
-
-                # Find all keys using litellm.get_secret()
-                get_secret_matches = get_secret_pattern.findall(content)
-                env_keys.update(match for match in get_secret_matches)
-
-                # Find all keys using litellm.get_secret_str()
-                get_secret_str_matches = get_secret_str_pattern.findall(content)
-                env_keys.update(match for match in get_secret_str_matches)
-
-# Print the unique keys found
-print(env_keys)
-
-
-# Parse the documentation to extract documented keys
-repo_base = "./"
-print(os.listdir(repo_base))
-docs_path = (
-    "./docs/my-website/docs/proxy/config_settings.md"  # Path to the documentation
-)
-documented_keys = set()
-try:
-    with open(docs_path, "r", encoding="utf-8") as docs_file:
-        content = docs_file.read()
-
-        print(f"content: {content}")
-
-        # Find the section titled "general_settings - Reference"
-        general_settings_section = re.search(
-            r"### environment variables - Reference(.*?)(?=\n###|\Z)",
-            content,
-            re.DOTALL | re.MULTILINE,
-        )
-        print(f"general_settings_section: {general_settings_section}")
-        if general_settings_section:
-            # Extract the table rows - only first column (key name) from each row
-            table_content = general_settings_section.group(1)
-            for line in table_content.split("\n"):
-                # Match | KEY_NAME | description | - capture first column only
-                match = re.match(r"^\|\s*([A-Z_][A-Z0-9_]*)\s*\|", line)
-                if match:
-                    documented_keys.add(match.group(1).strip())
-except Exception as e:
-    raise Exception(
-        f"Error reading documentation: {e}, \n repo base - {os.listdir(repo_base)}"
+def extract_env_keys(source: str) -> frozenset[str]:
+    """Return every documentable env var name read by the given Python source."""
+    return frozenset(
+        match for pattern in ENV_KEY_PATTERNS for match in pattern.findall(source) if match not in EXCLUDED_KEYS
     )
 
 
-print(f"documented_keys: {documented_keys}")
-# Compare and find undocumented keys
-undocumented_keys = env_keys - documented_keys
+def collect_env_keys(base_dir: str) -> frozenset[str]:
+    """Return every documentable env var name read anywhere under ``base_dir``."""
+    return frozenset(key for file_path in _python_files(base_dir) for key in extract_env_keys(_read_text(file_path)))
 
-# Print results
-print("Keys expected in 'environment settings' (found in code):")
-for key in sorted(env_keys):
-    print(key)
 
-if undocumented_keys:
-    raise Exception(
-        f"\nKeys not documented in 'environment settings - Reference': {undocumented_keys}"
+def _python_files(base_dir: str) -> Iterator[str]:
+    for root, dirs, files in os.walk(base_dir):
+        # Skip dependency/venv directories - prevents picking up env vars from installed packages
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        yield from (os.path.join(root, name) for name in files if name.endswith(".py"))
+
+
+def _read_text(file_path: str) -> str:
+    with open(file_path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def extract_documented_keys(docs_content: str) -> frozenset[str]:
+    """Return the key names listed in the 'environment variables - Reference' table."""
+    section = re.search(
+        r"### environment variables - Reference(.*?)(?=\n###|\Z)",
+        docs_content,
+        re.DOTALL | re.MULTILINE,
     )
-else:
-    print(
-        "\nAll keys are documented in 'environment settings - Reference'. - {}".format(
-            env_keys
-        )
+    if section is None:
+        return frozenset()
+    # Match | KEY_NAME | description | - capture first column only
+    return frozenset(
+        match.group(1).strip()
+        for match in (re.match(r"^\|\s*([A-Z_][A-Z0-9_]*)\s*\|", line) for line in section.group(1).split("\n"))
+        if match is not None
     )
+
+
+def main() -> None:
+    env_keys = collect_env_keys(repo_base)
+    print(env_keys)
+
+    docs_path = "./docs/my-website/docs/proxy/config_settings.md"  # Path to the documentation
+    try:
+        documented_keys = extract_documented_keys(_read_text(docs_path))
+    except Exception as e:
+        raise Exception(f"Error reading documentation: {e}, \n repo base - {os.listdir('./')}")
+
+    print(f"documented_keys: {documented_keys}")
+    undocumented_keys = env_keys - documented_keys
+
+    print("Keys expected in 'environment settings' (found in code):")
+    for key in sorted(env_keys):
+        print(key)
+
+    if undocumented_keys:
+        raise Exception(f"\nKeys not documented in 'environment settings - Reference': {sorted(undocumented_keys)}")
+    print(f"\nAll keys are documented in 'environment settings - Reference'. - {env_keys}")
+
+
+if __name__ == "__main__":
+    main()
