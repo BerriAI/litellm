@@ -13,15 +13,12 @@ credential values only.
 import os
 from collections.abc import Callable, Mapping
 
-from litellm.constants import LITELLM_LOGGING_CREDENTIAL_NAME_KEY
 from litellm.integrations.langfuse.langfuse_otel import (
     LANGFUSE_CLOUD_US_ENDPOINT,
     LangfuseOtelLogger,
 )
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.integrations.weave.weave_otel import _get_weave_authorization_header
-
-LOGGING_CREDENTIAL_NAME_KEY = LITELLM_LOGGING_CREDENTIAL_NAME_KEY
 
 
 def _parse_header_string(raw: str) -> Mapping[str, str]:

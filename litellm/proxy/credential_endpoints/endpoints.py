@@ -287,8 +287,12 @@ def update_db_credential(
 
         merged_credential.credential_values.update(encrypted_params)
 
+    # update model info
     if encrypted_credential.credential_info:
-        merged_credential.credential_info = encrypted_credential.credential_info
+        """Update credential info"""
+        if "credential_info" not in merged_credential.credential_info:
+            merged_credential.credential_info = {}
+        merged_credential.credential_info.update(encrypted_credential.credential_info)
 
     return merged_credential
 
