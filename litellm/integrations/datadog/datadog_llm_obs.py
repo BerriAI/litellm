@@ -9,7 +9,9 @@ API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=examp
 import asyncio
 import json
 import os
+from collections.abc import Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any, Final, Literal
 
 import httpx
@@ -42,6 +44,21 @@ from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
 )
+
+_EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_CACHE_METRICS: Final[Mapping[str, float]] = MappingProxyType({})
+
+
+def _parse_tool_call_arguments(raw: object) -> object:
+    """
+    Decode a tool call's `arguments` payload, keeping the raw string when it is not valid JSON.
+    """
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
 
 
 class DataDogLLMObsLogger(CustomBatchLogger):
@@ -256,6 +273,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             total_cost=float(standard_logging_payload.get("response_cost", 0)),
             time_to_first_token=self._get_time_to_first_token_seconds(standard_logging_payload),
         )
+        metrics.update(self._get_cache_token_metrics(standard_logging_payload))
 
         payload: Final[LLMObsPayload] = LLMObsPayload(
             parent_id=metadata_parent_id if metadata_parent_id else "undefined",
@@ -312,6 +330,45 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     stack=error_information.get("traceback"),
                 )
         return error_info
+
+    def _get_usage_object(self, standard_logging_payload: StandardLoggingPayload) -> Mapping[str, Any]:
+        """Locate the provider usage object, preferring metadata over hidden_params."""
+        for container_key in ("metadata", "hidden_params"):
+            container = standard_logging_payload.get(container_key)
+            if isinstance(container, dict):
+                usage_object = container.get("usage_object")
+                if isinstance(usage_object, dict):
+                    return usage_object
+        return _EMPTY_MAPPING
+
+    def _get_cache_token_metrics(self, standard_logging_payload: StandardLoggingPayload) -> Mapping[str, float]:
+        """
+        Extract prompt-cache token counts from the usage object as DD span metrics.
+
+        DD's UI computes cache hit ratios from `metrics.cache_read_input_tokens` /
+        `metrics.cache_write_input_tokens` on the span; the values nested inside
+        `meta.metadata.usage_object` are not parsed for this purpose.
+        """
+        try:
+            usage_object: Final = self._get_usage_object(standard_logging_payload)
+            cache_read: Final = usage_object.get("cache_read_input_tokens") or 0
+            cache_write: Final = usage_object.get("cache_creation_input_tokens") or 0
+            if not cache_read and not cache_write:
+                return _EMPTY_CACHE_METRICS
+
+            prompt_tokens: Final = usage_object.get("prompt_tokens") or standard_logging_payload.get("prompt_tokens", 0)
+            pairs: Final = (
+                ("cache_read_input_tokens", float(cache_read) if cache_read else None),
+                ("cache_write_input_tokens", float(cache_write) if cache_write else None),
+                (
+                    "non_cached_input_tokens",
+                    max(float(prompt_tokens) - float(cache_read), 0.0) if prompt_tokens else None,
+                ),
+            )
+            return MappingProxyType({key: value for key, value in pairs if value is not None})
+        except (TypeError, ValueError) as e:
+            verbose_logger.debug("DataDogLLMObs: Error extracting cache token metrics: %s", e)
+            return _EMPTY_CACHE_METRICS
 
     def _get_time_to_first_token_seconds(self, standard_logging_payload: StandardLoggingPayload) -> float:
         """
@@ -374,12 +431,64 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 if isinstance(response_obj, dict) and "choices" in response_obj:
                     choices: Final = response_obj["choices"]
                     if choices and len(choices) > 0 and "message" in choices[0]:
-                        return [choices[0]["message"]]
+                        return [self._to_dd_output_message(choices[0]["message"])]
                 return []
             except (KeyError, IndexError, TypeError):
                 # In case of any error accessing the response structure, return empty list
                 return []
         return []
+
+    def _to_dd_output_message(self, message: object) -> object:
+        """
+        Map a chat-completion response message to DD LLM Obs' Message schema.
+
+        DD renders tool calls from `meta.output.messages[].tool_calls` (ToolCall
+        schema: name / arguments / tool_id / type), not from the OpenAI-style
+        nested `function` dict, so passing the raw message through leaves the
+        Tools panel empty even though the data is present.
+        Ref: https://docs.datadoghq.com/llm_observability/setup/api/
+        """
+        if not isinstance(message, dict):
+            return message
+
+        tool_calls: Final = message.get("tool_calls")
+        dd_tool_calls: Final = self._map_tool_calls_to_dd_schema(tool_calls) if tool_calls else ()
+
+        dd_message: Final[dict[str, Any]] = {  # mutable-ok: JSON body serialized into the DD intake payload
+            "role": message.get("role", "assistant"),
+            "content": message.get("content") or "",
+        }
+        if dd_tool_calls:
+            dd_message["tool_calls"] = list(dd_tool_calls)  # mutable-ok: serialized into the DD JSON payload
+        return dd_message
+
+    @staticmethod
+    def _map_tool_calls_to_dd_schema(
+        tool_calls: Sequence[object],
+    ) -> Sequence[dict[str, Any]]:  # mutable-ok: JSON payload dicts
+        """
+        Convert OpenAI-style tool calls to DD LLM Obs ToolCall dicts.
+
+        OpenAI: {"id", "type", "function": {"name", "arguments": "<json str>"}}
+        DD:     {"name", "arguments": <dict>, "tool_id", "type"}
+        """
+
+        def to_dd_tool_call(tool_call: Mapping[str, Any]) -> dict[str, Any]:  # mutable-ok: JSON payload dict
+            function: Final = tool_call.get("function")
+            function_map: Final[Mapping[str, Any]] = function if isinstance(function, dict) else _EMPTY_MAPPING
+            arguments: Final = _parse_tool_call_arguments(function_map.get("arguments"))
+            return {  # mutable-ok: JSON body serialized as-is into the DD intake payload
+                "name": function_map.get("name", ""),
+                "arguments": arguments if arguments is not None else {},  # mutable-ok: JSON payload value
+                "tool_id": tool_call.get("id", ""),
+                "type": tool_call.get("type", "function"),
+            }
+
+        try:
+            return tuple(to_dd_tool_call(tool_call) for tool_call in tool_calls if isinstance(tool_call, dict))
+        except (KeyError, TypeError, ValueError) as e:
+            verbose_logger.debug("DataDogLLMObs: Error mapping tool call to DD schema: %s", e)
+            return ()
 
     def _get_datadog_span_kind(
         self, call_type: str | None, parent_id: str | None = None

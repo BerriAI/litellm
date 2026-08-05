@@ -6,7 +6,7 @@ API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=examp
 
 from typing import Any, Literal
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.integrations.custom_logger import StandardCustomLoggerInitParams
 
@@ -45,6 +45,9 @@ class LLMMetrics(TypedDict, total=False):
     time_to_first_token: float
     time_per_output_token: float
     total_cost: float
+    cache_read_input_tokens: ReadOnly[float]
+    cache_write_input_tokens: ReadOnly[float]
+    non_cached_input_tokens: ReadOnly[float]
 
 
 class LLMObsPayload(TypedDict, total=False):
