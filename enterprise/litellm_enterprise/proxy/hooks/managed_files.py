@@ -4,7 +4,8 @@
 import base64
 import json
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Final, List, Literal, Optional, Union, cast
+from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import HTTPException
 
@@ -1059,10 +1060,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     def get_unified_output_file_id(
         self, output_file_id: str, model_id: str, model_name: Optional[str]
     ) -> str:
+        deterministic_uuid: Final = uuid5(
+            uuid5(NAMESPACE_URL, model_id), output_file_id
+        )
         unified_output_file_id = (
             SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
                 "application/json",
-                str(uuid.uuid4()),
+                str(deterministic_uuid),
                 model_name or "",
                 output_file_id,
                 model_id,

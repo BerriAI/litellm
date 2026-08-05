@@ -5,6 +5,7 @@ Regression test for afile_retrieve called without credentials in
 async_post_call_success_hook when processing completed batch responses.
 """
 
+import asyncio
 import json
 
 import pytest
@@ -460,3 +461,64 @@ async def test_store_unified_file_id_is_idempotent_via_upsert():
         assert upsert_data["create"]["unified_file_id"] == file_id
         assert json.loads(upsert_data["create"]["model_mappings"]) == model_mappings
         assert json.loads(upsert_data["update"]["model_mappings"]) == model_mappings
+
+
+def test_get_unified_output_file_id_is_deterministic_per_output_file():
+    managed_files, _ = _make_real_managed_files_instance()
+
+    first = managed_files.get_unified_output_file_id(
+        output_file_id="file-output-abc",
+        model_id="model-deploy-xyz",
+        model_name="azure/gpt-4",
+    )
+    repeat = managed_files.get_unified_output_file_id(
+        output_file_id="file-output-abc",
+        model_id="model-deploy-xyz",
+        model_name="azure/gpt-4",
+    )
+    other_file = managed_files.get_unified_output_file_id(
+        output_file_id="file-output-def",
+        model_id="model-deploy-xyz",
+        model_name="azure/gpt-4",
+    )
+    other_model = managed_files.get_unified_output_file_id(
+        output_file_id="file-output-abc",
+        model_id="model-deploy-other",
+        model_name="azure/gpt-4",
+    )
+
+    assert first == repeat
+    assert len({first, other_file, other_model}) == 3
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_registrations_converge_on_one_row():
+    managed_files, mock_prisma = _make_real_managed_files_instance()
+
+    minted_ids = tuple(
+        managed_files.get_unified_output_file_id(
+            output_file_id="file-output-abc",
+            model_id="model-deploy-xyz",
+            model_name=None,
+        )
+        for _ in range(2)
+    )
+    await asyncio.gather(
+        *(
+            managed_files.store_unified_file_id(
+                file_id=unified_id,
+                file_object=None,
+                litellm_parent_otel_span=None,
+                model_mappings={"model-deploy-xyz": "file-output-abc"},
+                user_api_key_dict=_make_user_api_key_dict(),
+            )
+            for unified_id in minted_ids
+        )
+    )
+
+    upserted_row_keys = {
+        upsert_call.kwargs["where"]["unified_file_id"]
+        for upsert_call in mock_prisma.db.litellm_managedfiletable.upsert.await_args_list
+    }
+    assert minted_ids[0] == minted_ids[1]
+    assert upserted_row_keys == {minted_ids[0]}
