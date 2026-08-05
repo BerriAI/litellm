@@ -567,3 +567,63 @@ class TestCoralBricks:
 
         api_base, api_key = config._get_openai_compatible_provider_info(None, None)
         assert api_base == "https://inference.coralbricks.ai/v1"
+
+
+class TestCoralBricksPricing:
+    """Regression coverage for the CoralBricks cost map (Greptile P2):
+    the four pricing records and the zero-cost cached-input behavior."""
+
+    EXPECTED = {
+        "coralbricks/glm-5.2-fp4": (1.4e-06, 4.4e-06),
+        "coralbricks/kimi-k3": (3e-06, 1.5e-05),
+        "coralbricks/kimi-k2.6": (7.6e-07, 4e-06),
+        "coralbricks/gpt-oss-120b": (1.5e-07, 6e-07),
+    }
+
+    def test_pricing_records_present(self):
+        """The shipped cost map carries all four models with free cache reads."""
+        prices_path = os.path.join(
+            workspace_path, "model_prices_and_context_window.json"
+        )
+        with open(prices_path) as fh:
+            prices = json.load(fh)
+        for model, (inp, out) in self.EXPECTED.items():
+            row = prices[model]
+            assert row["litellm_provider"] == "coralbricks"
+            assert row["input_cost_per_token"] == inp
+            assert row["output_cost_per_token"] == out
+            assert row["cache_read_input_token_cost"] == 0.0
+            assert row["mode"] == "chat"
+
+    def test_completion_cost_with_free_cached_reads(self):
+        """completion_cost prices cached input tokens at zero for coralbricks."""
+        from litellm import ModelResponse, Usage, completion_cost
+
+        model = "coralbricks/glm-5.2-fp4"
+        inp, out = self.EXPECTED[model]
+        # register_model makes the test deterministic regardless of which
+        # cost map (local backup vs remote) the environment loaded.
+        litellm.register_model(
+            {
+                model: {
+                    "litellm_provider": "coralbricks",
+                    "mode": "chat",
+                    "input_cost_per_token": inp,
+                    "output_cost_per_token": out,
+                    "cache_read_input_token_cost": 0.0,
+                }
+            }
+        )
+        resp = ModelResponse(
+            model=model,
+            usage=Usage(
+                prompt_tokens=1000,
+                completion_tokens=100,
+                prompt_tokens_details={"cached_tokens": 800},
+            ),
+        )
+        resp._hidden_params["custom_llm_provider"] = "coralbricks"
+        cost = completion_cost(completion_response=resp)
+        # 200 uncached input tokens at full rate + 800 cached at 0 + output.
+        expected = 200 * inp + 800 * 0.0 + 100 * out
+        assert abs(cost - expected) < 1e-12, (cost, expected)
