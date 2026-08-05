@@ -198,9 +198,7 @@ class NLPCloudConfig(BaseConfig):
         else:
             try:
                 if len(completion_response["generated_text"]) > 0:
-                    model_response.choices[0].message.content = (  # type: ignore
-                        completion_response["generated_text"]
-                    )
+                    model_response.choices[0].message.content = completion_response["generated_text"]
             except Exception:
                 raise NLPCloudError(
                     message=json.dumps(completion_response),

@@ -129,6 +129,30 @@ describe("RoutingDecisionCard", () => {
     expect(screen.getByText("Heuristic, REASONING override (2 or more reasoning markers)")).toBeInTheDocument();
   });
 
+  it("shows the operator's tier name on the badge instead of the canonical one", () => {
+    render(<RoutingDecisionCard decision={{ ...heuristic, tier_label: "Deep" }} />);
+    expect(screen.getByText("Deep")).toBeInTheDocument();
+    expect(screen.queryByText("REASONING")).not.toBeInTheDocument();
+  });
+
+  it("keeps the canonical tier name when the router did not rename it", () => {
+    render(<RoutingDecisionCard decision={heuristic} />);
+    expect(screen.getByText("REASONING")).toBeInTheDocument();
+  });
+
+  it("drops the tier name from the score band on a renamed router", () => {
+    render(<RoutingDecisionCard decision={{ ...heuristic, tier_label: "Deep" }} />);
+    expect(screen.getByText("(at or above 0.6)")).toBeInTheDocument();
+    expect(screen.queryByText(/at or above 0\.6, REASONING/)).not.toBeInTheDocument();
+  });
+
+  it("uses the operator's tier name in the reasoning override description", () => {
+    render(
+      <RoutingDecisionCard decision={{ ...heuristic, cause: "reasoning_override", score: 0.2, tier_label: "Deep" }} />,
+    );
+    expect(screen.getByText("Heuristic, Deep override (2 or more reasoning markers)")).toBeInTheDocument();
+  });
+
   it("falls back to the raw cause for a value this build does not know", () => {
     render(<RoutingDecisionCard decision={{ cause: "some_future_cause", routed_model: "m" }} />);
     expect(screen.getByText("some_future_cause")).toBeInTheDocument();

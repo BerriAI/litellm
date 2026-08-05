@@ -61,3 +61,30 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
         number_of_web_search_requests = 1
 
     return _cost * number_of_web_search_requests
+
+
+def cost_per_google_maps_grounding_request(usage: "Usage", model_info: "ModelInfo | None") -> float:
+    """
+    Calculates the cost of Grounding with Google Maps.
+
+    Maps grounding is a separate SKU from Google Search grounding, with its own
+    rate and free allowance, and is billed per grounded prompt. Reads the rate
+    from ``google_maps_grounding_cost_per_query`` in ``model_info``, falling
+    back to $25 / 1K grounded prompts for models not yet updated in the
+    pricing JSON (https://ai.google.dev/gemini-api/docs/pricing).
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    _DEFAULT_COST: Final = 25e-3
+    _cost: Final = (model_info or {}).get("google_maps_grounding_cost_per_query") or _DEFAULT_COST
+
+    number_of_maps_grounding_requests = 0
+    if (
+        usage is not None
+        and usage.prompt_tokens_details is not None
+        and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
+        and getattr(usage.prompt_tokens_details, "google_maps_grounding_requests", None) is not None
+    ):
+        number_of_maps_grounding_requests = usage.prompt_tokens_details.google_maps_grounding_requests or 0
+
+    return _cost * number_of_maps_grounding_requests

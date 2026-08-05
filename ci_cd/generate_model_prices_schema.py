@@ -149,6 +149,7 @@ COST_DESCRIPTIONS: dict[str, str] = {
     "cache_read_input_token_cost": "USD per prompt token served from the provider's prompt cache.",
     "input_cost_per_token_batches": "USD per prompt token via the provider's batch API.",
     "output_cost_per_token_batches": "USD per generated token via the provider's batch API.",
+    "google_maps_grounding_cost_per_query": "USD per Maps-grounded prompt (Gemini Grounding with Google Maps).",
 }
 
 

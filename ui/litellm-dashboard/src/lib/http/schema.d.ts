@@ -31330,6 +31330,14 @@ export interface components {
              */
             reasoning_keywords?: string[] | null;
             /**
+             * Reminder Markers
+             * @description Override the (open, close) marker pair used to recognize and strip harness-injected reminder blocks before classification. Defaults to Claude Code's convention, ('<system-reminder>', '</system-reminder>'), when unset. Matching is case-insensitive.
+             */
+            reminder_markers?: [
+                string,
+                string
+            ] | null;
+            /**
              * Return Raw Model Name
              * @description Return the resolved raw model name in the response model field instead of the client-requested complexity-router alias
              * @default false
@@ -31365,7 +31373,7 @@ export interface components {
             technical_keywords?: string[] | null;
             /**
              * Tier Boundaries
-             * @description Score boundaries between tiers
+             * @description Score boundaries between tiers. These keys (simple_medium, medium_complex, complex_reasoning) name the gaps between the default tier names and are not renameable by tier_labels; they are scorer knobs persisted by name on every routing decision
              */
             tier_boundaries?: {
                 [key: string]: number;
@@ -31376,6 +31384,13 @@ export interface components {
              * @default 0.5
              */
             tier_distance_penalty: number;
+            /**
+             * Tier Labels
+             * @description Display names for the complexity tiers, so a deployment can use its own vocabulary (e.g. Cheap/Standard/Premium/Deep) in the dashboard, spend logs, and the LLM classifier rubric. Purely operator-facing: config keys stay canonical (tiers, keyword_tier_rules[].tier, tier_boundaries), API callers never see these names, and the heuristic scorer never reads them. Unlisted tiers keep their canonical name. Partial maps are allowed.
+             */
+            tier_labels?: {
+                [key: string]: string;
+            };
             /**
              * Tiers
              * @description Mapping of complexity tiers to a model or model pool. A list is randomly picked from when adaptive=False, and used as a soft-floor home pool when adaptive=True
@@ -32147,6 +32162,10 @@ export interface components {
              * @enum {string}
              */
             router_type?: "complexity" | "adaptive" | "quality";
+            /** Savings Baseline Deployment Id */
+            savings_baseline_deployment_id?: string;
+            /** Savings Baseline Model */
+            savings_baseline_model?: string;
             /** Score */
             score?: number;
             /** Signals */
@@ -32154,6 +32173,8 @@ export interface components {
             /** Tier */
             tier?: string;
             tier_boundaries?: components["schemas"]["StandardLoggingRoutingDecisionTierBoundaries"];
+            /** Tier Label */
+            tier_label?: string;
         };
         /**
          * StandardLoggingRoutingDecisionTierBoundaries

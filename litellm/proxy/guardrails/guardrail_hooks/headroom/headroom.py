@@ -722,7 +722,7 @@ class HeadroomGuardrail(CustomGuardrail):
         stream: bool,
         kwargs: dict,
     ) -> AgenticLoopPlan:
-        tool_calls: Final[list[dict[str, object]]] = tools.get("tool_calls", [])  # type: ignore[assignment]
+        tool_calls: Final[list[dict[str, object]]] = tools.get("tool_calls", [])
 
         self._prune_expired_hashes()
         call_id: Final = _resolve_call_id(logging_obj, kwargs)

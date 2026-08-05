@@ -18604,7 +18604,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/gemini-3.6-flash": {
         "cache_read_input_token_cost": 1.5e-07,
@@ -20266,7 +20267,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini/gemini-3.6-flash": {
         "cache_read_input_token_cost": 1.5e-07,
@@ -20603,7 +20605,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini-3.6-flash": {
         "cache_read_input_token_cost": 1.5e-07,

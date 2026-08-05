@@ -40,8 +40,8 @@ from fastapi.responses import JSONResponse
 try:
     from prisma.errors import RecordNotFoundError, UniqueViolationError
 except ImportError:
-    RecordNotFoundError = Exception  # type: ignore
-    UniqueViolationError = Exception  # type: ignore
+    RecordNotFoundError = Exception
+    UniqueViolationError = Exception
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -109,7 +109,7 @@ if MCP_AVAILABLE:
             is_valid: bool = True
             warnings: list = []
 
-        def validate_tool_name(name: str) -> _ToolNameValidationResult:  # type: ignore[misc]
+        def validate_tool_name(name: str) -> _ToolNameValidationResult:
             return _ToolNameValidationResult()
 
     from litellm.proxy._experimental.mcp_server.db import (
@@ -489,7 +489,7 @@ if MCP_AVAILABLE:
         try:
             redacted_server = mcp_server.model_copy(deep=True)
         except AttributeError:
-            redacted_server = mcp_server.copy(deep=True)  # type: ignore[attr-defined]
+            redacted_server = mcp_server.copy(deep=True)
 
         if hasattr(redacted_server, "credentials"):
             setattr(redacted_server, "credentials", _preserved_admin_config_credentials(redacted_server.credentials))
@@ -702,9 +702,9 @@ if MCP_AVAILABLE:
 
         payload_dict: dict[str, Any]
         try:
-            payload_dict = payload.model_dump()  # type: ignore[attr-defined]
+            payload_dict = payload.model_dump()
         except AttributeError:
-            payload_dict = payload.dict()  # type: ignore[attr-defined]
+            payload_dict = payload.dict()
         payload_dict["credentials"] = inherited_credentials
         return NewMCPServerRequest.model_validate(payload_dict)
 

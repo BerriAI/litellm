@@ -300,7 +300,7 @@ def _get_effective_ui_settings_class() -> type[UISettings]:
         return _EFFECTIVE_UI_SETTINGS_CLASS
     if not _EXTRA_UI_SETTINGS_FIELDS:
         return UISettings
-    _EFFECTIVE_UI_SETTINGS_CLASS = create_model(  # type: ignore[call-overload]
+    _EFFECTIVE_UI_SETTINGS_CLASS = create_model(
         "EffectiveUISettings",
         __base__=UISettings,
         __doc__=UISettings.__doc__,
@@ -784,7 +784,7 @@ async def update_internal_user_settings(
     if settings.teams is not None and all(isinstance(team, NewUserRequestTeam) for team in settings.teams):
         await update_default_team_member_budget(
             settings.teams,
-            user_api_key_dict=user_api_key_dict,  # type: ignore
+            user_api_key_dict=user_api_key_dict,
         )
 
     return await _update_litellm_setting(

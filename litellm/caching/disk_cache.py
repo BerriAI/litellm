@@ -44,7 +44,7 @@ class DiskCache(BaseCache):
         original_cached_response: Final = self.disk_cache.get(key)
         if original_cached_response:
             try:
-                cached_response = json.loads(original_cached_response)  # type: ignore
+                cached_response = json.loads(original_cached_response)
             except Exception:
                 cached_response = original_cached_response
             return cached_response

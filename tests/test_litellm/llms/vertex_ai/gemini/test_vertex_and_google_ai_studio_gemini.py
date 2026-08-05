@@ -5553,3 +5553,39 @@ def test_accumulated_json_skips_non_dict_leading_value():
 
     assert len(out) == 1
     assert out[0].choices[0].delta.content == "a"
+
+
+def test_calculate_google_maps_grounding_requests():
+    """Maps grounding is detected via groundingChunks[].maps or the widget token,
+    never via webSearchQueries (absent on Maps-only responses)."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    maps_metadata = [
+        {
+            "groundingChunks": [
+                {
+                    "maps": {
+                        "uri": "https://maps.google.com/?cid=123",
+                        "title": "Blue Bottle Coffee",
+                        "placeId": "ChIJd8BlQ2BZwokRAFUEcm_qrcA",
+                    }
+                }
+            ]
+        }
+    ]
+    assert VertexGeminiConfig._calculate_google_maps_grounding_requests(maps_metadata) == 1
+
+    widget_metadata = [{"googleMapsWidgetContextToken": "widget-token-abc"}]
+    assert VertexGeminiConfig._calculate_google_maps_grounding_requests(widget_metadata) == 1
+
+    search_only_metadata = [
+        {
+            "webSearchQueries": ["coffee shops nyc"],
+            "groundingChunks": [{"web": {"uri": "https://example.com", "title": "example"}}],
+        }
+    ]
+    assert VertexGeminiConfig._calculate_google_maps_grounding_requests(search_only_metadata) is None
+
+    assert VertexGeminiConfig._calculate_google_maps_grounding_requests([]) is None
