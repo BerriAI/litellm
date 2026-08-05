@@ -1275,6 +1275,31 @@ class TestRewriteBodyIds:
         assert result == [{"input_file_id": "file-top-level"}, "raw-string"]
 
     @pytest.mark.asyncio
+    async def test_scalar_body_passes_through_unchanged(self):
+        """A truthy scalar JSON body (bare string/number/bool) must pass through
+        unchanged instead of raising while walking a non-container body."""
+        hook = _managed_files_hook()
+
+        for body in ("plain-string-body", 42, 3.14, True):
+            result = await rewrite_body_ids(body, "openai", _user(), None, hook)
+            assert result is body
+
+    @pytest.mark.asyncio
+    async def test_top_level_managed_id_string_body_resolved(self):
+        """A bare managed-ID string body is resolved to the raw provider ID,
+        matching how the same string is resolved when nested in a dict."""
+        mid = encode("openai", "u", "file-scalar")
+        hook = _managed_files_hook()
+        file_row = MagicMock()
+        file_row.created_by = "user-1"
+        file_row.team_id = "team-1"
+        hook.get_unified_file_id = AsyncMock(return_value=file_row)
+
+        result = await rewrite_body_ids(mid, "openai", _user(), None, hook)
+
+        assert result == "file-scalar"
+
+    @pytest.mark.asyncio
     async def test_forged_managed_id_raises_404(self):
         """An unknown managed ID in the body raises 404 (not passed to upstream)."""
         mid = encode("openai", "u", "file-forged")
