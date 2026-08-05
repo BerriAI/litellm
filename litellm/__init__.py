@@ -1269,8 +1269,8 @@ from .llms.xai.common_utils import XAIModelInfo
 from litellm.types.utils import LlmProviders
 
 ## Lazy loading this is not straightforward, will leave it here for now.
-from .main import *  # type: ignore
-from .compression import compress  # type: ignore[no-redef]
+from .main import *
+from .compression import compress
 
 # Skills API
 from .skills.main import (
@@ -1341,7 +1341,7 @@ from .assistants.main import *
 from .batches.main import *
 from .images.main import *
 from .videos.main import *
-from .batch_completion.main import *  # type: ignore
+from .batch_completion.main import *
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
@@ -2054,7 +2054,7 @@ if TYPE_CHECKING:
     supports_reasoning: Callable[..., bool]
     acreate: Callable[..., Any]
     get_max_tokens: Callable[..., int]
-    get_model_info: Callable[..., _ModelInfoType]  # type: ignore[no-redef]
+    get_model_info: Callable[..., _ModelInfoType]
     register_prompt_template: Callable[..., None]
     validate_environment: Callable[..., dict]
     check_valid_key: Callable[..., bool]
@@ -2150,9 +2150,9 @@ def __getattr__(name: str) -> Any:
 
     # Lazy load encoding from main.py to avoid heavy tiktoken import
     if name == "encoding":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         # Check if already cached
         if "encoding" not in _globals:
             from .main import encoding as _encoding
@@ -2162,9 +2162,9 @@ def __getattr__(name: str) -> Any:
 
     # Lazy load bedrock_tool_name_mappings instance
     if name == "bedrock_tool_name_mappings":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         # Check if already cached
         if "bedrock_tool_name_mappings" not in _globals:
             from .llms.bedrock.chat.invoke_handler import (
@@ -2176,9 +2176,9 @@ def __getattr__(name: str) -> Any:
 
     # Lazy load AzureOpenAIError exception class
     if name == "AzureOpenAIError":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         # Check if already cached
         if "AzureOpenAIError" not in _globals:
             from .llms.azure.common_utils import AzureOpenAIError as _AzureOpenAIError
@@ -2188,9 +2188,9 @@ def __getattr__(name: str) -> Any:
 
     # Lazy load openaiOSeriesConfig instance
     if name == "openaiOSeriesConfig":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         if "openaiOSeriesConfig" not in _globals:
             # Import the config class and instantiate it
             config_class = __getattr__("OpenAIOSeriesConfig")
@@ -2206,9 +2206,9 @@ def __getattr__(name: str) -> Any:
         "nvidiaNimEmbeddingConfig": "NvidiaNimEmbeddingConfig",
     }
     if name in _config_instances:
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         if name not in _globals:
             # Import the config class and instantiate it
             config_class = __getattr__(_config_instances[name])
@@ -2221,9 +2221,9 @@ def __getattr__(name: str) -> Any:
 
     # Lazy load provider_list
     if name == "provider_list":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         # Check if already cached
         if "provider_list" not in _globals:
             # LlmProviders is eagerly imported above, so we can import it directly
@@ -2234,9 +2234,9 @@ def __getattr__(name: str) -> Any:
 
     # Lazy load priority_reservation_settings instance
     if name == "priority_reservation_settings":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         # Check if already cached
         if "priority_reservation_settings" not in _globals:
             # Import the class and instantiate it
@@ -2246,9 +2246,9 @@ def __getattr__(name: str) -> Any:
 
     # Lazy load logging_callback_manager instance
     if name == "logging_callback_manager":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         # Check if already cached
         if "logging_callback_manager" not in _globals:
             # Import the class and instantiate it
@@ -2258,9 +2258,9 @@ def __getattr__(name: str) -> Any:
 
     # Lazy load _service_logger module
     if name == "_service_logger":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         # Check if already cached
         if "_service_logger" not in _globals:
             # Import the module lazily

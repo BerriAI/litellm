@@ -4180,6 +4180,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/gateway/daily/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Gateway Daily Activity
+         * @description Successful and failed gateway requests, counted at the ASGI edge.
+         *
+         *     Deployment-wide: the underlying table has no per-key or per-user dimension,
+         *     so this is admin-only.
+         */
+        get: operations["get_gateway_daily_activity_gateway_daily_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/gemini/{endpoint}": {
         parameters: {
             query?: never;
@@ -24616,6 +24639,64 @@ export interface components {
          * @enum {string}
          */
         GUARDRAIL_DEFINITION_LOCATION: "db" | "config";
+        /**
+         * GatewayRequestActivityResponse
+         * @description Response for GET /gateway/daily/activity.
+         */
+        GatewayRequestActivityResponse: {
+            /**
+             * By Date
+             * @default []
+             */
+            by_date: components["schemas"]["GatewayRequestDailyEntry"][];
+            /**
+             * By Route
+             * @default []
+             */
+            by_route: components["schemas"]["GatewayRequestBreakdownEntry"][];
+            /**
+             * Total Failed Requests
+             * @default 0
+             */
+            total_failed_requests: number;
+            /**
+             * Total Successful Requests
+             * @default 0
+             */
+            total_successful_requests: number;
+        };
+        /** GatewayRequestBreakdownEntry */
+        GatewayRequestBreakdownEntry: {
+            /** Category */
+            category: string;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /** Route */
+            route: string;
+            /**
+             * Successful Requests
+             * @default 0
+             */
+            successful_requests: number;
+        };
+        /** GatewayRequestDailyEntry */
+        GatewayRequestDailyEntry: {
+            /** Date */
+            date: string;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /**
+             * Successful Requests
+             * @default 0
+             */
+            successful_requests: number;
+        };
         /** GenerateKeyRequest */
         GenerateKeyRequest: {
             /** Access Group Ids */
@@ -26689,7 +26770,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: string | number | null;
+            stream_timeout?: number | string | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -31446,7 +31527,7 @@ export interface components {
             technical_keywords?: string[] | null;
             /**
              * Tier Boundaries
-             * @description Score boundaries between tiers
+             * @description Score boundaries between tiers. These keys (simple_medium, medium_complex, complex_reasoning) name the gaps between the default tier names and are not renameable by tier_labels; they are scorer knobs persisted by name on every routing decision
              */
             tier_boundaries?: {
                 [key: string]: number;
@@ -31457,6 +31538,13 @@ export interface components {
              * @default 0.5
              */
             tier_distance_penalty: number;
+            /**
+             * Tier Labels
+             * @description Display names for the complexity tiers, so a deployment can use its own vocabulary (e.g. Cheap/Standard/Premium/Deep) in the dashboard, spend logs, and the LLM classifier rubric. Purely operator-facing: config keys stay canonical (tiers, keyword_tier_rules[].tier, tier_boundaries), API callers never see these names, and the heuristic scorer never reads them. Unlisted tiers keep their canonical name. Partial maps are allowed.
+             */
+            tier_labels?: {
+                [key: string]: string;
+            };
             /**
              * Tiers
              * @description Mapping of complexity tiers to a model or model pool. A list is randomly picked from when adaptive=False, and used as a soft-floor home pool when adaptive=True
@@ -32239,6 +32327,8 @@ export interface components {
             /** Tier */
             tier?: string;
             tier_boundaries?: components["schemas"]["StandardLoggingRoutingDecisionTierBoundaries"];
+            /** Tier Label */
+            tier_label?: string;
         };
         /**
          * StandardLoggingRoutingDecisionTierBoundaries
@@ -35272,7 +35362,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: string | number | null;
+            stream_timeout?: number | string | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -41459,6 +41549,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_gateway_daily_activity_gateway_daily_activity_get: {
+        parameters: {
+            query?: {
+                /** @description Start date in YYYY-MM-DD format */
+                start_date?: string | null;
+                /** @description End date in YYYY-MM-DD format */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayRequestActivityResponse"];
                 };
             };
             /** @description Validation Error */

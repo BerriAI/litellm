@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Final, Protocol, Union
+from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import HTTPException, status
 from typing_extensions import TypedDict
@@ -109,7 +109,7 @@ class _KeyMetadataDict(TypedDict, total=False):
     team_id: str | None
 
 
-_WhereValue = Union[str, dict[str, object]]
+_WhereValue = str | dict[str, object]
 
 
 class _AggregatedSpendData(TypedDict):
@@ -571,6 +571,11 @@ def _build_aggregated_sql_query(
     # straight into their buckets without re-summing. The leaf grouping
     # is omitted on purpose: nothing in the response shape needs it once
     # all the rollups are present.
+    #
+    # TODO: drop the successful_requests/failed_requests aggregates (and the
+    # total_successful_requests metadata they feed) once the admin UI reads SGR
+    # only from LiteLLM_DailyGatewayRequests. The remaining spend, token and
+    # api_requests rollups are still served from here.
     sql_query: Final = f"""
         SELECT
             date,

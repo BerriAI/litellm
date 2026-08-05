@@ -231,7 +231,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
                 and hasattr(model_response.choices[0], "message")
                 and getattr(model_response.choices[0].message, "tool_calls", None) is None
             ):
-                model_response.choices[0].message.content = message_content  # type: ignore
+                model_response.choices[0].message.content = message_content
                 model_response.choices[0].finish_reason = finish_reason
             else:
                 raise Exception("Unable to set message content")
@@ -250,7 +250,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         completion_tokens: Final = int(
             bedrock_output_tokens
             or litellm.token_counter(
-                text=model_response.choices[0].message.content,  # type: ignore
+                text=model_response.choices[0].message.content,
                 count_response_tokens=True,
             )
         )

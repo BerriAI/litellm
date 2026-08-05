@@ -47,26 +47,21 @@ class ModelResponseIterator:
                     index=0,
                 )
 
-            if processed_chunk.choices[0].delta.content is not None:  # type: ignore
-                text = processed_chunk.choices[0].delta.content  # type: ignore
+            if processed_chunk.choices[0].delta.content is not None:
+                text = processed_chunk.choices[0].delta.content
 
             if (
-                processed_chunk.choices[0].delta.tool_calls is not None  # type: ignore
-                and len(processed_chunk.choices[0].delta.tool_calls) > 0  # type: ignore
-                and processed_chunk.choices[0].delta.tool_calls[0].function is not None  # type: ignore
-                and processed_chunk.choices[0].delta.tool_calls[0].function.arguments  # type: ignore
-                is not None
+                processed_chunk.choices[0].delta.tool_calls is not None
+                and len(processed_chunk.choices[0].delta.tool_calls) > 0
+                and processed_chunk.choices[0].delta.tool_calls[0].function is not None
+                and processed_chunk.choices[0].delta.tool_calls[0].function.arguments is not None
             ):
                 tool_use = ChatCompletionToolCallChunk(
-                    id=processed_chunk.choices[0].delta.tool_calls[0].id,  # type: ignore
+                    id=processed_chunk.choices[0].delta.tool_calls[0].id,
                     type="function",
                     function=ChatCompletionToolCallFunctionChunk(
-                        name=processed_chunk.choices[0]
-                        .delta.tool_calls[0]  # type: ignore
-                        .function.name,
-                        arguments=processed_chunk.choices[0]
-                        .delta.tool_calls[0]  # type: ignore
-                        .function.arguments,
+                        name=processed_chunk.choices[0].delta.tool_calls[0].function.name,
+                        arguments=processed_chunk.choices[0].delta.tool_calls[0].function.arguments,
                     ),
                     index=processed_chunk.choices[0].delta.tool_calls[0].index,
                 )

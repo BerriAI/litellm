@@ -108,7 +108,7 @@ def adapt_messages_to_cohere_standard(
         content = _extract_text_content(msg.get("content"))
 
         tool_calls: list[CohereToolCall] | None = None
-        if role == "assistant" and msg.get("tool_calls"):  # type: ignore[union-attr,typeddict-item]
+        if role == "assistant" and msg.get("tool_calls"):
             tool_calls = []
             for tc in msg["tool_calls"]:  # pyright: ignore[reportOptionalIterable]  # truthiness check above rules out None
                 raw_arguments: Any = tc.get("function", {}).get("arguments", {})
@@ -246,13 +246,13 @@ def handle_cohere_response(
 
     usage_info: Final = cohere_response.chatResponse.usage
     if usage_info is not None:
-        model_response.usage = Usage(  # type: ignore[attr-defined]
+        model_response.usage = Usage(
             prompt_tokens=usage_info.promptTokens,
             completion_tokens=usage_info.completionTokens,
             total_tokens=usage_info.totalTokens,
         )
     else:
-        model_response.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)  # type: ignore[attr-defined]
+        model_response.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
     return model_response
 

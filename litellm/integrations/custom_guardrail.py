@@ -34,7 +34,7 @@ from litellm.types.utils import (
 try:
     from fastapi.exceptions import HTTPException
 except ImportError:
-    HTTPException = None  # type: ignore
+    HTTPException = None
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -410,7 +410,7 @@ class CustomGuardrail(CustomLogger):
         if self.should_route_on_sensitive_data():
             try:
                 self.raise_sensitive_data_route_exception(
-                    route_to_model=self.sensitive_data_route_to_model,  # type: ignore
+                    route_to_model=self.sensitive_data_route_to_model,
                     request_data=request_data,
                     detection_info=detection_info,
                 )
@@ -892,9 +892,9 @@ class CustomGuardrail(CustomLogger):
         if event_type is not None:
             guardrail_mode = event_type
         elif isinstance(self.event_hook, Mode):
-            guardrail_mode = GuardrailMode(**dict(self.event_hook.model_dump()))  # type: ignore[typeddict-item]
+            guardrail_mode = GuardrailMode(**dict(self.event_hook.model_dump()))
         else:
-            guardrail_mode = self.event_hook  # type: ignore[assignment]
+            guardrail_mode = self.event_hook
 
         from litellm.litellm_core_utils.core_helpers import (
             filter_exceptions_from_params,

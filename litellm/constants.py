@@ -197,6 +197,16 @@ RUNWAYML_POLLING_TIMEOUT = int(os.getenv("RUNWAYML_POLLING_TIMEOUT", 600))  # 10
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS: Final = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
+# The earliest an evicted, litellm-created client may be closed. A request handed the
+# client just before eviction is still using it, so nothing is closed inside this window;
+# past it, the client is closed once it reports no connection in flight.
+EVICTED_LLM_CLIENT_CLOSE_GRACE_SECONDS: Final = 900
+
+# How many evicted clients may be queued for closing at once. Past this, an evicted client
+# is left to the collector rather than letting a cache-churning workload grow the queue
+# without bound. Each queued entry is ~100 bytes and comes due within one grace window.
+EVICTED_LLM_CLIENT_CLOSE_MAX_PENDING: Final = 10_000
+
 # Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
 # Set to 0 for unlimited (not recommended for production)
 AIOHTTP_CONNECTOR_LIMIT: Final = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 1000))
