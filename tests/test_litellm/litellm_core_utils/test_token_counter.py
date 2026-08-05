@@ -563,12 +563,24 @@ def test_token_counter():
 
 
 import unittest
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 from litellm.utils import _select_tokenizer_helper, claude_json_str, encoding
 
 # Clear the cache at module load to ensure clean state
 _select_tokenizer_helper.cache_clear()
+
+
+@contextmanager
+def registered_models(model_cost_additions: Mapping[str, Mapping[str, str]]) -> Iterator[None]:
+    try:
+        with patch.dict(litellm.model_cost, model_cost_additions):
+            litellm.add_known_models()
+            yield
+    finally:
+        litellm.add_known_models()
 
 
 class TestTokenizerSelection(unittest.TestCase):
@@ -602,10 +614,11 @@ class TestTokenizerSelection(unittest.TestCase):
         mock_from_pretrained.side_effect = Exception("Failed to load tokenizer")
 
         # Add Cohere model to the list for testing
-        litellm.cohere_models = ["command-r-v1"]
+        with registered_models({"command-r-v1": {"litellm_provider": "cohere", "mode": "chat"}}):
+            self.assertIn("command-r-v1", litellm.cohere_models)
 
-        # Test with Cohere model
-        result = _select_tokenizer_helper("command-r-v1")
+            # Test with Cohere model
+            result = _select_tokenizer_helper("command-r-v1")
 
         # Verify the attempt to load Cohere tokenizer
         mock_from_pretrained.assert_called_once_with(
@@ -622,10 +635,11 @@ class TestTokenizerSelection(unittest.TestCase):
         mock_from_str.side_effect = Exception("Failed to load tokenizer")
 
         # Add Claude model to the list for testing
-        litellm.anthropic_models = ["claude-2"]
+        with registered_models({"claude-2": {"litellm_provider": "anthropic", "mode": "chat"}}):
+            self.assertIn("claude-2", litellm.anthropic_models)
 
-        # Test with Claude model
-        result = _select_tokenizer_helper("claude-2")
+            # Test with Claude model
+            result = _select_tokenizer_helper("claude-2")
 
         # Verify the attempt to load Claude tokenizer
         mock_from_str.assert_called_once_with(claude_json_str)

@@ -22,7 +22,6 @@ from litellm import (
     cost_per_token,
     get_max_tokens,
     model_cost,
-    open_ai_chat_completion_models,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 import json

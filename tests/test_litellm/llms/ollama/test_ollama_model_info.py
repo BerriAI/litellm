@@ -188,8 +188,9 @@ class TestOllamaModelInfo:
 
     def test_get_models_fallback_on_error(self, monkeypatch):
         """
-        If the httpx.get call raises an exception, get_models should
-        fall back to the static models_by_provider list prefixed by 'ollama/'.
+        The static fallback bucket mixes bare registry seeds ('llama2') with
+        already-prefixed cost-map keys ('ollama/llama3'), so get_models must
+        normalize to exactly one 'ollama/' prefix instead of blindly prepending.
         """
 
         def mock_get(url, headers):
@@ -198,8 +199,16 @@ class TestOllamaModelInfo:
         monkeypatch.setattr(httpx, "get", mock_get)
         info = OllamaModelInfo()
         models = info.get_models()
-        # Default static ollama_models is ['llama2'], so expect ['ollama/llama2']
-        assert models == ["ollama/llama2"]
+
+        static = litellm.models_by_provider["ollama"]
+        already_prefixed = {name for name in static if name.startswith("ollama/")}
+
+        assert models
+        assert models == sorted(models)
+        assert all(name.startswith("ollama/") for name in models)
+        assert not any(name.removeprefix("ollama/").startswith("ollama/") for name in models)
+        assert "ollama/llama2" in models
+        assert already_prefixed and already_prefixed <= set(models)
 
     def test_get_models_no_double_prefix(self, monkeypatch):
         """

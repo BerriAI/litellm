@@ -2708,25 +2708,33 @@ def test_register_model_with_scientific_notation():
     _invalidate_model_cost_lowercase_map()
 
 
-def test_register_model_openrouter_without_slash():
+@pytest.fixture
+def registered_model_cleanup():
+    """Register models without leaking them into litellm.model_cost or the registry."""
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    original_keys = frozenset(litellm.model_cost)
+
+    yield litellm.register_model
+
+    for key in frozenset(litellm.model_cost) - original_keys:
+        del litellm.model_cost[key]
+    _invalidate_model_cost_lowercase_map()
+    litellm.add_known_models()
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["my-custom-alias", "openrouter/some-model", "openrouter/openai/gpt-4-turbo"],
+)
+def test_register_model_openrouter_stores_the_key_verbatim(registered_model_cleanup, key):
     """
-    Test that register_model handles openrouter models without '/' in the name.
-
-    Fixes https://github.com/BerriAI/litellm/issues/18936
-
-    Previously, the code did `split_string[1]` which would fail with IndexError
-    when the model name didn't contain '/'. Now it uses `split_string[-1]` which
-    always works.
+    register_model must not raise on openrouter names without '/' (issue #18936) and now
+    stores whatever key it was handed, matching what the cost map itself contributes.
     """
-    # Clear any existing entries
-    litellm.openrouter_models.discard("my-custom-alias")
-    litellm.openrouter_models.discard("gpt-4")
-    litellm.openrouter_models.discard("openai/gpt-4")
-
-    # Test 1: Model name without '/' (this was the bug - would raise IndexError)
-    litellm.register_model(
+    registered_model_cleanup(
         {
-            "my-custom-alias": {
+            key: {
                 "max_tokens": 8192,
                 "input_cost_per_token": 0.00001,
                 "output_cost_per_token": 0.00002,
@@ -2735,35 +2743,60 @@ def test_register_model_openrouter_without_slash():
             },
         }
     )
-    assert "my-custom-alias" in litellm.openrouter_models
 
-    # Test 2: Model name with single '/' (openrouter/model format)
-    litellm.register_model(
+    assert key in litellm.openrouter_models
+    assert key in litellm.models_by_provider["openrouter"]
+
+
+def test_register_model_reaches_providers_outside_the_legacy_branch_chain(registered_model_cleanup):
+    """
+    register_model used to hand-roll a 15-provider if/elif chain, so anything outside it
+    (groq here) was priced but never enumerable. It now runs the same derivation as a rebuild.
+    """
+    registered_model_cleanup(
         {
-            "openrouter/gpt-4": {
+            "groq/brand-new-groq-model": {
                 "max_tokens": 8192,
                 "input_cost_per_token": 0.00001,
                 "output_cost_per_token": 0.00002,
-                "litellm_provider": "openrouter",
+                "litellm_provider": "groq",
                 "mode": "chat",
             },
         }
     )
-    assert "gpt-4" in litellm.openrouter_models
 
-    # Test 3: Model name with double '/' (openrouter/provider/model format)
-    litellm.register_model(
+    assert "groq/brand-new-groq-model" in litellm.groq_models
+    assert "groq/brand-new-groq-model" in litellm.models_by_provider["groq"]
+    assert "groq/brand-new-groq-model" in litellm.model_list_set
+
+
+def test_register_model_does_not_detach_names_from_the_registry(registered_model_cleanup):
+    """
+    A later rebuild must still be able to reach every name register_model touched; if
+    register_model wrote into litellm.__dict__ the rebuild would be invisible forever.
+    """
+    from litellm.litellm_core_utils.model_registry import REGISTRY_SET_NAMES
+
+    registered_model_cleanup(
         {
-            "openrouter/openai/gpt-4-turbo": {
-                "max_tokens": 8192,
+            "groq/registered-then-rebuilt": {
                 "input_cost_per_token": 0.00001,
                 "output_cost_per_token": 0.00002,
-                "litellm_provider": "openrouter",
+                "litellm_provider": "groq",
                 "mode": "chat",
             },
         }
     )
-    assert "openai/gpt-4-turbo" in litellm.openrouter_models
+    assert not (REGISTRY_SET_NAMES & litellm.__dict__.keys())
+
+    litellm.model_cost["groq/added-after-register"] = {"litellm_provider": "groq", "mode": "chat"}
+    try:
+        litellm.add_known_models()
+        assert "groq/added-after-register" in litellm.groq_models
+        assert "groq/registered-then-rebuilt" in litellm.groq_models
+    finally:
+        del litellm.model_cost["groq/added-after-register"]
+        litellm.add_known_models()
 
 
 def test_reasoning_content_preserved_in_text_completion_wrapper():

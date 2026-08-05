@@ -15,6 +15,21 @@ from litellm.llms.inception.completion.transformation import (
 )
 
 
+@pytest.fixture
+def local_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
+    try:
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.get_model_info.cache_clear()
+        litellm.add_known_models()
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.add_known_models()
+        litellm.get_model_info.cache_clear()
+
+
 def _fim_response_bytes():
     return json.dumps(
         {
@@ -143,13 +158,8 @@ async def test_inception_fim_async():
     assert r.choices[0].text == "a + b"
 
 
-def test_inception_fim_model_configuration():
+def test_inception_fim_model_configuration(local_cost_map):
     from litellm import get_model_info
-
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.text_completion_inception_models = set()
-    litellm.add_known_models()
 
     assert (
         "text-completion-inception/mercury-edit-2"

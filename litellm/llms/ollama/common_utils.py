@@ -125,7 +125,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
                 from litellm import models_by_provider
 
                 static = models_by_provider.get("ollama", []) or []
-                return [f"ollama/{m}" for m in static]
+                return sorted({name if name.startswith("ollama/") else f"ollama/{name}" for name in static})
             except Exception as e1:
                 verbose_logger.warning("Error retrieving static ollama models as fallback: %s", e1)
                 return []

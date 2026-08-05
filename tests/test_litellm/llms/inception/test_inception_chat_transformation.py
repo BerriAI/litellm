@@ -7,9 +7,25 @@ import os
 from unittest import mock
 
 import httpx
+import pytest
 
 import litellm
 from litellm.llms.inception.chat.transformation import InceptionChatConfig
+
+
+@pytest.fixture
+def local_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
+    try:
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.get_model_info.cache_clear()
+        litellm.add_known_models()
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.add_known_models()
+        litellm.get_model_info.cache_clear()
 
 
 def test_inception_config_initialization():
@@ -231,13 +247,8 @@ def test_inception_in_provider_lists():
     assert "https://api.inceptionlabs.ai/v1" in litellm.openai_compatible_endpoints
 
 
-def test_inception_model_configuration():
+def test_inception_model_configuration(local_cost_map):
     from litellm import get_model_info
-
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.inception_models = set()
-    litellm.add_known_models()
 
     info = get_model_info("inception/mercury-2")
     assert info.get("litellm_provider") == "inception"
@@ -251,12 +262,7 @@ def test_inception_model_configuration():
     assert info.get("supports_response_schema") is True
 
 
-def test_inception_model_list_populated():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.inception_models = set()
-    litellm.add_known_models()
-
+def test_inception_model_list_populated(local_cost_map):
     assert "inception/mercury-2" in litellm.inception_models
     for model in litellm.inception_models:
         assert model.startswith("inception/")

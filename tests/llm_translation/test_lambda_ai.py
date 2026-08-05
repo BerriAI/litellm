@@ -12,6 +12,16 @@ from litellm import completion
 from litellm.llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 
 
+@pytest.fixture
+def local_cost_map_registry(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.add_known_models()
+    yield
+    monkeypatch.undo()
+    litellm.add_known_models()
+
+
 def test_lambda_ai_config_initialization():
     """Test LambdaAIChatConfig initializes correctly"""
     config = LambdaAIChatConfig()
@@ -103,17 +113,9 @@ async def test_lambda_ai_completion_call():
             raise
 
 
-def test_lambda_ai_models_configuration():
+def test_lambda_ai_models_configuration(local_cost_map_registry):
     """Test that Lambda AI models are configured correctly"""
     from litellm import get_model_info
-
-    # Reload model cost map to pick up local changes
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    # Clear and repopulate lambda_ai_models list after reloading model_cost
-    litellm.lambda_ai_models = set()
-    litellm.add_known_models()
 
     # Some Lambda AI models to test
     lambda_ai_models = [
@@ -145,16 +147,8 @@ def test_lambda_ai_models_configuration():
             ), f"{model} should support vision"
 
 
-def test_lambda_ai_model_list_populated():
+def test_lambda_ai_model_list_populated(local_cost_map_registry):
     """Test that lambda_ai_models list is populated correctly"""
-    # Ensure we're using local model cost map and repopulate models
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    # Clear and repopulate all model lists after reloading model_cost
-    litellm.lambda_ai_models = set()
-    litellm.add_known_models()
-
     # This should be populated by the add_known_models function
     assert (
         len(litellm.lambda_ai_models) > 0

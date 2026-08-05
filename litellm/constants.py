@@ -846,7 +846,7 @@ _openai_like_providers: list = [
     "watsonx",
 ]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
 # well supported replicate llms
-replicate_models: set = set(
+replicate_models: frozenset[str] = frozenset(
     [
         # llama replicate supported LLMs
         "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf",
@@ -863,7 +863,7 @@ replicate_models: set = set(
     ]
 )
 
-clarifai_models: set = set(
+clarifai_models: frozenset[str] = frozenset(
     [
         "clarifai/openai.chat-completion.gpt-oss-20b",
         "clarifai/qwen.qwenLM.Qwen3-30B-A3B-Instruct-2507",
@@ -899,7 +899,7 @@ clarifai_models: set = set(
 )
 
 
-huggingface_models: set = set(
+huggingface_models: frozenset[str] = frozenset(
     [
         "meta-llama/Llama-2-7b-hf",
         "meta-llama/Llama-2-7b-chat-hf",
@@ -915,14 +915,14 @@ huggingface_models: set = set(
         "meta-llama/Llama-2-70b-chat",
     ]
 )  # these have been tested on extensively. But by default all text2text-generation and text-generation models are supported by liteLLM. - https://docs.litellm.ai/docs/providers
-empower_models = set(
+empower_models: frozenset[str] = frozenset(
     [
         "empower/empower-functions",
         "empower/empower-functions-small",
     ]
 )
 
-together_ai_models: set = set(
+together_ai_models: frozenset[str] = frozenset(
     [
         # llama llms - chat
         "togethercomputer/llama-2-70b-chat",
@@ -956,7 +956,7 @@ together_ai_models: set = set(
 # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
 
-baseten_models: set = set(
+baseten_models: frozenset[str] = frozenset(
     [
         "qvv0xeq",
         "q841o8w",
@@ -1055,7 +1055,7 @@ nebius_embedding_models: set = set(
     ]
 )
 
-WANDB_MODELS: set = set(
+WANDB_MODELS: frozenset[str] = frozenset(
     [
         # openai models
         "openai/gpt-oss-120b",
@@ -1084,7 +1084,7 @@ WANDB_MODELS: set = set(
     ]
 )
 
-modelscope_models: set = set(
+modelscope_models: frozenset[str] = frozenset(
     [
         # Qwen series models
         "Qwen/Qwen3-0.6B",
@@ -1151,7 +1151,7 @@ BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
     "nova",
 ]
 
-BEDROCK_CONVERSE_MODELS = [
+BEDROCK_CONVERSE_MODELS: tuple[str, ...] = (
     "qwen.qwen3-coder-480b-a35b-v1:0",
     "qwen.qwen3-coder-next",
     "qwen.qwen3-235b-a22b-2507-v1:0",
@@ -1209,11 +1209,11 @@ BEDROCK_CONVERSE_MODELS = [
     "writer.palmyra-x5-v1:0",
     "minimax.minimax-m2.1",
     "moonshotai.kimi-k2.5",
-]
+)
 
 
-open_ai_embedding_models: set = set(["text-embedding-ada-002"])
-cohere_embedding_models: set = set(
+open_ai_embedding_models: frozenset[str] = frozenset(["text-embedding-ada-002"])
+cohere_embedding_models: frozenset[str] = frozenset(
     [
         "embed-v4.0",
         "embed-english-v3.0",
@@ -1224,7 +1224,7 @@ cohere_embedding_models: set = set(
         "embed-multilingual-v2.0",
     ]
 )
-bedrock_embedding_models: set = set(
+bedrock_embedding_models: frozenset[str] = frozenset(
     [
         "amazon.titan-embed-text-v1",
         "amazon.nova-2-multimodal-embeddings-v1:0",

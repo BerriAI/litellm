@@ -20,6 +20,7 @@ import asyncio
 
 import litellm
 from litellm._logging import ALL_LOGGERS
+from litellm.litellm_core_utils.model_registry import REGISTRY_SET_NAMES
 from litellm.litellm_core_utils.prompt_templates import (
     image_handling as image_handling_module,
 )
@@ -27,6 +28,8 @@ from litellm.llms.custom_httpx.async_client_cleanup import (
     close_litellm_async_clients,
 )
 from litellm.proxy.db import tool_registry_writer as tool_registry_writer_module
+
+_REGISTRY_SERVED_NAMES = REGISTRY_SET_NAMES | frozenset(litellm._REGISTRY_VIEWS)
 
 
 def _reset_module_level_aws_auth_caches():
@@ -230,8 +233,6 @@ def isolate_litellm_state():
         "cost_discount_config",
         "disable_hf_tokenizer_download",
         "disable_copilot_system_to_assistant",
-        "cohere_models",
-        "anthropic_models",
         "token_counter",
         "initialized_langfuse_clients",
     ):
@@ -253,6 +254,7 @@ def isolate_litellm_state():
     # Store singleton registries that are lazily initialized during tests and
     # can change endpoint behavior later in the suite.
     original_tool_policy_registry = tool_registry_writer_module._tool_policy_registry
+    original_registry_snapshot = litellm._model_registry_snapshot
     had_module_level_client = "module_level_client" in litellm.__dict__
     had_module_level_aclient = "module_level_aclient" in litellm.__dict__
     original_module_level_client = litellm.__dict__.get("module_level_client")
@@ -301,8 +303,15 @@ def isolate_litellm_state():
 
     # Restore all callback lists to original state
     for attr_name, original_value in original_state.items():
+        if attr_name in _REGISTRY_SERVED_NAMES:
+            continue
         if hasattr(litellm, attr_name):
             setattr(litellm, attr_name, original_value)
+
+    for _shadowed in _REGISTRY_SERVED_NAMES & litellm.__dict__.keys():
+        del litellm.__dict__[_shadowed]
+    if litellm._model_registry_snapshot is not original_registry_snapshot:
+        litellm.add_known_models()
 
     # Restore logger configuration mutated by logging-focused tests.
     for logger in ALL_LOGGERS:

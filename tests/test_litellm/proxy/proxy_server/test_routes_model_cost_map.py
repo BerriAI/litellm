@@ -55,12 +55,14 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
     table = _attach_litellm_config(mock_prisma)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
-    fake_cost_map = {"gpt-4": {"input_cost": 0.03}, "gpt-3.5": {"input_cost": 0.002}}
+    fake_cost_map = {
+        "gpt-4": {"input_cost": 0.03, "litellm_provider": "openai", "mode": "chat"},
+        "gpt-3.5": {"input_cost": 0.002, "litellm_provider": "openai", "mode": "chat"},
+    }
     monkeypatch.setattr(
         "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
         AsyncMock(return_value=ModelCostMapReloaded(model_cost_map=fake_cost_map)),
     )
-    monkeypatch.setattr("litellm.add_known_models", lambda model_cost_map=None: None)
     monkeypatch.setattr("litellm.model_cost", {}, raising=False)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server._invalidate_model_cost_lowercase_map",
@@ -84,6 +86,59 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
         "timestamp": "<VOLATILE>",
     }
     assert table.upsert.await_count == 1
+
+    import litellm as litellm_module
+
+    assert litellm_module.open_ai_chat_completion_models == frozenset({"gpt-4", "gpt-3.5"})
+
+
+def test_reload_model_cost_map_rebuilds_provider_enumeration(
+    client, auth_as, monkeypatch, mock_prisma
+):
+    """A reload must re-derive provider enumeration: new models appear and dropped models disappear.
+
+    Regression (LIT-4947): the derived collections were import-time snapshots, so a reload
+    updated pricing while `anthropic/*` kept expanding to the models the pod booted with.
+    """
+    from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    import litellm as litellm_module
+
+    _attach_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    async def _fake_invalidate(name):
+        return None
+
+    monkeypatch.setattr(ps, "invalidate_config_param", _fake_invalidate)
+
+    booted_map = {"claude-doomed": {"litellm_provider": "anthropic", "mode": "chat"}}
+    monkeypatch.setattr("litellm.model_cost", booted_map, raising=False)
+    litellm_module.add_known_models()
+    assert "claude-doomed" in litellm_module.models_by_provider["anthropic"]
+
+    reloaded_map = {"claude-fresh": {"litellm_provider": "anthropic", "mode": "chat"}}
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+        AsyncMock(return_value=ModelCostMapReloaded(model_cost_map=reloaded_map)),
+    )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post("/reload/model_cost_map")
+    assert response.status_code == 200
+
+    assert litellm_module.models_by_provider["anthropic"] == frozenset({"claude-fresh"})
+    assert "claude-fresh" in litellm_module.anthropic_models
+    assert "claude-fresh" in litellm_module.model_list_set
+    assert "claude-doomed" not in litellm_module.anthropic_models
+    assert "claude-doomed" not in litellm_module.model_list_set
+
+    expanded = get_known_models_from_wildcard(wildcard_model="anthropic/*")
+    assert "anthropic/claude-fresh" in expanded
+    assert "anthropic/claude-doomed" not in expanded
 
 
 def test_reload_model_cost_map_fetch_failure_502_keeps_map(

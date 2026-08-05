@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import litellm
 from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, Member
 from litellm.proxy.auth.handle_jwt import JWTAuthManager
 
@@ -709,3 +710,67 @@ def test_expand_wildcard_invalid_litellm_params_passthrough():
     # Even if LiteLLM_Params construction fails the deployment should survive
     result = expand_wildcard_deployments_for_model_info([deployment])
     assert result == [deployment]
+
+
+@pytest.fixture
+def register_in_cost_map(monkeypatch):
+    """LIT-4947: mutate the cost map, rebuild the registry, and put the world back afterwards."""
+
+    def _register(model: str, litellm_provider: str) -> str:
+        monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": litellm_provider, "mode": "chat"})
+        litellm.add_known_models()
+        return model
+
+    yield _register
+    monkeypatch.undo()
+    litellm.add_known_models()
+
+
+@pytest.mark.parametrize(
+    "provider, litellm_provider",
+    [
+        ("vertex_ai", "vertex_ai-language-models"),
+        ("openai", "openai"),
+        ("anthropic", "anthropic"),
+        ("bedrock", "bedrock_converse"),
+        ("cohere", "cohere_chat"),
+    ],
+)
+def test_cost_map_addition_reaches_provider_enumeration(register_in_cost_map, provider, litellm_provider):
+    """LIT-4947: models_by_provider union entries used to be frozen at import, so reloads went unseen."""
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    model = register_in_cost_map(f"lit-4947-{provider}-brand-new", litellm_provider)
+
+    assert model in litellm.models_by_provider[provider]
+    assert f"{provider}/{model}" in get_known_models_from_wildcard(wildcard_model=f"{provider}/*")
+
+
+def test_cost_map_addition_reaches_model_list_set(register_in_cost_map):
+    """LIT-4947: model_list/model_list_set were import-time snapshots that no reload could refresh."""
+    model = register_in_cost_map("lit-4947-openai-brand-new", "openai")
+
+    assert model in litellm.model_list_set
+    assert model in litellm.model_list
+    assert model in litellm.open_ai_chat_completion_models
+
+
+def test_cost_map_removal_disappears_from_provider_enumeration(monkeypatch):
+    """LIT-4947: a rebuild must prune, otherwise a shrinking cost map leaves phantom models routable."""
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    monkeypatch.setitem(litellm.model_cost, "lit-4947-doomed", {"litellm_provider": "anthropic", "mode": "chat"})
+    litellm.add_known_models()
+    try:
+        assert "lit-4947-doomed" in litellm.models_by_provider["anthropic"]
+        assert "anthropic/lit-4947-doomed" in get_known_models_from_wildcard(wildcard_model="anthropic/*")
+
+        monkeypatch.delitem(litellm.model_cost, "lit-4947-doomed")
+        litellm.add_known_models()
+
+        assert "lit-4947-doomed" not in litellm.models_by_provider["anthropic"]
+        assert "lit-4947-doomed" not in litellm.model_list_set
+        assert "anthropic/lit-4947-doomed" not in get_known_models_from_wildcard(wildcard_model="anthropic/*")
+    finally:
+        monkeypatch.undo()
+        litellm.add_known_models()

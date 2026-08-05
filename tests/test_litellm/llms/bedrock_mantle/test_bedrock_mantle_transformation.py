@@ -23,7 +23,6 @@ from litellm.types.utils import LlmProviders
 @pytest.fixture
 def local_cost_map(monkeypatch):
     original_model_cost = litellm.model_cost
-    original_bedrock_mantle_models = set(litellm.bedrock_mantle_models)
     try:
         monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
         litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -32,8 +31,7 @@ def local_cost_map(monkeypatch):
         yield
     finally:
         litellm.model_cost = original_model_cost
-        litellm.bedrock_mantle_models.clear()
-        litellm.bedrock_mantle_models.update(original_bedrock_mantle_models)
+        litellm.add_known_models()
         litellm.get_model_info.cache_clear()
 
 

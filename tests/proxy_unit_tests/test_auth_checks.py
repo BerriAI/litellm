@@ -305,6 +305,17 @@ async def test_can_key_call_model_wildcard_access(key_models, model, expect_to_w
             print(e)
 
 
+@pytest.fixture
+def reload_cost_map(monkeypatch):
+    def _reload(new_cost_map: dict) -> None:
+        monkeypatch.setattr(litellm, "model_cost", new_cost_map)
+        litellm.add_known_models(model_cost_map=new_cost_map)
+
+    yield _reload
+    monkeypatch.undo()
+    litellm.add_known_models()
+
+
 @pytest.mark.parametrize(
     "key_models, model, expect_to_work",
     [
@@ -316,7 +327,7 @@ async def test_can_key_call_model_wildcard_access(key_models, model, expect_to_w
     ],
 )
 @pytest.mark.asyncio
-async def test_wildcard_access_after_cost_map_reload(key_models, model, expect_to_work):
+async def test_wildcard_access_after_cost_map_reload(key_models, model, expect_to_work, reload_cost_map):
     """
     Regression test: after a cost-map hot-reload, calling
     add_known_models(model_cost_map=new_map) must update litellm.anthropic_models
@@ -334,22 +345,21 @@ async def test_wildcard_access_after_cost_map_reload(key_models, model, expect_t
 
     # Build a new cost map that includes the brand-new model — exactly what
     # proxy_server.py receives from get_model_cost_map() during a reload.
-    new_cost_map = dict(litellm.model_cost)
-    new_cost_map[model] = {
-        "litellm_provider": "anthropic",
-        "max_tokens": 8192,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000015,
+    new_cost_map = {
+        **litellm.model_cost,
+        model: {
+            "litellm_provider": "anthropic",
+            "max_tokens": 8192,
+            "input_cost_per_token": 0.000003,
+            "output_cost_per_token": 0.000015,
+        },
     }
-
-    original_model_cost = litellm.model_cost
-    litellm.model_cost = new_cost_map
 
     # Confirm the model is NOT yet in the provider set before reload propagation.
     assert model not in litellm.anthropic_models
 
     # Simulate what proxy_server.py now does after every reload.
-    litellm.add_known_models(model_cost_map=new_cost_map)
+    reload_cost_map(new_cost_map)
 
     # After add_known_models(), the model must be in the set.
     assert model in litellm.anthropic_models
@@ -369,29 +379,25 @@ async def test_wildcard_access_after_cost_map_reload(key_models, model, expect_t
     router = litellm.Router(model_list=llm_model_list)
     user_api_key_object = UserAPIKeyAuth(models=key_models)
 
-    try:
-        if expect_to_work:
+    if expect_to_work:
+        await can_key_call_model(
+            model=model,
+            llm_model_list=llm_model_list,
+            valid_token=user_api_key_object,
+            llm_router=router,
+        )
+    else:
+        with pytest.raises(Exception):
             await can_key_call_model(
                 model=model,
                 llm_model_list=llm_model_list,
                 valid_token=user_api_key_object,
                 llm_router=router,
             )
-        else:
-            with pytest.raises(Exception):
-                await can_key_call_model(
-                    model=model,
-                    llm_model_list=llm_model_list,
-                    valid_token=user_api_key_object,
-                    llm_router=router,
-                )
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.anthropic_models.discard(model)
 
 
 @pytest.mark.asyncio
-async def test_add_known_models_explicit_map_updates_provider_sets():
+async def test_add_known_models_explicit_map_updates_provider_sets(reload_cost_map):
     """
     Regression test: after a cost-map hot-reload, calling
     add_known_models(model_cost_map=new_map) with the new map passed explicitly
@@ -407,28 +413,23 @@ async def test_add_known_models_explicit_map_updates_provider_sets():
     # Baseline: the model must not be in the sets before we do anything.
     assert fake_new_model not in litellm.anthropic_models
 
-    new_cost_map = dict(litellm.model_cost)
-    new_cost_map[fake_new_model] = {
-        "litellm_provider": "anthropic",
-        "max_tokens": 8192,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000015,
+    new_cost_map = {
+        **litellm.model_cost,
+        fake_new_model: {
+            "litellm_provider": "anthropic",
+            "max_tokens": 8192,
+            "input_cost_per_token": 0.000003,
+            "output_cost_per_token": 0.000015,
+        },
     }
 
     # Simulate what proxy_server.py does on reload.
-    original_model_cost = litellm.model_cost
-    litellm.model_cost = new_cost_map
-    litellm.add_known_models(model_cost_map=new_cost_map)
+    reload_cost_map(new_cost_map)
 
-    try:
-        assert fake_new_model in litellm.anthropic_models, (
-            "add_known_models(model_cost_map=...) did not add the new model to "
-            "litellm.anthropic_models — wildcard access checks would fail."
-        )
-    finally:
-        # Clean up: restore original state.
-        litellm.model_cost = original_model_cost
-        litellm.anthropic_models.discard(fake_new_model)
+    assert fake_new_model in litellm.anthropic_models, (
+        "add_known_models(model_cost_map=...) did not add the new model to "
+        "litellm.anthropic_models — wildcard access checks would fail."
+    )
 
 
 @pytest.mark.asyncio
