@@ -14,6 +14,7 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Function,
     ModelResponse,
+    TranscriptionResponse,
 )
 
 OPENAI_CUSTOM_TOOL_CALL_RESPONSE = {
@@ -102,3 +103,49 @@ def test_handle_invalid_parallel_tool_calls_skips_custom_tool_calls():
     )
     result = _handle_invalid_parallel_tool_calls([custom_tool_call, function_tool_call])
     assert result == [custom_tool_call, function_tool_call]
+
+
+def test_audio_transcription_preserves_logprobs():
+    """`logprobs` must survive conversion (requested via `include[]=logprobs`).
+
+    Regression: only language/task/duration/words/segments were copied, so
+    `logprobs` was silently dropped for `gpt-4o-transcribe` and callers had no
+    way to read the per-token confidence without falling back to `stream=True`.
+    """
+    response_object = {
+        "text": "Guten Tag.",
+        "logprobs": [
+            {"token": "Guten", "logprob": -0.01, "bytes": [71]},
+            {"token": " Tag", "logprob": -0.02, "bytes": [32]},
+        ],
+        "usage": {
+            "type": "tokens",
+            "input_tokens": 30,
+            "output_tokens": 4,
+            "total_tokens": 34,
+            "input_token_details": {"text_tokens": 0, "audio_tokens": 30},
+        },
+    }
+
+    result = convert_to_model_response_object(
+        response_object=response_object,
+        model_response_object=TranscriptionResponse(),
+        response_type="audio_transcription",
+    )
+
+    assert result.text == "Guten Tag."
+    assert result.logprobs == response_object["logprobs"]
+    # usage must keep working alongside it (cost tracking depends on it)
+    assert result.usage.input_tokens == 30
+
+
+def test_audio_transcription_without_logprobs_is_unchanged():
+    """No `logprobs` in the response → attribute simply absent, no crash."""
+    result = convert_to_model_response_object(
+        response_object={"text": "Guten Tag."},
+        model_response_object=TranscriptionResponse(),
+        response_type="audio_transcription",
+    )
+
+    assert result.text == "Guten Tag."
+    assert getattr(result, "logprobs", None) is None
