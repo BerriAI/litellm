@@ -154,12 +154,8 @@ def test_trigger_cooldown_calls_set_cooldown_when_deployment_id_present():
     exc.status_code = 429
     exc.failed_deployment_id = "deployment-abc"
 
-    with patch(
-        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
-    ) as mock_set:
-        _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs={}, exception=exc
-        )
+    with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set:
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exc)
 
     mock_set.assert_called_once()
     _, call_kwargs = mock_set.call_args
@@ -170,12 +166,8 @@ def test_trigger_cooldown_calls_set_cooldown_when_deployment_id_present():
 def test_trigger_cooldown_skips_when_no_deployment_id():
     router = MagicMock()
 
-    with patch(
-        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
-    ) as mock_set:
-        _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs={}, exception=RuntimeError("err")
-        )
+    with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set:
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=RuntimeError("err"))
 
     mock_set.assert_not_called()
 
@@ -192,12 +184,8 @@ def test_trigger_cooldown_does_not_trust_caller_supplied_metadata_bucket():
     exc = RuntimeError("err")
     kwargs = {"metadata": {"model_info": {"id": "attacker-chosen-deployment"}, "deployment_model_name": "gpt-4"}}
 
-    with patch(
-        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
-    ) as mock_set:
-        _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs=kwargs, exception=exc
-        )
+    with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set:
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs=kwargs, exception=exc)
 
     mock_set.assert_not_called()
 
@@ -219,9 +207,7 @@ def test_trigger_cooldown_increments_failure_counter_before_cooldown_check():
             "litellm.router_utils.fallback_event_handlers.increment_deployment_failures_for_current_minute"
         ) as mock_increment,
     ):
-        _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs={}, exception=exc
-        )
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exc)
 
     mock_increment.assert_called_once_with(litellm_router_instance=router, deployment_id="deployment-abc")
     mock_set.assert_called_once()
@@ -236,12 +222,8 @@ def test_trigger_cooldown_uses_deployment_cooldown_time_when_present():
     exc.status_code = 429
     exc.failed_deployment_id = "deployment-abc"
 
-    with patch(
-        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
-    ) as mock_set:
-        _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs={}, exception=exc
-        )
+    with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set:
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exc)
 
     _, call_kwargs = mock_set.call_args
     assert call_kwargs["time_to_cooldown"] == 30
@@ -259,12 +241,8 @@ def test_trigger_cooldown_falls_back_to_litellm_params_cooldown_time():
     exc.status_code = 429
     exc.failed_deployment_id = "deployment-abc"
 
-    with patch(
-        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
-    ) as mock_set:
-        _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs={}, exception=exc
-        )
+    with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set:
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exc)
 
     _, call_kwargs = mock_set.call_args
     assert call_kwargs["time_to_cooldown"] == 30
@@ -284,12 +262,8 @@ def test_trigger_cooldown_uses_response_header_when_no_deployment_config():
     exc.failed_deployment_id = "deployment-abc"
     exc.litellm_response_headers = httpx.Headers({"retry-after": "45"})
 
-    with patch(
-        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
-    ) as mock_set:
-        _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs={}, exception=exc
-        )
+    with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set:
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exc)
 
     _, call_kwargs = mock_set.call_args
     assert call_kwargs["time_to_cooldown"] == 45
@@ -307,9 +281,54 @@ def test_trigger_cooldown_silently_catches_exceptions():
         "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments",
         side_effect=RuntimeError("cooldown error"),
     ):
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exc)
+
+
+def test_trigger_cooldown_skips_request_scoped_404_on_generic_api_call():
+    """A generic API call (files/batches/threads/rerank/...) forwards a caller-supplied
+    resource id, so a 404 there means "that id doesn't exist", not "this deployment is
+    unhealthy". Without this guard, a single bad id would 404 every deployment in the
+    fallback chain and cool all of them down from one request."""
+    router = MagicMock()
+    router.cooldown_time = 60
+    router.get_model_info.return_value = None
+
+    exc = RuntimeError("not found")
+    exc.status_code = 404
+    exc.failed_deployment_id = "deployment-abc"
+
+    with (
+        patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set,
+        patch(
+            "litellm.router_utils.fallback_event_handlers.increment_deployment_failures_for_current_minute"
+        ) as mock_increment,
+    ):
         _trigger_cooldown_for_failed_deployment(
-            litellm_router=router, kwargs={}, exception=exc
+            litellm_router=router,
+            kwargs={"original_generic_function": MagicMock()},
+            exception=exc,
         )
+
+    mock_set.assert_not_called()
+    mock_increment.assert_not_called()
+
+
+def test_trigger_cooldown_still_cools_down_404_outside_generic_api_call():
+    """The request-scoped-404 guard is scoped to generic API calls only: a 404 on a
+    regular completion fallback (no original_generic_function in kwargs) must still
+    cool down the deployment as before."""
+    router = MagicMock()
+    router.cooldown_time = 60
+    router.get_model_info.return_value = None
+
+    exc = RuntimeError("not found")
+    exc.status_code = 404
+    exc.failed_deployment_id = "deployment-abc"
+
+    with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set:
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exc)
+
+    mock_set.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -334,9 +353,7 @@ async def test_run_async_fallback_triggers_cooldown_when_logging_obj_has_logged(
         "litellm_logging_obj": logging_obj,
     }
 
-    with patch(
-        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
-    ) as mock_set:
+    with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set:
         with pytest.raises(RuntimeError):
             await run_async_fallback(
                 litellm_router=router,
@@ -371,9 +388,7 @@ async def test_run_async_fallback_skips_cooldown_when_logging_obj_not_logged():
         "litellm_logging_obj": logging_obj,
     }
 
-    with patch(
-        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
-    ) as mock_set:
+    with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set:
         with pytest.raises(RuntimeError):
             await run_async_fallback(
                 litellm_router=router,
@@ -393,9 +408,7 @@ def test_get_fallback_model_group_does_not_mutate_fallbacks():
     fallbacks list, which is the live router config shared across requests."""
     fallbacks = [{"gpt-3.5-turbo": ["claude-3-haiku"]}, "gpt-4o-mini"]
 
-    fallback_model_group, _ = get_fallback_model_group(
-        fallbacks=fallbacks, model_group="unmatched-model"
-    )
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="unmatched-model")
 
     assert fallback_model_group == ["gpt-4o-mini"]
     assert fallbacks == [{"gpt-3.5-turbo": ["claude-3-haiku"]}, "gpt-4o-mini"]
