@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 from fastapi import HTTPException
 from pydantic import BaseModel, EmailStr, field_validator
@@ -25,27 +25,21 @@ class UserListResponse(BaseModel):
 class BulkUpdateUserRequest(BaseModel):
     """Request for bulk user updates"""
 
-    users: Optional[List[UpdateUserRequest]] = (
-        None  # List of specific user update requests
-    )
+    users: Optional[List[UpdateUserRequest]] = None  # List of specific user update requests
     all_users: Optional[bool] = False  # Flag to update all users
-    user_updates: Optional[UpdateUserRequestNoUserIDorEmail] = (
-        None  # Updates to apply to all users when all_users=True
-    )
+    user_updates: Optional[UpdateUserRequestNoUserIDorEmail] = None  # Updates to apply to all users when all_users=True
 
     @field_validator("users", "all_users", "user_updates")
     @classmethod
     def validate_request(cls, v, info):
         # Get all field values for validation
-        values = info.data if hasattr(info, "data") else {}
+        values: Final = info.data if hasattr(info, "data") else {}
 
         # After all fields are set, validate the combination
-        if (
-            info.field_name == "user_updates"
-        ):  # This is the last field, do validation here
-            users = values.get("users")
-            all_users = values.get("all_users", False)
-            user_updates = v
+        if info.field_name == "user_updates":  # This is the last field, do validation here
+            users: Final = values.get("users")
+            all_users: Final = values.get("all_users", False)
+            user_updates: Final = v
 
             # Must specify either users list OR all_users with user_updates
             if not users and not (all_users and user_updates):
@@ -55,9 +49,7 @@ class BulkUpdateUserRequest(BaseModel):
 
             # Cannot specify both users list and all_users
             if users and all_users:
-                raise ValueError(
-                    "Cannot specify both 'users' and 'all_users=True'. Choose one approach."
-                )
+                raise ValueError("Cannot specify both 'users' and 'all_users=True'. Choose one approach.")
 
         return v
 

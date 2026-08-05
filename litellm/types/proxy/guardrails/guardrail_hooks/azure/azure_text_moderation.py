@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Final, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 from typing_extensions import Required, TypedDict
@@ -7,7 +7,7 @@ from ..base import GuardrailConfigModel
 from .base import AzureContentSafetyConfigModel
 
 # Shared Azure Content Safety categories
-AZURE_CONTENT_SAFETY_CATEGORIES = ["Hate", "SelfHarm", "Sexual", "Violence"]
+AZURE_CONTENT_SAFETY_CATEGORIES: Final = ["Hate", "SelfHarm", "Sexual", "Violence"]
 
 
 class AzureTextModerationRequestBodyOptionalParams(TypedDict, total=False):
@@ -19,9 +19,7 @@ class AzureTextModerationRequestBodyOptionalParams(TypedDict, total=False):
     outputType: Literal["FourSeverityLevels", "EightSeverityLevels"]
 
 
-class AzureTextModerationGuardrailRequestBody(
-    AzureTextModerationRequestBodyOptionalParams
-):
+class AzureTextModerationGuardrailRequestBody(AzureTextModerationRequestBodyOptionalParams):
     """Configuration parameters for the Azure Text Moderation guardrail"""
 
     text: Required[str]

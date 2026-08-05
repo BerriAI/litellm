@@ -349,14 +349,11 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
           cleanUser.metadata = user.metadata.trim();
         }
 
-        console.log("Sending user data:", cleanUser);
         const response = await userCreateCall(accessToken, null, cleanUser);
-        console.log("Full response:", response);
 
         // Check if response has key or user_id, indicating success
         if (response && (response.key || response.user_id)) {
           anySuccessful = true;
-          console.log("Success case triggered");
           const user_id = response.data?.user_id || response.user_id;
 
           // Create invitation link for the user
@@ -364,7 +361,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
             if (!uiSettings?.SSO_ENABLED) {
               // Regular invitation flow
               const invitationData = await invitationCreateCall(accessToken, user_id);
-              const invitationUrl = new URL(`/ui?invitation_id=${invitationData.id}`, baseUrl).toString();
+              const invitationUrl = new URL(`/ui/onboarding?invitation_id=${invitationData.id}`, baseUrl).toString();
 
               setParsedData((current) =>
                 current.map((u, i) =>
@@ -411,9 +408,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
             );
           }
         } else {
-          console.log("Error case triggered");
           const errorMessage = response?.error || "Failed to create user";
-          console.log("Error message:", errorMessage);
           setParsedData((current) =>
             current.map((u, i) => (i === index ? { ...u, status: "failed", error: errorMessage } : u)),
           );
@@ -576,14 +571,14 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                   <h4 className="font-medium mb-2">Template Column Names</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div className="flex items-start">
-                      <div className="w-3 h-3 rounded-full bg-red-500 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div className="w-3 h-3 rounded-full bg-red-500 mt-1.5 mr-2 shrink-0"></div>
                       <div>
                         <p className="font-medium">user_email</p>
                         <p className="text-sm text-gray-600">User&apos;s email address (required)</p>
                       </div>
                     </div>
                     <div className="flex items-start">
-                      <div className="w-3 h-3 rounded-full bg-red-500 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div className="w-3 h-3 rounded-full bg-red-500 mt-1.5 mr-2 shrink-0"></div>
                       <div>
                         <p className="font-medium">user_role</p>
                         <p className="text-sm text-gray-600">
@@ -593,7 +588,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       </div>
                     </div>
                     <div className="flex items-start">
-                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 shrink-0"></div>
                       <div>
                         <p className="font-medium">teams</p>
                         <p className="text-sm text-gray-600">
@@ -602,14 +597,14 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       </div>
                     </div>
                     <div className="flex items-start">
-                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 shrink-0"></div>
                       <div>
                         <p className="font-medium">max_budget</p>
                         <p className="text-sm text-gray-600">Maximum budget as a number (e.g., &quot;100&quot;)</p>
                       </div>
                     </div>
                     <div className="flex items-start">
-                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 shrink-0"></div>
                       <div>
                         <p className="font-medium">budget_duration</p>
                         <p className="text-sm text-gray-600">
@@ -618,7 +613,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       </div>
                     </div>
                     <div className="flex items-start">
-                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 flex-shrink-0"></div>
+                      <div className="w-3 h-3 rounded-full bg-gray-300 mt-1.5 mr-2 shrink-0"></div>
                       <div>
                         <p className="font-medium">models</p>
                         <p className="text-sm text-gray-600">
@@ -760,11 +755,11 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                     {parsedData.some((user) => user.status === "success" || user.status === "failed") ? (
                       <div className="flex items-center">
                         <Text className="text-lg font-medium mr-3">Creation Summary</Text>
-                        <Text className="text-sm bg-green-100 text-green-800 px-2 py-1 rounded mr-2">
+                        <Text className="text-sm bg-green-100 text-green-800 px-2 py-1 rounded-sm mr-2">
                           {parsedData.filter((d) => d.status === "success").length} Successful
                         </Text>
                         {parsedData.some((d) => d.status === "failed") && (
-                          <Text className="text-sm bg-red-100 text-red-800 px-2 py-1 rounded">
+                          <Text className="text-sm bg-red-100 text-red-800 px-2 py-1 rounded-sm">
                             {parsedData.filter((d) => d.status === "failed").length} Failed
                           </Text>
                         )}
@@ -772,7 +767,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                     ) : (
                       <div className="flex items-center">
                         <Text className="text-lg font-medium mr-3">User Preview</Text>
-                        <Text className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                        <Text className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded-sm">
                           {parsedData.filter((d) => d.isValid).length} of {parsedData.length} users valid
                         </Text>
                       </div>

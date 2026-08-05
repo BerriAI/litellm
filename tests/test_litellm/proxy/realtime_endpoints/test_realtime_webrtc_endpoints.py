@@ -902,6 +902,109 @@ def test_session_type_coerced_for_unknown_value():
 
 
 @pytest.mark.asyncio
+async def test_client_secrets_realtime_default_model_blocked_when_not_in_key_scope(
+    proxy_app,
+):
+    """
+    Regression: omitting both model and session.model must NOT bypass the authz
+    check. The endpoint defaults to gpt-4o-realtime-preview; a key that cannot
+    reach that model must receive 403.
+    """
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user",
+        models=["some-other-model"],
+    )
+    try:
+        client = TestClient(proxy_app, raise_server_exceptions=False)
+        with (
+            patch("litellm.proxy.proxy_server.route_request") as mock_route_request,
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+
+            response = client.post(
+                "/v1/realtime/client_secrets",
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json={},
+            )
+
+        assert response.status_code == 403
+        assert "gpt-4o-realtime-preview" in response.text
+        mock_route_request.assert_not_called()
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_client_secrets_realtime_explicit_model_blocked_when_not_in_key_scope(
+    proxy_app,
+):
+    """An explicit model not in the key's allowed list must also be rejected."""
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user",
+        models=["gpt-4o-realtime-preview"],
+    )
+    try:
+        client = TestClient(proxy_app, raise_server_exceptions=False)
+        with (
+            patch("litellm.proxy.proxy_server.route_request") as mock_route_request,
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+
+            response = client.post(
+                "/v1/realtime/client_secrets",
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json={"model": "gpt-4o-realtime-mini"},
+            )
+
+        assert response.status_code == 403
+        assert "gpt-4o-realtime-mini" in response.text
+        mock_route_request.assert_not_called()
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_client_secrets_realtime_default_model_allowed_when_in_key_scope(
+    proxy_app,
+    mock_route_request_client_secrets,
+    mock_add_litellm_data,
+    mock_pre_call_hook,
+):
+    """Omitting model should succeed when the default (gpt-4o-realtime-preview) is in scope."""
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user",
+        models=["gpt-4o-realtime-preview"],
+    )
+    try:
+        client = TestClient(proxy_app)
+        with (
+            patch(
+                "litellm.proxy.proxy_server.route_request",
+                side_effect=mock_route_request_client_secrets,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.add_litellm_data_to_request",
+                side_effect=mock_add_litellm_data,
+            ),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+            mock_logging.post_call_failure_hook = AsyncMock()
+
+            response = client.post(
+                "/v1/realtime/client_secrets",
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json={},
+            )
+
+        assert response.status_code == 200
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_transcription_sessions_returns_upstream_error_verbatim(
     proxy_app,
     mock_add_litellm_data,

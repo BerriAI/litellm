@@ -233,7 +233,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
               {Array.from(selectedModels).map((modelGroup) => {
                 const model = modelHubData.find((m) => m.model_group === modelGroup);
                 return (
-                  <div key={modelGroup} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                  <div key={modelGroup} className="flex items-center justify-between p-2 bg-gray-50 rounded-sm">
                     <div>
                       <Text className="font-medium">{modelGroup}</Text>
                       {model && (

@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 from pydantic import BaseModel
 from typing_extensions import TypedDict
@@ -9,6 +9,7 @@ class LiteLLMCacheType(str, Enum):
     LOCAL = "local"
     REDIS = "redis"
     REDIS_SEMANTIC = "redis-semantic"
+    VALKEY_SEMANTIC = "valkey-semantic"
     S3 = "s3"
     DISK = "disk"
     QDRANT_SEMANTIC = "qdrant-semantic"

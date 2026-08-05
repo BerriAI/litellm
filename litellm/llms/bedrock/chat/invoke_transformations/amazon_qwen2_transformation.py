@@ -7,7 +7,7 @@ The main difference is in the response format: Qwen2 uses "text" field while Qwe
 Qwen2 + Invoke API Tutorial: https://docs.aws.amazon.com/bedrock/latest/userguide/invoke-imported-model.html
 """
 
-from typing import Any, List, Optional
+from typing import Any, Final
 
 import httpx
 
@@ -38,12 +38,12 @@ class AmazonQwen2Config(AmazonQwen3Config):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform Qwen2 Bedrock response to OpenAI format
@@ -51,31 +51,24 @@ class AmazonQwen2Config(AmazonQwen3Config):
         Qwen2 uses "text" field, but we also support "generation" field for compatibility.
         """
         try:
-            if hasattr(raw_response, "json"):
-                response_data = raw_response.json()
-            else:
-                response_data = raw_response
+            response_data: Final = raw_response.json()
 
             # Extract the generated text - Qwen2 uses "text" field, but also support "generation" for compatibility
-            generated_text = response_data.get("generation", "") or response_data.get(
-                "text", ""
-            )
+            generated_text = response_data.get("generation", "") or response_data.get("text", "")
 
             # Clean up the response (remove assistant start token if present)
-            if generated_text.startswith("<|im_start|>assistant\n"):
-                generated_text = generated_text[len("<|im_start|>assistant\n") :]
-            if generated_text.endswith("<|im_end|>"):
-                generated_text = generated_text[: -len("<|im_end|>")]
+            generated_text = generated_text.removeprefix("<|im_start|>assistant\n")
+            generated_text = generated_text.removesuffix("<|im_end|>")
 
             # Set the content in the existing model_response structure
             if hasattr(model_response, "choices") and len(model_response.choices) > 0:
-                choice = model_response.choices[0]
+                choice: Final = model_response.choices[0]
                 choice.message.content = generated_text
                 choice.finish_reason = "stop"
 
             # Set usage information if available in response
             if "usage" in response_data:
-                usage_data = response_data["usage"]
+                usage_data: Final = response_data["usage"]
                 setattr(
                     model_response,
                     "usage",

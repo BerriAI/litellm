@@ -6,7 +6,7 @@ the final guardrails list.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -203,53 +203,33 @@ class PolicyDBResponse(BaseModel):
         default="production",
         description="One of: draft, published, production.",
     )
-    parent_version_id: Optional[str] = Field(
-        default=None, description="Policy ID this version was cloned from."
-    )
+    parent_version_id: Optional[str] = Field(default=None, description="Policy ID this version was cloned from.")
     is_latest: bool = Field(
         default=True,
         description="True if this is the latest version by version_number.",
     )
-    published_at: Optional[datetime] = Field(
-        default=None, description="When this version was published."
-    )
-    production_at: Optional[datetime] = Field(
-        default=None, description="When this version was promoted to production."
-    )
+    published_at: Optional[datetime] = Field(default=None, description="When this version was published.")
+    production_at: Optional[datetime] = Field(default=None, description="When this version was promoted to production.")
     inherit: Optional[str] = Field(default=None, description="Parent policy name.")
     description: Optional[str] = Field(default=None, description="Policy description.")
-    guardrails_add: List[str] = Field(
-        default_factory=list, description="Guardrails to add."
-    )
-    guardrails_remove: List[str] = Field(
-        default_factory=list, description="Guardrails to remove."
-    )
-    condition: Optional[Dict[str, Any]] = Field(
-        default=None, description="Policy condition."
-    )
-    pipeline: Optional[Dict[str, Any]] = Field(
-        default=None, description="Optional guardrail pipeline."
-    )
-    created_at: Optional[datetime] = Field(
-        default=None, description="When the policy was created."
-    )
-    updated_at: Optional[datetime] = Field(
-        default=None, description="When the policy was last updated."
-    )
-    created_by: Optional[str] = Field(
-        default=None, description="Who created the policy."
-    )
-    updated_by: Optional[str] = Field(
-        default=None, description="Who last updated the policy."
+    guardrails_add: List[str] = Field(default_factory=list, description="Guardrails to add.")
+    guardrails_remove: List[str] = Field(default_factory=list, description="Guardrails to remove.")
+    condition: Optional[Dict[str, Any]] = Field(default=None, description="Policy condition.")
+    pipeline: Optional[Dict[str, Any]] = Field(default=None, description="Optional guardrail pipeline.")
+    created_at: Optional[datetime] = Field(default=None, description="When the policy was created.")
+    updated_at: Optional[datetime] = Field(default=None, description="When the policy was last updated.")
+    created_by: Optional[str] = Field(default=None, description="Who created the policy.")
+    updated_by: Optional[str] = Field(default=None, description="Who last updated the policy.")
+    definition_location: Literal["db", "config"] = Field(
+        default="db",
+        description="Where this policy is defined: 'db' (database) or 'config' (config.yaml).",
     )
 
 
 class PolicyListDBResponse(BaseModel):
     """Response for listing policies from the database."""
 
-    policies: List[PolicyDBResponse] = Field(
-        default_factory=list, description="List of policies."
-    )
+    policies: List[PolicyDBResponse] = Field(default_factory=list, description="List of policies.")
     total_count: int = Field(default=0, description="Total number of policies.")
 
 
@@ -337,17 +317,13 @@ class PolicyAttachmentDBResponse(BaseModel):
     keys: List[str] = Field(default_factory=list, description="Key patterns.")
     models: List[str] = Field(default_factory=list, description="Model patterns.")
     tags: List[str] = Field(default_factory=list, description="Tag patterns.")
-    created_at: Optional[datetime] = Field(
-        default=None, description="When the attachment was created."
-    )
-    updated_at: Optional[datetime] = Field(
-        default=None, description="When the attachment was last updated."
-    )
-    created_by: Optional[str] = Field(
-        default=None, description="Who created the attachment."
-    )
-    updated_by: Optional[str] = Field(
-        default=None, description="Who last updated the attachment."
+    created_at: Optional[datetime] = Field(default=None, description="When the attachment was created.")
+    updated_at: Optional[datetime] = Field(default=None, description="When the attachment was last updated.")
+    created_by: Optional[str] = Field(default=None, description="Who created the attachment.")
+    updated_by: Optional[str] = Field(default=None, description="Who last updated the attachment.")
+    definition_location: Literal["db", "config"] = Field(
+        default="db",
+        description="Where this attachment is defined: 'db' (database) or 'config' (config.yaml).",
     )
 
 
@@ -379,12 +355,8 @@ class PipelineTestRequest(BaseModel):
 class PolicyResolveRequest(BaseModel):
     """Request body for resolving effective policies/guardrails for a context."""
 
-    team_alias: Optional[str] = Field(
-        default=None, description="Team alias to resolve for."
-    )
-    key_alias: Optional[str] = Field(
-        default=None, description="Key alias to resolve for."
-    )
+    team_alias: Optional[str] = Field(default=None, description="Team alias to resolve for.")
+    key_alias: Optional[str] = Field(default=None, description="Key alias to resolve for.")
     model: Optional[str] = Field(default=None, description="Model name to resolve for.")
     tags: Optional[List[str]] = Field(default=None, description="Tags to resolve for.")
 
@@ -431,12 +403,8 @@ class AttachmentImpactResponse(BaseModel):
         default=0,
         description="Number of teams that would be affected (named + unnamed).",
     )
-    unnamed_keys_count: int = Field(
-        default=0, description="Number of affected keys without an alias."
-    )
-    unnamed_teams_count: int = Field(
-        default=0, description="Number of affected teams without an alias."
-    )
+    unnamed_keys_count: int = Field(default=0, description="Number of affected keys without an alias.")
+    unnamed_teams_count: int = Field(default=0, description="Number of affected teams without an alias.")
     sample_keys: List[str] = Field(
         default_factory=list,
         description="Sample of affected key aliases (up to 10).",

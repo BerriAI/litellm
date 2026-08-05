@@ -21,9 +21,13 @@ from litellm.proxy.utils import PrismaClient
 
 
 @pytest.mark.asyncio
-async def test_run_reconnect_cycle_direct_path_when_engine_alive(
+async def test_run_reconnect_cycle_direct_path_skips_recreate_when_probe_healthy(
     prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Direct path probes the writer first: if SELECT 1 succeeds the
+    connection is healthy (e.g. an IAM token refresh just replaced the
+    engine) and recreating — killing the fresh engine — must be skipped.
+    Part of the fix for https://github.com/BerriAI/litellm/issues/29176."""
     monkeypatch.setenv("DATABASE_URL", "postgres://x:y@h:5432/db")
     prisma_client._engine_confirmed_dead = False
     prisma_client._engine_pid = 0
@@ -43,15 +47,83 @@ async def test_run_reconnect_cycle_direct_path_when_engine_alive(
     pinned = {
         "recreate_called": prisma_client.db.recreate_prisma_client.await_count,
         "start_watcher_called": prisma_client._start_engine_watcher.await_count,
-        "writer_smoke_test_called": writer.query_raw.await_count,
+        "writer_probe_called": writer.query_raw.await_count,
         "engine_confirmed_dead": prisma_client._engine_confirmed_dead,
+    }
+    assert pinned == {
+        "recreate_called": 0,
+        "start_watcher_called": 1,
+        "writer_probe_called": 1,
+        "engine_confirmed_dead": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_reconnect_cycle_direct_path_recreates_when_probe_fails(
+    prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Genuine network blip: probe fails, so the client is recreated and the
+    final SELECT 1 smoke test validates the new writer engine."""
+    monkeypatch.setenv("DATABASE_URL", "postgres://x:y@h:5432/db")
+    prisma_client._engine_confirmed_dead = False
+    prisma_client._engine_pid = 0
+    prisma_client.db.recreate_prisma_client = AsyncMock()
+    prisma_client._start_engine_watcher = AsyncMock()
+    prisma_client._cleanup_engine_watcher = MagicMock()
+
+    writer = MagicMock()
+    writer.query_raw = AsyncMock(
+        side_effect=[ConnectionError("probe failed"), [{"?column?": 1}]]
+    )
+    monkeypatch.setattr(
+        PrismaClient,
+        "writer_db",
+        property(lambda self: writer),
+    )
+
+    await prisma_client._run_reconnect_cycle(timeout_seconds=5)
+    pinned = {
+        "recreate_called": prisma_client.db.recreate_prisma_client.await_count,
+        "start_watcher_called": prisma_client._start_engine_watcher.await_count,
+        "writer_query_raw_calls": writer.query_raw.await_count,
+        "cleanup_called": prisma_client._cleanup_engine_watcher.call_count,
     }
     assert pinned == {
         "recreate_called": 1,
         "start_watcher_called": 1,
-        "writer_smoke_test_called": 1,
-        "engine_confirmed_dead": False,
+        "writer_query_raw_calls": 2,
+        "cleanup_called": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_run_reconnect_cycle_passes_writer_generation_to_recreate(
+    prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cycle snapshots the writer's engine generation at entry and passes
+    it to recreate_prisma_client so a recreate that lost the race against a
+    planned restart (IAM refresh) is skipped inside the wrapper."""
+    monkeypatch.setenv("DATABASE_URL", "postgres://x:y@h:5432/db")
+    prisma_client._engine_confirmed_dead = False
+    prisma_client._engine_pid = 0
+    prisma_client.db.recreate_prisma_client = AsyncMock()
+    prisma_client._start_engine_watcher = AsyncMock()
+    prisma_client._cleanup_engine_watcher = MagicMock()
+
+    writer = MagicMock()
+    writer._engine_generation = 7
+    writer.query_raw = AsyncMock(
+        side_effect=[ConnectionError("probe failed"), [{"?column?": 1}]]
+    )
+    monkeypatch.setattr(
+        PrismaClient,
+        "writer_db",
+        property(lambda self: writer),
+    )
+
+    await prisma_client._run_reconnect_cycle(timeout_seconds=5)
+    recreate_kwargs = prisma_client.db.recreate_prisma_client.await_args.kwargs
+    assert recreate_kwargs.get("expected_generation") == 7
 
 
 @pytest.mark.asyncio
@@ -369,3 +441,146 @@ async def test_db_health_watchdog_loop_swallows_non_db_errors(
     monkeypatch.setattr("asyncio.wait_for", _raise_then_cancel)
     await prisma_client._db_health_watchdog_loop()
     assert prisma_client.attempt_db_reconnect.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_iam_refresh_racing_reconnect_recreates_engine_only_once(
+    prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Integration repro for https://github.com/BerriAI/litellm/issues/29176.
+
+    An IAM token refresh (PrismaWrapper._safe_refresh_token) is mid-recreate
+    when an in-flight transport error triggers attempt_db_reconnect. The
+    reconnect must NOT recreate the Prisma client a second time (which would
+    SIGTERM the engine the refresh just spawned).
+    """
+    import os
+    import urllib.parse
+    from datetime import datetime, timedelta
+
+    import prisma as prisma_pkg
+
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+
+    def token_db_url(created: datetime) -> str:
+        token = (
+            f"host/?X-Amz-Date={created.strftime('%Y%m%dT%H%M%SZ')}"
+            f"&X-Amz-Expires=900&X-Amz-Signature=abc"
+        )
+        return f"postgresql://user:{urllib.parse.quote(token, safe='')}@host:5432/db"
+
+    # Old engine (PID 111) carries an expired token; in-flight queries on it
+    # fail with a transport error.
+    expired_url = token_db_url(datetime.utcnow() - timedelta(seconds=1200))
+    fresh_url = token_db_url(datetime.utcnow())
+    monkeypatch.setenv("DATABASE_URL", expired_url)
+
+    old_prisma = MagicMock(name="OldPrisma")
+    old_prisma._engine = MagicMock()
+    old_prisma._engine.process.pid = 111
+    old_prisma.query_raw = AsyncMock(side_effect=ConnectionError("engine restarting"))
+
+    wrapper = PrismaWrapper(original_prisma=old_prisma, iam_token_db_auth=True)
+    prisma_client.db = wrapper
+    prisma_client._engine_pid = 0
+    prisma_client._engine_confirmed_dead = False
+    prisma_client._start_engine_watcher = AsyncMock()
+
+    # The refresh's recreate is held open at connect() so the reconnect path
+    # races it deterministically.
+    connect_started = asyncio.Event()
+    release_connect = asyncio.Event()
+
+    async def slow_connect(*args: Any, **kwargs: Any) -> None:
+        connect_started.set()
+        await release_connect.wait()
+
+    new_prisma = MagicMock(name="NewPrisma")
+    new_prisma.connect = AsyncMock(side_effect=slow_connect)
+    new_prisma._engine = MagicMock()
+    new_prisma._engine.process.pid = 222
+    new_prisma.query_raw = AsyncMock(return_value=[{"?column?": 1}])
+
+    prisma_factory = MagicMock(name="PrismaFactory", return_value=new_prisma)
+    monkeypatch.setattr(prisma_pkg, "Prisma", prisma_factory, raising=False)
+
+    def fake_get_token() -> str:
+        os.environ["DATABASE_URL"] = fresh_url
+        return fresh_url
+
+    monkeypatch.setattr(wrapper, "get_rds_iam_token", fake_get_token)
+    kill_mock = MagicMock()
+    monkeypatch.setattr("os.kill", kill_mock)
+
+    refresh_task = asyncio.create_task(wrapper._safe_refresh_token())
+    await asyncio.wait_for(connect_started.wait(), timeout=5)
+
+    # In-flight transport-error path fires while the refresh holds the
+    # wrapper's reconnection lock mid-recreate.
+    reconnect_task = asyncio.create_task(
+        prisma_client.attempt_db_reconnect(
+            reason="in_flight_transport_error", force=True
+        )
+    )
+    await asyncio.sleep(0.05)
+    release_connect.set()
+
+    await asyncio.wait_for(refresh_task, timeout=5)
+    reconnect_ok = await asyncio.wait_for(reconnect_task, timeout=5)
+
+    # Drain any refresh task scheduled by PrismaWrapper.__getattr__ during
+    # the probe (expired-token path) so it coalesces before we assert.
+    for _ in range(3):
+        await asyncio.sleep(0)
+
+    killed_pids = [c.args[0] for c in kill_mock.call_args_list]
+    pinned = {
+        "prisma_constructed": prisma_factory.call_count,
+        "fresh_engine_killed": 222 in killed_pids,
+        "reconnect_ok": reconnect_ok,
+        "wrapper_client_is_new": wrapper._original_prisma is new_prisma,
+    }
+    assert pinned == {
+        "prisma_constructed": 1,
+        "fresh_engine_killed": False,
+        "reconnect_ok": True,
+        "wrapper_client_is_new": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_reconnect_cycle_heavy_path_forwards_entry_generation_to_recreate(
+    prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The heavy (engine-dead) path must also forward an engine-generation
+    snapshot to recreate_prisma_client, captured atomically at cycle entry.
+
+    A concurrent IAM refresh that replaces the engine mid-cycle bumps the
+    generation, so the guarded recreate becomes a no-op instead of killing the
+    freshly-spawned engine (#29176). The snapshot must be taken before any
+    await — `asyncio.wait_for(_do_heavy_reconnect())` yields, during which a
+    refresh can slip in. A side effect that bumps the generation AFTER entry
+    must NOT change the forwarded value (proves entry-snapshot, not in-closure).
+    """
+    monkeypatch.setenv("DATABASE_URL", "postgres://x:y@h:5432/db")
+    prisma_client._engine_confirmed_dead = True
+    prisma_client._engine_pid = 1234
+    prisma_client.db.recreate_prisma_client = AsyncMock()
+    prisma_client._start_engine_watcher = AsyncMock()
+    monkeypatch.setattr(PrismaClient, "_reap_all_zombies", staticmethod(lambda: set()))
+
+    writer = MagicMock()
+    writer._engine_generation = 4
+    monkeypatch.setattr(PrismaClient, "writer_db", property(lambda self: writer))
+
+    # Simulate a concurrent refresh bumping the generation after cycle entry:
+    # _cleanup_engine_watcher runs between the entry snapshot and the recreate.
+    def _bump_then_cleanup() -> None:
+        writer._engine_generation = 5
+
+    monkeypatch.setattr(prisma_client, "_cleanup_engine_watcher", _bump_then_cleanup)
+
+    await prisma_client._run_reconnect_cycle(timeout_seconds=5)
+
+    kwargs = prisma_client.db.recreate_prisma_client.await_args.kwargs
+    assert kwargs.get("expected_generation") == 4

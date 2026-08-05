@@ -2,7 +2,7 @@
 Cisco AI Defense Guardrail Config Model
 """
 
-from typing import List, Literal, Optional
+from typing import Final, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -116,9 +116,7 @@ class CiscoAIDefenseGuardrailConfigModelOptionalParams(BaseModel):
     )
 
 
-class CiscoAIDefenseGuardrailConfigModel(
-    GuardrailConfigModel[CiscoAIDefenseGuardrailConfigModelOptionalParams]
-):
+class CiscoAIDefenseGuardrailConfigModel(GuardrailConfigModel[CiscoAIDefenseGuardrailConfigModelOptionalParams]):
     """Configuration parameters for the Cisco AI Defense guardrail."""
 
     api_key: Optional[str] = Field(

@@ -1,5 +1,5 @@
 import json
-from typing import Any, Union
+from typing import Any, Final
 
 from pydantic import BaseModel
 
@@ -24,19 +24,20 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
             return "MaxDepthExceeded"
         # Base-case: if it is a primitive, simply return it.
         if isinstance(obj, str):
-            return strip_null_bytes(obj)
+            return obj.replace("\x00", "") if "\x00" in obj else obj
         if isinstance(obj, (int, float, bool, type(None))):
             return obj
         # Check for circular reference.
         if id(obj) in seen:
             return "CircularReference Detected"
         seen.add(id(obj))
-        result: Union[dict, list, tuple, set, str]
+        result: dict | list | tuple | set | str
         if isinstance(obj, dict):
             result = {}
             for k, v in obj.items():
                 if isinstance(k, (str)):
-                    result[strip_null_bytes(k)] = _serialize(v, seen, depth + 1)
+                    clean_k = k.replace("\x00", "") if "\x00" in k else k
+                    result[clean_k] = _serialize(v, seen, depth + 1)
             seen.remove(id(obj))
             return result
         elif isinstance(obj, list):
@@ -52,7 +53,7 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
             seen.remove(id(obj))
             return result
         elif isinstance(obj, BaseModel):
-            dumped = obj.model_dump()
+            dumped: Final = obj.model_dump()
             result = _serialize(dumped, seen, depth + 1)
             seen.remove(id(obj))
             return result
@@ -63,5 +64,5 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
             except Exception:
                 return "Unserializable Object"
 
-    safe_data = _serialize(data, set(), 0)
+    safe_data: Final = _serialize(data, set(), 0)
     return json.dumps(safe_data, default=str)

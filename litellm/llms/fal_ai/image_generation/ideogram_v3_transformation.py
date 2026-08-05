@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -38,9 +38,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         "1024x1536": "portrait_16_9",
     }
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Ideogram v3 accepts the core OpenAI image parameters.
         """
@@ -62,9 +60,9 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         Map OpenAI-style parameters onto Ideogram's request schema.
         """
 
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
-        for k in non_default_params.keys():
+        for k in non_default_params:
             if k in optional_params:
                 continue
 
@@ -100,7 +98,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         if not isinstance(size, str):
             return size
 
-        normalized = size.strip()
+        normalized: Final = size.strip()
         if normalized in self._OPENAI_SIZE_TO_IMAGE_SIZE:
             return self._OPENAI_SIZE_TO_IMAGE_SIZE[normalized]
 
@@ -151,15 +149,15 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Parse Ideogram v3 responses which contain a list of File objects.
         """
 
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -170,7 +168,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         if not model_response.data:
             model_response.data = []
 
-        images = response_data.get("images", [])
+        images: Final = response_data.get("images", [])
         if isinstance(images, list):
             for image_entry in images:
                 if isinstance(image_entry, dict):

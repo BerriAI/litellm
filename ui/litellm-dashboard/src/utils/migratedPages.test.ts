@@ -41,11 +41,27 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES["api-reference"]).toBe("api-reference");
   });
 
+  it("maps the api-keys landing id to its route and builds its redirect href", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES, migratedHref } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES["api-keys"]).toBe("api-keys");
+    expect(migratedHref(MIGRATED_PAGES["api-keys"])).toBe("/ui/api-keys");
+  });
+
   it("maps the llm-playground sidebar id to the playground route", async () => {
     vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
     const { MIGRATED_PAGES } = await import("./migratedPages");
 
     expect(MIGRATED_PAGES["llm-playground"]).toBe("playground");
+  });
+
+  it("maps the models sidebar id to the models-and-endpoints route and builds its redirect href", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES, migratedHref } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.models).toBe("models-and-endpoints");
+    expect(migratedHref(MIGRATED_PAGES.models)).toBe("/ui/models-and-endpoints");
   });
 
   it("maps the projects and access-groups sidebar ids to their routes", async () => {
@@ -107,9 +123,16 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES["admin-panel"]).toBe("admin-panel");
     expect(MIGRATED_PAGES["logging-and-alerts"]).toBe("logging-and-alerts");
     expect(MIGRATED_PAGES["model-hub-table"]).toBe("model-hub-table");
-    // new_usage routes to /usage; the legacy ?page=usage report keeps its switch arm.
+    // new_usage routes to /usage; the legacy ?page=usage report routes to /old-usage (asserted below).
     expect(MIGRATED_PAGES.new_usage).toBe("usage");
-    expect(MIGRATED_PAGES.usage).toBeUndefined();
+  });
+
+  it("maps the legacy usage report id to the old-usage route and builds its redirect href", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES, migratedHref } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.usage).toBe("old-usage");
+    expect(migratedHref(MIGRATED_PAGES.usage)).toBe("/ui/old-usage");
   });
 
   it("maps the agents and router-settings ids to their routes", async () => {
@@ -125,6 +148,20 @@ describe("migratedHref / legacyPageHref", () => {
     const { MIGRATED_PAGES } = await import("./migratedPages");
 
     expect(MIGRATED_PAGES.users).toBe("users");
+  });
+
+  it("maps the teams id to its route", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.teams).toBe("teams");
+  });
+
+  it("maps the organizations id to its route", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.organizations).toBe("organizations");
   });
 });
 

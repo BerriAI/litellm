@@ -4,7 +4,7 @@ Semantic Guard guardrail — embedding-based prompt injection detection.
 Uses semantic-router to match user prompts against known attack patterns.
 """
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 import litellm
 from litellm.constants import (
@@ -37,21 +37,19 @@ def initialize_guardrail(
     Returns:
         Initialized SemanticGuardrail instance
     """
-    guardrail_name = guardrail.get("guardrail_name")
+    guardrail_name: Final = guardrail.get("guardrail_name")
     if not guardrail_name:
         raise ValueError("SemanticGuard: guardrail_name is required")
 
     if llm_router is None:
         raise ValueError(
-            "SemanticGuard requires llm_router for embeddings. "
-            "Configure a model_list with an embedding model."
+            "SemanticGuard requires llm_router for embeddings. Configure a model_list with an embedding model."
         )
 
-    semantic_guardrail = SemanticGuardrail(
+    semantic_guardrail: Final = SemanticGuardrail(
         guardrail_name=guardrail_name,
         llm_router=llm_router,
-        embedding_model=getattr(litellm_params, "embedding_model", None)
-        or DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL,
+        embedding_model=getattr(litellm_params, "embedding_model", None) or DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL,
         similarity_threshold=getattr(litellm_params, "similarity_threshold", None)
         or DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD,
         route_templates=getattr(litellm_params, "route_templates", None),
@@ -67,10 +65,10 @@ def initialize_guardrail(
     return semantic_guardrail
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.SEMANTIC_GUARD.value: initialize_guardrail,
 }
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.SEMANTIC_GUARD.value: SemanticGuardrail,
 }

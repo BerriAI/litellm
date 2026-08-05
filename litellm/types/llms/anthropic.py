@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Optional, Union
+from typing import Any, Dict, Final, Iterable, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import Literal, NotRequired, Required, TypedDict
@@ -127,7 +127,7 @@ class AnthropicToolSearchToolBM25(TypedDict, total=False):
     input_examples: Optional[List[Dict[str, Any]]]
 
 
-ANTHROPIC_ADVISOR_TOOL_TYPE: Literal["advisor_20260301"] = "advisor_20260301"
+ANTHROPIC_ADVISOR_TOOL_TYPE: Final[Literal["advisor_20260301"]] = "advisor_20260301"
 
 
 class AnthropicAdvisorTool(TypedDict, total=False):
@@ -365,9 +365,7 @@ class AnthropicSystemMessageContent(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
-AllAnthropicMessageValues = Union[
-    AnthropicMessagesUserMessageParam, AnthopicMessagesAssistantMessageParam
-]
+AllAnthropicMessageValues = Union[AnthropicMessagesUserMessageParam, AnthopicMessagesAssistantMessageParam]
 
 
 class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
@@ -385,14 +383,10 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     top_p: Optional[float]
     mcp_servers: Optional[List[AnthropicMcpServerTool]]
     context_management: Optional[Dict[str, Any]]
-    container: Optional[
-        Dict[str, Any]
-    ]  # Container config with skills for code execution
+    container: Optional[Dict[str, Any]]  # Container config with skills for code execution
     output_format: Optional[AnthropicOutputSchema]  # Structured outputs support
     speed: Optional[str]  # Fast mode support for Opus models
-    output_config: Optional[
-        AnthropicOutputConfig
-    ]  # Configuration for Claude's output behavior
+    output_config: Optional[AnthropicOutputConfig]  # Configuration for Claude's output behavior
     cache_control: Optional[Dict[str, Any]]  # Automatic prompt caching
     reasoning_effort: Optional[str]
 
@@ -443,6 +437,9 @@ class ContentThinkingSignatureBlockDelta(TypedDict):
 
     type: Literal["signature_delta"]
     signature: str
+
+
+StreamingContentBlockDeltaType = Literal["text_delta", "input_json_delta", "thinking_delta", "signature_delta"]
 
 
 class ContentBlockDelta(TypedDict):
@@ -497,9 +494,7 @@ class ContentBlockStartText(TypedDict):
     content_block: TextBlock
 
 
-ContentBlockContentBlockDict = Union[
-    ToolUseBlock, TextBlock, ChatCompletionThinkingBlock
-]
+ContentBlockContentBlockDict = Union[ToolUseBlock, TextBlock, ChatCompletionThinkingBlock]
 
 ContentBlockStart = Union[ContentBlockStartToolUse, ContentBlockStartText]
 
@@ -625,6 +620,8 @@ class AnthropicResponseContentBlockRedactedThinking(BaseModel):
 
 
 class AnthropicResponseUsageBlock(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     input_tokens: int
     output_tokens: int
 
@@ -673,12 +670,12 @@ class AnthropicChatCompletionUsageBlock(ChatCompletionUsageBlock, total=False):
     cache_read_input_tokens: int
 
 
-ANTHROPIC_API_HEADERS = {
+ANTHROPIC_API_HEADERS: Final = {
     "anthropic-version",
     "anthropic-beta",
 }
 
-ANTHROPIC_API_ONLY_HEADERS = {  # fails if calling anthropic on vertex ai / bedrock
+ANTHROPIC_API_ONLY_HEADERS: Final = {  # fails if calling anthropic on vertex ai / bedrock
     "anthropic-beta",
 }
 
@@ -714,13 +711,13 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)
-ANTHROPIC_TOOL_SEARCH_BETA_HEADER = "advanced-tool-use-2025-11-20"
+ANTHROPIC_TOOL_SEARCH_BETA_HEADER: Final = "advanced-tool-use-2025-11-20"
 
 # Effort beta header constant
-ANTHROPIC_EFFORT_BETA_HEADER = "effort-2025-11-24"
+ANTHROPIC_EFFORT_BETA_HEADER: Final = "effort-2025-11-24"
 
 # OAuth constants
-ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat"
-ANTHROPIC_OAUTH_BETA_HEADER = "oauth-2025-04-20"
+ANTHROPIC_OAUTH_TOKEN_PREFIX: Final = "sk-ant-oat"
+ANTHROPIC_OAUTH_BETA_HEADER: Final = "oauth-2025-04-20"
 
-ANTHROPIC_PROMPT_CACHING_SCOPE_BETA_HEADER = "prompt-caching-scope-2026-01-05"
+ANTHROPIC_PROMPT_CACHING_SCOPE_BETA_HEADER: Final = "prompt-caching-scope-2026-01-05"

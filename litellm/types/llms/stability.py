@@ -4,7 +4,7 @@ Type definitions for Stability AI API
 API Reference: https://platform.stability.ai/docs/api-reference
 """
 
-from typing import List, Literal, Optional
+from typing import Final, List, Literal, Optional
 
 from typing_extensions import TypedDict
 
@@ -21,9 +21,7 @@ class StabilityImageGenerationRequest(TypedDict, total=False):
 
     prompt: str  # Required - text prompt for image generation
     negative_prompt: Optional[str]  # What to avoid in the image
-    aspect_ratio: Optional[
-        str
-    ]  # e.g., "1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "9:21"
+    aspect_ratio: Optional[str]  # e.g., "1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "9:21"
     seed: Optional[int]  # Random seed for reproducibility (0 to 4294967294)
     output_format: Optional[Literal["jpeg", "png", "webp"]]  # Output format
     model: Optional[str]  # Model variant (e.g., "sd3.5-large", "sd3.5-medium")
@@ -144,9 +142,7 @@ class StabilityRemoveBackgroundRequest(TypedDict, total=False):
     """
 
     image: str  # Required - Base64-encoded image
-    output_format: Optional[
-        Literal["png", "webp"]
-    ]  # Output format (no jpeg - needs transparency)
+    output_format: Optional[Literal["png", "webp"]]  # Output format (no jpeg - needs transparency)
 
 
 class StabilityControlRequest(TypedDict, total=False):
@@ -178,7 +174,7 @@ class StabilityEditResponse(TypedDict, total=False):
 
 
 # Mapping of OpenAI size to Stability aspect_ratio
-OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO = {
+OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO: Final = {
     "1024x1024": "1:1",
     "1792x1024": "16:9",
     "1024x1792": "9:16",
@@ -187,7 +183,7 @@ OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO = {
 }
 
 # Stability AI supported aspect ratios
-STABILITY_ASPECT_RATIOS = [
+STABILITY_ASPECT_RATIOS: Final = [
     "1:1",
     "16:9",
     "9:16",
@@ -202,7 +198,7 @@ STABILITY_ASPECT_RATIOS = [
 ]
 
 # Stability AI model endpoints
-STABILITY_GENERATION_MODELS = {
+STABILITY_GENERATION_MODELS: Final = {
     "sd3": "/v2beta/stable-image/generate/sd3",
     "sd3.5-large": "/v2beta/stable-image/generate/sd3",
     "sd3.5-large-turbo": "/v2beta/stable-image/generate/sd3",
@@ -214,7 +210,7 @@ STABILITY_GENERATION_MODELS = {
     "stable-image-core": "/v2beta/stable-image/generate/core",
 }
 
-STABILITY_EDIT_ENDPOINTS = {
+STABILITY_EDIT_ENDPOINTS: Final = {
     "inpaint": "/v2beta/stable-image/edit/inpaint",
     "outpaint": "/v2beta/stable-image/edit/outpaint",
     "erase": "/v2beta/stable-image/edit/erase",

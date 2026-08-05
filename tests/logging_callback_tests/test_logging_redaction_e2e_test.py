@@ -2,7 +2,7 @@ import io
 import os
 import sys
 
-from typing import Optional
+from typing import Optional, Union
 
 sys.path.insert(0, os.path.abspath("../.."))
 
@@ -12,6 +12,7 @@ import json
 import logging
 import time
 from unittest.mock import AsyncMock, patch
+from datetime import datetime
 
 import httpx
 import pytest
@@ -20,17 +21,24 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.responses.main import mock_responses_api_response
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import (
+    ModelResponse,
+    ResponsesAPIResponse,
+    StandardLoggingPayload,
+    TextCompletionResponse,
+)
 
 
 class TestCustomLogger(CustomLogger):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.logged_standard_logging_payload: Optional[StandardLoggingPayload] = None
+        self.response_obj: Optional[Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]] = None
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_logging_payload = kwargs.get("standard_logging_object", None)
         self.logged_standard_logging_payload = standard_logging_payload
+        self.response_obj = response_obj
 
 
 @pytest.mark.asyncio
@@ -56,69 +64,128 @@ async def test_global_redaction_on():
     )
 
 
-@pytest.mark.parametrize("turn_off_message_logging", [True, False])
+@pytest.mark.parametrize(
+    "dynamic_turn_off, expect_redacted",
+    [(True, True), (False, False)],
+)
 @pytest.mark.asyncio
-async def test_global_redaction_ignores_dynamic_param(turn_off_message_logging):
-    """
-    Request-body `turn_off_message_logging` is no longer honored as a dynamic
-    callback param — global setting (or admin-configured key/team config) wins.
-    With global redaction ON, the caller cannot disable redaction via the
-    request body.
-    """
+async def test_dynamic_turn_off_message_logging_overrides_global_on(dynamic_turn_off, expect_redacted):
     litellm.turn_off_message_logging = True
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
-    response = await litellm.acompletion(
+    await litellm.acompletion(
         model="gpt-5-mini",
         messages=[{"role": "user", "content": "hi"}],
-        turn_off_message_logging=turn_off_message_logging,
+        turn_off_message_logging=dynamic_turn_off,
         mock_response="hello",
     )
 
     await asyncio.sleep(1)
     standard_logging_payload = test_custom_logger.logged_standard_logging_payload
     assert standard_logging_payload is not None
-    print(
-        "logged standard logging payload",
-        json.dumps(standard_logging_payload, indent=2),
-    )
 
-    response = standard_logging_payload["response"]
-    assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
-    assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
+    expected_response_content = "redacted-by-litellm" if expect_redacted else "hello"
+    expected_message_content = "redacted-by-litellm" if expect_redacted else "hi"
+    assert standard_logging_payload["response"]["choices"][0]["message"]["content"] == expected_response_content
+    assert standard_logging_payload["messages"][0]["content"] == expected_message_content
 
 
-@pytest.mark.parametrize("turn_off_message_logging", [True, False])
+@pytest.mark.parametrize(
+    "dynamic_turn_off, expect_redacted",
+    [(True, True), (False, False)],
+)
 @pytest.mark.asyncio
-async def test_global_redaction_off_ignores_dynamic_param(turn_off_message_logging):
-    """
-    Request-body `turn_off_message_logging` is no longer honored as a dynamic
-    callback param — global setting (or admin-configured key/team config) wins.
-    With global redaction OFF, the caller cannot enable redaction via the
-    request body.
-    """
+async def test_dynamic_turn_off_message_logging_overrides_global_off(dynamic_turn_off, expect_redacted):
     litellm.turn_off_message_logging = False
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
-    response = await litellm.acompletion(
+    await litellm.acompletion(
         model="gpt-5-mini",
         messages=[{"role": "user", "content": "hi"}],
-        turn_off_message_logging=turn_off_message_logging,
+        turn_off_message_logging=dynamic_turn_off,
         mock_response="hello",
     )
 
     await asyncio.sleep(1)
     standard_logging_payload = test_custom_logger.logged_standard_logging_payload
     assert standard_logging_payload is not None
-    print(
-        "logged standard logging payload",
-        json.dumps(standard_logging_payload, indent=2),
-    )
-    assert (
-        standard_logging_payload["response"]["choices"][0]["message"]["content"]
-        == "hello"
-    )
-    assert standard_logging_payload["messages"][0]["content"] == "hi"
+
+    expected_response_content = "redacted-by-litellm" if expect_redacted else "hello"
+    expected_message_content = "redacted-by-litellm" if expect_redacted else "hi"
+    assert standard_logging_payload["response"]["choices"][0]["message"]["content"] == expected_response_content
+    assert standard_logging_payload["messages"][0]["content"] == expected_message_content
+
+
+@pytest.mark.asyncio
+async def test_redaction_with_custom_logger_streaming():
+    """Test redaction of responses for custom logger callbacks"""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    class LoggingWithoutSyncSuccessHandler(Logging):
+        def success_handler(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
+            pass
+
+    litellm.turn_off_message_logging = True
+    test_custom_logger = TestCustomLogger()
+
+    try:
+        litellm_logging_obj = LoggingWithoutSyncSuccessHandler(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="acompletion",
+            litellm_call_id="1234",
+            start_time=datetime.now(),
+            function_id="1234",
+            dynamic_async_success_callbacks=[test_custom_logger],
+        )
+
+        response = await litellm.acompletion(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="hello",
+            stream=True,
+            litellm_logging_obj=litellm_logging_obj,
+        )
+
+        # Consume the stream to trigger logging
+        chunks = []
+        async for chunk in response:
+            chunks.append(chunk)
+
+        await asyncio.sleep(1)
+        async_complete_streaming_response = test_custom_logger.response_obj
+        assert async_complete_streaming_response is not None
+        assert async_complete_streaming_response.choices[0].message.content == "redacted-by-litellm"
+    finally:
+        litellm.turn_off_message_logging = False
+
+
+@pytest.mark.asyncio
+async def test_streaming_redaction_scoped_to_opted_out_logger():
+    """One logger opting out of message logging must not blank the response for other loggers"""
+    litellm.turn_off_message_logging = False
+    opted_out_logger = TestCustomLogger(message_logging=False)
+    compliant_logger = TestCustomLogger()
+    litellm.callbacks = [opted_out_logger, compliant_logger]
+
+    try:
+        response = await litellm.acompletion(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="hello",
+            stream=True,
+        )
+        async for _ in response:
+            pass
+
+        await asyncio.sleep(1)
+        assert opted_out_logger.response_obj is not None
+        assert opted_out_logger.response_obj.choices[0].message.content == "redacted-by-litellm"
+        assert compliant_logger.response_obj is not None
+        assert compliant_logger.response_obj.choices[0].message.content == "hello"
+    finally:
+        litellm.callbacks = []
 
 
 @pytest.mark.asyncio

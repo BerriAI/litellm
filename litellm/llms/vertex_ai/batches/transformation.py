@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Final
 
 from litellm._uuid import uuid
 from litellm.llms.vertex_ai.common_utils import (
@@ -24,19 +24,15 @@ class VertexAIBatchTransformation:
         """
         Transforms OpenAI Batch requests to Vertex AI Batch requests
         """
-        request_display_name = f"litellm-vertex-batch-{uuid.uuid4()}"
-        input_file_id = request.get("input_file_id")
+        request_display_name: Final = f"litellm-vertex-batch-{uuid.uuid4()}"
+        input_file_id: Final = request.get("input_file_id")
         if input_file_id is None:
             raise ValueError("input_file_id is required, but not provided")
-        input_config: InputConfig = InputConfig(
-            gcsSource=GcsSource(uris=[input_file_id]), instancesFormat="jsonl"
-        )
-        model: str = cls._get_model_from_gcs_file(input_file_id)
-        output_config: OutputConfig = OutputConfig(
+        input_config: InputConfig = InputConfig(gcsSource=GcsSource(uris=[input_file_id]), instancesFormat="jsonl")
+        model: Final[str] = cls._get_model_from_gcs_file(input_file_id)
+        output_config: Final[OutputConfig] = OutputConfig(
             predictionsFormat="jsonl",
-            gcsDestination=GcsDestination(
-                outputUriPrefix=cls._get_gcs_uri_prefix_from_file(input_file_id)
-            ),
+            gcsDestination=GcsDestination(outputUriPrefix=cls._get_gcs_uri_prefix_from_file(input_file_id)),
         )
         return VertexAIBatchPredictionJob(
             inputConfig=input_config,
@@ -51,39 +47,30 @@ class VertexAIBatchTransformation:
     ) -> LiteLLMBatch:
         return LiteLLMBatch(
             id=cls._get_batch_id_from_vertex_ai_batch_response(response),
-            completion_window="24hrs",
-            created_at=_convert_vertex_datetime_to_openai_datetime(
-                vertex_datetime=response.get("createTime", "")
-            ),
+            completion_window="24h",
+            created_at=_convert_vertex_datetime_to_openai_datetime(vertex_datetime=response.get("createTime", "")),
             endpoint="",
-            input_file_id=cls._get_input_file_id_from_vertex_ai_batch_response(
-                response
-            ),
+            input_file_id=cls._get_input_file_id_from_vertex_ai_batch_response(response),
             object="batch",
             status=cls._get_batch_job_status_from_vertex_ai_batch_response(response),
             error_file_id=None,  # Vertex AI doesn't seem to have a direct equivalent
-            output_file_id=cls._get_output_file_id_from_vertex_ai_batch_response(
-                response
-            ),
+            output_file_id=cls._get_output_file_id_from_vertex_ai_batch_response(response),
         )
 
     @classmethod
     def transform_vertex_ai_batch_list_response_to_openai_list_response(
-        cls, response: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        cls, response: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         Transforms Vertex AI batch list response into OpenAI-compatible list response.
         """
 
-        batch_jobs = response.get("batchPredictionJobs", []) or []
-        data = [
-            cls.transform_vertex_ai_batch_response_to_openai_batch_response(job)
-            for job in batch_jobs
-        ]
+        batch_jobs: Final = response.get("batchPredictionJobs", []) or []
+        data: Final = [cls.transform_vertex_ai_batch_response_to_openai_batch_response(job) for job in batch_jobs]
 
-        first_id = data[0].id if len(data) > 0 else None
-        last_id = data[-1].id if len(data) > 0 else None
-        next_page_token = response.get("nextPageToken")
+        first_id: Final = data[0].id if len(data) > 0 else None
+        last_id: Final = data[-1].id if len(data) > 0 else None
+        next_page_token: Final = response.get("nextPageToken")
 
         return {
             "object": "list",
@@ -95,70 +82,63 @@ class VertexAIBatchTransformation:
         }
 
     @classmethod
-    def _get_batch_id_from_vertex_ai_batch_response(
-        cls, response: VertexBatchPredictionResponse
-    ) -> str:
+    def _get_batch_id_from_vertex_ai_batch_response(cls, response: VertexBatchPredictionResponse) -> str:
         """
         Gets the batch id from the Vertex AI Batch response safely
 
         vertex response: `projects/510528649030/locations/us-central1/batchPredictionJobs/3814889423749775360`
         returns: `3814889423749775360`
         """
-        _name = response.get("name", "")
+        _name: Final = response.get("name", "")
         if not _name:
             return ""
 
         # Split by '/' and get the last part if it exists
-        parts = _name.split("/")
+        parts: Final = _name.split("/")
         return parts[-1] if parts else _name
 
     @classmethod
-    def _get_input_file_id_from_vertex_ai_batch_response(
-        cls, response: VertexBatchPredictionResponse
-    ) -> str:
+    def _get_input_file_id_from_vertex_ai_batch_response(cls, response: VertexBatchPredictionResponse) -> str:
         """
         Gets the input file id from the Vertex AI Batch response
         """
-        input_file_id: str = ""
-        input_config = response.get("inputConfig")
+        input_file_id: Final[str] = ""
+        input_config: Final = response.get("inputConfig")
         if input_config is None:
             return input_file_id
 
-        gcs_source = input_config.get("gcsSource")
+        gcs_source: Final = input_config.get("gcsSource")
         if gcs_source is None:
             return input_file_id
 
-        uris = gcs_source.get("uris", "")
+        uris: Final = gcs_source.get("uris", "")
         if len(uris) == 0:
             return input_file_id
 
         return uris[0]
 
     @classmethod
-    def _get_output_file_id_from_vertex_ai_batch_response(
-        cls, response: VertexBatchPredictionResponse
-    ) -> str:
+    def _get_output_file_id_from_vertex_ai_batch_response(cls, response: VertexBatchPredictionResponse) -> str:
         """
         Gets the output file id from the Vertex AI Batch response
         """
 
-        output_file_id: str = response.get("outputInfo", OutputInfo()).get(
-            "gcsOutputDirectory", ""
-        )
+        output_info: Final = response.get("outputInfo") or OutputInfo()
+        output_file_id: str = output_info.get("gcsOutputDirectory", "")
         if output_file_id:
             output_file_id = output_file_id.rstrip("/") + "/predictions.jsonl"
         if output_file_id and output_file_id != "/predictions.jsonl":
             return output_file_id
 
-        output_config = response.get("outputConfig")
+        output_config: Final = response.get("outputConfig")
         if output_config is None:
             return output_file_id
 
-        gcs_destination = output_config.get("gcsDestination")
+        gcs_destination: Final = output_config.get("gcsDestination")
         if gcs_destination is None:
             return output_file_id
 
-        output_uri_prefix = gcs_destination.get("outputUriPrefix", "")
+        output_uri_prefix: Final = gcs_destination.get("outputUriPrefix", "")
         if output_uri_prefix.endswith("/predictions.jsonl"):
             return output_uri_prefix
         return output_uri_prefix.rstrip("/") + "/predictions.jsonl"
@@ -172,7 +152,7 @@ class VertexAIBatchTransformation:
 
         ref: https://cloud.google.com/vertex-ai/docs/reference/rest/v1/JobState
         """
-        state_mapping: Dict[str, BatchJobStatus] = {
+        state_mapping: Final[dict[str, BatchJobStatus]] = {
             "JOB_STATE_UNSPECIFIED": "failed",
             "JOB_STATE_QUEUED": "validating",
             "JOB_STATE_PENDING": "validating",
@@ -187,7 +167,7 @@ class VertexAIBatchTransformation:
             "JOB_STATE_PARTIALLY_SUCCEEDED": "completed",
         }
 
-        vertex_state = response.get("state", "JOB_STATE_UNSPECIFIED")
+        vertex_state: Final = response.get("state", "JOB_STATE_UNSPECIFIED")
         return state_mapping[vertex_state]
 
     @classmethod
@@ -203,7 +183,7 @@ class VertexAIBatchTransformation:
         returns: "gs://litellm-testing-bucket/batches"
         """
         # Split the path and remove the filename
-        path_parts = input_file_id.rsplit("/", 1)
+        path_parts: Final = input_file_id.rsplit("/", 1)
         return path_parts[0]
 
     @classmethod
@@ -222,9 +202,25 @@ class VertexAIBatchTransformation:
         """
         from urllib.parse import unquote
 
-        decoded_uri = unquote(gcs_file_uri)
+        decoded_uri: Final = unquote(gcs_file_uri)
 
-        model_path = decoded_uri.split("publishers/")[1]
-        parts = model_path.split("/")
-        model = f"publishers/{'/'.join(parts[:3])}"
+        model_path: Final = decoded_uri.split("publishers/")[1]
+        parts: Final = model_path.split("/")
+        model: Final = f"publishers/{'/'.join(parts[:3])}"
         return model
+
+    @classmethod
+    def is_unmanaged_gcs_batch_input_file_id(cls, input_file_id: str | None) -> bool:
+        """
+        Returns True if `input_file_id` is a raw gs:// Vertex batch input file (i.e. not a
+        LiteLLM-managed unified file id) with a `publishers/` model path that
+        `_get_model_from_gcs_file` can parse.
+        """
+        return input_file_id is not None and input_file_id.startswith("gs://") and "publishers/" in input_file_id
+
+    @classmethod
+    def get_bare_model_name_from_gcs_file(cls, gcs_file_uri: str) -> str:
+        """
+        Extracts the bare model name (e.g. "gemini-1.5-flash-001") from a gcs file uri.
+        """
+        return cls._get_model_from_gcs_file(gcs_file_uri).rsplit("/", 1)[-1]

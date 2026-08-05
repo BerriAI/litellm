@@ -216,7 +216,44 @@ lives in [`plumbing/`](./plumbing):
   `TracerProvider` so one logger serves many tenants. The cache is a bounded LRU
   that flushes + shuts down evicted providers, since the key derives from
   request-supplied credentials and must not grow (or leak threads) without limit.
-- [`metrics.py`](./plumbing/metrics.py) — GenAI client metric instruments.
+- [`metrics.py`](./plumbing/metrics.py) — GenAI client metric instruments. The
+  six `gen_ai.client.*` histograms are recorded through the meter resolved by
+  `providers.resolve_meter_provider`: an injected provider wins (tests/DI),
+  otherwise the operator's globally configured `MeterProvider` is reused so its
+  readers/exporters receive them alongside the server metrics, and one is built
+  and registered as the global only when none is set (mirroring how V2 owns trace
+  export). A **failed** call records `gen_ai.client.operation.duration` too,
+  carrying the semconv `error.type` (the mapped provider exception's class name),
+  so the histogram covers the whole traffic and failure-rate panels are buildable;
+  the other five instruments describe a completed generation and are skipped
+  rather than filled with a fabricated zero. `error.type` is stamped after the
+  cardinality filter, so an `otel.attributes` list cannot merge the failure series
+  back into the success series. A proxy-gate rejection (auth / rate limit) records
+  nothing, for the same reason it gets no span: no upstream call happened.
+  Both paths cap their attributes at `METRIC_ATTRIBUTE_CEILING` before the
+  operator's own `otel.attributes` filter runs, so the filter can narrow the set
+  but never widen it. The ceiling is what keeps series count bounded by the
+  deployment's own key/team/user/deployment count instead of by its traffic: a
+  label value that moves per request mints a time series per request, which both
+  bills per request on a hosted backend and leaves a histogram that cannot be
+  aggregated. So client-supplied and per-request metadata (`requester_metadata`,
+  `spend_logs_metadata`, `user_api_key_end_user_id`, `requester_ip_address`) is
+  metric-ineligible and stays on the span, where cardinality is free, and the
+  `hidden_params` label carries only `model_id`, the deployment identity a
+  per-deployment panel joins on. `api_base` is excluded despite naming the same
+  deployment, because it is a documented per-call parameter and so is caller-chosen
+  in SDK use. Because the shared validator accepts every span attribute name, a
+  filter that names a metric-ineligible one logs a warning once when the filter
+  resolves rather than silently emitting nothing for it.
+- [`events.py`](./plumbing/events.py) — GenAI client events. Gated on
+  `enable_events` (`LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS`), a failed LLM call
+  records the semconv `gen_ai.client.operation.exception` log event at severity
+  WARN, carrying `exception.type` / `exception.message` / `exception.stacktrace`
+  and correlated to the failed span through the trace and span ids. The
+  `LoggerProvider` is resolved like the meter provider, except that an explicit
+  `NoOpLoggerProvider` global is an operator opt-out that builds no recorder at
+  all. The deprecated `error.*` span attributes and the `exception` span event
+  are still stamped by the emitter for backwards compatibility.
 
 ### Adapter
 
@@ -252,7 +289,10 @@ lives in [`plumbing/`](./plumbing):
 
 - **A new attribute vocabulary for a backend**: add a mapper in `mappers/`
   (a class with a `map(data) -> AttributeMap` method, typically built from
-  `key -> extractor` tables) and register it in `mappers/__init__._MAPPER_BY_NAME`.
+  `key -> extractor` tables) and register it in `mappers/__init__._PLAIN_MAPPERS`.
+  If it spells declared tool definitions out per index, register it in
+  `_TOOL_DEFINITION_MAPPERS` instead and take the shared attribute budget in its
+  constructor, so the family stays bounded span-wide rather than per vocabulary.
 - **A new integration**: add a preset in `presets/` that returns an
   `OpenTelemetryV2Config`, and register it in `presets/__init__.PRESET_BY_CALLBACK`.
   If it supports dynamic credentials, add a header builder to

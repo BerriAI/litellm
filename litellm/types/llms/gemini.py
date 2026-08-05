@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Final, List, Literal, Optional
 
 from typing_extensions import Required, TypedDict
 
@@ -103,9 +103,7 @@ class BidiGenerateContentRealtimeInput(TypedDict, total=False):
 StartOfSpeechSensitivityEnum = Literal[
     "START_SENSITIVITY_UNSPECIFIED", "START_SENSITIVITY_HIGH", "START_SENSITIVITY_LOW"
 ]
-EndOfSpeechSensitivityEnum = Literal[
-    "END_SENSITIVITY_UNSPECIFIED", "END_SENSITIVITY_HIGH", "END_SENSITIVITY_LOW"
-]
+EndOfSpeechSensitivityEnum = Literal["END_SENSITIVITY_UNSPECIFIED", "END_SENSITIVITY_HIGH", "END_SENSITIVITY_LOW"]
 
 
 class AutomaticActivityDetection(TypedDict, total=False):

@@ -18,7 +18,7 @@ import asyncio
 import os
 import threading
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -219,7 +219,7 @@ async def test_run_reconnect_cycle_uses_heavy_path_when_engine_dead(
         await engine_client._run_reconnect_cycle(timeout_seconds=5.0)
 
     engine_client.db.recreate_prisma_client.assert_awaited_once_with(
-        "postgresql://test"
+        "postgresql://test", expected_generation=ANY
     )
     engine_client._start_engine_watcher.assert_awaited_once()
     engine_client.db.connect.assert_not_awaited()
@@ -246,7 +246,7 @@ async def test_run_reconnect_cycle_uses_heavy_path_when_confirmed_dead(
         await engine_client._run_reconnect_cycle(timeout_seconds=5.0)
 
     engine_client.db.recreate_prisma_client.assert_awaited_once_with(
-        "postgresql://test"
+        "postgresql://test", expected_generation=ANY
     )
     engine_client._start_engine_watcher.assert_awaited_once()
     engine_client.db.connect.assert_not_awaited()
@@ -257,12 +257,16 @@ async def test_run_reconnect_cycle_uses_heavy_path_when_confirmed_dead(
 async def test_run_reconnect_cycle_uses_direct_path_when_engine_alive(
     engine_client,
 ) -> None:
-    """Direct reconnect (engine alive) calls recreate_prisma_client + SELECT 1.
+    """Direct reconnect (engine alive) probes the writer first and skips the
+    recreate when the probe is healthy.
 
-    The old "lightweight" path called `disconnect()` + `connect()`, which
-    blocks the event loop on the sync `process.wait()` inside aclose().
-    The fix routes both engine-alive and engine-dead paths through
-    `recreate_prisma_client`, which non-blockingly kills the old engine.
+    The engine-alive path now runs a SELECT 1 probe before recreating. A
+    healthy probe means the connection is fine — e.g. an IAM token refresh
+    already replaced the engine (issue #29176) — so recreating would kill a
+    working engine. Recreate happens only when the probe fails (covered in
+    test_prisma_client_reconnect.py::
+    test_run_reconnect_cycle_direct_path_recreates_when_probe_fails). Either
+    way the blocking `disconnect()` is never called.
     """
     engine_client._engine_pid = 1234
     engine_client._start_engine_watcher = AsyncMock()
@@ -273,29 +277,28 @@ async def test_run_reconnect_cycle_uses_direct_path_when_engine_alive(
     ):
         await engine_client._run_reconnect_cycle(timeout_seconds=5.0)
 
-    engine_client.db.recreate_prisma_client.assert_awaited_once_with(
-        "postgresql://test"
-    )
+    engine_client.db.recreate_prisma_client.assert_not_awaited()
     engine_client.db.query_raw.assert_awaited_once_with("SELECT 1")
     engine_client.db.disconnect.assert_not_awaited()
+    engine_client._start_engine_watcher.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_run_reconnect_cycle_uses_direct_path_when_pid_unknown(
     engine_client,
 ) -> None:
-    """When the engine PID is not tracked, direct reconnect still runs."""
+    """When the engine PID is not tracked, direct reconnect still runs and a
+    healthy probe likewise skips the recreate."""
     engine_client._engine_pid = 0
     engine_client._start_engine_watcher = AsyncMock()
 
     with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
         await engine_client._run_reconnect_cycle(timeout_seconds=5.0)
 
-    engine_client.db.recreate_prisma_client.assert_awaited_once_with(
-        "postgresql://test"
-    )
+    engine_client.db.recreate_prisma_client.assert_not_awaited()
     engine_client.db.query_raw.assert_awaited_once_with("SELECT 1")
     engine_client.db.disconnect.assert_not_awaited()
+    engine_client._start_engine_watcher.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -497,7 +500,10 @@ async def test_escalation_after_consecutive_direct_reconnect_failures(engine_cli
     engine_client._db_reconnect_cooldown_seconds = 0  # disable cooldown for test
     engine_client._start_engine_watcher = AsyncMock(return_value=None)
 
-    # Make direct reconnect fail every time
+    # Make the direct path's writer probe fail so it proceeds to recreate
+    # (a healthy probe would correctly skip recreate), then make recreate
+    # fail every time.
+    engine_client.db.query_raw = AsyncMock(side_effect=Exception("probe failed"))
     engine_client.db.recreate_prisma_client = AsyncMock(
         side_effect=Exception("recreate failed")
     )

@@ -1452,6 +1452,157 @@ class TestContextCachingEndpoints:
         # Restart the patcher so teardown_method can stop it cleanly
         self._token_check_patcher.start()
 
+    def _model_turn_final_messages(self, final_cached_role):
+        tool_call = {
+            "id": "call_abc123",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"location": "Boston"}'},
+        }
+        cached_tail = {
+            "assistant": [],
+            "tool": [
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_abc123",
+                    "content": "72F and sunny",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "system": [
+                {
+                    "role": "system",
+                    "content": "Tool results are authoritative.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }[final_cached_role]
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Use the weather tool for every answer.",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [tool_call],
+                "cache_control": {"type": "ephemeral"},
+            },
+            *cached_tail,
+            {"role": "user", "content": "What is the weather in Boston?"},
+        ]
+
+    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool", "system"])
+    def test_check_and_create_cache_skips_when_cached_block_ends_on_model_turn(
+        self, final_cached_role
+    ):
+        """The cachedContents API rejects contents ending on an assistant or tool turn
+        with HTTP 400 "Requests ending with a model turn are not supported", so the
+        request must proceed uncached instead of failing.
+        """
+        all_messages = self._model_turn_final_messages(final_cached_role)
+        optional_params = self.sample_optional_params.copy()
+
+        result = self.context_caching.check_and_create_cache(
+            messages=all_messages,
+            optional_params=optional_params,
+            api_key="test_key",
+            api_base=None,
+            model="gemini-3.6-flash",
+            client=self.mock_client,
+            timeout=30.0,
+            logging_obj=self.mock_logging,
+            cached_content=None,
+            custom_llm_provider="vertex_ai",
+            vertex_project="test_project",
+            vertex_location="us-central1",
+            vertex_auth_header="test_token",
+        )
+
+        messages, returned_params, returned_cache = result
+        assert messages == all_messages
+        assert returned_cache is None
+        assert "tools" in returned_params
+        self.mock_client.get.assert_not_called()
+        self.mock_client.post.assert_not_called()
+
+    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool", "system"])
+    @pytest.mark.asyncio
+    async def test_async_check_and_create_cache_skips_when_cached_block_ends_on_model_turn(
+        self, final_cached_role
+    ):
+        """Async variant: an unsupported terminal turn skips caching instead of failing."""
+        all_messages = self._model_turn_final_messages(final_cached_role)
+        optional_params = self.sample_optional_params.copy()
+
+        result = await self.context_caching.async_check_and_create_cache(
+            messages=all_messages,
+            optional_params=optional_params,
+            api_key="test_key",
+            api_base=None,
+            model="gemini-3.6-flash",
+            client=self.mock_async_client,
+            timeout=30.0,
+            logging_obj=self.mock_logging,
+            cached_content=None,
+            custom_llm_provider="vertex_ai",
+            vertex_project="test_project",
+            vertex_location="us-central1",
+            vertex_auth_header="test_token",
+        )
+
+        messages, returned_params, returned_cache = result
+        assert messages == all_messages
+        assert returned_cache is None
+        assert "tools" in returned_params
+        self.mock_async_client.get.assert_not_called()
+        self.mock_async_client.post.assert_not_called()
+
+
+def test_cached_messages_end_on_supported_turn():
+    from litellm.llms.vertex_ai.context_caching.transformation import (
+        cached_messages_end_on_supported_turn,
+    )
+
+    assert (
+        cached_messages_end_on_supported_turn(
+            [{"role": "assistant", "content": "hi"}, {"role": "user", "content": "hello"}]
+        )
+        is True
+    )
+    assert cached_messages_end_on_supported_turn([{"role": "system", "content": "be brief"}]) is True
+    assert cached_messages_end_on_supported_turn([{"role": "assistant", "content": "hi"}]) is False
+    assert (
+        cached_messages_end_on_supported_turn(
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi"},
+                {"role": "system", "content": "be brief"},
+            ]
+        )
+        is False
+    )
+    assert (
+        cached_messages_end_on_supported_turn(
+            [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hello"}]
+        )
+        is True
+    )
+    assert (
+        cached_messages_end_on_supported_turn([{"role": "tool", "tool_call_id": "x", "content": "y"}])
+        is False
+    )
+    assert (
+        cached_messages_end_on_supported_turn([{"role": "function", "name": "f", "content": "y"}])
+        is False
+    )
+    assert cached_messages_end_on_supported_turn([]) is False
+
 
 class TestCheckCachePagination:
     """Test pagination logic in check_cache and async_check_cache methods."""
@@ -1917,3 +2068,57 @@ class TestVertexAIGlobalLocation:
 
         assert "generativelanguage.googleapis.com" in url
         assert "cachedContents" in url
+
+
+class TestContextCachingMultiRegionUrls:
+    """Regression coverage for #29571: multi-region vertex_location values
+    (`eu`, `us`) must resolve to the REP host (`aiplatform.{geo}.rep.googleapis.com`)
+    on the cachedContents endpoint, matching the inference path (already
+    fixed in #27293). Previously the URL was hardcoded to
+    `{location}-aiplatform.googleapis.com`, which doesn't exist for
+    multi-region locations and 404'd."""
+
+    def setup_method(self):
+        self.caching = ContextCachingEndpoints()
+
+    @pytest.mark.parametrize("location", ["eu", "us"])
+    def test_vertex_ai_multi_region_uses_rep_host(self, location):
+        _, url = self.caching._get_token_and_url_context_caching(
+            gemini_api_key=None,
+            custom_llm_provider="vertex_ai",
+            api_base=None,
+            vertex_project="my-project",
+            vertex_location=location,
+            vertex_auth_header="Bearer token",
+        )
+
+        assert url.startswith(f"https://aiplatform.{location}.rep.googleapis.com/")
+        assert f"/locations/{location}/cachedContents" in url
+        # Old broken host must no longer appear.
+        assert f"{location}-aiplatform.googleapis.com" not in url
+
+    def test_vertex_ai_regional_still_uses_regional_host(self):
+        _, url = self.caching._get_token_and_url_context_caching(
+            gemini_api_key=None,
+            custom_llm_provider="vertex_ai",
+            api_base=None,
+            vertex_project="my-project",
+            vertex_location="us-central1",
+            vertex_auth_header="Bearer token",
+        )
+
+        assert url.startswith("https://us-central1-aiplatform.googleapis.com/")
+        assert "/locations/us-central1/cachedContents" in url
+
+    def test_vertex_ai_global_still_uses_global_host(self):
+        _, url = self.caching._get_token_and_url_context_caching(
+            gemini_api_key=None,
+            custom_llm_provider="vertex_ai",
+            api_base=None,
+            vertex_project="my-project",
+            vertex_location="global",
+            vertex_auth_header="Bearer token",
+        )
+
+        assert url.startswith("https://aiplatform.googleapis.com/")
+        assert "/locations/global/cachedContents" in url

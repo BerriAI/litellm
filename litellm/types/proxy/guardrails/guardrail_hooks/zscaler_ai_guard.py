@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Final, Optional
 
 from pydantic import Field, model_validator
 
@@ -88,7 +88,7 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
         import os
 
         # Resolve actual api_base value (including env fallback)
-        api_base = self.api_base or os.getenv(
+        api_base: Final = self.api_base or os.getenv(
             "ZSCALER_AI_GUARD_URL",
             "https://api.us1.zseclipse.net/v1/detection/execute-policy",
         )
@@ -96,21 +96,19 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
         # Resolve actual policy_id value
         policy_id = self.policy_id
         if policy_id is None:
-            env_policy = os.getenv("ZSCALER_AI_GUARD_POLICY_ID")
+            env_policy: Final = os.getenv("ZSCALER_AI_GUARD_POLICY_ID")
             if env_policy:
                 try:
                     policy_id = int(env_policy)
                 except ValueError:
                     verbose_proxy_logger.warning(
-                        f"ZSCALER_AI_GUARD_POLICY_ID env var is not a valid integer: {env_policy}"
+                        "ZSCALER_AI_GUARD_POLICY_ID env var is not a valid integer: %s", env_policy
                     )
 
         # Check for configuration issues
         assert api_base is not None  # always set via env default above
-        is_resolve_policy = api_base.endswith("/resolve-and-execute-policy")
-        is_execute_policy = (
-            api_base.endswith("/execute-policy") and not is_resolve_policy
-        )
+        is_resolve_policy: Final = api_base.endswith("/resolve-and-execute-policy")
+        is_execute_policy: Final = api_base.endswith("/execute-policy") and not is_resolve_policy
 
         # Scenario A: execute-policy without policy_id
         if is_execute_policy and (policy_id is None or policy_id < 1):

@@ -213,6 +213,145 @@ def test_save_worker_config_invalid_no_kwargs_yields_empty(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# _redact_worker_config_for_logging (LIT-4152)
+# ---------------------------------------------------------------------------
+
+
+_LIT4152_SECRETS = (
+    "sk-lit4152-regression-master-key-abcdef1234567890",
+    "leak_password_9090",
+    "sk-lit4152-provider-api-key-abcdef",
+    "postgresql://leak_user:leak_password_9090@leak-host.internal:5432/leak_db",
+)
+
+
+def _lit4152_worker_config_dict():
+    return {
+        "model": "openai/gpt-4o-mini",
+        "config": "/tmp/c.yaml",
+        "master_key": _LIT4152_SECRETS[0],
+        "database_url": _LIT4152_SECRETS[3],
+        "api_key": _LIT4152_SECRETS[2],
+        "telemetry": True,
+    }
+
+
+def test__redact_worker_config_for_logging_dict_masks_all_secret_shapes():
+    """LIT-4152 regression: dict-form worker_config must not embed any raw
+    secret. Covers the segment-matched fields (`master_key`, `api_key`) and the
+    URL-with-credentials field (`database_url`), which the segment masker
+    misses because neither segment matches its sensitive-pattern set.
+    """
+    from litellm.proxy.proxy_server import _redact_worker_config_for_logging
+
+    redacted = _redact_worker_config_for_logging(_lit4152_worker_config_dict())
+    rendered = repr(redacted)
+    for secret in _LIT4152_SECRETS:
+        assert secret not in rendered, f"leak: {secret} in {rendered!r}"
+    assert isinstance(redacted, dict)
+    assert redacted["model"] == "openai/gpt-4o-mini"
+    assert redacted["telemetry"] is True
+
+
+def test__redact_worker_config_for_logging_json_string_round_trips_masked():
+    """Docker/K8s deployments hand the proxy a JSON string via ``WORKER_CONFIG``.
+    Confirm the string path also masks and that the returned value re-parses
+    into a dict with the sensitive fields masked.
+    """
+    from litellm.proxy.proxy_server import _redact_worker_config_for_logging
+
+    payload = json.dumps(_lit4152_worker_config_dict())
+    redacted = _redact_worker_config_for_logging(payload)
+    assert isinstance(redacted, str)
+    for secret in _LIT4152_SECRETS:
+        assert secret not in redacted, f"leak: {secret} in {redacted!r}"
+    parsed = json.loads(redacted)
+    assert parsed["model"] == "openai/gpt-4o-mini"
+
+
+def test__redact_worker_config_for_logging_passthrough_for_none_and_non_json_string():
+    """Non-dict, non-JSON-parseable string is passed through verbatim (nothing
+    to mask) and ``None`` returns ``None``.
+    """
+    from litellm.proxy.proxy_server import _redact_worker_config_for_logging
+
+    assert _redact_worker_config_for_logging(None) is None
+    assert _redact_worker_config_for_logging("/tmp/some_config.yaml") == "/tmp/some_config.yaml"
+
+
+def test__redact_worker_config_for_logging_masks_non_string_url_webhook_values():
+    """The URL/webhook fields the segment masker cannot catch by key name
+    (``alert_to_webhook_url``, ``pass_through_endpoints``,
+    ``database_extra_connection_params``) can hold non-string shapes:
+    ``alert_to_webhook_url`` is typed as ``Optional[Dict]`` and can nest
+    secret query params under keys the segment masker also misses. Confirm
+    the whole value is replaced regardless of shape so a nested webhook or
+    Bearer token under a non-segment-matched key does not slip through.
+    """
+    from litellm.proxy.proxy_server import _redact_worker_config_for_logging
+
+    nested_webhook_secret = "https://hooks.slack.com/services/T0/B0/nested-webhook-secret-xyz"
+    data = {
+        "master_key": "sk-should-be-masked",
+        "alert_to_webhook_url": {"budget_alerts": nested_webhook_secret},
+        "pass_through_endpoints": [
+            {
+                "path": "/upstream",
+                "target": "https://api.provider.com",
+                "headers": {"Authorization": "Bearer nested-token-should-be-gone"},
+            }
+        ],
+        "database_extra_connection_params": {"password": "extra-db-password-abc"},
+    }
+    redacted = _redact_worker_config_for_logging(data)
+    rendered = repr(redacted)
+    for secret in (
+        "sk-should-be-masked",
+        nested_webhook_secret,
+        "nested-token-should-be-gone",
+        "extra-db-password-abc",
+    ):
+        assert secret not in rendered, f"leak: {secret} in {rendered!r}"
+
+
+def test__redact_worker_config_for_logging_masks_nested_secret_fields():
+    """LIT-4152 nested regression: the URL/webhook credential fields the segment
+    masker cannot catch by name (``database_url``,
+    ``database_extra_connection_params``, ``pass_through_endpoints``,
+    ``alert_to_webhook_url``) must be redacted at any depth, not just the top
+    level. A worker_config that nests ``general_settings`` under a parent key
+    must not leak a nested ``database_url`` or webhook secret; the earlier
+    top-level-only redaction would have passed these through raw.
+    """
+    from litellm.proxy.proxy_server import _redact_worker_config_for_logging
+
+    nested_db_url = "postgresql://nested_user:nested_pw_4152@nested-host:5432/db"
+    nested_webhook = "https://hooks.slack.com/services/T0/B0/nested-4152-webhook"
+    nested_extra_pw = "nested-extra-conn-pw-4152"
+    nested_bearer = "Bearer nested-passthrough-token-4152"
+    data = {
+        "config": {
+            "general_settings": {
+                "database_url": nested_db_url,
+                "database_extra_connection_params": {"password": nested_extra_pw},
+                "alert_to_webhook_url": {"budget_alerts": nested_webhook},
+                "pass_through_endpoints": [
+                    {"path": "/up", "headers": {"Authorization": nested_bearer}}
+                ],
+            }
+        }
+    }
+    redacted = _redact_worker_config_for_logging(data)
+    rendered = repr(redacted)
+    for secret in (nested_db_url, nested_webhook, nested_extra_pw, nested_bearer):
+        assert secret not in rendered, f"nested leak: {secret} in {rendered!r}"
+
+    inner = redacted["config"]["general_settings"]
+    assert inner["database_url"] == "REDACTED"
+    assert inner["pass_through_endpoints"] == "REDACTED"
+
+
+# ---------------------------------------------------------------------------
 # initialize
 # ---------------------------------------------------------------------------
 
@@ -504,3 +643,28 @@ async def test_proxy_startup_event_invalid_missing_app_arg_raises():
         # no arguments — the decorator preserves the missing-arg TypeError.
         async with proxy_startup_event():  # type: ignore[call-arg]
             pass
+
+
+def test_otel_global_provider_published_after_callback_init():
+    """The OTel V2 global-provider publish must run after callback
+    initialization in ``proxy_startup_event``.
+
+    Regression for the orphan span: a preset (arize, langfuse, …) builds its
+    single folded logger during ``_initialize_startup_logging``. Publishing the
+    global ``TracerProvider`` before that ran found no logger and built a second
+    generic one whose provider became the global, so the FastAPI server span and
+    the preset's gen-ai spans exported through different providers and the LLM
+    span was orphaned. The publish (``publish_global_otel_v2_provider``) must
+    therefore appear after ``_initialize_startup_logging`` in the lifespan source.
+    """
+    wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
+    source = inspect.getsource(wrapped)
+    init_pos = source.find("_initialize_startup_logging(")
+    publish_pos = source.find("publish_global_otel_v2_provider(")
+    assert init_pos != -1, "callback init call not found in proxy_startup_event"
+    assert publish_pos != -1, "OTEL global publish not found in proxy_startup_event"
+    assert init_pos < publish_pos, (
+        "OTEL global provider is published before callbacks are initialized; a "
+        "preset logger will not exist yet and a second generic logger will own "
+        "the global provider, orphaning gen-ai spans"
+    )

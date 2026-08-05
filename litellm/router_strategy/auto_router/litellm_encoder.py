@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from pydantic import ConfigDict
 from semantic_router.encoders import DenseEncoder
@@ -18,11 +18,7 @@ def litellm_to_list(embeds: litellm.EmbeddingResponse) -> list[list[float]]:
     :param embeds: The LiteLLM embedding response.
     :return: A list of embeddings.
     """
-    if (
-        not embeds
-        or not isinstance(embeds, litellm.EmbeddingResponse)
-        or not embeds.data
-    ):
+    if not embeds or not isinstance(embeds, litellm.EmbeddingResponse) or not embeds.data:
         raise ValueError("No embeddings found in LiteLLM embedding response.")
     return [x["embedding"] for x in embeds.data]
 
@@ -53,7 +49,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         self,
         litellm_router_instance: "Router",
         model_name: str,
-        score_threshold: Union[float, None] = None,
+        score_threshold: float | None = None,
     ):
         """Initialize the LiteLLMEncoder.
 
@@ -90,50 +86,34 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         if self.litellm_router_instance is None:
             raise ValueError("litellm_router_instance is not set")
         try:
-            embeds = self.litellm_router_instance.embedding(
-                input=docs, model=self.model_name, **kwargs
-            )
+            embeds: Final = self.litellm_router_instance.embedding(input=docs, model=self.model_name, **kwargs)
             return litellm_to_list(embeds)
         except Exception as e:
-            raise ValueError(
-                f"{self.type.capitalize()} API call failed. Error: {e}"
-            ) from e
+            raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
 
     def encode_documents(self, docs: list[str], **kwargs) -> list[list[float]]:
         if self.litellm_router_instance is None:
             raise ValueError("litellm_router_instance is not set")
         try:
-            embeds = self.litellm_router_instance.embedding(
-                input=docs, model=self.model_name, **kwargs
-            )
+            embeds: Final = self.litellm_router_instance.embedding(input=docs, model=self.model_name, **kwargs)
             return litellm_to_list(embeds)
         except Exception as e:
-            raise ValueError(
-                f"{self.type.capitalize()} API call failed. Error: {e}"
-            ) from e
+            raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
 
     async def aencode_queries(self, docs: list[str], **kwargs) -> list[list[float]]:
         if self.litellm_router_instance is None:
             raise ValueError("litellm_router_instance is not set")
         try:
-            embeds = await self.litellm_router_instance.aembedding(
-                input=docs, model=self.model_name, **kwargs
-            )
+            embeds: Final = await self.litellm_router_instance.aembedding(input=docs, model=self.model_name, **kwargs)
             return litellm_to_list(embeds)
         except Exception as e:
-            raise ValueError(
-                f"{self.type.capitalize()} API call failed. Error: {e}"
-            ) from e
+            raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e
 
     async def aencode_documents(self, docs: list[str], **kwargs) -> list[list[float]]:
         if self.litellm_router_instance is None:
             raise ValueError("litellm_router_instance is not set")
         try:
-            embeds = await self.litellm_router_instance.aembedding(
-                input=docs, model=self.model_name, **kwargs
-            )
+            embeds: Final = await self.litellm_router_instance.aembedding(input=docs, model=self.model_name, **kwargs)
             return litellm_to_list(embeds)
         except Exception as e:
-            raise ValueError(
-                f"{self.type.capitalize()} API call failed. Error: {e}"
-            ) from e
+            raise ValueError(f"{self.type.capitalize()} API call failed. Error: {e}") from e

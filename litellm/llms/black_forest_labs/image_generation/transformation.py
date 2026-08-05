@@ -8,7 +8,7 @@ API Reference: https://docs.bfl.ai/
 """
 
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -50,9 +50,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
     This class only handles data transformation.
     """
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Return list of OpenAI params supported by Black Forest Labs.
 
@@ -85,7 +83,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
 
         BFL-specific params are passed through directly.
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
         for k, v in non_default_params.items():
             if k in optional_params:
@@ -117,7 +115,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
     def _map_size_param(self, size: str, optional_params: dict) -> None:
         """Map OpenAI size parameter to BFL width/height."""
         # Common size mappings
-        size_mapping = {
+        size_mapping: Final = {
             "1024x1024": (1024, 1024),
             "1792x1024": (1792, 1024),
             "1024x1792": (1024, 1792),
@@ -136,29 +134,25 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
                 optional_params["width"] = width
                 optional_params["height"] = height
             except ValueError:
-                raise ValueError(
-                    f"Invalid size format: '{size}'. Expected format 'WIDTHxHEIGHT' (e.g., '1024x1024')."
-                )
+                raise ValueError(f"Invalid size format: '{size}'. Expected format 'WIDTHxHEIGHT' (e.g., '1024x1024').")
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and set up headers for Black Forest Labs.
 
         BFL uses x-key header for authentication.
         """
-        final_api_key: Optional[str] = (
-            api_key
-            or get_secret_str("BFL_API_KEY")
-            or get_secret_str("BLACK_FOREST_LABS_API_KEY")
+        final_api_key: Final[str | None] = (
+            api_key or get_secret_str("BFL_API_KEY") or get_secret_str("BLACK_FOREST_LABS_API_KEY")
         )
 
         if not final_api_key:
@@ -193,12 +187,12 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the Black Forest Labs API request.
@@ -206,7 +200,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         base_url: str = api_base or get_secret_str("BFL_API_BASE") or DEFAULT_API_BASE
         base_url = base_url.rstrip("/")
 
-        endpoint = self._get_model_endpoint(model)
+        endpoint: Final = self._get_model_endpoint(model)
         return f"{base_url}{endpoint}"
 
     def transform_image_generation_request(
@@ -223,12 +217,12 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         https://docs.bfl.ai/flux_models/flux_1_1_pro
         """
         # Build request body with prompt
-        request_body: Dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "prompt": prompt,
         }
 
         # BFL-specific params that can be passed through
-        bfl_params = [
+        bfl_params: Final = [
             "width",
             "height",
             "aspect_ratio",
@@ -263,8 +257,8 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform Black Forest Labs response to OpenAI-compatible ImageResponse.
@@ -273,14 +267,14 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         The response contains: {"status": "Ready", "result": {"sample": "https://..."}}
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=raw_response.status_code,
                 message=f"Error parsing BFL response: {e}",
             )
 
-        result = response_data.get("result", {})
+        result: Final = response_data.get("result", {})
 
         if not model_response.data:
             model_response.data = []
@@ -306,7 +300,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         return model_response
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+        self, error_message: str, status_code: int, headers: dict | httpx.Headers
     ) -> BlackForestLabsError:
         """Return the appropriate error class for Black Forest Labs."""
         return BlackForestLabsError(

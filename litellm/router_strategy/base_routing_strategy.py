@@ -4,7 +4,7 @@ Base class across routing strategies to abstract commmon functions like batch in
 
 import asyncio
 from abc import ABC
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Final
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
@@ -17,19 +17,17 @@ class BaseRoutingStrategy(ABC):
         self,
         dual_cache: DualCache,
         should_batch_redis_writes: bool,
-        default_sync_interval: Optional[Union[int, float]],
+        default_sync_interval: float | None,
     ):
         self.dual_cache = dual_cache
-        self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
-        self._sync_task: Optional[asyncio.Task[None]] = None
+        self.redis_increment_operation_queue: list[RedisPipelineIncrementOperation] = []
+        self._sync_task: asyncio.Task[None] | None = None
         if should_batch_redis_writes:
             self.setup_sync_task(default_sync_interval)
 
-        self.in_memory_keys_to_update: set[str] = (
-            set()
-        )  # Set with max size of 1000 keys
+        self.in_memory_keys_to_update: set[str] = set()  # Set with max size of 1000 keys
 
-    def setup_sync_task(self, default_sync_interval: Optional[Union[int, float]]):
+    def setup_sync_task(self, default_sync_interval: float | None):
         """Setup the sync task in a way that's compatible with FastAPI"""
         try:
             loop = asyncio.get_running_loop()
@@ -38,9 +36,7 @@ class BaseRoutingStrategy(ABC):
             asyncio.set_event_loop(loop)
 
         self._sync_task = loop.create_task(
-            self.periodic_sync_in_memory_spend_with_redis(
-                default_sync_interval=default_sync_interval
-            )
+            self.periodic_sync_in_memory_spend_with_redis(default_sync_interval=default_sync_interval)
         )
 
     async def cleanup(self):
@@ -53,22 +49,18 @@ class BaseRoutingStrategy(ABC):
                 pass
 
     async def _increment_value_list_in_current_window(
-        self, increment_list: List[Tuple[str, int]], ttl: int
-    ) -> List[float]:
+        self, increment_list: list[tuple[str, int]], ttl: int
+    ) -> list[float]:
         """
         Increment a list of values in the current window
         """
-        results = []
+        results: Final = []
         for key, value in increment_list:
-            result = await self._increment_value_in_current_window(
-                key=key, value=value, ttl=ttl
-            )
+            result = await self._increment_value_in_current_window(key=key, value=value, ttl=ttl)
             results.append(result)
         return results
 
-    async def _increment_value_in_current_window(
-        self, key: str, value: Union[int, float], ttl: int
-    ):
+    async def _increment_value_in_current_window(self, key: str, value: float, ttl: int):
         """
         Increment spend within existing budget window
 
@@ -77,12 +69,12 @@ class BaseRoutingStrategy(ABC):
         - Increments the spend in memory cache (so spend instantly updated in memory)
         - Queues the increment operation to Redis Pipeline (using batched pipeline to optimize performance. Using Redis for multi instance environment of LiteLLM)
         """
-        result = await self.dual_cache.in_memory_cache.async_increment(
+        result: Final = await self.dual_cache.in_memory_cache.async_increment(
             key=key,
             value=value,
             ttl=ttl,
         )
-        increment_op = RedisPipelineIncrementOperation(
+        increment_op: Final = RedisPipelineIncrementOperation(
             key=key,
             increment_value=value,
             ttl=ttl,
@@ -92,9 +84,7 @@ class BaseRoutingStrategy(ABC):
         self.add_to_in_memory_keys_to_update(key=key)
         return result
 
-    async def periodic_sync_in_memory_spend_with_redis(
-        self, default_sync_interval: Optional[Union[int, float]]
-    ):
+    async def periodic_sync_in_memory_spend_with_redis(self, default_sync_interval: float | None):
         """
         Handler that triggers sync_in_memory_spend_with_redis every DEFAULT_REDIS_SYNC_INTERVAL seconds
 
@@ -108,7 +98,7 @@ class BaseRoutingStrategy(ABC):
                     default_sync_interval
                 )  # Wait for DEFAULT_REDIS_SYNC_INTERVAL seconds before next sync
             except Exception as e:
-                verbose_router_logger.error(f"Error in periodic sync task: {str(e)}")
+                verbose_router_logger.error("Error in periodic sync task: %s", e)
                 await asyncio.sleep(
                     default_sync_interval
                 )  # Still wait DEFAULT_REDIS_SYNC_INTERVAL seconds on error before retrying
@@ -128,64 +118,53 @@ class BaseRoutingStrategy(ABC):
 
             if len(self.redis_increment_operation_queue) > 0:
                 # Compress operations for the same key
-                compressed_ops: Dict[str, RedisPipelineIncrementOperation] = {}
-                ops_to_remove = []
+                compressed_ops: Final[dict[str, RedisPipelineIncrementOperation]] = {}
+                ops_to_remove: Final = []
                 for idx, op in enumerate(self.redis_increment_operation_queue):
                     if op["key"] in compressed_ops:
                         # Add to existing increment
-                        compressed_ops[op["key"]]["increment_value"] += op[
-                            "increment_value"
-                        ]
+                        compressed_ops[op["key"]]["increment_value"] += op["increment_value"]
                     else:
                         compressed_ops[op["key"]] = op
 
                     ops_to_remove.append(idx)
 
                 # Convert back to list
-                compressed_queue = list(compressed_ops.values())
+                compressed_queue: Final = list(compressed_ops.values())
 
-                increment_result = (
-                    await self.dual_cache.redis_cache.async_increment_pipeline(
-                        increment_list=compressed_queue,
-                    )
+                increment_result: Final = await self.dual_cache.redis_cache.async_increment_pipeline(
+                    increment_list=compressed_queue,
                 )
 
                 self.redis_increment_operation_queue = [
-                    op
-                    for idx, op in enumerate(self.redis_increment_operation_queue)
-                    if idx not in ops_to_remove
+                    op for idx, op in enumerate(self.redis_increment_operation_queue) if idx not in ops_to_remove
                 ]
 
                 if increment_result is not None:
-                    return_result = {
-                        key["key"]: op
-                        for key, op in zip(compressed_queue, increment_result)
-                    }
+                    return_result = {key["key"]: op for key, op in zip(compressed_queue, increment_result)}
                 else:
                     return_result = {}
                 return return_result
 
         except Exception as e:
-            verbose_router_logger.error(
-                f"Error syncing in-memory cache with Redis: {str(e)}"
-            )
+            verbose_router_logger.error("Error syncing in-memory cache with Redis: %s", e)
             self.redis_increment_operation_queue = []
 
     def add_to_in_memory_keys_to_update(self, key: str):
         self.in_memory_keys_to_update.add(key)
 
-    def get_key_pattern_to_sync(self) -> Optional[str]:
+    def get_key_pattern_to_sync(self) -> str | None:
         """
         Get the key pattern to sync
         """
         return None
 
-    def get_in_memory_keys_to_update(self) -> Set[str]:
+    def get_in_memory_keys_to_update(self) -> set[str]:
         return self.in_memory_keys_to_update
 
-    def get_and_reset_in_memory_keys_to_update(self) -> Set[str]:
+    def get_and_reset_in_memory_keys_to_update(self) -> set[str]:
         """Atomic get and reset in-memory keys to update"""
-        keys = self.in_memory_keys_to_update
+        keys: Final = self.in_memory_keys_to_update
         self.in_memory_keys_to_update = set()
         return keys
 
@@ -211,24 +190,20 @@ class BaseRoutingStrategy(ABC):
                 return
 
             # 2. Fetch all current provider spend from Redis to update in-memory cache
-            cache_keys = (
+            cache_keys: Final = (
                 self.get_in_memory_keys_to_update()
             )  # if no pattern OR redis cache does not support scan_iter, use in-memory keys
 
-            cache_keys_list = list(cache_keys)
+            cache_keys_list: Final = list(cache_keys)
 
             # 1. Snapshot in-memory before
-            in_memory_before_dict = {}
-            in_memory_before = (
-                await self.dual_cache.in_memory_cache.async_batch_get_cache(
-                    keys=cache_keys_list
-                )
-            )
+            in_memory_before_dict: Final = {}
+            in_memory_before: Final = await self.dual_cache.in_memory_cache.async_batch_get_cache(keys=cache_keys_list)
             for k, v in zip(cache_keys_list, in_memory_before):
                 in_memory_before_dict[k] = float(v or 0)
 
             # 1. Push all provider spend increments to Redis
-            redis_values = await self._push_in_memory_increments_to_redis()
+            redis_values: Final = await self._push_in_memory_increments_to_redis()
             if redis_values is None:
                 return
 
@@ -236,9 +211,7 @@ class BaseRoutingStrategy(ABC):
             for key in cache_keys_list:
                 redis_val = float(redis_values.get(key, 0) or 0)
                 before = float(in_memory_before_dict.get(key, 0) or 0)
-                after = float(
-                    await self.dual_cache.in_memory_cache.async_get_cache(key=key) or 0
-                )
+                after = float(await self.dual_cache.in_memory_cache.async_get_cache(key=key) or 0)
                 delta = after - before
                 if after <= redis_val:
                     merged = redis_val + delta
@@ -251,11 +224,7 @@ class BaseRoutingStrategy(ABC):
                 #     import os
                 #     os._exit(1)
                 #     raise Exception(f"Redis is behind in-memory cache for key: {key}. This should not happen, since we should be updating redis with in-memory cache.")
-                await self.dual_cache.in_memory_cache.async_set_cache(
-                    key=key, value=merged
-                )
+                await self.dual_cache.in_memory_cache.async_set_cache(key=key, value=merged)
 
         except Exception as e:
-            verbose_router_logger.exception(
-                f"Error syncing in-memory cache with Redis: {str(e)}"
-            )
+            verbose_router_logger.exception("Error syncing in-memory cache with Redis: %s", e)

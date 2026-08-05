@@ -2,7 +2,7 @@
 Type definitions for OpenAI Evals API
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 from typing_extensions import Required, TypedDict
@@ -42,9 +42,7 @@ class DataSourceConfigStoredCompletions(TypedDict, total=False):
     """Optional metadata for filtering stored completions"""
 
 
-DataSourceConfig = Union[
-    DataSourceConfigCustom, DataSourceConfigLogs, DataSourceConfigStoredCompletions
-]
+DataSourceConfig = Union[DataSourceConfigCustom, DataSourceConfigLogs, DataSourceConfigStoredCompletions]
 
 
 class LLMAsJudgeGraderConfig(TypedDict, total=False):
@@ -80,9 +78,7 @@ class CustomGraderConfig(TypedDict, total=False):
     """ID of the custom grading function"""
 
 
-GraderConfig = Union[
-    LLMAsJudgeGraderConfig, GroundTruthGraderConfig, CustomGraderConfig
-]
+GraderConfig = Union[LLMAsJudgeGraderConfig, GroundTruthGraderConfig, CustomGraderConfig]
 
 
 class CreateEvalRequest(TypedDict, total=False):
@@ -235,9 +231,7 @@ class DataSourceInlineConfig(TypedDict, total=False):
     """List of inline samples to use for the run"""
 
 
-RunDataSourceConfig = Union[
-    DataSourceDatasetConfig, DataSourceSampleSetConfig, DataSourceInlineConfig
-]
+RunDataSourceConfig = Union[DataSourceDatasetConfig, DataSourceSampleSetConfig, DataSourceInlineConfig]
 
 
 class CompletionConfig(TypedDict, total=False):

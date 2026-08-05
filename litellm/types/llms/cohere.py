@@ -1,4 +1,4 @@
-from typing import Iterable, List, Optional, Union
+from typing import Final, Iterable, List, Optional, Union
 
 from typing_extensions import Literal, Required, TypedDict
 
@@ -41,9 +41,7 @@ class ChatHistoryChatBot(TypedDict, total=False):
     tool_calls: List[ToolCallObject]
 
 
-ChatHistory = List[
-    Union[ChatHistorySystem, ChatHistoryChatBot, ChatHistoryUser, ChatHistoryToolResult]
-]
+ChatHistory = List[Union[ChatHistorySystem, ChatHistoryChatBot, ChatHistoryUser, ChatHistoryToolResult]]
 
 
 class CohereV2ChatResponseMessageToolCallFunction(TypedDict, total=False):

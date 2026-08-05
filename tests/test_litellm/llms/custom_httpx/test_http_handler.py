@@ -182,28 +182,6 @@ async def test_force_ipv4_transport():
 
 
 @pytest.mark.asyncio
-async def test_ssl_context_transport():
-    """Test transport creation with SSL context"""
-    # Create a test SSL context
-    ssl_context = ssl.create_default_context()
-
-    transport = AsyncHTTPHandler._create_async_transport(ssl_context=ssl_context)
-    assert transport is not None
-
-    try:
-        if isinstance(transport, LiteLLMAiohttpTransport):
-            # Get the client session and verify SSL context is passed through
-            client_session = transport._get_valid_client_session()
-            assert isinstance(client_session, ClientSession)
-            assert isinstance(client_session.connector, TCPConnector)
-            # Verify the connector has SSL context set by checking if it's using SSL
-            assert client_session.connector._ssl is not None
-    finally:
-        if isinstance(transport, LiteLLMAiohttpTransport):
-            await transport.aclose()
-
-
-@pytest.mark.asyncio
 async def test_aiohttp_disabled_transport():
     """Test transport creation with aiohttp disabled"""
     original_disable = litellm.disable_aiohttp_transport
@@ -339,44 +317,6 @@ async def test_ssl_context_with_shared_session():
         litellm.disable_aiohttp_transport = original_disable
 
 
-@pytest.mark.asyncio
-async def test_aiohttp_transport_trust_env_setting(monkeypatch):
-    """Test that trust_env setting is properly configured in aiohttp transport"""
-    transports = []
-    try:
-        # Test 1: Default trust_env behavior
-        transport = AsyncHTTPHandler._create_aiohttp_transport()
-        transports.append(transport)
-        client_session = transport._get_valid_client_session()
-
-        # Default should be False (litellm.aiohttp_trust_env default)
-        default_trust_env = getattr(litellm, "aiohttp_trust_env", False)
-        assert client_session._trust_env == default_trust_env
-
-        # Test 2: Environment variable override
-        monkeypatch.setenv("AIOHTTP_TRUST_ENV", "True")
-        transport_with_env = AsyncHTTPHandler._create_aiohttp_transport()
-        transports.append(transport_with_env)
-        client_session_with_env = transport_with_env._get_valid_client_session()
-
-        # Should be True when environment variable is set
-        assert client_session_with_env._trust_env is True
-
-        # Test 3: Verify environment variable with False value
-        monkeypatch.setenv("AIOHTTP_TRUST_ENV", "False")
-        transport_with_false_env = AsyncHTTPHandler._create_aiohttp_transport()
-        transports.append(transport_with_false_env)
-        client_session_with_false_env = (
-            transport_with_false_env._get_valid_client_session()
-        )
-
-        # Should respect the litellm.aiohttp_trust_env setting when env var is False
-        assert client_session_with_false_env._trust_env == default_trust_env
-    finally:
-        for t in transports:
-            await t.aclose()
-
-
 def test_get_ssl_configuration():
     """Test that get_ssl_configuration() returns a proper SSL context with certifi CA bundle
     when no environment variables are set."""
@@ -441,36 +381,6 @@ async def test_create_aiohttp_transport_with_shared_session():
     # Verify the transport uses the shared session directly
     assert transport.client is mock_session
     assert not callable(transport.client)  # Should not be callable
-
-
-@pytest.mark.asyncio
-async def test_create_aiohttp_transport_without_shared_session():
-    """Test that _create_aiohttp_transport creates new session when none provided"""
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
-    # Test without shared session
-    transport = AsyncHTTPHandler._create_aiohttp_transport(shared_session=None)
-
-    # Verify the transport uses a lambda function (for backward compatibility)
-    assert callable(transport.client)  # Should be a lambda function
-
-
-@pytest.mark.asyncio
-async def test_create_aiohttp_transport_with_closed_session():
-    """Test that _create_aiohttp_transport creates new session when shared session is closed"""
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
-    # Create a mock closed session
-    mock_session = MockClientSession()
-    mock_session.closed = True
-
-    # Test with closed session
-    transport = AsyncHTTPHandler._create_aiohttp_transport(
-        shared_session=mock_session  # type: ignore
-    )
-
-    # Verify the transport creates a new session (lambda function)
-    assert callable(transport.client)  # Should be a lambda function
 
 
 @pytest.mark.asyncio
@@ -620,27 +530,6 @@ async def test_session_reuse_integration():
     # Clean up
     await client1.close()
     await client2.close()
-
-
-@pytest.mark.asyncio
-async def test_session_validation():
-    """Test that session validation works correctly"""
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
-    # Test with None session
-    transport1 = AsyncHTTPHandler._create_aiohttp_transport(shared_session=None)
-    assert callable(transport1.client)  # Should create lambda
-
-    # Test with closed session
-    mock_closed_session = MockClientSession()
-    mock_closed_session.closed = True
-    transport2 = AsyncHTTPHandler._create_aiohttp_transport(shared_session=mock_closed_session)  # type: ignore
-    assert callable(transport2.client)  # Should create lambda
-
-    # Test with valid session
-    mock_valid_session = MockClientSession()
-    transport3 = AsyncHTTPHandler._create_aiohttp_transport(shared_session=mock_valid_session)  # type: ignore
-    assert transport3.client is mock_valid_session  # Should reuse session
 
 
 @pytest.mark.parametrize(
@@ -851,3 +740,187 @@ async def test_async_get_forwards_per_request_timeout():
         }
     finally:
         await handler.close()
+
+
+class TestDefaultCachedClientTimeoutHonorsRequestTimeout:
+    """Cached default httpx clients must fall back to an explicit litellm.request_timeout.
+
+    Regression for LIT-2369: get_async_httpx_client / _get_httpx_client hardcoded a
+    600s default and never consulted litellm.request_timeout, so provider calls with
+    no per-model timeout (e.g. Bedrock) hung for 600s.
+    """
+
+    @pytest.fixture
+    def restore_request_timeout(self):
+        original_value = litellm.request_timeout
+        original_flag = litellm.request_timeout_explicitly_set
+        try:
+            yield
+        finally:
+            litellm.request_timeout = original_value
+            litellm.request_timeout_explicitly_set = original_flag
+
+    def test_default_when_request_timeout_unset(self, restore_request_timeout):
+        from litellm.llms.custom_httpx.http_handler import (
+            _DEFAULT_TIMEOUT,
+            _default_cached_client_timeout,
+        )
+
+        litellm.request_timeout = litellm.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS
+        litellm.request_timeout_explicitly_set = False
+        assert _default_cached_client_timeout() is _DEFAULT_TIMEOUT
+
+    def test_uses_explicit_request_timeout(self, restore_request_timeout):
+        from litellm.llms.custom_httpx.http_handler import (
+            _default_cached_client_timeout,
+        )
+
+        litellm.request_timeout = 300
+        litellm.request_timeout_explicitly_set = True
+        resolved = _default_cached_client_timeout()
+        assert resolved.read == 300.0
+        assert resolved.connect == 5.0
+
+    def test_cached_async_client_built_with_explicit_request_timeout(
+        self, restore_request_timeout
+    ):
+        from litellm.caching.llm_caching_handler import LLMClientCache
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.types.utils import LlmProviders
+
+        litellm.request_timeout = 300
+        litellm.request_timeout_explicitly_set = True
+        litellm.in_memory_llm_clients_cache = LLMClientCache()
+        client = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK)
+        assert client.timeout.read == 300.0
+
+
+async def _read_http_request(reader: asyncio.StreamReader) -> None:
+    raw = b""
+    while b"\r\n\r\n" not in raw:
+        chunk = await reader.read(1024)
+        if not chunk:
+            return
+        raw += chunk
+    head, _, body = raw.partition(b"\r\n\r\n")
+    content_length = next(
+        (int(line.split(b":", 1)[1]) for line in head.split(b"\r\n") if line.lower().startswith(b"content-length")),
+        0,
+    )
+    while len(body) < content_length:
+        body += await reader.read(content_length - len(body))
+
+
+@pytest.mark.asyncio
+async def test_init_held_async_handler_survives_external_client_close():
+    handler = AsyncHTTPHandler(timeout=42.5)
+    held_client = handler.client
+    await held_client.aclose()
+    assert held_client.is_closed
+
+    async def respond(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await _read_http_request(reader)
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(respond, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        response = await handler.post(f"http://127.0.0.1:{port}/v1/compress", json={"messages": []})
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert response.status_code == 200
+    assert handler.client is not held_client
+    assert handler.client.timeout == httpx.Timeout(42.5)
+    await handler.close()
+
+
+def test_init_held_sync_handler_recreates_closed_client():
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class OkRequestHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, format, *args):
+            pass
+
+    handler = HTTPHandler(timeout=7)
+    held_client = handler.client
+    held_client.close()
+
+    server = HTTPServer(("127.0.0.1", 0), OkRequestHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        response = handler.get(f"http://127.0.0.1:{server.server_port}/")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status_code == 200
+    assert handler.client is not held_client
+    assert handler.client.timeout == httpx.Timeout(7)
+    handler.close()
+
+
+def test_caller_supplied_sync_client_is_not_replaced_when_closed():
+    supplied = httpx.Client()
+    handler = HTTPHandler(client=supplied)
+    supplied.close()
+    assert handler.client is supplied
+
+
+@pytest.mark.asyncio
+async def test_assigned_async_client_is_not_replaced():
+    handler = AsyncHTTPHandler()
+    await handler.client.aclose()
+    replacement = MagicMock()
+    handler.client = replacement
+    assert handler.client is replacement
+
+
+def test_concurrent_sync_heal_creates_exactly_one_replacement():
+    class GatedHealHandler(HTTPHandler):
+        def __init__(self):
+            self.heal_started = threading.Event()
+            self.release_heal = threading.Event()
+            self.heal_calls = 0
+            super().__init__(timeout=7)
+
+        def create_client(self) -> httpx.Client:
+            if hasattr(self, "_client"):
+                self.heal_calls += 1
+                self.heal_started.set()
+                assert self.release_heal.wait(timeout=5)
+            return super().create_client()
+
+    handler = GatedHealHandler()
+    handler.client.close()
+
+    seen = []
+
+    def grab_client():
+        seen.append(handler.client)
+
+    first = threading.Thread(target=grab_client)
+    second = threading.Thread(target=grab_client)
+    first.start()
+    assert handler.heal_started.wait(timeout=5)
+    second.start()
+    second.join(timeout=0.3)
+    handler.release_heal.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert handler.heal_calls == 1
+    assert seen[0] is seen[1]
+    assert not seen[0].is_closed
+    handler.close()

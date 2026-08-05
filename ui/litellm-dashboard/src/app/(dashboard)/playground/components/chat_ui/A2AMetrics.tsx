@@ -194,7 +194,9 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
           {taskId && (
             <div className="mb-1.5 flex items-center">
               <span className="font-medium text-gray-700 w-24">Task ID:</span>
-              <code className="ml-2 px-2 py-1 bg-white border border-gray-200 rounded text-xs font-mono">{taskId}</code>
+              <code className="ml-2 px-2 py-1 bg-white border border-gray-200 rounded-sm text-xs font-mono">
+                {taskId}
+              </code>
               <CopyOutlined
                 className="ml-2 cursor-pointer text-gray-400 hover:text-blue-500"
                 onClick={() => copyToClipboard(taskId)}
@@ -205,7 +207,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
           {contextId && (
             <div className="mb-1.5 flex items-center">
               <span className="font-medium text-gray-700 w-24">Session ID:</span>
-              <code className="ml-2 px-2 py-1 bg-white border border-gray-200 rounded text-xs font-mono">
+              <code className="ml-2 px-2 py-1 bg-white border border-gray-200 rounded-sm text-xs font-mono">
                 {contextId}
               </code>
               <CopyOutlined
@@ -219,7 +221,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
           {metadata && Object.keys(metadata).length > 0 && (
             <div className="mt-3">
               <span className="font-medium text-gray-700">Custom Metadata:</span>
-              <pre className="mt-1.5 p-2 bg-white border border-gray-200 rounded text-xs font-mono overflow-x-auto whitespace-pre-wrap">
+              <pre className="mt-1.5 p-2 bg-white border border-gray-200 rounded-sm text-xs font-mono overflow-x-auto whitespace-pre-wrap">
                 {JSON.stringify(metadata, null, 2)}
               </pre>
             </div>

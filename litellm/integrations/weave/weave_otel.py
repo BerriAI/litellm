@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 from opentelemetry.trace import Status, StatusCode
 from typing_extensions import override
@@ -29,8 +29,8 @@ if TYPE_CHECKING:
 # Weave OTEL endpoint
 # Multi-tenant cloud: https://trace.wandb.ai/otel/v1/traces
 # Dedicated cloud: https://<your-subdomain>.wandb.io/traces/otel/v1/traces
-WEAVE_BASE_URL = "https://trace.wandb.ai"
-WEAVE_OTEL_ENDPOINT = "/otel/v1/traces"
+WEAVE_BASE_URL: Final = "https://trace.wandb.ai"
+WEAVE_OTEL_ENDPOINT: Final = "/otel/v1/traces"
 
 
 class WeaveLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
@@ -43,27 +43,23 @@ class WeaveLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
 
     @staticmethod
     @override
-    def set_messages(span: "Span", kwargs: dict[str, Any]):
+    def set_messages(span: Span, kwargs: dict[str, Any]):
         """Set input messages as span attributes using OpenInference conventions."""
 
-        messages = kwargs.get("messages") or []
-        optional_params = kwargs.get("optional_params") or {}
+        messages: Final = kwargs.get("messages") or []
+        optional_params: Final = kwargs.get("optional_params") or {}
 
-        prompt = {"messages": messages}
-        functions = optional_params.get("functions")
-        tools = optional_params.get("tools")
+        prompt: Final = {"messages": messages}
+        functions: Final = optional_params.get("functions")
+        tools: Final = optional_params.get("tools")
         if functions is not None:
             prompt["functions"] = functions
         if tools is not None:
             prompt["tools"] = tools
-        safe_set_attribute(
-            span, OpenInferenceSpanAttributes.INPUT_VALUE, json.dumps(prompt)
-        )
+        safe_set_attribute(span, OpenInferenceSpanAttributes.INPUT_VALUE, json.dumps(prompt))
 
 
-def _set_weave_specific_attributes(
-    span: Span, kwargs: dict[str, Any], response_obj: Any
-):
+def _set_weave_specific_attributes(span: Span, kwargs: dict[str, Any], response_obj: Any):
     """
     Sets Weave-specific metadata attributes onto the OTEL span.
 
@@ -72,11 +68,11 @@ def _set_weave_specific_attributes(
     """
 
     # Extract all needed data upfront
-    litellm_params = kwargs.get("litellm_params") or {}
+    litellm_params: Final = kwargs.get("litellm_params") or {}
     # optional_params = kwargs.get("optional_params") or {}
-    metadata = kwargs.get("metadata") or {}
-    model = kwargs.get("model") or ""
-    custom_llm_provider = litellm_params.get("custom_llm_provider") or ""
+    metadata: Final = kwargs.get("metadata") or {}
+    model: Final = kwargs.get("model") or ""
+    custom_llm_provider: Final = litellm_params.get("custom_llm_provider") or ""
 
     # Weave supports a custom display name and will default to the model name if not provided.
     display_name = metadata.get("display_name")
@@ -106,9 +102,7 @@ def _set_weave_specific_attributes(
             output_dict = response_obj
 
         if output_dict:
-            safe_set_attribute(
-                span, OpenInferenceSpanAttributes.OUTPUT_VALUE, safe_dumps(output_dict)
-            )
+            safe_set_attribute(span, OpenInferenceSpanAttributes.OUTPUT_VALUE, safe_dumps(output_dict))
 
 
 def _get_weave_authorization_header(api_key: str) -> str:
@@ -117,8 +111,8 @@ def _get_weave_authorization_header(api_key: str) -> str:
 
     Weave uses Basic auth with format: api:<WANDB_API_KEY>
     """
-    auth_string = f"api:{api_key}"
-    auth_header = base64.b64encode(auth_string.encode()).decode()
+    auth_string: Final = f"api:{api_key}"
+    auth_header: Final = base64.b64encode(auth_string.encode()).decode()
     return f"Basic {auth_header}"
 
 
@@ -137,14 +131,12 @@ def get_weave_otel_config() -> WeaveOtelConfig:
     Raises:
         ValueError: If required environment variables are missing.
     """
-    api_key = os.getenv("WANDB_API_KEY")
-    project_id = os.getenv("WANDB_PROJECT_ID")
+    api_key: Final = os.getenv("WANDB_API_KEY")
+    project_id: Final = os.getenv("WANDB_PROJECT_ID")
     host = os.getenv("WANDB_HOST")
 
     if not api_key:
-        raise ValueError(
-            "WANDB_API_KEY must be set for Weave OpenTelemetry integration."
-        )
+        raise ValueError("WANDB_API_KEY must be set for Weave OpenTelemetry integration.")
 
     if not project_id:
         raise ValueError(
@@ -156,14 +148,14 @@ def get_weave_otel_config() -> WeaveOtelConfig:
             host = "https://" + host
         # Self-managed instances use a different path
         endpoint = host.rstrip("/") + WEAVE_OTEL_ENDPOINT
-        verbose_logger.debug(f"Using Weave OTEL endpoint from host: {endpoint}")
+        verbose_logger.debug("Using Weave OTEL endpoint from host: %s", endpoint)
     else:
         endpoint = WEAVE_BASE_URL + WEAVE_OTEL_ENDPOINT
-        verbose_logger.debug(f"Using Weave cloud endpoint: {endpoint}")
+        verbose_logger.debug("Using Weave cloud endpoint: %s", endpoint)
 
     # Weave uses Basic auth with format: api:<WANDB_API_KEY>
-    auth_header = _get_weave_authorization_header(api_key=api_key)
-    otlp_auth_headers = f"Authorization={auth_header},project_id={project_id}"
+    auth_header: Final = _get_weave_authorization_header(api_key=api_key)
+    otlp_auth_headers: Final = f"Authorization={auth_header},project_id={project_id}"
 
     # Set standard OTEL environment variables
     os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint
@@ -211,8 +203,8 @@ class WeaveOtelLogger(OpenTelemetry):
 
     def __init__(
         self,
-        config: Optional[OpenTelemetryConfig] = None,
-        callback_name: Optional[str] = "weave_otel",
+        config: OpenTelemetryConfig | None = None,
+        callback_name: str | None = "weave_otel",
         **kwargs,
     ):
         """
@@ -223,7 +215,7 @@ class WeaveOtelLogger(OpenTelemetry):
         """
         if config is None:
             # Auto-configure from Weave environment variables
-            weave_config = get_weave_otel_config()
+            weave_config: Final = get_weave_otel_config()
 
             config = OpenTelemetryConfig(
                 exporter=weave_config.protocol,
@@ -233,9 +225,7 @@ class WeaveOtelLogger(OpenTelemetry):
 
         super().__init__(config=config, callback_name=callback_name, **kwargs)
 
-    def _maybe_log_raw_request(
-        self, kwargs, response_obj, start_time, end_time, parent_span
-    ):
+    def _maybe_log_raw_request(self, kwargs, response_obj, start_time, end_time, parent_span):
         """
         Override to skip creating the raw_gen_ai_request child span.
 
@@ -243,7 +233,6 @@ class WeaveOtelLogger(OpenTelemetry):
         already contains all the necessary attributes, so the child span
         is redundant.
         """
-        pass
 
     def _start_primary_span(
         self,
@@ -261,10 +250,10 @@ class WeaveOtelLogger(OpenTelemetry):
         from the LiteLLM LLM call spans, creating proper nesting in Weave.
         """
 
-        otel_tracer = self.get_tracer_to_use_for_request(kwargs)
+        otel_tracer: Final = self.get_tracer_to_use_for_request(kwargs)
         # Always create a new child span, even if parent_span is provided
         # This ensures wrapper spans remain separate from LLM call spans
-        span = otel_tracer.start_span(
+        span: Final = otel_tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
             context=context,
@@ -290,12 +279,10 @@ class WeaveOtelLogger(OpenTelemetry):
         ctx, parent_span = self._get_span_context(kwargs)
 
         # Always create a child span (handled by _start_primary_span override)
-        primary_span_parent = None
+        primary_span_parent: Final = None
 
         # 1. Primary span
-        span = self._start_primary_span(
-            kwargs, response_obj, start_time, end_time, ctx, primary_span_parent
-        )
+        span: Final = self._start_primary_span(kwargs, response_obj, start_time, end_time, ctx, primary_span_parent)
 
         # 2. Raw-request sub-span (skipped for Weave via _maybe_log_raw_request override)
         self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, span)
@@ -326,15 +313,13 @@ class WeaveOtelLogger(OpenTelemetry):
         Returns:
             dict: A dictionary of dynamic Weave headers
         """
-        dynamic_headers = {}
+        dynamic_headers: Final = {}
 
-        dynamic_wandb_api_key = standard_callback_dynamic_params.get("wandb_api_key")
-        dynamic_weave_project_id = standard_callback_dynamic_params.get(
-            "weave_project_id"
-        )
+        dynamic_wandb_api_key: Final = standard_callback_dynamic_params.get("wandb_api_key")
+        dynamic_weave_project_id: Final = standard_callback_dynamic_params.get("weave_project_id")
 
         if dynamic_wandb_api_key:
-            auth_header = _get_weave_authorization_header(
+            auth_header: Final = _get_weave_authorization_header(
                 api_key=dynamic_wandb_api_key,
             )
             dynamic_headers["Authorization"] = auth_header

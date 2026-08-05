@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 from pydantic import BaseModel, SerializeAsAny
 
@@ -416,13 +416,9 @@ class OCIEmbedRequest(BaseModel):
     compartmentId: str
     servingMode: OCIServingMode
     inputs: List[str]
-    inputType: Optional[str] = (
-        None  # SEARCH_DOCUMENT | SEARCH_QUERY | CLASSIFICATION | CLUSTERING | IMAGE
-    )
+    inputType: Optional[str] = None  # SEARCH_DOCUMENT | SEARCH_QUERY | CLASSIFICATION | CLUSTERING | IMAGE
     truncate: Optional[str] = "END"  # NONE | START | END
-    outputDimensions: Optional[int] = (
-        None  # cohere.embed-v4.0+; valid: 256, 512, 1024, 1536
-    )
+    outputDimensions: Optional[int] = None  # cohere.embed-v4.0+; valid: 256, 512, 1024, 1536
 
 
 class OCIEmbedUsage(BaseModel):

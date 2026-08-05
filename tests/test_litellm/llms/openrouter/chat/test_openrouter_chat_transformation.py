@@ -553,3 +553,68 @@ def test_openrouter_non_reasoning_models_do_not_add_reasoning_effort():
     )
 
     assert "reasoning_effort" not in supported_params
+
+
+def test_openrouter_reasoning_effort_max_maps_to_xhigh():
+    """
+    OpenRouter expects 'xhigh' instead of 'max' for reasoning_effort.
+    """
+    config = OpenrouterConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "max"},
+        optional_params={},
+        model="openrouter/deepseek/deepseek-r1",
+        drop_params=False,
+    )
+
+    assert result["reasoning_effort"] == "xhigh"
+
+
+def test_openrouter_reasoning_effort_max_does_not_mutate_caller_dict():
+    """
+    map_openai_params must not mutate the caller-supplied non_default_params dict.
+    """
+    config = OpenrouterConfig()
+    original_params = {"reasoning_effort": "max"}
+
+    config.map_openai_params(
+        non_default_params=original_params,
+        optional_params={},
+        model="openrouter/deepseek/deepseek-r1",
+        drop_params=False,
+    )
+
+    assert original_params["reasoning_effort"] == "max"
+
+
+def test_openrouter_reasoning_effort_xhigh_passes_through():
+    """
+    reasoning_effort='xhigh' should be forwarded unchanged.
+    """
+    config = OpenrouterConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="openrouter/deepseek/deepseek-r1",
+        drop_params=False,
+    )
+
+    assert result["reasoning_effort"] == "xhigh"
+
+
+def test_openrouter_reasoning_effort_high_passes_through():
+    """
+    Non-max reasoning_effort values should be forwarded unchanged.
+    """
+    config = OpenrouterConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model="openrouter/deepseek/deepseek-r1",
+        drop_params=False,
+    )
+
+    assert result["reasoning_effort"] == "high"

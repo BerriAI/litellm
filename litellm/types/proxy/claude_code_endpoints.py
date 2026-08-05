@@ -21,19 +21,9 @@ class PluginOwner(BaseModel):
     email: Optional[str] = Field(None, description="Owner email")
 
 
-class RegisterPluginRequest(BaseModel):
-    """
-    Request body for registering a plugin in the marketplace.
+class PluginSpec(BaseModel):
+    """Mutable fields shared by plugin create and update requests."""
 
-    LiteLLM acts as a registry/discovery layer. Plugins are hosted on
-    GitHub/GitLab/Bitbucket and referenced by their git source.
-    """
-
-    name: str = Field(
-        ...,
-        description="Plugin name (kebab-case, e.g., 'my-plugin')",
-        pattern=r"^[a-z0-9-]+$",
-    )
     source: Dict[str, str] = Field(
         ...,
         description=(
@@ -49,12 +39,36 @@ class RegisterPluginRequest(BaseModel):
     homepage: Optional[str] = Field(None, description="Plugin homepage URL")
     keywords: Optional[List[str]] = Field(None, description="Search keywords")
     category: Optional[str] = Field(None, description="Plugin category")
-    domain: Optional[str] = Field(
-        None, description="Skill domain (e.g., 'Productivity')"
+    domain: Optional[str] = Field(None, description="Skill domain (e.g., 'Productivity')")
+    namespace: Optional[str] = Field(None, description="Skill namespace within domain (e.g., 'workflows')")
+
+
+class RegisterPluginRequest(PluginSpec):
+    """
+    Request body for registering a plugin in the marketplace.
+
+    LiteLLM acts as a registry/discovery layer. Plugins are hosted on
+    GitHub/GitLab/Bitbucket and referenced by their git source.
+    """
+
+    name: str = Field(
+        ...,
+        description="Plugin name (kebab-case, e.g., 'my-plugin')",
+        pattern=r"^[a-z0-9-]+$",
     )
-    namespace: Optional[str] = Field(
-        None, description="Skill namespace within domain (e.g., 'workflows')"
-    )
+
+
+class UpdatePluginRequest(PluginSpec):
+    """
+    Request body for replacing an existing plugin.
+
+    The plugin name is the resource identity and is supplied as the path
+    parameter, so it cannot be changed here. This is a full replace: omitted
+    fields reset to their defaults, so version is cleared rather than
+    defaulting to the create-time "1.0.0".
+    """
+
+    version: str | None = Field(None, description="Semantic version; cleared if omitted")
 
 
 class PluginResponse(BaseModel):
@@ -125,6 +139,4 @@ class MarketplaceResponse(BaseModel):
 
     name: str = Field(..., description="Marketplace identifier")
     owner: PluginOwner = Field(..., description="Marketplace owner")
-    plugins: List[MarketplacePluginEntry] = Field(
-        default_factory=list, description="Available plugins"
-    )
+    plugins: List[MarketplacePluginEntry] = Field(default_factory=list, description="Available plugins")

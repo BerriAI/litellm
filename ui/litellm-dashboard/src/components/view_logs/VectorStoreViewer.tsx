@@ -56,7 +56,7 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
   };
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapse
         defaultActiveKey={["1"]}
         expandIconPosition="start"
@@ -143,7 +143,7 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
                                 {result.content.map((content, contentIndex) => (
                                   <div key={contentIndex} className="mb-2 last:mb-0">
                                     <div className="text-xs text-gray-500 mb-1">{content.type}</div>
-                                    <pre className="text-xs font-mono whitespace-pre-wrap break-all bg-gray-50 p-2 rounded">
+                                    <pre className="text-xs font-mono whitespace-pre-wrap break-all bg-gray-50 p-2 rounded-sm">
                                       {content.text}
                                     </pre>
                                   </div>

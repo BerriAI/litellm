@@ -3,14 +3,7 @@
 OpenAI Moderation Guardrail Integration for LiteLLM
 """
 
-from typing import (
-    TYPE_CHECKING,
-    Dict,
-    Literal,
-    Optional,
-    Type,
-    Union,
-)
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
 
@@ -25,7 +18,11 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
+from litellm.types.utils import (
+    GenericGuardrailAPIInputs,
+    GuardrailStatus,
+    GuardrailTracingDetail,
+)
 
 from .base import OpenAIGuardrailBase
 
@@ -52,51 +49,33 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
     def __init__(
         self,
         guardrail_name: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        model: Optional[
-            Literal["omni-moderation-latest", "text-moderation-latest"]
-        ] = None,
-        streaming_end_of_stream_only: Optional[bool] = None,
-        streaming_sampling_rate: Optional[int] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        model: Literal["omni-moderation-latest", "text-moderation-latest"] | None = None,
+        streaming_end_of_stream_only: bool | None = None,
+        streaming_sampling_rate: int | None = None,
         **kwargs,
     ):
         """Initialize OpenAI Moderation guardrail handler."""
-        from litellm.types.guardrails import GuardrailEventHooks
-
-        # Initialize parent CustomGuardrail
-        supported_event_hooks = [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
-            GuardrailEventHooks.post_call,
-        ]
         super().__init__(
             guardrail_name=guardrail_name,
-            supported_event_hooks=supported_event_hooks,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
             **kwargs,
         )
 
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
         # Store configuration
         self.api_key = api_key or self._get_api_key()
         self.api_base = api_base or "https://api.openai.com/v1"
-        self.model: Literal["omni-moderation-latest", "text-moderation-latest"] = (
-            model or "omni-moderation-latest"
-        )
+        self.model: Literal["omni-moderation-latest", "text-moderation-latest"] = model or "omni-moderation-latest"
 
         # Read by UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook
         # via getattr(guardrail_to_apply, "streaming_*", default).
         self.streaming_end_of_stream_only: bool = (
-            False
-            if streaming_end_of_stream_only is None
-            else streaming_end_of_stream_only
+            False if streaming_end_of_stream_only is None else streaming_end_of_stream_only
         )
-        self.streaming_sampling_rate: int = (
-            5 if streaming_sampling_rate is None else streaming_sampling_rate
-        )
+        self.streaming_sampling_rate: int = 5 if streaming_sampling_rate is None else streaming_sampling_rate
 
         if not self.api_key:
             raise ValueError(
@@ -104,10 +83,10 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             )
 
         verbose_proxy_logger.debug(
-            f"Initialized OpenAI Moderation Guardrail: {guardrail_name} with model: {self.model}"
+            "Initialized OpenAI Moderation Guardrail: %s with model: %s", guardrail_name, self.model
         )
 
-    def _get_api_key(self) -> Optional[str]:
+    def _get_api_key(self) -> str | None:
         """Get API key from environment variables or litellm configuration"""
         import os
 
@@ -125,11 +104,11 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         """
         Make a request to the OpenAI Moderation API.
         """
-        request_body = {"model": self.model, "input": input_text}
+        request_body: Final = {"model": self.model, "input": input_text}
 
         verbose_proxy_logger.debug("OpenAI Moderation guard request: %s", request_body)
 
-        response = await self.async_handler.post(
+        response: Final = await self.async_handler.post(
             url=f"{self.api_base}/moderations",
             headers={
                 "Authorization": f"Bearer {self.api_key}",
@@ -138,9 +117,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             json=request_body,
         )
 
-        verbose_proxy_logger.debug(
-            "OpenAI Moderation guard response: %s", response.json()
-        )
+        verbose_proxy_logger.debug("OpenAI Moderation guard response: %s", response.json())
 
         if response.status_code != 200:
             raise HTTPException(
@@ -155,25 +132,23 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
         return OpenAIModerationResponse(**response.json())
 
-    def _check_moderation_result(
-        self, moderation_response: "OpenAIModerationResponse"
-    ) -> None:
+    def _check_moderation_result(self, moderation_response: "OpenAIModerationResponse") -> None:
         """
         Check if the moderation response indicates harmful content and raise exception if needed.
         """
         if not moderation_response.results:
             return
 
-        result = moderation_response.results[0]
+        result: Final = moderation_response.results[0]
         if result.flagged:
             # Build detailed violation information
-            violated_categories = []
+            violated_categories: Final = []
             if result.categories:
                 for category, is_violated in result.categories.items():
                     if is_violated:
                         violated_categories.append(category)
 
-            violation_details = {
+            violation_details: Final = {
                 "violated_categories": violated_categories,
                 "category_scores": result.category_scores or {},
             }
@@ -218,7 +193,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             HTTPException: If content violates moderation policy
         """
         # Extract text to moderate from inputs
-        text_to_moderate: Optional[str] = None
+        text_to_moderate: str | None = None
 
         # Prefer structured_messages if available (has role context)
         if structured_messages := inputs.get("structured_messages"):
@@ -231,18 +206,16 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
                 text_to_moderate = "\n".join(texts)
 
         if not text_to_moderate:
-            verbose_proxy_logger.debug(
-                "OpenAI Moderation: No text content to moderate in inputs"
-            )
+            verbose_proxy_logger.debug("OpenAI Moderation: No text content to moderate in inputs")
             return inputs
 
         # Make moderation request
-        moderation_response = await self.async_make_request(input_text=text_to_moderate)
+        moderation_response: Final = await self.async_make_request(input_text=text_to_moderate)
 
         # Stash full moderation response in request_data for logging
         # (Model Armor pattern — per-request dict avoids race conditions)
         if isinstance(request_data, dict):
-            metadata = request_data.get("metadata") or {}
+            metadata: Final = request_data.get("metadata") or {}
             request_data["metadata"] = metadata
             metadata["_openai_moderation_response"] = moderation_response.model_dump()
 
@@ -254,13 +227,13 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
     def _process_response(
         self,
-        response: Optional[Dict],
+        response: dict | None,
         request_data: dict,
-        start_time: Optional[float] = None,
-        end_time: Optional[float] = None,
-        duration: Optional[float] = None,
-        event_type: Optional[GuardrailEventHooks] = None,
-        original_inputs: Optional[Dict] = None,
+        start_time: float | None = None,
+        end_time: float | None = None,
+        duration: float | None = None,
+        event_type: GuardrailEventHooks | None = None,
+        original_inputs: dict | None = None,
     ):
         """
         Override to log the full OpenAI Moderation API response instead of
@@ -277,7 +250,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         # .pop() cleans up the internal key so it doesn't leak to downstream
         # loggers. Falls back to "allow" when no moderation call was made
         # (e.g. no text to moderate — early return in apply_guardrail).
-        guardrail_response = metadata.pop("_openai_moderation_response", "allow")
+        guardrail_response: Final = metadata.pop("_openai_moderation_response", "allow")
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,
@@ -287,6 +260,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
+            tracing_detail=self._build_tracing_detail(guardrail_response),
         )
         return response
 
@@ -294,19 +268,17 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         self,
         e: Exception,
         request_data: dict,
-        start_time: Optional[float] = None,
-        end_time: Optional[float] = None,
-        duration: Optional[float] = None,
-        event_type: Optional[GuardrailEventHooks] = None,
+        start_time: float | None = None,
+        end_time: float | None = None,
+        duration: float | None = None,
+        event_type: GuardrailEventHooks | None = None,
     ):
         """
         Override to log the full OpenAI Moderation API response on error
         instead of the stringified exception.
         """
-        guardrail_status: GuardrailStatus = (
-            "guardrail_intervened"
-            if self._is_guardrail_intervention(e)
-            else "guardrail_failed_to_respond"
+        guardrail_status: Final[GuardrailStatus] = (
+            "guardrail_intervened" if self._is_guardrail_intervention(e) else "guardrail_failed_to_respond"
         )
 
         if isinstance(request_data, dict):
@@ -316,9 +288,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             metadata = {}
 
         # Use the stashed moderation response if available, fall back to exception
-        guardrail_response: Union[dict, Exception, str] = metadata.pop(
-            "_openai_moderation_response", e
-        )
+        guardrail_response: Final[dict | Exception | str] = metadata.pop("_openai_moderation_response", e)
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,
@@ -328,11 +298,38 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
+            tracing_detail=self._build_tracing_detail(guardrail_response),
         )
         raise e
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def _build_tracing_detail(
+        guardrail_response: dict | str | Exception,
+    ) -> GuardrailTracingDetail | None:
+        """
+        Pull the flagged category names out of the moderation response so trace
+        backends can index a short, queryable ``guardrail_violation_categories``
+        attribute instead of the full ``guardrail_response`` blob, whose
+        ``category_scores`` map (one float per category) blows past indexed-field
+        length limits on backends like ELK (1024 chars).
+        """
+        if not isinstance(guardrail_response, dict):
+            return None
+
+        results: Final = guardrail_response.get("results") or []
+        violation_categories: Final = [
+            category
+            for result in results
+            if isinstance(result, dict)
+            for category, is_flagged in (result.get("categories") or {}).items()
+            if is_flagged
+        ]
+        if not violation_categories:
+            return None
+        return GuardrailTracingDetail(violation_categories=violation_categories)
+
+    @staticmethod
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         """
         Get the config model for the OpenAI Moderation guardrail.
         """
@@ -341,3 +338,11 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         )
 
         return OpenAIModerationGuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+        ]

@@ -1,10 +1,10 @@
-from typing import Any, List, Literal, Optional, cast
+from typing import Any, cast, Final, List, Literal, Optional
 
 from pydantic import Field
 
 from .base import GuardrailConfigModel
 
-XECGUARD_DEFAULT_POLICY_OPTIONS = [
+XECGUARD_DEFAULT_POLICY_OPTIONS: Final = [
     "Default_Policy_SystemPromptEnforcement",
     "Default_Policy_GeneralPromptAttackProtection",
     "Default_Policy_ContentBiasProtection",
@@ -33,9 +33,7 @@ class XecGuardConfigModel(GuardrailConfigModel):
     )
     xecguard_model: Optional[str] = Field(
         default=None,
-        description=(
-            "XecGuard scanning model identifier. " "Defaults to 'xecguard_v2'."
-        ),
+        description=("XecGuard scanning model identifier. Defaults to 'xecguard_v2'."),
     )
     policy_names: Optional[List[str]] = Field(
         default=None,

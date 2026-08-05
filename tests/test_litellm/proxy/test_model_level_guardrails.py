@@ -10,7 +10,7 @@ import os
 import sys
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
@@ -18,7 +18,6 @@ from litellm.proxy.utils import (
     _check_and_merge_model_level_guardrails,
     _merge_guardrails_with_existing,
 )
-
 
 # ---------------------------------------------------------------------------
 # Unit tests for _check_and_merge_model_level_guardrails
@@ -39,9 +38,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_deployment.litellm_params.get.return_value = ["openai-moderation"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=mock_router
-        )
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert "openai-moderation" in result["metadata"]["guardrails"]
         mock_router.get_deployment.assert_called_once_with(model_id="model-uuid-123")
@@ -60,9 +57,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_deployment.litellm_params.get.return_value = ["model-guardrail"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=mock_router
-        )
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert "existing-guardrail" in result["metadata"]["guardrails"]
         assert "model-guardrail" in result["metadata"]["guardrails"]
@@ -81,9 +76,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_deployment.litellm_params.get.return_value = ["openai-moderation"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=mock_router
-        )
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert result["metadata"]["guardrails"].count("openai-moderation") == 1
 
@@ -94,12 +87,15 @@ class TestCheckAndMergeModelLevelGuardrails:
         assert result is data
 
     def test_returns_data_unchanged_when_no_model_info(self):
-        """Returns data unchanged when metadata has no model_info."""
+        """Returns data unchanged when metadata has no model_info AND the
+        model alias does not resolve to a deployment."""
         data = {"model": "gpt-4", "metadata": {}}
         mock_router = MagicMock()
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=mock_router
-        )
+        # Neither the model_id lookup nor the alias-fallback lookup
+        # finds a deployment.
+        mock_router.get_deployment.return_value = None
+        mock_router.get_deployment_by_model_group_name.return_value = None
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
         assert result is data
 
     def test_returns_data_unchanged_when_deployment_has_no_guardrails(self):
@@ -113,9 +109,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_deployment.litellm_params.get.return_value = None
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=mock_router
-        )
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert result is data
 
@@ -128,9 +122,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_router = MagicMock()
         mock_router.get_deployment.return_value = None
 
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=mock_router
-        )
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert result is data
 
@@ -148,15 +140,164 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_deployment.litellm_params.get.return_value = ["new-guardrail"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=mock_router
-        )
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         # Result is a different top-level dict
         assert result is not data
         # Result should have the merged guardrail
         assert "new-guardrail" in result["metadata"]["guardrails"]
         assert "existing" in result["metadata"]["guardrails"]
+
+
+# ---------------------------------------------------------------------------
+# Regression test: pre_call hook must run exactly once with model-level guardrails
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_runs_once_with_model_level_guardrails():
+    """
+    A guardrail attached at the model level (litellm_params.guardrails) is
+    spread into the top-level request kwargs by the router. The proxy pre-call
+    loop (async_pre_call_hook) and the deployment-level hook
+    (async_pre_call_deployment_hook) must together invoke async_pre_call_hook
+    exactly once, not twice.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import CallTypes, UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class CountingGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="counting-guardrail",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+            )
+            self.pre_call_count = 0
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            self.pre_call_count += 1
+            return data
+
+    guardrail = CountingGuardrail()
+
+    with patch("litellm.callbacks", [guardrail]):
+        ProxyLogging._callback_capabilities_cache.clear()
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+        data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}],
+            "metadata": {},
+        }
+
+        # Path A: proxy pre-call loop runs the guardrail and records that it ran
+        data = await proxy_logging.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            call_type="acompletion",
+        )
+
+        # Path B: the router spreads the deployment's model-level guardrails into
+        # the top-level kwargs, then litellm.acompletion fires the deployment hook
+        data["guardrails"] = ["counting-guardrail"]
+        await guardrail.async_pre_call_deployment_hook(data, CallTypes.acompletion)
+
+    assert guardrail.pre_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_runs_once_when_hook_returns_fresh_dict():
+    """
+    async_pre_call_hook may return a brand-new request dict instead of mutating
+    or spreading the one it received. The exactly-once marker must live on the
+    data that flows downstream, so the deployment hook still skips the guardrail
+    even when the proxy loop swapped in a fresh dict that never carried it.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import CallTypes, UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class FreshDictGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="counting-guardrail",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+            )
+            self.pre_call_count = 0
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            self.pre_call_count += 1
+            return {"model": data["model"], "messages": data["messages"]}
+
+    guardrail = FreshDictGuardrail()
+
+    with patch("litellm.callbacks", [guardrail]):
+        ProxyLogging._callback_capabilities_cache.clear()
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+        data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}],
+            "metadata": {},
+        }
+
+        data = await proxy_logging.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            call_type="acompletion",
+        )
+
+        data["guardrails"] = ["counting-guardrail"]
+        await guardrail.async_pre_call_deployment_hook(data, CallTypes.acompletion)
+
+    assert guardrail.pre_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_deployment_hook_runs_pre_call_without_proxy_loop():
+    """
+    Direct-SDK usage (litellm.acompletion(..., guardrails=[...]) without the
+    proxy) never runs the proxy pre-call loop, so the deployment hook is the
+    only place the guardrail executes and it must still run exactly once.
+    """
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import CallTypes
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class CountingGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="counting-guardrail",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+            )
+            self.pre_call_count = 0
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            self.pre_call_count += 1
+            return data
+
+    guardrail = CountingGuardrail()
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello"}],
+        "guardrails": ["counting-guardrail"],
+        "metadata": {},
+    }
+
+    await guardrail.async_pre_call_deployment_hook(data, CallTypes.acompletion)
+
+    assert guardrail.pre_call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -322,9 +463,7 @@ async def test_streaming_iterator_hook_runs_model_level_guardrail():
             )
             self.was_called = False
 
-        async def async_post_call_streaming_iterator_hook(
-            self, user_api_key_dict, response, request_data
-        ):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
             self.was_called = True
             async for chunk in response:
                 yield chunk
@@ -385,9 +524,7 @@ async def test_streaming_iterator_hook_skips_guardrail_not_on_model():
             )
             self.was_called = False
 
-        async def async_post_call_streaming_iterator_hook(
-            self, user_api_key_dict, response, request_data
-        ):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
             self.was_called = True
             async for chunk in response:
                 yield chunk
@@ -425,3 +562,103 @@ async def test_streaming_iterator_hook_skips_guardrail_not_on_model():
 
         assert guardrail.was_called is False
         assert chunks == ["chunk-1"]
+
+
+# ---------------------------------------------------------------------------
+# Regression: pre_call ordering — _check_and_merge_model_level_guardrails
+# must run BEFORE pre_call_hook so DB/UI-configured guardrails fire on
+# pre_call paths (#29652; #23774 only covered post_call).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pre_call_merges_model_level_guardrails_before_pre_call_hook():
+    """
+    common_processing_pre_call_logic must merge model-level guardrails into
+    data BEFORE proxy_logging_obj.pre_call_hook is invoked. Otherwise
+    pre_call guardrails (e.g. apply_guardrail event) never see the
+    UI/DB-assigned guardrail name.
+    """
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    # Stub router that reports one deployment in the group with one
+    # model-level guardrail. Mirrors the real proxy: at pre_call_hook time
+    # model_info has been stripped by add_litellm_data_to_request (see
+    # veria-ai review on PR #29654) and route_request hasn't yet populated
+    # model_info.id — so the resolver has to fall back to the model alias
+    # and union guardrails across all deployments in the group.
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = None
+    mock_router.get_model_list.return_value = [{"litellm_params": {"guardrails": ["my-pre-call-guardrail"]}}]
+
+    processing = ProxyBaseLLMRequestProcessing(
+        data={
+            "model": "my-model",
+            "metadata": {},  # model_info already stripped
+        }
+    )
+
+    captured_pre_call_guardrails: list = []
+
+    async def fake_pre_call_hook(*, user_api_key_dict, data, call_type):
+        # Snapshot the list rather than the dict: metadata is shared by
+        # reference, so a merge that happens after this point would otherwise
+        # show up here retroactively and the assertion would pass either way.
+        captured_pre_call_guardrails.extend(
+            (data.get("metadata") or {}).get("guardrails") or data.get("guardrails") or []
+        )
+        return data
+
+    proxy_logging = MagicMock()
+    proxy_logging.pre_call_hook = fake_pre_call_hook
+
+    # Minimal stubs for the surrounding setup steps in
+    # common_processing_pre_call_logic. We only care about the ordering
+    # between _check_and_merge_model_level_guardrails and pre_call_hook.
+    async def passthrough_add_litellm_data(*, data, **kwargs):
+        return data
+
+    proxy_config = MagicMock()
+    proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
+
+    # Assert on what pre_call_hook was handed rather than short-circuiting the
+    # function part way through: a sentinel keyed to one particular later call
+    # silently stops testing the ordering as soon as that call moves.
+
+    with (
+        patch(
+            "litellm.proxy.common_request_processing.add_litellm_data_to_request",
+            side_effect=passthrough_add_litellm_data,
+        ),
+        patch(
+            "litellm.proxy.common_request_processing.litellm.utils.function_setup",
+            return_value=(MagicMock(), processing.data),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            None,
+        ),
+    ):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        await processing.common_processing_pre_call_logic(
+            request=MagicMock(headers={}, url=MagicMock(path="/v1/chat/completions")),
+            general_settings={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            proxy_logging_obj=proxy_logging,
+            proxy_config=proxy_config,
+            route_type="acompletion",
+            version=None,
+            user_model=None,
+            user_temperature=None,
+            user_request_timeout=None,
+            user_max_tokens=None,
+            user_api_base=None,
+            model=None,
+            llm_router=mock_router,
+        )
+
+    # The pre_call_hook must have received data with the model-level
+    # guardrail already merged in. Before the fix, this assertion fails
+    # because pre_call_hook saw the original data without merge.
+    assert "my-pre-call-guardrail" in captured_pre_call_guardrails

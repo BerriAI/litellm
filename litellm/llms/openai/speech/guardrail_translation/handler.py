@@ -5,7 +5,7 @@ This module provides guardrail translation support for OpenAI's text-to-speech e
 The handler processes the 'input' text parameter (output is audio, so no text to guardrail).
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -31,7 +31,7 @@ class OpenAITextToSpeechHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
+        litellm_logging_obj: Any | None = None,
     ) -> Any:
         """
         Process input text by applying guardrails.
@@ -43,31 +43,28 @@ class OpenAITextToSpeechHandler(BaseTranslation):
         Returns:
             Modified data with guardrails applied to input text
         """
-        input_text = data.get("input")
+        input_text: Final = data.get("input")
         if input_text is None:
-            verbose_proxy_logger.debug(
-                "OpenAI Text-to-Speech: No input text found in request data"
-            )
+            verbose_proxy_logger.debug("OpenAI Text-to-Speech: No input text found in request data")
             return data
 
         if isinstance(input_text, str):
-            inputs = GenericGuardrailAPIInputs(texts=[input_text])
+            inputs: Final = GenericGuardrailAPIInputs(texts=[input_text])
             # Include model information if available (voice model)
-            model = data.get("model")
+            model: Final = data.get("model")
             if model:
                 inputs["model"] = model
-            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+            guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data,
                 input_type="request",
                 logging_obj=litellm_logging_obj,
             )
-            guardrailed_texts = guardrailed_inputs.get("texts", [])
+            guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             data["input"] = guardrailed_texts[0] if guardrailed_texts else input_text
 
             verbose_proxy_logger.debug(
-                "OpenAI Text-to-Speech: Applied guardrail to input text. "
-                "Original length: %d, New length: %d",
+                "OpenAI Text-to-Speech: Applied guardrail to input text. Original length: %d, New length: %d",
                 len(input_text),
                 len(data["input"]),
             )
@@ -83,9 +80,9 @@ class OpenAITextToSpeechHandler(BaseTranslation):
         self,
         response: "HttpxBinaryResponseContent",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
-        user_api_key_dict: Optional[Any] = None,
-        request_data: Optional[dict] = None,
+        litellm_logging_obj: Any | None = None,
+        user_api_key_dict: Any | None = None,
+        request_data: dict | None = None,
     ) -> Any:
         """
         Process output - not applicable for text-to-speech.
@@ -103,7 +100,6 @@ class OpenAITextToSpeechHandler(BaseTranslation):
             Unmodified response (audio data doesn't need text guardrails)
         """
         verbose_proxy_logger.debug(
-            "OpenAI Text-to-Speech: Output processing not applicable "
-            "(output is audio data, not text)"
+            "OpenAI Text-to-Speech: Output processing not applicable (output is audio data, not text)"
         )
         return response

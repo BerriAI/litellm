@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 from typing_extensions import (
     Required,
@@ -16,7 +16,7 @@ GeminiEmbeddingInput = Union[EmbeddingInput, List[List[str]]]
 
 class FunctionResponse(TypedDict, total=False):
     # `id` correlates this response with the originating `functionCall` part.
-    # Supported on Google AI Studio Gemini 3.5+; Vertex AI rejects this field.
+    # Supported on Gemini 3+; older Gemini models reject this field.
     id: str
     name: Required[str]
     response: Optional[dict]
@@ -24,8 +24,8 @@ class FunctionResponse(TypedDict, total=False):
 
 
 class FunctionCall(TypedDict, total=False):
-    # `id` correlates the corresponding `functionResponse` on Google AI Studio
-    # Gemini 3.5+. Vertex AI and older Gemini models omit/reject this field.
+    # `id` correlates the corresponding `functionResponse` on Gemini 3+.
+    # Older Gemini models omit/reject this field.
     id: str
     name: Required[str]
     args: Optional[dict]
@@ -58,8 +58,8 @@ class PartType(TypedDict, total=False):
 
 
 class HttpxFunctionCall(TypedDict, total=False):
-    # `id` correlates the corresponding `functionResponse` on Google AI Studio
-    # Gemini 3.5+. Vertex AI and older Gemini models omit/reject this field.
+    # `id` correlates the corresponding `functionResponse` on Gemini 3+.
+    # Older Gemini models omit/reject this field.
     id: str
     name: Required[str]
     args: dict
@@ -182,9 +182,7 @@ HarmBlockThreshold = Literal[
 ]
 HarmBlockMethod = Literal["HARM_BLOCK_METHOD_UNSPECIFIED", "SEVERITY", "PROBABILITY"]
 
-HarmProbability = Literal[
-    "HARM_PROBABILITY_UNSPECIFIED", "NEGLIGIBLE", "LOW", "MEDIUM", "HIGH"
-]
+HarmProbability = Literal["HARM_PROBABILITY_UNSPECIFIED", "NEGLIGIBLE", "LOW", "MEDIUM", "HIGH"]
 
 HarmSeverity = Literal[
     "HARM_SEVERITY_UNSPECIFIED",
@@ -210,9 +208,7 @@ class GeminiThinkingConfig(TypedDict, total=False):
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
 
-GeminiImageAspectRatio = Literal[
-    "1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"
-]
+GeminiImageAspectRatio = Literal["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"]
 
 GeminiImageSize = Literal["1K", "2K", "4K"]
 
@@ -303,13 +299,13 @@ class UsageMetadata(TypedDict, total=False):
     candidatesTokenCount: int
     responseTokenCount: int
     cachedContentTokenCount: int
+    toolUsePromptTokenCount: int
+    toolUsePromptTokensDetails: List[PromptTokensDetails]
     promptTokensDetails: List[PromptTokensDetails]
     cacheTokensDetails: List[PromptTokensDetails]
     thoughtsTokenCount: int
     responseTokensDetails: List[PromptTokensDetails]
-    candidatesTokensDetails: List[
-        PromptTokensDetails
-    ]  # Alternative key name used in some responses
+    candidatesTokensDetails: List[PromptTokensDetails]  # Alternative key name used in some responses
 
 
 class TokenCountDetailsResponse(TypedDict):
@@ -760,7 +756,7 @@ class VertexPartnerProvider(str, Enum):
     claude = "claude"
 
 
-VERTEX_AI_PROVIDER_METADATA_FIELDS = (
+VERTEX_AI_PROVIDER_METADATA_FIELDS: Final = (
     "vertex_ai_grounding_metadata",
     "vertex_ai_url_context_metadata",
     "vertex_ai_safety_ratings",
