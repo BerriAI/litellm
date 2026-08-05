@@ -1,10 +1,11 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import moment from "moment";
-import type { UrlUpdateEvent } from "nuqs/adapters/testing";
+import { NuqsTestingAdapter, type UrlUpdateEvent } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
+import { render, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import type { LogEntry } from "./columns";
 import RequestLogsPanel from "./RequestLogsPanel";
 
@@ -97,6 +98,35 @@ const lastCall = () => vi.mocked(uiSpendLogsCall).mock.calls.at(-1)?.[0];
 const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
 const renderPanel = (searchParams?: string) =>
   renderWithProviders(<RequestLogsPanel {...defaultProps} />, { searchParams, onUrlUpdate });
+
+const renderPanelWithHistory = () => {
+  const stack = [""];
+  const handleUrlUpdate = (event: UrlUpdateEvent) => {
+    onUrlUpdate(event);
+    if (event.options.history === "push") {
+      stack.push(event.queryString);
+    } else {
+      stack[stack.length - 1] = event.queryString;
+    }
+  };
+  const tree = (searchParams: string) => (
+    <NuqsTestingAdapter searchParams={searchParams} onUrlUpdate={handleUrlUpdate} hasMemory>
+      <QueryClientProvider client={testQueryClient}>
+        <RequestLogsPanel {...defaultProps} />
+      </QueryClientProvider>
+    </NuqsTestingAdapter>
+  );
+  const view = render(tree(""));
+  return {
+    goBack: () => {
+      const current = stack[stack.length - 1] ?? "";
+      stack.pop();
+      const target = stack[stack.length - 1] ?? "";
+      view.rerender(tree(current));
+      view.rerender(tree(target));
+    },
+  };
+};
 const urlParams = () => onUrlUpdate.mock.calls.at(-1)?.[0].searchParams ?? new URLSearchParams();
 const historyModes = () => onUrlUpdate.mock.calls.map(([event]) => event.options.history);
 
@@ -285,7 +315,7 @@ describe("RequestLogsPanel", () => {
     it("switching logs inside the drawer replaces the URL, so back closes the drawer in one step", async () => {
       const user = userEvent.setup();
       respondWith([logEntry({ request_id: "req-1" }), logEntry({ request_id: "req-2" })]);
-      renderPanel();
+      const { goBack } = renderPanelWithHistory();
 
       await waitFor(() => expect(row("req-1")).not.toBeNull());
       await user.click(row("req-1") as HTMLElement);
@@ -295,6 +325,10 @@ describe("RequestLogsPanel", () => {
       await waitFor(() => expect(drawer()).toHaveAttribute("data-log-id", "req-2"));
       expect(urlParams().get("log_id")).toBe("req-2");
       expect(historyModes()).toEqual(["push", "replace"]);
+
+      goBack();
+      await waitFor(() => expect(drawer()).toHaveTextContent("closed"));
+      expect(drawer()).toHaveAttribute("data-log-id", "");
     });
 
     it("clicking a session id writes ?session_id= and ?log_id= and opens the session drawer", async () => {
