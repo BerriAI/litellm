@@ -86,7 +86,7 @@ class AmazonDeepseekR1ResponseIterator(BaseModelResponseIterator):
         Deepseek r1 starts by thinking, then it generates the response.
         """
         try:
-            typed_chunk: Final = AmazonDeepSeekR1StreamingResponse(**chunk)  # type: ignore
+            typed_chunk: Final = AmazonDeepSeekR1StreamingResponse(**chunk)
             generated_content = typed_chunk["generation"]
             if generated_content == "</think>" and not self.has_finished_thinking:
                 verbose_logger.debug("Deepseek r1: </think> received, setting has_finished_thinking to True")

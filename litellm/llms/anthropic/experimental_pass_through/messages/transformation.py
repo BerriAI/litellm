@@ -552,7 +552,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         _tools: Final = anthropic_messages_optional_request_params.get("tools") or []
         _has_advisor: Final = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _tools)
         if not _has_advisor:
-            messages = strip_advisor_blocks_from_messages(messages)  # type: ignore[assignment]
+            messages = strip_advisor_blocks_from_messages(messages)
 
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
             messages=messages,

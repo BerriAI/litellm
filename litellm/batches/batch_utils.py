@@ -274,7 +274,7 @@ async def _fetch_batch_output_file_content(
     credentials: Final = _extract_file_access_credentials(litellm_params)
     file_content_kwargs.update(credentials)
 
-    _file_content: Final = await afile_content(**file_content_kwargs)  # type: ignore[reportArgumentType]
+    _file_content: Final = await afile_content(**file_content_kwargs)
     return _file_content.content
 
 

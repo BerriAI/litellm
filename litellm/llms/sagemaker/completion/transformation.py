@@ -144,7 +144,7 @@ class SagemakerConfig(BaseConfig):
             hf_model_name = (
                 hf_model_name or model
             )  # pass in hf model name for pulling it's prompt template - (e.g. `hf_model_name="meta-llama/Llama-2-7b-chat-hf` applies the llama2 chat template to the prompt)
-            prompt: str = prompt_factory(model=hf_model_name, messages=messages)  # type: ignore
+            prompt: str = prompt_factory(model=hf_model_name, messages=messages)
 
         return prompt
 
@@ -227,7 +227,7 @@ class SagemakerConfig(BaseConfig):
             if completion_output.startswith(prompt) and "<s>" in prompt:
                 completion_output = completion_output.replace(prompt, "", 1)
 
-            model_response.choices[0].message.content = completion_output  # type: ignore
+            model_response.choices[0].message.content = completion_output
         except Exception:
             raise SagemakerError(
                 message=f"LiteLLM Error: Unable to parse sagemaker RAW RESPONSE {json.dumps(completion_response)}",

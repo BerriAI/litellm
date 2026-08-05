@@ -162,9 +162,9 @@ class SagemakerChatHandler(BaseAWSLLM):
             logger_fn=logger_fn,
             timeout=timeout,
             encoding=encoding,
-            headers=prepared_request.headers,  # type: ignore
+            headers=prepared_request.headers,
             custom_endpoint=True,
             custom_llm_provider="sagemaker_chat",
-            streaming_decoder=custom_stream_decoder,  # type: ignore
+            streaming_decoder=custom_stream_decoder,
             client=client,
         )

@@ -1199,7 +1199,7 @@ async def test_prompt(
             # Use conversation history for user/assistant messages
             messages = system_messages + request.conversation_history
         else:
-            messages = rendered_messages  # type: ignore[assignment]
+            messages = rendered_messages
 
         # Use PromptTemplate's optional_params which already extracts all parameters
         optional_params: Final = template.optional_params.copy()

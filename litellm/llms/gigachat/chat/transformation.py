@@ -469,7 +469,7 @@ class GigaChatConfig(BaseConfig):
         model_response.id = response_json.get("id", f"chatcmpl-{uuid.uuid4().hex[:12]}")
         model_response.created = response_json.get("created", int(time.time()))
         model_response.model = model
-        model_response.choices = choices  # type: ignore
+        model_response.choices = choices
         setattr(model_response, "usage", usage)
 
         return model_response

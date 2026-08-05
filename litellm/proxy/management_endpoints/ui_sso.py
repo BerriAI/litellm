@@ -937,7 +937,7 @@ async def google_login(
     # check if user defined a custom auth sso sign in handler, if yes, use it
     if user_custom_ui_sso_sign_in_handler is not None:
         try:
-            from litellm_enterprise.proxy.auth.custom_sso_handler import (  # type: ignore[import-untyped]
+            from litellm_enterprise.proxy.auth.custom_sso_handler import (
                 EnterpriseCustomSSOHandler,
             )
 
@@ -2019,7 +2019,7 @@ async def _build_cli_sso_user_defined_values(
     user_id: Final = parsed_openid_result.get("user_id")
     if user_custom_sso is not None:
         if inspect.iscoroutinefunction(user_custom_sso):
-            return await user_custom_sso(result)  # type: ignore
+            return await user_custom_sso(result)
         raise ValueError("user_custom_sso must be a coroutine function")
     if user_id is None:
         return None
@@ -2365,12 +2365,12 @@ async def insert_sso_user(
         if _should_use_role_from_sso_response(sso_role):
             # Preserve the SSO-extracted role, but apply other defaults
             preserved_role: Final = sso_role
-            user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
+            user_defined_values.update(litellm.default_internal_user_params)
             user_defined_values["user_role"] = preserved_role  # Restore preserved role
             verbose_proxy_logger.debug("Preserved SSO-extracted role '%s'", preserved_role)
         else:
             # SSO didn't provide a valid role, apply all defaults including role
-            user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
+            user_defined_values.update(litellm.default_internal_user_params)
 
     # Set budget for internal users
     if user_defined_values.get("user_role") == LitellmUserRoles.INTERNAL_USER.value:
@@ -2385,7 +2385,7 @@ async def insert_sso_user(
     new_user_request: Final = NewUserRequest(
         user_id=user_defined_values["user_id"],
         user_email=normalize_email(user_defined_values["user_email"]),
-        user_role=user_defined_values["user_role"],  # type: ignore
+        user_role=user_defined_values["user_role"],
         max_budget=user_defined_values["max_budget"],
         budget_duration=user_defined_values["budget_duration"],
         sso_user_id=user_defined_values["user_id"],
@@ -2816,7 +2816,7 @@ class SSOAuthenticationHandler:
                     state_only_params[key] = value
 
             # Get the redirect response from fastapi-sso with only state param
-            redirect_response: Final = await generic_sso.get_login_redirect(**state_only_params)  # type: ignore
+            redirect_response: Final = await generic_sso.get_login_redirect(**state_only_params)
 
             # If PKCE is enabled, add PKCE parameters to the redirect URL
             if code_verifier and "state" in redirect_params:
@@ -3188,7 +3188,7 @@ class SSOAuthenticationHandler:
 
         if user_email is not None and os.getenv("ALLOWED_EMAIL_DOMAINS") is not None:
             email_domain: Final = user_email.split("@")[1]
-            allowed_domains: Final = os.getenv("ALLOWED_EMAIL_DOMAINS").split(",")  # type: ignore
+            allowed_domains: Final = os.getenv("ALLOWED_EMAIL_DOMAINS").split(",")
             if email_domain not in allowed_domains:
                 raise HTTPException(
                     status_code=401,
@@ -3211,7 +3211,7 @@ class SSOAuthenticationHandler:
             user_id = getattr(result, "id", None)
             user_email = normalize_email(getattr(result, "email", None))
             if user_role is None:
-                _role_from_attr: Final = getattr(result, generic_user_role_attribute_name, None)  # type: ignore
+                _role_from_attr: Final = getattr(result, generic_user_role_attribute_name, None)
                 if _role_from_attr is not None:
                     # Convert enum to string if needed
                     user_role = (
@@ -3280,7 +3280,7 @@ class SSOAuthenticationHandler:
 
         if user_custom_sso is not None:
             if inspect.iscoroutinefunction(user_custom_sso):
-                user_defined_values = await user_custom_sso(result)  # type: ignore
+                user_defined_values = await user_custom_sso(result)
             else:
                 raise ValueError("user_custom_sso must be a coroutine function")
         elif user_id is not None:
@@ -3352,8 +3352,8 @@ class SSOAuthenticationHandler:
             table_name="key",
         )
 
-        key = response["token"]  # type: ignore
-        user_id = response["user_id"]  # type: ignore
+        key = response["token"]
+        user_id = response["user_id"]
 
         user_role = user_defined_values["user_role"] or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
         if user_id and isinstance(user_id, str):
@@ -4016,7 +4016,7 @@ class MicrosoftSSOHandler:
         original_msft_result: Final = (
             await microsoft_sso.verify_and_process(
                 request=request,
-                convert_response=False,  # type: ignore
+                convert_response=False,
             )
             or {}
         )
@@ -4343,7 +4343,7 @@ class GoogleSSOHandler:
             return (
                 await google_sso.verify_and_process(
                     request=request,
-                    convert_response=False,  # type: ignore
+                    convert_response=False,
                 )
                 or {}
             )

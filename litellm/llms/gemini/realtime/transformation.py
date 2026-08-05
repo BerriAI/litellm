@@ -1011,7 +1011,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 object="realtime.response",
                 id=current_response_id,
                 status="completed",
-                status_details=None,  # type: ignore[typeddict-item]
+                status_details=None,
                 output=([output_item["item"] for output_item in output_items] if output_items else []),
                 conversation_id=current_conversation_id,
                 modalities=_modalities,
@@ -1410,7 +1410,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         id=current_response_id,
                         object="realtime.response",
                         status="completed",
-                        status_details=None,  # type: ignore[typeddict-item]
+                        status_details=None,
                         output=[
                             {
                                 "id": te["item_id"],
@@ -1452,7 +1452,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     server_content_handled = True
                     continue
                 transformed_response_done_event = self.transform_response_done_event(
-                    message=BidiGenerateContentServerMessage(**json_message),  # type: ignore
+                    message=BidiGenerateContentServerMessage(**json_message),
                     current_response_id=current_response_id,
                     current_conversation_id=current_conversation_id,
                     session_configuration_request=session_configuration_request,

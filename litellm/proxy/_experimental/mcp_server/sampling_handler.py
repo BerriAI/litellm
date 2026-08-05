@@ -762,8 +762,8 @@ async def _check_model_access(model: str, user_api_key_auth: "UserAPIKeyAuth | N
             )
         except ImportError:
             _prisma_client = None
-            _user_api_key_cache = None  # type: ignore[assignment]
-            _proxy_logging_obj = None  # type: ignore[assignment]
+            _user_api_key_cache = None
+            _proxy_logging_obj = None
 
         if _team_id and _prisma_client and _user_api_key_cache:
             try:

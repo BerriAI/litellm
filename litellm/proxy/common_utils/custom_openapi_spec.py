@@ -38,11 +38,11 @@ class CustomOpenAPISpec:
         """
         try:
             # Try Pydantic v2 method first
-            return model_class.model_json_schema()  # type: ignore
+            return model_class.model_json_schema()
         except AttributeError:
             try:
                 # Fallback to Pydantic v1 method
-                return model_class.schema()  # type: ignore
+                return model_class.schema()
             except AttributeError:
                 # If both methods fail, return None
                 return None
