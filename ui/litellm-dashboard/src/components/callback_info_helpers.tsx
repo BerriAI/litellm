@@ -1,8 +1,10 @@
 import arizeLogo from "../../public/assets/logos/arize.png";
 import awsLogo from "../../public/assets/logos/aws.svg";
+import azureLogo from "../../public/assets/logos/microsoft_azure.svg";
 import braintrustLogo from "../../public/assets/logos/braintrust.png";
 import datadogLogo from "../../public/assets/logos/datadog.png";
 import galileoLogo from "../../public/assets/logos/galileo.ico";
+import googleLogo from "../../public/assets/logos/google.svg";
 import lagoLogo from "../../public/assets/logos/lago.svg";
 import langfuseLogo from "../../public/assets/logos/langfuse.png";
 import langsmithLogo from "../../public/assets/logos/langsmith.png";
@@ -13,7 +15,6 @@ interface CallbackConfig {
   id: string;
   displayName: string;
   logo?: string;
-  supports_key_team_logging: boolean;
   dynamic_params: Record<string, "text" | "password" | "select" | "upload" | "number">;
   description: string;
 }
@@ -23,7 +24,6 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     id: "arize",
     displayName: "Arize",
     logo: arizeLogo.src,
-    supports_key_team_logging: true,
     dynamic_params: {
       arize_api_key: "password",
       arize_space_id: "password",
@@ -31,46 +31,36 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     description: "Arize Logging Integration",
   },
   {
+    id: "arize_phoenix",
+    displayName: "Arize Phoenix",
+    logo: arizeLogo.src,
+    dynamic_params: {},
+    description: "Arize Phoenix Logging Integration",
+  },
+  {
+    id: "azure_storage",
+    displayName: "Azure Blob Storage",
+    logo: azureLogo.src,
+    dynamic_params: {},
+    description: "Azure Blob Storage Logging Integration",
+  },
+  {
     id: "braintrust",
     displayName: "Braintrust",
     logo: braintrustLogo.src,
-    supports_key_team_logging: false,
-    dynamic_params: {
-      braintrust_api_key: "password",
-      braintrust_project_name: "text",
-    },
+    dynamic_params: {},
     description: "Braintrust Logging Integration",
   },
   {
     id: "custom_callback_api",
     displayName: "Custom Callback API",
-    supports_key_team_logging: true,
-    dynamic_params: {
-      custom_callback_api_url: "text",
-      custom_callback_api_headers: "text",
-    },
+    dynamic_params: {},
     description: "Custom Callback API Logging Integration",
-  },
-  {
-    id: "galileo",
-    displayName: "Galileo",
-    logo: galileoLogo.src,
-    supports_key_team_logging: false,
-    dynamic_params: {
-      GALILEO_API_KEY: "password",
-      GALILEO_PROJECT_ID: "text",
-      GALILEO_LOG_STREAM_ID: "text",
-      GALILEO_BASE_URL: "text",
-      GALILEO_USERNAME: "text",
-      GALILEO_PASSWORD: "password",
-    },
-    description: "Galileo AI Observability Integration",
   },
   {
     id: "datadog",
     displayName: "Datadog",
     logo: datadogLogo.src,
-    supports_key_team_logging: false,
     dynamic_params: {
       dd_api_key: "password",
       dd_site: "text",
@@ -78,21 +68,47 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     description: "Datadog Logging Integration",
   },
   {
+    id: "datadog_llm_observability",
+    displayName: "Datadog LLM Observability",
+    logo: datadogLogo.src,
+    dynamic_params: {},
+    description: "Datadog LLM Observability Logging Integration",
+  },
+  {
+    id: "galileo",
+    displayName: "Galileo",
+    logo: galileoLogo.src,
+    dynamic_params: {},
+    description: "Galileo AI Observability Integration",
+  },
+  {
+    id: "gcs_bucket",
+    displayName: "GCS Bucket",
+    logo: googleLogo.src,
+    dynamic_params: {
+      gcs_bucket_name: "text",
+      gcs_path_service_account: "text",
+    },
+    description: "Google Cloud Storage Bucket Logging Integration",
+  },
+  {
+    id: "gcs_pubsub",
+    displayName: "GCS Pub/Sub",
+    logo: googleLogo.src,
+    dynamic_params: {},
+    description: "Google Cloud Pub/Sub Logging Integration",
+  },
+  {
     id: "lago",
     displayName: "Lago",
     logo: lagoLogo.src,
-    supports_key_team_logging: false,
-    dynamic_params: {
-      lago_api_url: "text",
-      lago_api_key: "password",
-    },
+    dynamic_params: {},
     description: "Lago Billing Logging Integration",
   },
   {
     id: "langfuse",
     displayName: "Langfuse",
     logo: langfuseLogo.src,
-    supports_key_team_logging: true,
     dynamic_params: {
       langfuse_public_key: "text",
       langfuse_secret_key: "password",
@@ -104,7 +120,6 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     id: "langfuse_otel",
     displayName: "Langfuse OTEL",
     logo: langfuseLogo.src,
-    supports_key_team_logging: true,
     dynamic_params: {
       langfuse_public_key: "text",
       langfuse_secret_key: "password",
@@ -116,7 +131,6 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     id: "langsmith",
     displayName: "LangSmith",
     logo: langsmithLogo.src,
-    supports_key_team_logging: true,
     dynamic_params: {
       langsmith_api_key: "password",
       langsmith_project: "text",
@@ -126,52 +140,62 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     description: "Langsmith Logging Integration",
   },
   {
+    id: "mlflow",
+    displayName: "MLflow",
+    dynamic_params: {},
+    description: "MLflow Logging Integration",
+  },
+  {
     id: "openmeter",
     displayName: "OpenMeter",
     logo: openmeterLogo.src,
-    supports_key_team_logging: false,
-    dynamic_params: {
-      openmeter_api_key: "password",
-      openmeter_base_url: "text",
-    },
+    dynamic_params: {},
     description: "OpenMeter Logging Integration",
+  },
+  {
+    id: "opik",
+    displayName: "Opik",
+    dynamic_params: {},
+    description: "Comet Opik Logging Integration",
   },
   {
     id: "otel",
     displayName: "Open Telemetry",
     logo: otelLogo.src,
-    supports_key_team_logging: false,
-    dynamic_params: {
-      otel_endpoint: "text",
-      otel_headers: "text",
-    },
+    dynamic_params: {},
     description: "OpenTelemetry Logging Integration",
+  },
+  {
+    id: "posthog",
+    displayName: "PostHog",
+    dynamic_params: {
+      posthog_api_key: "password",
+      posthog_api_url: "text",
+    },
+    description: "PostHog Logging Integration",
   },
   {
     id: "s3",
     displayName: "S3",
     logo: awsLogo.src,
-    supports_key_team_logging: false,
-    dynamic_params: {
-      s3_bucket_name: "text",
-      aws_access_key_id: "password",
-      aws_secret_access_key: "password",
-      aws_region: "text",
-    },
+    dynamic_params: {},
     description: "S3 Bucket (AWS) Logging Integration",
   },
   {
-    id: "SQS",
+    id: "aws_sqs",
     displayName: "SQS",
     logo: awsLogo.src,
-    supports_key_team_logging: false,
-    dynamic_params: {
-      sqs_queue_url: "text",
-      aws_access_key_id: "password",
-      aws_secret_access_key: "password",
-      aws_region: "text",
-    },
+    dynamic_params: {},
     description: "SQS Queue (AWS) Logging Integration",
+  },
+  {
+    id: "weave_otel",
+    displayName: "Weave",
+    dynamic_params: {
+      wandb_api_key: "password",
+      weave_project_id: "text",
+    },
+    description: "Weights & Biases Weave Logging Integration",
   },
 ];
 
