@@ -25,7 +25,7 @@ SERVER_ROOT_PATHS_ENV: Final = "SERVER_ROOT_PATHS"
 def normalize_root_paths(raw_paths: Sequence[str]) -> tuple[str, ...]:
     """Strip whitespace and trailing slashes, dedupe, order longest-first;
     warn and drop entries missing a leading ``/`` and the bare root."""
-    kept: list[str] = []
+    kept: list[str] = []  # mutable-ok: local accumulator; escapes only as a tuple
     for entry in raw_paths:
         candidate = entry.strip()
         if not candidate:
