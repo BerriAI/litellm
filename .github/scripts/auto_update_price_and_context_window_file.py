@@ -1,6 +1,7 @@
 import asyncio
 import aiohttp
 import json
+from typing import Any, Optional
 
 # Asynchronously fetch data from a given URL
 async def fetch_data(url):
@@ -20,6 +21,203 @@ async def fetch_data(url):
         # Print an error message if fetching data fails
         print("Error fetching data from URL:", e)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Friendli
+# ---------------------------------------------------------------------------
+
+FRIENDLI_API_URL = "https://api.friendli.ai/serverless/v1/models"
+FRIENDLI_PROVIDER = "friendliai"
+
+# litellm model-entry keys that Friendli API provides directly.
+# These override the base model's value when set.
+FRIENDLI_OVERRIDE_KEYS = (
+    "context_length",
+    "max_completion_tokens",
+    "pricing",
+    "reasoning_options",
+    "input_modalities",
+    "output_modalities",
+    "interleaved",
+    "description",
+)
+
+# Keys copied from the base-model entry (if one exists in litellm) to the
+# Friendli entry, so that manually-curated capability metadata is inherited.
+INHERITABLE_BASE_KEYS = (
+    "supports_reasoning",
+    "supports_function_calling",
+    "supports_parallel_function_calling",
+    "supports_response_schema",
+    "supports_system_messages",
+    "supports_tool_choice",
+    "supports_vision",
+    "supports_pdf_input",
+    "supports_prompt_caching",
+    "supports_assistant_prefill",
+    "supports_low_reasoning_effort",
+    "supports_minimal_reasoning_effort",
+    "supports_max_reasoning_effort",
+    "supports_xhigh_reasoning_effort",
+    "supports_none_reasoning_effort",
+    "supports_adaptive_thinking",
+    "supports_output_config",
+    "supports_native_structured_output",
+)
+
+# litellm reasoning-effort boolean flags keyed by the effort string returned by
+# the Friendli API ("none", "minimal", "low", "medium", "high", "xhigh", "max").
+EFFORT_FLAG_MAP = {
+    "none": "supports_none_reasoning_effort",
+    "minimal": "supports_minimal_reasoning_effort",
+    "low": "supports_low_reasoning_effort",
+    "medium": "supports_low_reasoning_effort",  # ponytail: litellm has no "medium" flag; medium implies low. Upgrade when a medium flag is added.
+    "high": "supports_max_reasoning_effort",  # ponytail: litellm only has low/minimal/none/xhigh/max, not a standalone "high". Map high→max.
+    "xhigh": "supports_xhigh_reasoning_effort",
+    "max": "supports_max_reasoning_effort",
+}
+
+
+def _find_base_model_entry(base_model: str, local_data: dict) -> Optional[str]:
+    """Return the litellm key for ``base_model`` if one already exists.
+
+    Friendli ``base_model`` is a canonical model id like ``zhipuai/glm-5.2`` or
+    ``minimax/minimax-m2.5``.  litellm stores the same model under various provider
+    prefixes (``zai/glm-5.2``, ``cloudflare/@cf/zai-org/glm-5.2`` etc).  We match the
+    tail of the base_model against every existing key so capability flags are
+    inherited from whichever provider entry is already curated.
+    """
+    if not base_model:
+        return None
+    bm_tail = base_model.split("/")[-1].lower()
+    # Exact key match (base_model itself could be a litellm key).
+    if base_model in local_data:
+        return base_model
+    # Tail match against every key's last segment.
+    for key in local_data:
+        if key.startswith("sample_spec") or key == "fallback_generalizations":
+            continue
+        if key.split("/")[-1].lower() == bm_tail:
+            return key
+    return None
+
+
+def _effort_flags(reasoning_options: list) -> dict:
+    """Map Friendli ``reasoning_options`` effort values to litellm boolean flags."""
+    flags: dict[str, bool] = {}
+    for opt in reasoning_options or []:
+        if opt.get("type") == "effort":
+            for val in opt.get("values", []):
+                flag = EFFORT_FLAG_MAP.get(val)
+                if flag:
+                    flags[flag] = True
+    return flags
+
+
+def _pricing(pricing: dict) -> dict:
+    """Convert Friendli pricing dict → litellm cost fields."""
+    out: dict[str, Any] = {}
+    if not pricing:
+        return out
+    if "input" in pricing:
+        out["input_cost_per_token"] = float(pricing["input"])
+    if "output" in pricing:
+        out["output_cost_per_token"] = float(pricing["output"])
+    if "input_cache_read" in pricing and pricing["input_cache_read"] is not None:
+        out["cache_read_input_token_cost"] = float(pricing["input_cache_read"])
+    return out
+
+
+def _modalities(input_mods: list, output_mods: list) -> dict:
+    """Convert Friendli modality lists to litellm capability flags."""
+    out: dict[str, Any] = {}
+    if "image" in (input_mods or []):
+        out["supports_vision"] = True
+        out["supports_image_input"] = True
+    return out
+
+
+def transform_friendli_data(data: list, local_data: dict) -> dict:
+    """Transform the Friendli /models response into litellm model entries.
+
+    For each Friendli model we build a ``friendliai/{id}`` entry.  When the
+    model's ``base_model`` already exists in litellm (under any provider prefix)
+    we inherit capability flags; Friendli-supplied pricing/limits/modalities/
+    reasoning always override.
+    """
+    transformed: dict[str, dict] = {}
+    for model in data:
+        model_id = model["id"]
+        base_model = model.get("base_model") or ""
+        entry: dict[str, Any] = {
+            "litellm_provider": FRIENDLI_PROVIDER,
+        }
+
+        # --- Inherit capability flags from an existing base-model entry ---
+        base_key = _find_base_model_entry(base_model, local_data)
+        if base_key:
+            base_entry = local_data[base_key]
+            for k in INHERITABLE_BASE_KEYS:
+                if k in base_entry:
+                    entry[k] = base_entry[k]
+
+        # --- Override with Friendli-supplied values ---
+        ctx = model.get("context_length")
+        if ctx is not None:
+            entry["max_input_tokens"] = int(ctx)
+            entry["max_tokens"] = int(ctx)
+        max_out = model.get("max_completion_tokens")
+        if max_out is not None:
+            entry["max_output_tokens"] = int(max_out)
+
+        # Pricing
+        entry.update(_pricing(model.get("pricing", {})))
+
+        # Reasoning
+        if model.get("reasoning") is True:
+            entry["supports_reasoning"] = True
+            # Effort flags (if present) override inherited ones.
+            entry.update(_effort_flags(model.get("reasoning_options", [])))
+
+        # Functionality
+        func = model.get("functionality", {})
+        if func.get("tool_call") is True:
+            entry["supports_function_calling"] = True
+        if func.get("parallel_tool_call") is True:
+            entry["supports_parallel_function_calling"] = True
+        if func.get("structured_output") is True:
+            entry["supports_response_schema"] = True
+            entry["supports_native_structured_output"] = True
+        if func.get("system_messages") is True:
+            entry["supports_system_messages"] = True
+        if func.get("tool_choice") is True:
+            entry["supports_tool_choice"] = True
+
+        # Modalities
+        entry.update(_modalities(
+            model.get("input_modalities", []),
+            model.get("output_modalities", []),
+        ))
+
+        # Mode
+        entry["mode"] = model.get("mode", "chat")
+
+        # Description → comment (free-form)
+        desc = model.get("description")
+        if desc:
+            entry["comment"] = desc
+
+        # Deprecation
+        dep = model.get("deprecation_date")
+        if dep:
+            entry["deprecation_date"] = dep.split("T")[0]
+
+        # Source URL for traceability
+        entry["source"] = FRIENDLI_API_URL
+
+        transformed[f"{FRIENDLI_PROVIDER}/{model_id}"] = entry
+    return transformed
 
 # Synchronize local data with remote data
 def sync_local_data_with_remote(local_data, remote_data):
@@ -143,9 +341,14 @@ def main():
     vercel_data = asyncio.run(fetch_data(vercel_ai_gateway_url))
     # Transform the fetched Vercel AI Gateway data
     vercel_data = transform_vercel_ai_gateway_data(vercel_data)
+
+    # Fetch Friendli data (no auth required for the public /models endpoint)
+    friendli_data = asyncio.run(fetch_data(FRIENDLI_API_URL))
+    # Transform Friendli data, inheriting capability flags from existing base-model entries
+    friendli_data = transform_friendli_data(friendli_data, local_data)
     
     # Combine both datasets
-    all_remote_data = {**openrouter_data, **vercel_data}
+    all_remote_data = {**openrouter_data, **vercel_data, **friendli_data}
 
     # If both local and openrouter data are available, synchronize and save
     if local_data and all_remote_data:
