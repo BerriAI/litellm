@@ -594,3 +594,51 @@ describe("testMCPToolsListRequest auth headers", () => {
     expect(headers["Authorization"]).toBe("Bearer sk-key");
   });
 });
+
+describe("credential path encoding", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const mockOk = () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: vi.fn().mockResolvedValue("{}"),
+    } as any);
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  const requestedUrl = (mockFetch: ReturnType<typeof mockOk>): URL => {
+    const [url] = mockFetch.mock.calls[0];
+    const urlStr = typeof url === "string" ? url : (url as Request).url;
+    return new URL(urlStr, "http://example.com");
+  };
+
+  it("encodes the credential name on delete so the request cannot address a different credential", async () => {
+    const mockFetch = mockOk();
+
+    await Networking.credentialDeleteCall("token", "dest/other?force=1");
+
+    const parsed = requestedUrl(mockFetch);
+    expect(parsed.pathname).toBe("/credentials/dest%2Fother%3Fforce%3D1");
+    expect(parsed.search).toBe("");
+  });
+
+  it("encodes the credential name on update so the patch reaches the named credential", async () => {
+    const mockFetch = mockOk();
+
+    await Networking.credentialUpdateCall("token", "dest/other?force=1", { credential_info: {} });
+
+    const parsed = requestedUrl(mockFetch);
+    expect(parsed.pathname).toBe("/credentials/dest%2Fother%3Fforce%3D1");
+    expect(parsed.search).toBe("");
+  });
+});

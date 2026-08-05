@@ -58,8 +58,10 @@ vi.mock("./CloudZeroCostTracking/CloudZeroCostTracking", () => ({
   default: () => <div>Mock CloudZero Cost Tracking</div>,
 }));
 
+let credentialsFixture: { credentials: unknown[] } = { credentials: [] };
+
 vi.mock("@/app/(dashboard)/hooks/credentials/useCredentials", () => ({
-  useCredentials: () => ({ data: { credentials: [] }, refetch: vi.fn() }),
+  useCredentials: () => ({ data: credentialsFixture, refetch: vi.fn() }),
 }));
 
 // Polyfill ResizeObserver for components relying on it in tests
@@ -100,6 +102,7 @@ describe("Settings", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    credentialsFixture = { credentials: [] };
     mockGetCallbacksCall.mockResolvedValue({
       callbacks: [],
       available_callbacks: [],
@@ -230,6 +233,29 @@ describe("Settings", () => {
     await waitFor(() => {
       expect(getByText("Langfuse OTEL")).toBeInTheDocument();
     });
+  });
+
+  it("should keep rendering every destination when one stored access scope is not a list", async () => {
+    credentialsFixture = {
+      credentials: [
+        {
+          credential_name: "legacy-shape",
+          credential_info: { credential_type: "logging", description: "langfuse_otel", access: { teams: "team-1" } },
+        },
+        {
+          credential_name: "well-formed",
+          credential_info: { credential_type: "logging", description: "langfuse_otel", access: { teams: ["team-2"] } },
+        },
+      ],
+    };
+
+    const { getByText } = renderSettings(defaultProps);
+
+    await waitFor(() => {
+      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+    expect(getByText("legacy-shape")).toBeInTheDocument();
+    expect(getByText("well-formed")).toBeInTheDocument();
   });
 
   it("should hold the callbacks table in loading state until the fetch settles", async () => {

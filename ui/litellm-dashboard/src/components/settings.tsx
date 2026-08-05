@@ -289,10 +289,13 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     return o?.organization_alias || id;
   };
 
+  const asIdList = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+
   const resolveScope = (access?: CredentialAccess): ResolvedScope => ({
     global: access?.global === true,
-    teams: (access?.teams ?? []).map(teamAlias),
-    orgs: (access?.orgs ?? []).map(orgAlias),
+    teams: asIdList(access?.teams).map(teamAlias),
+    orgs: asIdList(access?.orgs).map(orgAlias),
   });
 
   const destinationRows: AlertingObject[] = (credentialData?.credentials ?? [])

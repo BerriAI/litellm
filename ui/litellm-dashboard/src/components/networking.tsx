@@ -2549,7 +2549,7 @@ export const credentialGetCall = async (accessToken: string, credentialName: str
 
 export const credentialDeleteCall = async (accessToken: string, credentialName: string) => {
   try {
-    const data = await apiClient.delete(`/credentials/${credentialName}`, { accessToken });
+    const data = await apiClient.delete(`/credentials/${encodeURIComponent(credentialName)}`, { accessToken });
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -2573,7 +2573,7 @@ export const credentialUpdateCall = async (
       }
     }
 
-    const data = await apiClient.patch(`/credentials/${credentialName}`, {
+    const data = await apiClient.patch(`/credentials/${encodeURIComponent(credentialName)}`, {
       accessToken,
       body: {
         ...formValues, // Include formValues in the request body
