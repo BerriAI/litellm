@@ -8038,6 +8038,13 @@ class Router:
         verbose_router_logger.debug("\nInitialized Model List %s", self.get_model_names())
         self.model_names = {m["model_name"] for m in model_list}
 
+        for m in self.model_list:
+            model_info = m.get("model_info")
+            self._warn_on_id_name_collision(
+                model_id=model_info.get("id") if isinstance(model_info, dict) else None,
+                model_name=m["model_name"],
+            )
+
         # Note: model_name_to_deployment_indices is already built incrementally
         # by _create_deployment -> _add_model_to_list_and_index_map
 
@@ -8217,6 +8224,54 @@ class Router:
                     api_key=api_key,
                 )
 
+    def _warn_on_id_name_collision(self, model_id: str | None, model_name: str) -> None:
+        """Warn when a deployment id equals a routable name served by this router.
+
+        Ids are resolved before model names at request time
+        (see ``_common_checks_available_deployment``), and before team public
+        names, so such a deployment captures every request for that name and
+        bypasses load balancing, cooldowns, and fallbacks. When the captured name
+        is a team public name the capture also crosses a tenant boundary, serving
+        another team's requests from this deployment and its credentials. Existing
+        routers may already carry this state, so it is surfaced as a warning here;
+        the proxy write path rejects new occurrences.
+        """
+        if model_id is None or (model_id not in self.model_names and model_id not in self.team_public_model_names):
+            return
+        verbose_router_logger.warning(
+            "Deployment id '%s' (model_name '%s') collides with the routable name '%s' (a model name "
+            "or a team public model name). Deployment ids are resolved first at request time, so all "
+            "requests for model '%s' will pin "
+            "to this single deployment, bypassing load balancing, cooldowns, and fallbacks. Change "
+            "this deployment's model_info.id to restore normal routing.",
+            model_id,
+            model_name,
+            model_id,
+            model_id,
+        )
+
+    def _warn_on_name_shadowed_by_existing_id(self, model_id: str | None, model_name: str | None) -> None:
+        """Warn when a newly added deployment's routable name equals a pre-existing deployment id.
+
+        The counterpart of ``_warn_on_id_name_collision`` for incremental adds:
+        when the id-carrying deployment was registered first (DB rows load one
+        at a time), the forward check on it ran before this name existed, so
+        the collision is only visible from the name side. Called for the
+        deployment's model_name and, when set, its team public name. Skipped when
+        the id belongs to this same deployment, which the forward check already
+        reports.
+        """
+        if model_name is None or model_name == model_id or not self.has_model_id(model_name):
+            return
+        verbose_router_logger.warning(
+            "Model name '%s' equals an existing deployment id. Deployment ids are resolved before "
+            "model names at request time, so all requests for model '%s' will pin to the deployment "
+            "carrying that id, bypassing load balancing, cooldowns, and fallbacks for this name. "
+            "Change that deployment's model_info.id to restore normal routing.",
+            model_name,
+            model_name,
+        )
+
     def add_deployment(self, deployment: Deployment) -> Deployment | None:
         """
         Parameters:
@@ -8281,6 +8336,12 @@ class Router:
         # add to model names
         self._add_model_to_list_and_index_map(model=_deployment, model_id=deployment.model_info.id)
         self.model_names.add(deployment.model_name)
+        self._warn_on_id_name_collision(model_id=deployment.model_info.id, model_name=deployment.model_name)
+        self._warn_on_name_shadowed_by_existing_id(model_id=deployment.model_info.id, model_name=deployment.model_name)
+        self._warn_on_name_shadowed_by_existing_id(
+            model_id=deployment.model_info.id,
+            model_name=deployment.model_info.get("team_public_model_name"),
+        )
         self._sync_deployment_budget_config(deployment=deployment)
         return deployment
 
