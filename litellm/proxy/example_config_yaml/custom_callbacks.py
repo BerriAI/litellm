@@ -10,6 +10,7 @@ import inspect
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from typing import Final
 
 
 # This file includes the custom callbacks for LiteLLM Proxy
@@ -21,12 +22,12 @@ def print_verbose(print_statement):
 
 class MyCustomHandler(CustomLogger):
     def __init__(self):
-        blue_color_code = "\033[94m"
-        reset_color_code = "\033[0m"
+        blue_color_code: Final = "\033[94m"
+        reset_color_code: Final = "\033[0m"
         print_verbose(f"{blue_color_code}Initialized LiteLLM custom logger")
         try:
             print_verbose("Logger Initialized with following methods:")
-            methods = [method for method in dir(self) if inspect.ismethod(getattr(self, method))]
+            methods: Final = [method for method in dir(self) if inspect.ismethod(getattr(self, method))]
 
             # Pretty print_verbose the methods
             for method in methods:
@@ -49,7 +50,7 @@ class MyCustomHandler(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         print_verbose("On Async Success!")
-        response_cost = litellm.completion_cost(completion_response=response_obj)
+        response_cost: Final = litellm.completion_cost(completion_response=response_obj)
         assert response_cost > 0.0
         return
 
@@ -60,7 +61,7 @@ class MyCustomHandler(CustomLogger):
             print_verbose(f"Exception: {e}")
 
 
-proxy_handler_instance = MyCustomHandler()
+proxy_handler_instance: Final = MyCustomHandler()
 
 
 # need to set litellm.callbacks = [customHandler] # on the proxy

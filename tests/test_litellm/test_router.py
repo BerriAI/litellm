@@ -1782,10 +1782,12 @@ async def test_acompletion_streaming_iterator():
     assert all(chunk in mock_chunks for chunk in collected_chunks)
     print("✓ Successfully streamed all chunks")
 
-    # Test 2: MidStreamFallbackError with fallback
-    print("\n=== Test 2: MidStreamFallbackError with fallback ===")
+    # Test 2: MidStreamFallbackError with generated content is re-raised, not silently continued
+    print("\n=== Test 2: MidStreamFallbackError re-raises when content already generated ===")
 
-    # Create error that should trigger after first chunk
+    # Error with generated content and is_pre_first_chunk=False (the default):
+    # the router must re-raise instead of attempting a continuation-prompt fallback,
+    # because partial content has already been sent to the client.
     error = MidStreamFallbackError(
         message="Connection lost",
         model="gpt-4",
@@ -1812,64 +1814,107 @@ async def test_acompletion_streaming_iterator():
             self.index += 1
             return item
 
-    mock_error_response = AsyncIteratorWithError(
-        mock_chunks, 1
-    )  # Error after first chunk
+    mock_error_response = AsyncIteratorWithError(mock_chunks, 1)  # Error after first chunk
 
     setattr(mock_error_response, "model", "gpt-4")
     setattr(mock_error_response, "custom_llm_provider", "openai")
     setattr(mock_error_response, "logging_obj", MagicMock())
 
-    # Mock the fallback response
-    fallback_chunks = [
-        MagicMock(choices=[MagicMock(delta=MagicMock(content=" world"))]),
-        MagicMock(choices=[MagicMock(delta=MagicMock(content="!"))]),
-    ]
+    result = await router._acompletion_streaming_iterator(
+        model_response=mock_error_response,
+        messages=messages,
+        initial_kwargs=initial_kwargs,
+    )
 
-    mock_fallback_response = AsyncIterator(fallback_chunks)
-
-    # Mock the fallback function
-    with patch.object(
-        router,
-        "async_function_with_fallbacks_common_utils",
-        return_value=mock_fallback_response,
-    ) as mock_fallback_utils:
-        collected_chunks = []
-        result = await router._acompletion_streaming_iterator(
-            model_response=mock_error_response,
-            messages=messages,
-            initial_kwargs=initial_kwargs,
-        )
-
+    # Collect streamed chunks — the first chunk succeeds, then the error re-raises
+    collected_chunks = []
+    with pytest.raises(MidStreamFallbackError):
         async for chunk in result:
             collected_chunks.append(chunk)
 
-        # Verify fallback was called
-        assert mock_fallback_utils.called
-        call_args = mock_fallback_utils.call_args
-
-        # Check that generated content was added to messages
-        fallback_kwargs = call_args.kwargs["kwargs"]
-        modified_messages = fallback_kwargs["messages"]
-
-        # Should have original message + system message + assistant message with prefix
-        assert len(modified_messages) == 3
-        assert modified_messages[0] == {"role": "user", "content": "Hello"}
-        assert modified_messages[1]["role"] == "system"
-        assert "continuation" in modified_messages[1]["content"]
-        assert modified_messages[2]["role"] == "assistant"
-        assert modified_messages[2]["content"] == "Hello"
-        assert modified_messages[2]["prefix"] == True
-
-        # Verify fallback parameters
-        assert call_args.kwargs["disable_fallbacks"] == False
-        assert call_args.kwargs["model_group"] == "gpt-4"
-
-        # Should get original chunk + fallback chunks
-        assert len(collected_chunks) == 3  # 1 original + 2 fallback
-        print("✓ Fallback system called correctly with proper message modification")
+    assert len(collected_chunks) == 1, "one chunk yielded before the error"
+    print("✓ MidStreamFallbackError re-raised correctly when content was already generated")
 
     print("\n=== All tests passed! ===")
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_reraises_original_exception_when_available():
+    """Async: when the mid-stream MidStreamFallbackError wraps a real provider
+    exception (original_exception), the router must re-raise that original
+    exception instead of the internal wrapper, so the client sees the
+    specific error type/code (e.g. RateLimitError) rather than a generic
+    MidStreamFallbackError."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError, RateLimitError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+        set_verbose=True,
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    original_exception = RateLimitError(
+        message="rate limited",
+        llm_provider="vertex_ai",
+        model="gpt-4",
+    )
+    error = MidStreamFallbackError(
+        message="rate limited",
+        model="gpt-4",
+        llm_provider="openai",
+        original_exception=original_exception,
+        generated_content="Hello",
+    )
+
+    mock_chunks = [
+        MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))]),
+        MagicMock(choices=[MagicMock(delta=MagicMock(content=" there"))]),
+    ]
+
+    class AsyncIteratorWithError:
+        def __init__(self, items, error_after_index):
+            self.items = items
+            self.index = 0
+            self.error_after_index = error_after_index
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.index >= len(self.items):
+                raise StopAsyncIteration
+            if self.index == self.error_after_index:
+                raise error
+            item = self.items[self.index]
+            self.index += 1
+            return item
+
+    mock_error_response = AsyncIteratorWithError(mock_chunks, 1)
+    setattr(mock_error_response, "model", "gpt-4")
+    setattr(mock_error_response, "custom_llm_provider", "openai")
+    setattr(mock_error_response, "logging_obj", MagicMock())
+
+    result = await router._acompletion_streaming_iterator(
+        model_response=mock_error_response,
+        messages=messages,
+        initial_kwargs=initial_kwargs,
+    )
+
+    with pytest.raises(RateLimitError) as exc_info:
+        async for _ in result:
+            pass
+    assert exc_info.value is original_exception
+    assert exc_info.value.type == "throttling_error"
+    assert exc_info.value.code == "429"
 
 
 @pytest.mark.asyncio
@@ -2113,6 +2158,196 @@ def test_completion_streaming_iterator_preserves_hidden_params():
     assert result._hidden_params.get("litellm_call_id") == "test-sync-call"
 
 
+def test_completion_streaming_iterator_reraises_mid_chunk_error():
+    """Sync: MidStreamFallbackError with generated_content and is_pre_first_chunk=False
+    must be re-raised immediately; the router cannot recover after partial content
+    has already been sent to the client."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    mid_chunk_error = MidStreamFallbackError(
+        message="Connection reset",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="Hello, I am",
+        is_pre_first_chunk=False,
+    )
+
+    class SyncIteratorMidChunkError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise mid_chunk_error
+
+    mock_response = SyncIteratorMidChunkError()
+
+    result = router._completion_streaming_iterator(
+        model_response=mock_response,
+        messages=messages,
+        initial_kwargs=initial_kwargs,
+    )
+
+    with pytest.raises(MidStreamFallbackError):
+        list(result)
+
+
+def test_completion_streaming_iterator_reraises_original_exception_when_available():
+    """Sync: when the mid-chunk MidStreamFallbackError wraps a real provider
+    exception (original_exception), the router must re-raise that original
+    exception instead of the internal wrapper, so the client sees the
+    specific error type/code (e.g. RateLimitError) rather than a generic
+    MidStreamFallbackError."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError, RateLimitError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    original_exception = RateLimitError(
+        message="rate limited",
+        llm_provider="vertex_ai",
+        model="gpt-4",
+    )
+    mid_chunk_error = MidStreamFallbackError(
+        message="rate limited",
+        model="gpt-4",
+        llm_provider="openai",
+        original_exception=original_exception,
+        generated_content="Hello, I am",
+        is_pre_first_chunk=False,
+    )
+
+    class SyncIteratorMidChunkError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise mid_chunk_error
+
+    mock_response = SyncIteratorMidChunkError()
+
+    result = router._completion_streaming_iterator(
+        model_response=mock_response,
+        messages=messages,
+        initial_kwargs=initial_kwargs,
+    )
+
+    with pytest.raises(RateLimitError) as exc_info:
+        list(result)
+    assert exc_info.value is original_exception
+    assert exc_info.value.type == "throttling_error"
+    assert exc_info.value.code == "429"
+
+
+def test_completion_streaming_iterator_reraises_mid_chunk_error_with_no_text_content():
+    """Sync: a reasoning-only chunk sets is_pre_first_chunk=False without populating
+    generated_content (which only tracks text deltas). The re-raise guard must still
+    detect this via the raw chunks on the wrapper, or the router silently retries and
+    the client receives duplicated/inconsistent output."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.utils import Delta, StreamingChoices
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    mid_chunk_error = MidStreamFallbackError(
+        message="Connection reset",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=False,
+    )
+
+    reasoning_chunk = litellm.ModelResponseStream(
+        id="chatcmpl-partial-1",
+        model="gpt-4",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(reasoning_content="Thinking about the answer", role="assistant"),
+            )
+        ],
+    )
+
+    class SyncIteratorNoTextChunkError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = [reasoning_chunk]
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise mid_chunk_error
+
+    mock_response = SyncIteratorNoTextChunkError()
+
+    with patch.object(router, "function_with_fallbacks") as mock_fallback:
+        result = router._completion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        with pytest.raises(MidStreamFallbackError):
+            list(result)
+
+        assert not mock_fallback.called, (
+            "fallback must not be attempted once any content, text or non-text, has already streamed"
+        )
+
+
 @pytest.mark.asyncio
 async def test_acompletion_streaming_iterator_pre_first_chunk_skips_continuation():
     """When MidStreamFallbackError has is_pre_first_chunk=True, use original messages."""
@@ -2179,6 +2414,81 @@ async def test_acompletion_streaming_iterator_pre_first_chunk_skips_continuation
         fallback_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
         # Pre-first-chunk: should use original messages, no continuation prompt
         assert fallback_kwargs["messages"] == messages
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_reraises_mid_chunk_error_with_no_text_content():
+    """Async: a reasoning-only chunk sets is_pre_first_chunk=False without populating
+    generated_content (which only tracks text deltas). The re-raise guard must still
+    detect this via the raw chunks on the wrapper, or the router silently retries and
+    the client receives duplicated/inconsistent output."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.utils import Delta, StreamingChoices
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    mid_chunk_error = MidStreamFallbackError(
+        message="Connection reset",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=False,
+    )
+
+    reasoning_chunk = litellm.ModelResponseStream(
+        id="chatcmpl-partial-1",
+        model="gpt-4",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(reasoning_content="Thinking about the answer", role="assistant"),
+            )
+        ],
+    )
+
+    class AsyncIteratorNoTextChunkError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = [reasoning_chunk]
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise mid_chunk_error
+
+    mock_response = AsyncIteratorNoTextChunkError()
+
+    with patch.object(router, "async_function_with_fallbacks_common_utils") as mock_fallback_utils:
+        iterator = await router._acompletion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        with pytest.raises(MidStreamFallbackError):
+            async for _ in iterator:
+                pass
+
+        assert not mock_fallback_utils.called, (
+            "fallback must not be attempted once any content, text or non-text, has already streamed"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -4683,9 +4993,7 @@ async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_f
                 StreamingChoices(
                     finish_reason=None,
                     index=0,
-                    delta=Delta(
-                        content="The Roman Empire began when", role="assistant"
-                    ),
+                    delta=Delta(content="The Roman Empire began when", role="assistant"),
                 )
             ],
             usage=Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26),
@@ -4738,56 +5046,28 @@ async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_f
     assert len(collected) == 1
     logging_obj.dispatch_success_handlers.assert_not_called()
 
-    # Fallback success: the fallback stream owns success accounting via
-    # _combine_fallback_usage, so this iterator must not dispatch its own.
+    # Mid-stream errors with generated content are now re-raised immediately;
+    # no continuation-prompt fallback is attempted.  Success handlers must
+    # still not be dispatched in this path.
     model_response, logging_obj = _make_interrupted_model_response()
 
-    class _FallbackStream:
-        def __init__(self, items):
-            self.items = items
-            self.index = 0
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self.index >= len(self.items):
-                raise StopAsyncIteration
-            item = self.items[self.index]
-            self.index += 1
-            return item
-
-    fallback_stream = _FallbackStream(
-        [
-            litellm.ModelResponseStream(
-                id="chatcmpl-fallback-1",
-                model="gpt-3.5-turbo",
-                object="chat.completion.chunk",
-                choices=[
-                    StreamingChoices(
-                        finish_reason=None,
-                        index=0,
-                        delta=Delta(content=" continued", role="assistant"),
-                    )
-                ],
-            )
-        ]
-    )
     with patch.object(
         router,
         "async_function_with_fallbacks_common_utils",
-        new=AsyncMock(return_value=fallback_stream),
-    ):
+        new=AsyncMock(),
+    ) as mock_fallback:
         result = await router._acompletion_streaming_iterator(
             model_response=model_response,
             messages=messages,
             initial_kwargs=dict(initial_kwargs),
         )
         collected = []
-        async for chunk in result:
-            collected.append(chunk)
+        with pytest.raises(MidStreamFallbackError):
+            async for chunk in result:
+                collected.append(chunk)
 
-    assert len(collected) == 2
+    assert len(collected) == 1, "only the partial chunk before the error"
+    mock_fallback.assert_not_called()
     logging_obj.dispatch_success_handlers.assert_not_called()
 
 
@@ -5906,6 +6186,198 @@ class TestRouterRequestTimeoutPropagation:
         )
 
 
+# ---------------------------------------------------------------------------
+# Deferred-stream eager-fetch tests
+# ---------------------------------------------------------------------------
+
+
+def _make_deferred_stream_wrapper(make_call_fn):
+    """Return a CustomStreamWrapper with completion_stream=None and the given make_call."""
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"litellm_params": {}}
+    return CustomStreamWrapper(
+        completion_stream=None,
+        model="vertex_ai/gemini-2.0-flash",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=make_call_fn,
+    )
+
+
+def _make_router_with_vertex_and_fallback():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.0-flash",
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                },
+            },
+            {
+                "model_name": "my-fallback",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-fake",
+                },
+            },
+        ],
+        fallbacks=[{"my-gemini": ["my-fallback"]}],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_deferred_stream_error_propagates_through_acompletion():
+    """Regression: a deferred-stream CustomStreamWrapper whose make_call raises a 429
+    must propagate the exception from within _acompletion's except block so that
+    fail_calls is incremented (i.e., deployment cooldown fires) and the standard
+    router fallback chain can handle it.
+
+    Before the fix, the HTTP call happened inside __anext__ (outside the except block),
+    so fail_calls was never incremented.
+    """
+    import litellm as _litellm
+
+    rate_limit_err = _litellm.RateLimitError(
+        message="Resource exhausted",
+        llm_provider="vertex_ai",
+        model="gemini-2.0-flash",
+    )
+
+    async def failing_make_call(**kwargs):
+        raise rate_limit_err
+
+    router = _make_router_with_vertex_and_fallback()
+    deferred_wrapper = _make_deferred_stream_wrapper(failing_make_call)
+
+    with patch(
+        "litellm.acompletion",
+        new_callable=AsyncMock,
+        return_value=deferred_wrapper,
+    ):
+        with pytest.raises(_litellm.RateLimitError):
+            await router._acompletion(
+                model="vertex_ai/gemini-2.0-flash",
+                messages=[{"role": "user", "content": "Hello"}],
+                stream=True,
+                specific_deployment=router.model_list[0],
+            )
+
+    model_name = router.model_list[0]["litellm_params"]["model"]
+    assert router.fail_calls[model_name] == 1, (
+        "fail_calls must be incremented when the deferred HTTP call fails; "
+        "without the eager fetch_stream() fix this stays at 0"
+    )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_deferred_stream_preserves_original_headers_on_error():
+    """Router is used both by the proxy and directly as an SDK. HTTP-framing headers
+    (Content-Length, Transfer-Encoding, ...) must NOT be stripped at this layer, or
+    direct SDK callers lose legitimate provider metadata (e.g. content-type,
+    proxy-authenticate) that only the proxy's own response construction needs to
+    worry about. Stripping happens in the proxy layer instead
+    (_handle_llm_api_exception)."""
+    import litellm as _litellm
+
+    err = _litellm.RateLimitError(
+        message="Resource exhausted",
+        llm_provider="vertex_ai",
+        model="gemini-2.0-flash",
+    )
+    err.headers = {
+        "content-length": "42",
+        "transfer-encoding": "chunked",
+        "content-encoding": "gzip",
+        "content-type": "application/json",
+        "x-request-id": "abc-123",
+    }
+
+    async def failing_make_call(**kwargs):
+        raise err
+
+    router = _make_router_with_vertex_and_fallback()
+    deferred_wrapper = _make_deferred_stream_wrapper(failing_make_call)
+
+    with patch(
+        "litellm.acompletion",
+        new_callable=AsyncMock,
+        return_value=deferred_wrapper,
+    ):
+        with pytest.raises(_litellm.RateLimitError) as exc_info:
+            await router._acompletion(
+                model="vertex_ai/gemini-2.0-flash",
+                messages=[{"role": "user", "content": "Hello"}],
+                stream=True,
+                specific_deployment=router.model_list[0],
+            )
+
+    raised = exc_info.value
+    headers = getattr(raised, "headers", {})
+    assert headers.get("content-length") == "42"
+    assert headers.get("transfer-encoding") == "chunked"
+    assert headers.get("content-encoding") == "gzip"
+    assert headers.get("content-type") == "application/json"
+    assert headers.get("x-request-id") == "abc-123"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_deferred_stream_skipped_when_stream_already_set():
+    """When completion_stream is already populated (non-deferred provider), the eager
+    fetch_stream() call must be skipped entirely; no exception should be raised even
+    if make_call would fail.
+    """
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    async def would_fail(**kwargs):
+        raise RuntimeError("should not be called")
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"litellm_params": {}}
+
+    async def noop_aiter():
+        return
+        yield
+
+    already_set_wrapper = CustomStreamWrapper(
+        completion_stream=noop_aiter(),
+        model="openai/gpt-4o",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        make_call=would_fail,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "sk-fake",
+                },
+            }
+        ],
+    )
+
+    with patch(
+        "litellm.acompletion",
+        new_callable=AsyncMock,
+        return_value=already_set_wrapper,
+    ):
+        result = await router._acompletion(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            specific_deployment=router.model_list[0],
+        )
+
+    assert result is not None, "should return a streaming wrapper without errors"
+
+
 class TestAdvisorSubCallCooldown:
     """Regression for LIT-4565: an advisor orchestration failure must not cool
     down the selected (healthy) deployment, which would reject unrelated
@@ -5974,6 +6446,70 @@ class TestAdvisorSubCallCooldown:
             is False
         )
         assert "dep-1" not in self._cooled_down_ids(router)
+
+
+def test_stream_chunks_have_generated_content_detects_text_and_non_text():
+    from litellm.router import _stream_chunks_have_generated_content
+    from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
+        StreamingChoices,
+    )
+
+    def _chunk(delta):
+        return litellm.ModelResponseStream(
+            id="chatcmpl-1",
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=delta)],
+        )
+
+    assert _stream_chunks_have_generated_content([]) is False
+
+    empty_chunk = _chunk(Delta(role="assistant"))
+    assert _stream_chunks_have_generated_content([empty_chunk]) is False
+
+    text_chunk = _chunk(Delta(content="Hello"))
+    assert _stream_chunks_have_generated_content([text_chunk]) is True
+
+    reasoning_chunk = _chunk(Delta(reasoning_content="Thinking"))
+    assert _stream_chunks_have_generated_content([reasoning_chunk]) is True
+
+    tool_call_delta = Delta(
+        tool_calls=[
+            ChatCompletionDeltaToolCall(
+                id="call_1",
+                function=Function(name="get_weather", arguments="{}"),
+                type="function",
+                index=0,
+            )
+        ]
+    )
+    tool_call_chunk = _chunk(tool_call_delta)
+    assert _stream_chunks_have_generated_content([tool_call_chunk]) is True
+
+    thinking_delta = Delta(thinking_blocks=[{"type": "thinking", "thinking": "Let me think..."}])
+    thinking_chunk = _chunk(thinking_delta)
+    assert _stream_chunks_have_generated_content([thinking_chunk]) is True
+
+    reasoning_items_delta = Delta(reasoning_items=[{"type": "reasoning", "id": "rs_1"}])
+    reasoning_items_chunk = _chunk(reasoning_items_delta)
+    assert _stream_chunks_have_generated_content([reasoning_items_chunk]) is True
+
+    audio_delta = Delta(audio={"data": "abc123", "expires_at": 1234567890, "transcript": "hello"})
+    audio_chunk = _chunk(audio_delta)
+    assert _stream_chunks_have_generated_content([audio_chunk]) is True
+
+    images_delta = Delta(images=[{"image_url": {"url": "https://example.com/img.png"}, "index": 0, "type": "image_url"}])
+    images_chunk = _chunk(images_delta)
+    assert _stream_chunks_have_generated_content([images_chunk]) is True
+
+    annotations_delta = Delta(
+        annotations=[{"type": "url_citation", "url_citation": {"url": "https://example.com"}}]
+    )
+    annotations_chunk = _chunk(annotations_delta)
+    assert _stream_chunks_have_generated_content([annotations_chunk]) is True
 
 
 def test_get_configured_token_limits_reads_deployment_model_info():
