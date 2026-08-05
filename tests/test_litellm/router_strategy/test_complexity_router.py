@@ -2423,6 +2423,7 @@ class TestCjkKeywordTierRules:
             ("請求", "這個請求要怎麼處理"),
             ("見積", "見積をお願いします"),
             ("キャンセル", "注文をキャンセルしたい"),
+            ("\U00030000", "这个\U00030000很少见"),
         ],
     )
     def test_cjk_keyword_matches_without_surrounding_whitespace(

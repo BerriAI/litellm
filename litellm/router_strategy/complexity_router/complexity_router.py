@@ -211,7 +211,7 @@ _REMINDER_CLOSE: Final = "</system-reminder>"
 
 _TRUNCATION_MARKER: Final = "..."
 
-_CJK_CHARACTER: Final = re.compile("[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ\U00020000-\U0002fa1f]")
+_CJK_CHARACTER: Final = re.compile("[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ\U00020000-\U0003ffff]")
 
 
 def _message_text(content: object) -> str:
