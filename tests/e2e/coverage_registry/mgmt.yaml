@@ -160,15 +160,6 @@
 - {id: mgmt.user.info_v2.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "internal_user_endpoints.py:968", rationale: "Lightweight user info (no keys/teams)"}
 - {id: mgmt.user.daily_activity.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "internal_user_endpoints.py:2619", rationale: "Daily activity for users"}
 - {id: mgmt.user.daily_activity_aggregated.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "internal_user_endpoints.py:2728", rationale: "Aggregated user analytics without pagination"}
-# Workflow Management
-- {id: mgmt.workflow.runs.create.persists, module: mgmt, tier: P2, surface: api, assertions: [persists], source: "workflow_management_endpoints.py:139", rationale: "Create workflow run"}
-- {id: mgmt.workflow.runs.list.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "workflow_management_endpoints.py:174", rationale: "List workflow runs"}
-- {id: mgmt.workflow.runs.get.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "workflow_management_endpoints.py:219", rationale: "Fetch workflow run details"}
-- {id: mgmt.workflow.runs.update.persists, module: mgmt, tier: P2, surface: api, assertions: [persists], source: "workflow_management_endpoints.py:253", rationale: "Update workflow run"}
-- {id: mgmt.workflow.runs.events.create.persists, module: mgmt, tier: P2, surface: api, assertions: [persists], source: "workflow_management_endpoints.py:298", rationale: "Create workflow event"}
-- {id: mgmt.workflow.runs.events.list.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "workflow_management_endpoints.py:364", rationale: "List workflow events"}
-- {id: mgmt.workflow.runs.messages.create.persists, module: mgmt, tier: P2, surface: api, assertions: [persists], source: "workflow_management_endpoints.py:394", rationale: "Create workflow message"}
-- {id: mgmt.workflow.runs.messages.list.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "workflow_management_endpoints.py:448", rationale: "List workflow messages"}
 # Utility Endpoints
 - {id: mgmt.utils.token_counter.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "proxy_server.py:11037", rationale: "Count tokens for input"}
 - {id: mgmt.utils.supported_openai_params.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "proxy_server.py:11151", rationale: "List supported OpenAI parameters"}
