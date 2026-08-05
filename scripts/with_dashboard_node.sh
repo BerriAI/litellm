@@ -28,9 +28,9 @@ nvm_script="${NVM_DIR:-$HOME/.nvm}/nvm.sh"
 if [ -r "$nvm_script" ]; then
     echo "with_dashboard_node: node ${current:-missing} is below the dashboard floor $floor; switching to $pinned via nvm" >&2
     set +eu
-    . "$nvm_script" --no-use
-    nvm install "$pinned" >&2
-    nvm use "$pinned" >&2
+    . "$nvm_script" --no-use || { echo "with_dashboard_node: could not load nvm from $nvm_script" >&2; exit 1; }
+    nvm install "$pinned" >&2 || { echo "with_dashboard_node: nvm install $pinned failed" >&2; exit 1; }
+    nvm use "$pinned" >&2 || { echo "with_dashboard_node: nvm use $pinned failed" >&2; exit 1; }
     set -eu
     exec "$@"
 fi
