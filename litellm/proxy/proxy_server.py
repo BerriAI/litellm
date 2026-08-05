@@ -16488,10 +16488,7 @@ app.add_middleware(
 )
 # Added last on purpose — last-added is outermost, and the client-visible URL
 # prefix must be resolved into scope["root_path"] before any inner middleware
-# or the router inspects the path: LazyFeatureMiddleware strips it for feature
-# prefix matching, Starlette strips it for route matching, and
-# request.base_url re-includes it in every emitted URL (the MCP OAuth
-# discovery documents among them). Only added when SERVER_ROOT_PATHS is
+# or the router inspects the path. Only added when SERVER_ROOT_PATHS is
 # configured, so the default deployment's middleware stack is unchanged.
 _server_root_paths: Final = get_server_root_paths()
 if _server_root_paths:
