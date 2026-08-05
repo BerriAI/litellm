@@ -233,6 +233,48 @@ async def test_async_sse_wrapper_excludes_synthetic_error_event_from_logged_chun
     assert not any(chunk.startswith(b"event: error\n") for chunk in iterator.logged_chunks)
 
 
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_logs_collected_chunks_when_client_disconnects_mid_stream():
+    """
+    Regression test for issue #35958: a client that interrupts a streaming
+    /v1/messages response used to get no spend log at all, because logging
+    only ran after the upstream stream was fully consumed and a disconnect
+    raises GeneratorExit into the wrapper instead.
+    """
+
+    async def _slow_stream():
+        for i in range(50):
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"tok{i}"}}
+
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("test_disconnect_logs_partial_chunks"),
+        request_body={},
+    )
+
+    stream = iterator.async_sse_wrapper(_slow_stream())
+    streamed = [await stream.__anext__() for _ in range(3)]
+    await stream.aclose()
+
+    assert iterator.logged_chunks == streamed
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_does_not_log_when_client_disconnects_before_first_chunk():
+    async def _never_yields():
+        return
+        yield
+
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("test_disconnect_before_first_chunk"),
+        request_body={},
+    )
+
+    stream = iterator.async_sse_wrapper(_never_yields())
+    await stream.aclose()
+
+    assert iterator.logged_chunks == []
+
+
 def test_incomplete_stream_error_sse_event_is_valid_anthropic_error():
     event = _incomplete_stream_error_sse_event().decode()
     lines = event.split("\n")

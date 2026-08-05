@@ -1,4 +1,3 @@
-import asyncio
 import json
 from collections.abc import AsyncIterator
 from datetime import datetime
@@ -10,6 +9,7 @@ from typing_extensions import TypedDict
 
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
@@ -134,8 +134,8 @@ class BaseAnthropicMessagesStreamingIterator:
         if self.completion_start_time is not None:
             self.litellm_logging_obj.completion_start_time = self.completion_start_time
             self.litellm_logging_obj.model_call_details["completion_start_time"] = self.completion_start_time
-        asyncio.create_task(
-            PassThroughStreamingHandler._route_streaming_logging_to_handler(
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine=PassThroughStreamingHandler._route_streaming_logging_to_handler(
                 litellm_logging_obj=self.litellm_logging_obj,
                 passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
                 url_route="/v1/messages",
@@ -197,16 +197,17 @@ class BaseAnthropicMessagesStreamingIterator:
         collected_chunks: Final = []
         saw_terminal_event = False
 
-        async for chunk in completion_stream:
-            if self.completion_start_time is None:
-                self.completion_start_time = datetime.now()
-            saw_terminal_event = saw_terminal_event or _is_terminal_stream_chunk(chunk)
-            encoded_chunk = self._convert_chunk_to_sse_format(chunk)
-            collected_chunks.append(encoded_chunk)
-            yield encoded_chunk
+        try:
+            async for chunk in completion_stream:
+                if self.completion_start_time is None:
+                    self.completion_start_time = datetime.now()
+                saw_terminal_event = saw_terminal_event or _is_terminal_stream_chunk(chunk)
+                encoded_chunk = self._convert_chunk_to_sse_format(chunk)
+                collected_chunks.append(encoded_chunk)
+                yield encoded_chunk
 
-        if not saw_terminal_event:
-            yield _incomplete_stream_error_sse_event()
-
-        # Handle logging after all chunks are processed
-        await self._handle_streaming_logging(collected_chunks)
+            if not saw_terminal_event:
+                yield _incomplete_stream_error_sse_event()
+        finally:
+            if collected_chunks:
+                await self._handle_streaming_logging(collected_chunks)

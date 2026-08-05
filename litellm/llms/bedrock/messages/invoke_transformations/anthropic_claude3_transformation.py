@@ -757,12 +757,12 @@ class AmazonAnthropicClaudeMessagesConfig(
             request_body=request_body,
         )
 
-    async def bedrock_sse_wrapper(
+    def bedrock_sse_wrapper(
         self,
         completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict],
         litellm_logging_obj: LiteLLMLoggingObj,
         request_body: dict,
-    ):
+    ) -> AsyncIterator[bytes]:
         """
         Bedrock invoke does not return SSE formatted data. This function is a wrapper to ensure litellm chunks are SSE formatted.
 
@@ -786,8 +786,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         patched_stream: Final = self._promote_message_stop_usage(completion_stream)
 
-        async for chunk in handler.async_sse_wrapper(patched_stream):
-            yield chunk
+        return handler.async_sse_wrapper(patched_stream)
 
     @staticmethod
     def _merge_message_start_cache_into_delta_usage(
