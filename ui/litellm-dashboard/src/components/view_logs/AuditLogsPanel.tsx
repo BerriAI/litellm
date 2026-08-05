@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { ColumnFiltersState, OnChangeFn, PaginationState } from "@tanstack/react-table";
+import moment from "moment";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import { uiAuditLogsCall } from "../networking";
 import { AuditLogEntry } from "./AuditLogsTableColumns";
@@ -20,6 +21,9 @@ const asset_logos_folder = "/ui/assets/";
 const auditLogsPreviewImg = `${asset_logos_folder}audit-logs-preview.png`;
 
 const PAGE_SIZE = 50;
+
+const toUtcTimestamp = (value: string | undefined): string | undefined =>
+  value === undefined ? undefined : moment(value).utc().format("YYYY-MM-DD HH:mm:ss");
 
 interface AuditLogsResponse {
   audit_logs: AuditLogEntry[];
@@ -63,9 +67,11 @@ export default function AuditLogsPanel({
           object_id: getFilterValue("object_id"),
           changed_by: getFilterValue("changed_by"),
           object_key_hash: getFilterValue("key_hash"),
-          object_team_id: getFilterValue("team_id"),
+          object_team: getFilterValue("object_team"),
           action: getFilterValue("action"),
           table_name: getFilterValue("table_name"),
+          start_date: toUtcTimestamp(getFilterValue("start_date")),
+          end_date: toUtcTimestamp(getFilterValue("end_date")),
           sort_by: "updated_at",
           sort_order: "desc",
         },

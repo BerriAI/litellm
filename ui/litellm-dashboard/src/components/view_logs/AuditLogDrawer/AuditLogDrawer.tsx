@@ -229,14 +229,26 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
               </Text>
             }
           />
-          <MetadataRow label="Changed By" value={<DefaultProxyAdminTag userId={log.changed_by} />} />
+          <MetadataRow label="Alias" value={log.object_alias || "—"} />
+          <MetadataRow
+            label="Changed By"
+            value={
+              <span className="flex flex-col gap-0.5">
+                {!!log.changed_by_user_email && <span>{log.changed_by_user_email}</span>}
+                <DefaultProxyAdminTag userId={log.changed_by} />
+              </span>
+            }
+          />
           <MetadataRow
             label="API Key (Hash)"
             value={
               log.changed_by_api_key ? (
-                <Text copyable className="font-mono text-xs break-all">
-                  {log.changed_by_api_key}
-                </Text>
+                <span className="flex flex-col gap-0.5">
+                  {!!log.changed_by_key_alias && <span>{log.changed_by_key_alias}</span>}
+                  <Text copyable className="font-mono text-xs break-all">
+                    {log.changed_by_api_key}
+                  </Text>
+                </span>
               ) : (
                 "—"
               )

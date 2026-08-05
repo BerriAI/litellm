@@ -2,6 +2,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -77,11 +78,13 @@ const defaultProps = {
   teams: [],
 };
 
-const renderDashboard = () =>
+const renderDashboard = (searchParams?: Record<string, string>) =>
   render(
-    <QueryClientProvider client={createQueryClient()}>
-      <ViewUserDashboard {...defaultProps} />
-    </QueryClientProvider>,
+    <NuqsTestingAdapter searchParams={searchParams} hasMemory>
+      <QueryClientProvider client={createQueryClient()}>
+        <ViewUserDashboard {...defaultProps} />
+      </QueryClientProvider>
+    </NuqsTestingAdapter>,
   );
 
 describe("ViewUserDashboard", () => {
@@ -140,6 +143,12 @@ describe("ViewUserDashboard", () => {
 
     expect(await screen.findByTestId("user-info-view")).toHaveTextContent("detail:user-1:false");
     expect(screen.queryByText("test@example.com")).not.toBeInTheDocument();
+  });
+
+  it("should open the detail view directly from a ?user= deep link", async () => {
+    renderDashboard({ user: "user-1" });
+
+    expect(await screen.findByTestId("user-info-view")).toHaveTextContent("detail:user-1:false");
   });
 
   it("should open the detail view in edit mode from the row actions menu", async () => {
