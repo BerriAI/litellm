@@ -5,6 +5,7 @@ import AddAutoRouterTab from "./add_auto_router_tab";
 import NotificationManager from "../molecules/notifications_manager";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { getMissingTiersError } from "./build_complexity_router_config";
+import { testAutoRouterRouting } from "../networking";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 
 // Every model referenced by both bundled family presets. A caller holding all of these can select
@@ -42,6 +43,7 @@ const { mockFetchAvailableModels } = vi.hoisted(() => ({ mockFetchAvailableModel
 
 vi.mock("../networking", () => ({
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
+  testAutoRouterRouting: vi.fn(),
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
@@ -301,6 +303,55 @@ describe("AddAutoRouterTab", () => {
     );
 
     expect(labels).toEqual(["Anthropic Family", "OpenAI Family", "Custom Configuration"]);
+  });
+
+  describe("routing test", () => {
+    it("offers no routing test until the config is complete enough to route", async () => {
+      const actual = await vi.importActual<typeof import("./build_complexity_router_config")>(
+        "./build_complexity_router_config",
+      );
+      vi.mocked(getMissingTiersError).mockImplementation(actual.getMissingTiersError);
+
+      renderWithProviders(<Harness />);
+
+      expect(screen.getByTestId("auto-router-test-routing-btn")).toBeDisabled();
+    });
+
+    it("routes a prompt through the config on screen without creating the router", async () => {
+      const user = userEvent.setup();
+      vi.mocked(getMissingTiersError).mockReturnValue(null);
+      vi.mocked(testAutoRouterRouting).mockResolvedValue({
+        status: "success",
+        result: {
+          routed_model: "claude-opus-5",
+          routed_model_configured: true,
+          routing_decision: { routed_model: "claude-opus-5", tier: "COMPLEX", cause: "literal_keyword_match" },
+        },
+      });
+
+      renderWithProviders(<Harness />);
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "keyword-router");
+      expandDetailedConfiguration();
+      await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+      await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
+      const keywordsField = screen.getByText("Keywords 1").closest("div") as HTMLElement;
+      await user.type(within(keywordsField).getByRole("combobox"), "invoice{enter}");
+
+      await user.click(screen.getByTestId("auto-router-test-routing-btn"));
+      await user.type(await screen.findByTestId("auto-router-routing-test-prompt"), "reconcile this invoice");
+      await user.click(screen.getByTestId("auto-router-routing-test-send"));
+
+      await waitFor(() => expect(testAutoRouterRouting).toHaveBeenCalled());
+      const [accessToken, request] = vi.mocked(testAutoRouterRouting).mock.calls.at(-1)!;
+      expect(accessToken).toBe("token");
+      expect(request.prompt).toBe("reconcile this invoice");
+      expect(request.router_name).toBe("keyword-router");
+      expect(request.complexity_router_config).toMatchObject({
+        keyword_tier_rules: [{ keywords: ["invoice"], tier: "COMPLEX" }],
+      });
+      expect(await screen.findByTestId("auto-router-routing-test-routed-model")).toHaveTextContent("claude-opus-5");
+      expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
+    });
   });
 
   describe("template presets", () => {

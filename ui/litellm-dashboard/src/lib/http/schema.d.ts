@@ -760,6 +760,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/test_routing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Auto Router Routing
+         * @description Route a single prompt through a complexity-router config and report where it landed.
+         *
+         *     Answers "which model would this prompt get?" for a config that only exists in a form,
+         *     so an auto router can be checked before it is created. The prompt is classified by the
+         *     same pre-routing hook a live request runs, then dropped: nothing is sent to the model it
+         *     routed to, and no auto router is created. A heuristic config therefore spends nothing, while
+         *     an `llm` classifier or semantic keyword matching bills its classifier/embedding call to the
+         *     calling key, like Test Connection does.
+         *
+         *     **Example Request:**
+         *     ```json
+         *     {
+         *         "prompt": "think step by step about how to shard this table",
+         *         "complexity_router_config": {
+         *             "tiers": {"SIMPLE": ["gpt-4o-mini"], "REASONING": ["o3"]},
+         *             "classifier_type": "heuristic"
+         *         }
+         *     }
+         *     ```
+         */
+        post: operations["preview_auto_router_routing_auto_router_test_routing_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/azure/{endpoint}": {
         parameters: {
             query?: never;
@@ -20662,6 +20700,19 @@ export interface components {
             /** Results */
             results: components["schemas"]["TagActiveUsersResponse"][];
         };
+        /** AdaptiveRouterWeights */
+        AdaptiveRouterWeights: {
+            /**
+             * Cost
+             * @default 0.3
+             */
+            cost: number;
+            /**
+             * Quality
+             * @default 0.7
+             */
+            quality: number;
+        };
         /** AddTeamCallback */
         AddTeamCallback: {
             /** Callback Name */
@@ -21061,6 +21112,53 @@ export interface components {
             updated_values?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /**
+         * AutoRouterRoutingTestRequest
+         * @description A single prompt to classify against a complexity-router config that need not be saved yet.
+         */
+        AutoRouterRoutingTestRequest: {
+            /** @description The complexity router config to route against, in the shape /model/new accepts */
+            complexity_router_config: components["schemas"]["RequestComplexityRouterConfig"];
+            /**
+             * Default Model
+             * @description Model to route to when no tier resolves, i.e. complexity_router_default_model
+             */
+            default_model?: string | null;
+            /**
+             * Prompt
+             * @description The prompt to route, as an end user would send it
+             */
+            prompt: string;
+            /**
+             * Router Name
+             * @description Name reported as the router in the routing decision. Display only
+             * @default auto_router_routing_test
+             */
+            router_name: string;
+            /**
+             * Team Id
+             * @description Team the router is being created for. Required for a team admin, who may only test their own team's routers
+             */
+            team_id?: string | null;
+        };
+        /**
+         * AutoRouterRoutingTestResponse
+         * @description Where one prompt would have been routed, and why.
+         */
+        AutoRouterRoutingTestResponse: {
+            /**
+             * Routed Model
+             * @description The model group the router picked
+             */
+            routed_model: string;
+            /**
+             * Routed Model Configured
+             * @description Whether routed_model is a model group this proxy actually serves
+             */
+            routed_model_configured: boolean;
+            /** @description The decision record this request would have written to its log row */
+            routing_decision: components["schemas"]["StandardLoggingRoutingDecision"];
         };
         /** BaseLitellmParams */
         "BaseLitellmParams-Input": {
@@ -22610,6 +22708,23 @@ export interface components {
             enabled: boolean;
         };
         /**
+         * ClassifierLLMConfig
+         * @description Configuration for the LLM-based complexity classifier.
+         */
+        ClassifierLLMConfig: {
+            /**
+             * Model
+             * @description Model name (from the router's model_list) to call for classification
+             */
+            model: string;
+            /**
+             * Timeout Ms
+             * @description Timeout budget for the classification call, in milliseconds
+             * @default 3000
+             */
+            timeout_ms: number;
+        };
+        /**
          * CloudZeroExportRequest
          * @description Request model for CloudZero export operations
          */
@@ -22741,6 +22856,12 @@ export interface components {
              */
             timezone?: string | null;
         };
+        /**
+         * ComplexityTier
+         * @description Complexity tiers for routing decisions.
+         * @enum {string}
+         */
+        ComplexityTier: "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
         /**
          * ComplianceCheckRequest
          * @description Request payload for compliance check endpoints.
@@ -25123,6 +25244,19 @@ export interface components {
             tpm_limit?: number | null;
             /** Tpm Limit Type */
             tpm_limit_type?: ("guaranteed_throughput" | "best_effort_throughput" | "dynamic") | null;
+        };
+        /**
+         * KeywordTierRule
+         * @description A deterministic override: if any keyword matches, route to this tier.
+         */
+        KeywordTierRule: {
+            /**
+             * Keywords
+             * @description Keywords/phrases that trigger this rule (lexical or semantic match)
+             */
+            keywords: string[];
+            /** @description Tier to route to when this rule matches */
+            tier: components["schemas"]["ComplexityTier"];
         };
         /** LakeraCategoryThresholds */
         LakeraCategoryThresholds: {
@@ -30897,6 +31031,173 @@ export interface components {
             /** Review Notes */
             review_notes?: string | null;
         };
+        /**
+         * RequestComplexityRouterConfig
+         * @description The part of a complexity-router config a request can carry.
+         *
+         *     `plugins` holds live RoutingPlugin objects, which no JSON body can express and which have no
+         *     OpenAPI schema, so it is closed off here rather than left as an arbitrary-type field.
+         */
+        RequestComplexityRouterConfig: {
+            /**
+             * Adaptive
+             * @description Enable adaptive bandit selection with soft complexity floors
+             * @default false
+             */
+            adaptive: boolean;
+            /**
+             * Adaptive Eligible
+             * @description When adaptive=True: 'all' scores every pool model with a tier-distance penalty (soft floors); 'classified_tier' Thompson-samples only inside the classified tier's pool
+             * @default all
+             * @enum {string}
+             */
+            adaptive_eligible: "all" | "classified_tier";
+            /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
+            adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
+            /**
+             * Classifier Context Include Assistant Turns
+             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies share classifier_context_per_turn_chars with user turns, so raise it if replies are truncated before the part that carries the difficulty. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
+             * @default false
+             */
+            classifier_context_include_assistant_turns: boolean;
+            /**
+             * Classifier Context Per Turn Chars
+             * @description Maximum character length for each prior turn's text in the classifier context window. Turns exceeding this are truncated. Only applies when classifier_type is 'llm'.
+             * @default 200
+             */
+            classifier_context_per_turn_chars: number;
+            /**
+             * Classifier Context Window Size
+             * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM classifier prompt, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model, which may be a different deployment or provider than the routed completion model; that call already carries the current user ask and the caller's system prompt in full. Set to 0 to send neither prior turns nor any conversation context beyond the current ask. Only applies when classifier_type is 'llm'.
+             * @default 3
+             */
+            classifier_context_window_size: number;
+            /** @description Configuration for the LLM classifier; required when classifier_type is 'llm' */
+            classifier_llm_config?: components["schemas"]["ClassifierLLMConfig"] | null;
+            /**
+             * Classifier Type
+             * @description Classification strategy: local regex/keyword scoring, or an LLM call
+             * @default heuristic
+             * @enum {string}
+             */
+            classifier_type: "heuristic" | "llm";
+            /**
+             * Code Keywords
+             * @description Keywords indicating code-related content
+             */
+            code_keywords?: string[] | null;
+            /**
+             * Custom Technical Keywords
+             * @description Domain-specific technical keywords appended to the effective base list (technical_keywords if set, otherwise DEFAULT_TECHNICAL_KEYWORDS). Order is preserved; duplicates are removed case-insensitively against the base list and within this list.
+             */
+            custom_technical_keywords?: string[] | null;
+            /**
+             * Default Model
+             * @description Default model to use if tier cannot be determined
+             */
+            default_model?: string | null;
+            /**
+             * Dimension Weights
+             * @description Weights for each scoring dimension
+             */
+            dimension_weights?: {
+                [key: string]: number;
+            };
+            /**
+             * Embedding Model
+             * @description Embedding model (LiteLLM model name) used when semantic_keyword_matching is enabled
+             */
+            embedding_model?: string | null;
+            /**
+             * Escalation Keywords
+             * @description Case-sensitive phrases a user can include to force a bump to the next-higher complexity tier when they aren't satisfied with results (they can force a stronger model, but not choose which one). Defaults to ['LITELLM ESCALATE'] when unset; set to an empty list to disable.
+             */
+            escalation_keywords?: string[] | null;
+            /**
+             * Keyword Tier Rules
+             * @description Rules that force a specific tier when their keywords match the prompt
+             */
+            keyword_tier_rules?: components["schemas"]["KeywordTierRule"][] | null;
+            /**
+             * Match Threshold
+             * @description Minimum cosine similarity for a semantic keyword match
+             * @default 0.5
+             */
+            match_threshold: number;
+            /**
+             * Plugins
+             * @description Not settable over HTTP; routing plugins are runtime objects
+             */
+            plugins?: null;
+            /**
+             * Reasoning Keywords
+             * @description Keywords indicating reasoning-required content
+             */
+            reasoning_keywords?: string[] | null;
+            /**
+             * Return Raw Model Name
+             * @description Return the resolved raw model name in the response model field instead of the client-requested complexity-router alias
+             * @default false
+             */
+            return_raw_model_name: boolean;
+            /**
+             * Semantic Keyword Matching
+             * @description Match keyword_tier_rules by embedding similarity instead of literal text
+             * @default false
+             */
+            semantic_keyword_matching: boolean;
+            /**
+             * Session Affinity
+             * @description When True and a session_id is resolvable on the request, pin the model chosen on the session's first turn and reuse it for every later turn, skipping re-classification. Off by default so every turn is classified on its own merits and routed to the cheapest adequate tier. Set True to keep a multi-turn session on one model, which preserves provider prompt caches and avoids cross-model conversation-history errors.
+             * @default false
+             */
+            session_affinity: boolean;
+            /**
+             * Session Affinity Ttl Seconds
+             * @description TTL for the session affinity pin; refreshed on every cache hit
+             * @default 3600
+             */
+            session_affinity_ttl_seconds: number;
+            /**
+             * Simple Keywords
+             * @description Keywords indicating simple/basic queries
+             */
+            simple_keywords?: string[] | null;
+            /**
+             * Technical Keywords
+             * @description Keywords indicating technical content
+             */
+            technical_keywords?: string[] | null;
+            /**
+             * Tier Boundaries
+             * @description Score boundaries between tiers
+             */
+            tier_boundaries?: {
+                [key: string]: number;
+            };
+            /**
+             * Tier Distance Penalty
+             * @description Score penalty per tier-step away from the classified tier when adaptive=True
+             * @default 0.5
+             */
+            tier_distance_penalty: number;
+            /**
+             * Tiers
+             * @description Mapping of complexity tiers to a model or model pool. A list is randomly picked from when adaptive=False, and used as a soft-floor home pool when adaptive=True
+             */
+            tiers?: {
+                [key: string]: string | string[];
+            };
+            /**
+             * Token Thresholds
+             * @description Token count thresholds for simple/complex classification
+             */
+            token_thresholds?: {
+                [key: string]: number;
+            };
+        } & {
+            [key: string]: unknown;
+        };
         /** ResetSpendRequest */
         ResetSpendRequest: {
             /** Reset To */
@@ -31619,6 +31920,58 @@ export interface components {
              * @default 0
              */
             total_tokens: number;
+        };
+        /**
+         * StandardLoggingRoutingDecision
+         * @description Per-request provenance for a pre-routing strategy (auto-router) decision.
+         */
+        StandardLoggingRoutingDecision: {
+            /**
+             * Cause
+             * @enum {string}
+             */
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "literal_keyword_match" | "semantic_keyword_match" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            /** Classifier Model */
+            classifier_model?: string;
+            /** Conversation Continuing */
+            conversation_continuing?: boolean;
+            /** Escalated */
+            escalated?: boolean;
+            /** Escalation Keyword */
+            escalation_keyword?: string;
+            /** Matched Keyword */
+            matched_keyword?: string;
+            /** Request Type */
+            request_type?: string;
+            /** Routed Model */
+            routed_model?: string;
+            /** Router Model Name */
+            router_model_name?: string;
+            /**
+             * Router Type
+             * @enum {string}
+             */
+            router_type?: "complexity" | "adaptive" | "quality";
+            /** Score */
+            score?: number;
+            /** Signals */
+            signals?: string[];
+            /** Tier */
+            tier?: string;
+            tier_boundaries?: components["schemas"]["StandardLoggingRoutingDecisionTierBoundaries"];
+        };
+        /**
+         * StandardLoggingRoutingDecisionTierBoundaries
+         * @description Snapshot of the complexity scorer's tier boundaries at decision time, so a
+         *     historical spend log row stays explainable after the router config changes.
+         */
+        StandardLoggingRoutingDecisionTierBoundaries: {
+            /** Complex Reasoning */
+            complex_reasoning: number;
+            /** Medium Complex */
+            medium_complex: number;
+            /** Simple Medium */
+            simple_medium: number;
         };
         /**
          * SuccessfulKeyUpdate
@@ -35695,6 +36048,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    preview_auto_router_routing_auto_router_test_routing_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoRouterRoutingTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterRoutingTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

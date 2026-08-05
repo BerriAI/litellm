@@ -20,6 +20,7 @@ import { KeywordTierRule } from "./KeywordTierRules";
 import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
+  BuildComplexityRouterConfigParams,
   buildComplexityRouterConfig,
   getKeywordTierRulesError,
   getMissingTiersError,
@@ -27,6 +28,7 @@ import {
 } from "./build_complexity_router_config";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
+import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
 import NotificationManager from "../molecules/notifications_manager";
 import {
   getAllPresets,
@@ -80,6 +82,9 @@ const isPresetHintAlarming = (availability: PresetAvailability): boolean => avai
 // this is resolved once at import time rather than re-called from inside the component every render.
 const presets = getAllPresets();
 
+const resolveDefaultModel = (tiers: ComplexityTiers): string | undefined =>
+  tiers.MEDIUM[0] || tiers.SIMPLE[0] || tiers.COMPLEX[0] || tiers.REASONING[0];
+
 // A one-line summary of what's configured, shown when the detailed section is collapsed so a
 // caller can see the shape of the config without opening it.
 const tierConfigSummary = (tiers: ComplexityTiers): string => {
@@ -126,6 +131,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   // change it" affordance. A caller can always toggle it manually at any point.
   const [detailsExpanded, setDetailsExpanded] = useState<boolean>(false);
 
+  const [isRoutingTestVisible, setIsRoutingTestVisible] = useState<boolean>(false);
   const [isTestModalVisible, setIsTestModalVisible] = useState<boolean>(false);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
   const [connectionTestId, setConnectionTestId] = useState<number>(0);
@@ -224,21 +230,29 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     getKeywordTierRulesError(keywordTierRules) ??
     getReferencedModelsError(referencedModelsParams, availableModelSet);
 
+  const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
+    tiers: complexityRouterConfig.tiers,
+    classifierType: complexityRouterConfig.classifier_type,
+    classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
+    classifierContextWindowSize: complexityRouterConfig.classifier_context_window_size,
+    classifierContextPerTurnChars: complexityRouterConfig.classifier_context_per_turn_chars,
+    classifierContextIncludeAssistantTurns: complexityRouterConfig.classifier_context_include_assistant_turns,
+    sessionAffinity: complexityRouterConfig.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+    customTechnicalKeywords,
+    keywordTierRules,
+    semanticMatchingEnabled,
+    embeddingModel,
+    matchThreshold,
+    escalationKeywords,
+    adaptive: complexityRouterConfig.adaptive ?? false,
+    adaptiveWeights: complexityRouterConfig.adaptive_weights ?? DEFAULT_ADAPTIVE_WEIGHTS,
+    tierDistancePenalty: complexityRouterConfig.tier_distance_penalty ?? DEFAULT_TIER_DISTANCE_PENALTY,
+    adaptiveEligible: complexityRouterConfig.adaptive_eligible ?? "all",
+    returnRawModelName: complexityRouterConfig.return_raw_model_name ?? false,
+  };
+
   const submitRecommendedRouter = (name: string) => {
-    const {
-      tiers,
-      classifier_type: classifierType,
-      classifier_llm_config: classifierLlmConfig,
-      classifier_context_window_size: classifierContextWindowSize,
-      classifier_context_per_turn_chars: classifierContextPerTurnChars,
-      classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
-      session_affinity: sessionAffinity = DEFAULT_SESSION_AFFINITY,
-      adaptive = false,
-      adaptive_weights: adaptiveWeights = DEFAULT_ADAPTIVE_WEIGHTS,
-      tier_distance_penalty: tierDistancePenalty = DEFAULT_TIER_DISTANCE_PENALTY,
-      adaptive_eligible: adaptiveEligible = "all",
-      return_raw_model_name: returnRawModelName = false,
-    } = complexityRouterConfig;
+    const { tiers, classifierType, classifierLlmConfig } = complexityRouterConfigParams;
 
     const missingTiersError = getMissingTiersError(tiers);
     if (missingTiersError) {
@@ -278,7 +292,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
-    const defaultModel = tiers.MEDIUM[0] || tiers.SIMPLE[0] || tiers.COMPLEX[0] || tiers.REASONING[0];
+    const defaultModel = resolveDefaultModel(tiers);
 
     form.setFieldsValue({
       custom_llm_provider: "auto_router",
@@ -290,27 +304,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     form
       .validateFields(requiresTeamScope ? ["auto_router_name", "team_id"] : ["auto_router_name"])
       .then((values) => {
-        const complexityRouterConfigParams = {
-          tiers,
-          classifierType,
-          classifierLlmConfig,
-          classifierContextWindowSize,
-          classifierContextPerTurnChars,
-          classifierContextIncludeAssistantTurns,
-          sessionAffinity,
-          customTechnicalKeywords,
-          keywordTierRules,
-          semanticMatchingEnabled,
-          embeddingModel,
-          matchThreshold,
-          escalationKeywords,
-          adaptive,
-          adaptiveWeights,
-          tierDistancePenalty,
-          adaptiveEligible,
-          returnRawModelName,
-        };
-
         const submitValues = {
           ...values,
           auto_router_name: name,
@@ -515,6 +508,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               <Typography.Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Typography.Link>
             </Tooltip>
             <div className="space-x-2">
+              <Tooltip title={submitBlockedReason}>
+                <Button
+                  data-testid="auto-router-test-routing-btn"
+                  disabled={submitBlockedReason !== null}
+                  onClick={() => setIsRoutingTestVisible(true)}
+                >
+                  Test Routing
+                </Button>
+              </Tooltip>
               {
                 <Button
                   data-testid="auto-router-test-connect-btn"
@@ -539,6 +541,28 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           </div>
         </Form>
       </Card>
+
+      <Modal
+        title="Test Routing"
+        open={isRoutingTestVisible}
+        onCancel={() => setIsRoutingTestVisible(false)}
+        footer={[
+          <Button key="close" onClick={() => setIsRoutingTestVisible(false)}>
+            Close
+          </Button>,
+        ]}
+        width={760}
+      >
+        {isRoutingTestVisible && (
+          <AutoRouterRoutingTest
+            accessToken={accessToken}
+            config={buildComplexityRouterConfig(complexityRouterConfigParams)}
+            defaultModel={resolveDefaultModel(complexityRouterConfig.tiers)}
+            routerName={form.getFieldValue("auto_router_name")}
+            teamId={requiresTeamScope ? form.getFieldValue("team_id") : undefined}
+          />
+        )}
+      </Modal>
 
       <Modal
         title="Connection Test Results"
