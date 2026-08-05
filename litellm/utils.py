@@ -4789,7 +4789,7 @@ def get_api_key(llm_provider: str, dynamic_api_key: str | None):
         api_key = api_key or litellm.anthropic_key or get_secret("ANTHROPIC_API_KEY")
     # ai21
     elif llm_provider == "ai21":
-        api_key = api_key or litellm.ai21_key or get_secret("AI211_API_KEY")
+        api_key = api_key or litellm.ai21_key or get_secret("AI21_API_KEY")
     # aleph_alpha
     elif llm_provider == "aleph_alpha":
         api_key = api_key or litellm.aleph_alpha_key or get_secret("ALEPH_ALPHA_API_KEY")
