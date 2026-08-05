@@ -1153,6 +1153,22 @@ def test_reasoning_effort_integer_passthrough():
     assert isinstance(result["reasoning_effort"], int)
 
 
+def test_reasoning_effort_auto_dropped_to_model_default():
+    """
+    Fireworks rejects reasoning_effort="auto" (accepted set: low/medium/high/
+    xhigh/max/none/adaptive). Omitting the param is the model default, which is
+    exactly what "auto" means on OpenAI's side, so it must not reach the request.
+    """
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": "auto"},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in result
+
+
 def test_transform_response_captures_perf_metrics():
     body = {
         **_BASE_CHAT_COMPLETION_RESPONSE,

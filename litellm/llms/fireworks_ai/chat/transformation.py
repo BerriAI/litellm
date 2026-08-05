@@ -295,7 +295,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                     optional_params["reasoning_effort"] = "medium"
                 elif value is False:
                     optional_params["reasoning_effort"] = "none"
-                else:
+                elif value != "auto":
                     optional_params["reasoning_effort"] = value
             elif param in supported_openai_params:
                 if value is not None:
@@ -303,7 +303,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         return optional_params
 
-    def map_extra_body_params(self, optional_params: Mapping[str, object], model: str) -> dict:  # noqa: LIT001  # http handler pops extra_body off the returned dict
+    def map_extra_body_params(
+        self, optional_params: Mapping[str, object], model: str
+    ) -> dict:  # mutable-ok: http handler pops extra_body off the returned dict
         extra_body: Final = optional_params.get("extra_body")
         if not isinstance(extra_body, dict):
             return dict(optional_params)  # mutable-ok: JSON request body
