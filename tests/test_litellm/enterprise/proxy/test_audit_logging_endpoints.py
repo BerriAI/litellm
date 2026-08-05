@@ -52,6 +52,7 @@ class FakeDb:
         teams=(),
         orgs=(),
         models=(),
+        team_id_rows=(),
     ):
         self.litellm_auditlog = FakeAuditLogTable(audit_logs)
         self.litellm_verificationtoken = FakeTable(keys)
@@ -59,6 +60,12 @@ class FakeDb:
         self.litellm_teamtable = FakeTable(teams)
         self.litellm_organizationtable = FakeTable(orgs)
         self.litellm_proxymodeltable = FakeTable(models)
+        self.team_id_rows = list(team_id_rows)
+        self.query_raw_calls = []
+
+    async def query_raw(self, sql, *args):
+        self.query_raw_calls.append((sql, *args))
+        return self.team_id_rows
 
 
 class FakePrismaClient:
@@ -219,17 +226,16 @@ async def test_enrichment_db_lookup_wins_over_blob():
 
 
 async def test_build_object_team_condition_matches_id_and_alias():
-    """object_team ORs the raw value with every team_id whose team_alias contains it."""
-    db = FakeDb(
-        teams=[
-            SimpleNamespace(team_id="team-1", team_alias="prod-team"),
-            SimpleNamespace(team_id="team-2", team_alias="prod-eu"),
-        ]
-    )
+    """object_team ORs the raw value with every team_id whose team_alias contains it,
+    via a projected and capped query so one request cannot load the whole team table."""
+    db = FakeDb(team_id_rows=[{"team_id": "team-1"}, {"team_id": "team-2"}])
 
     condition = await _build_object_team_condition(FakePrismaClient(db), "prod")
 
-    assert db.litellm_teamtable.find_many_calls == [{"team_alias": {"contains": "prod"}}]
+    assert db.query_raw_calls == [
+        ('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_alias LIKE $1 LIMIT 100', "%prod%")
+    ]
+    assert db.litellm_teamtable.find_many_calls == []
     assert condition == {
         "OR": [
             _build_json_field_or_condition("team_alias", "prod"),
@@ -238,6 +244,15 @@ async def test_build_object_team_condition_matches_id_and_alias():
             _build_json_field_or_condition("team_id", "team-2"),
         ]
     }
+
+
+async def test_build_object_team_condition_escapes_like_wildcards():
+    """LIKE wildcards in the user-supplied value are escaped, not treated as patterns."""
+    db = FakeDb()
+
+    await _build_object_team_condition(FakePrismaClient(db), "pr_od%te\\am")
+
+    assert db.query_raw_calls[0][1] == "%pr\\_od\\%te\\\\am%"
 
 
 async def test_build_object_team_condition_deleted_team_matches_blob_alias():
@@ -272,6 +287,7 @@ def test_get_audit_logs_object_team_filter_and_enrichment():
         audit_logs=[audit_row],
         users=[SimpleNamespace(user_id="admin-user", user_alias=None, user_email="admin@example.com")],
         teams=[SimpleNamespace(team_id="team-1", team_alias="prod-team")],
+        team_id_rows=[{"team_id": "team-1"}],
     )
     client = _client_for(db)
 
@@ -307,6 +323,7 @@ def test_get_audit_logs_object_team_id_filter_unchanged():
     where = db.litellm_auditlog.find_many_calls[0]
     assert where["AND"] == [_build_json_field_or_condition("team_id", "team-1")]
     assert db.litellm_teamtable.find_many_calls == []
+    assert db.query_raw_calls == []
 
 
 def test_get_audit_log_by_id_is_enriched():
