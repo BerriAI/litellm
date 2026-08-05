@@ -7541,18 +7541,30 @@ _KEEPALIVE_MAX_SECONDS: Final = 300.0
 _EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
 
 
-async def _iter_with_keepalive(aiter: AsyncIterator[Any], keepalive_seconds: float) -> AsyncGenerator[Any, None]:
+async def _iter_with_keepalive(
+    aiter: AsyncIterator[Any],
+    resolve_keepalive_seconds: Callable[[object], float],
+    keepalive_seconds: float,
+) -> AsyncGenerator[Any, None]:
+    """Wrap `aiter` with idle-gap heartbeats, re-resolving the interval after each
+    real chunk via `resolve_keepalive_seconds`. A mid-stream router fallback can
+    swap in a deployment with a different (or disabled) keepalive policy partway
+    through the same stream; re-resolving against each chunk's own identity
+    (rather than trusting the interval picked before iteration started) keeps the
+    heartbeat behavior in sync with whichever deployment actually produced it."""
     if keepalive_seconds <= 0:
         async for item in aiter:
             yield item
         return
 
     pending: asyncio.Task[Any] | None = None  # rebind-ok: rebound each loop iteration
+    current_keepalive_seconds = keepalive_seconds  # rebind-ok: re-resolved after each chunk
     try:
         while True:
             if pending is None:
                 pending = asyncio.create_task(aiter.__anext__())
-            done, _ = await asyncio.wait((pending,), timeout=keepalive_seconds)
+            timeout = current_keepalive_seconds if current_keepalive_seconds > 0 else None
+            done, _ = await asyncio.wait((pending,), timeout=timeout)
             if not done:
                 yield _STREAM_KEEPALIVE
                 continue
@@ -7563,6 +7575,7 @@ async def _iter_with_keepalive(aiter: AsyncIterator[Any], keepalive_seconds: flo
             finally:
                 pending = None
             yield item
+            current_keepalive_seconds = resolve_keepalive_seconds(item)
     finally:
         if pending is not None and not pending.done():
             pending.cancel()
@@ -7716,7 +7729,13 @@ async def async_data_generator(
 
         _ka_secs: Final = _resolve_keepalive_seconds(request_data, response)
         stream_source: Final = (
-            _iter_with_keepalive(stream_iterator.__aiter__(), _ka_secs) if _ka_secs > 0 else stream_iterator
+            _iter_with_keepalive(
+                stream_iterator.__aiter__(),
+                lambda item: _resolve_keepalive_seconds(request_data, item),
+                _ka_secs,
+            )
+            if _ka_secs > 0
+            else stream_iterator
         )
 
         async for item in stream_source:
