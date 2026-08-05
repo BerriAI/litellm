@@ -11,7 +11,7 @@ export interface LogDetailRouting {
   sessionId: string | null;
   openLog: (requestId: string) => void;
   openSession: (sessionId: string, requestId: string | null) => void;
-  selectLog: (requestId: string) => void;
+  selectLog: (requestId: string, sessionId?: string | null) => void;
   close: () => void;
 }
 
@@ -36,9 +36,12 @@ export function useLogDetailRouting(): LogDetailRouting {
     });
   }, []);
 
-  const selectLog = useCallback((requestId: string) => {
+  const selectLog = useCallback((requestId: string, sessionId?: string | null) => {
     navigateWithParams((params) => {
       params.set(LOG_ID_QUERY_PARAM, requestId);
+      if (sessionId) {
+        params.set(SESSION_ID_QUERY_PARAM, sessionId);
+      }
     }, "replace");
   }, []);
 

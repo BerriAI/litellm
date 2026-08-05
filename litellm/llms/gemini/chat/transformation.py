@@ -1,7 +1,6 @@
-from typing import List, Optional, cast
+from typing import Final, cast
 
 import litellm
-
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
@@ -42,27 +41,27 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     Note: Please make sure to modify the default parameters as required for your use case.
     """
 
-    temperature: Optional[float] = None
-    max_output_tokens: Optional[int] = None
-    top_p: Optional[float] = None
-    top_k: Optional[int] = None
-    response_mime_type: Optional[str] = None
-    response_schema: Optional[dict] = None
-    candidate_count: Optional[int] = None
-    stop_sequences: Optional[list] = None
+    temperature: float | None = None
+    max_output_tokens: int | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    response_mime_type: str | None = None
+    response_schema: dict | None = None
+    candidate_count: int | None = None
+    stop_sequences: list | None = None
 
     def __init__(
         self,
-        temperature: Optional[float] = None,
-        max_output_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        response_mime_type: Optional[str] = None,
-        response_schema: Optional[dict] = None,
-        candidate_count: Optional[int] = None,
-        stop_sequences: Optional[list] = None,
+        temperature: float | None = None,
+        max_output_tokens: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        response_mime_type: str | None = None,
+        response_schema: dict | None = None,
+        candidate_count: int | None = None,
+        stop_sequences: list | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -74,8 +73,8 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     def is_model_gemini_audio_model(self, model: str) -> bool:
         return "tts" in model
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
-        supported_params = [
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        supported_params: Final = [
             "temperature",
             "top_p",
             "max_tokens",
@@ -105,10 +104,10 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
 
     def _transform_messages(
         self,
-        messages: List[AllMessageValues],
-        model: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-    ) -> List[ContentType]:
+        messages: list[AllMessageValues],
+        model: str | None = None,
+        litellm_params: dict | None = None,
+    ) -> list[ContentType]:
         """
         Google AI Studio Gemini does not support HTTP/HTTPS URLs for files.
         Convert them to base64 data instead.
@@ -116,13 +115,13 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         for message in messages:
             _message_content = message.get("content")
             if _message_content is not None and isinstance(_message_content, list):
-                _parts: List[PartType] = []
+                _parts: list[PartType] = []
                 for element in _message_content:
                     if element.get("type") == "image_url":
                         img_element = element
-                        _image_url: Optional[str] = None
-                        format: Optional[str] = None
-                        detail: Optional[str] = None
+                        _image_url: str | None = None
+                        format: str | None = None
+                        detail: str | None = None
                         if isinstance(img_element.get("image_url"), dict):
                             _image_url = img_element["image_url"].get("url")  # type: ignore
                             format = img_element["image_url"].get("format")  # type: ignore

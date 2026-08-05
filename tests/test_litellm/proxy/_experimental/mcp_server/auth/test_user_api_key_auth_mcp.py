@@ -8191,3 +8191,177 @@ class TestGetUserObjectPermission:
     async def test_no_user_id_places_no_ceiling(self):
         assert await MCPRequestHandler._get_user_object_permission(UserAPIKeyAuth(api_key="sk-test")) is None
         assert await MCPRequestHandler._get_user_object_permission(None) is None
+
+
+def _key_auth_reaching(server, *, tools=None, **fields):
+    """A key-authenticated caller whose OWN key grant reaches ``server`` (and optionally its ``tools``).
+
+    The key grant is the thing an upper-level entitlement fault must not silently hand back: every
+    test below asserts against what this key reaches when the level under test cannot be resolved.
+    """
+    return UserAPIKeyAuth(
+        api_key="sk-hash",
+        user_id="u1",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-key",
+            mcp_servers=[server],
+            mcp_tool_permissions={server: tools} if tools else None,
+        ),
+        **fields,
+    )
+
+
+def _agent_prisma(object_permission_id=None, side_effect=None):
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=MagicMock(object_permission_id=object_permission_id),
+        side_effect=side_effect,
+    )
+    return prisma_client
+
+
+@contextlib.contextmanager
+def _entitlement_fault_globals(prisma_client=None):
+    from litellm.caching.dual_cache import DualCache
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client or MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+    ):
+        yield
+
+
+@pytest.mark.asyncio
+class TestEntitlementFaultSemantics:
+    """Each entitlement level distinguishes two fault classes for a KEY-authenticated caller.
+
+    A principal row that NAMES an object_permission we cannot load is a known entitlement with
+    unknown contents, so the level denies rather than handing back the wider key scope. A lookup
+    that fails before we can tell whether the principal is entitled at all leaves no ceiling, which
+    is the state that existed before the level did; denying there would refuse MCP to the majority
+    of callers, who have no such entitlement configured, for the duration of a cold-cache fault.
+    """
+
+    async def test_end_user_named_but_unloadable_permission_denies(self):
+        end_user = MagicMock(object_permission=None, object_permission_id="op-eu")
+        auth = _key_auth_reaching("srv1", end_user_id="eu-1")
+        with _entitlement_fault_globals():
+            with (
+                patch("litellm.proxy.auth.auth_checks.get_end_user_object", AsyncMock(return_value=end_user)),
+                patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=None)),
+            ):
+                allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert allowed == [], "an end-user entitlement we know exists but cannot read must deny"
+
+    async def test_end_user_without_an_entitlement_places_no_ceiling(self):
+        """The three shapes that are NOT evidence of an entitlement: an end user row linking no
+        permission, no end user row at all, and a lookup that blew up before answering either."""
+        auth = _key_auth_reaching("srv1", end_user_id="eu-1")
+        linked_none = MagicMock(object_permission=None, object_permission_id=None)
+        for lookup, shape in (
+            (AsyncMock(return_value=linked_none), "row links no permission"),
+            (AsyncMock(return_value=None), "no end user row"),
+            (AsyncMock(side_effect=RuntimeError("connection reset by peer")), "lookup failed"),
+        ):
+            with _entitlement_fault_globals():
+                with patch("litellm.proxy.auth.auth_checks.get_end_user_object", lookup):
+                    allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+            assert set(allowed) == {"srv1"}, f"{shape}: no evidence of an entitlement, so no ceiling"
+
+    async def test_agent_named_but_unloadable_permission_denies(self):
+        auth = _key_auth_reaching("srv1", agent_id="agent-unloadable")
+        with _entitlement_fault_globals(_agent_prisma(object_permission_id="op-agent")):
+            with patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=None)):
+                allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert allowed == [], "an agent entitlement we know exists but cannot read must deny"
+
+    async def test_agent_without_an_entitlement_places_no_ceiling(self):
+        """An agent row linking no permission, and an agent row we could not read at all."""
+        for prisma_client, agent_id, shape in (
+            (_agent_prisma(object_permission_id=None), "agent-unlinked", "agent links no permission"),
+            (_agent_prisma(side_effect=RuntimeError("connection reset by peer")), "agent-unread", "row read failed"),
+        ):
+            auth = _key_auth_reaching("srv1", agent_id=agent_id)
+            with _entitlement_fault_globals(prisma_client):
+                allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+            assert set(allowed) == {"srv1"}, f"{shape}: no evidence of an entitlement, so no ceiling"
+
+    async def test_agent_named_but_unloadable_permission_denies_tools(self):
+        """The tools axis denies with [] rather than the None (allow-all) key auth gets for an
+        indeterminate fault, so an unreadable agent entitlement cannot widen the key's tool scope."""
+        auth = _key_auth_reaching("srv1", tools=["tool_a"], agent_id="agent-tools-unloadable")
+        with _entitlement_fault_globals(_agent_prisma(object_permission_id="op-agent")):
+            with patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=None)):
+                tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        assert tools == [], "an agent entitlement we know exists but cannot read must deny its tools"
+
+    async def test_org_named_but_unloadable_ceiling_denies(self):
+        auth = _key_auth_reaching("srv1", org_id="org-a")
+        org = MagicMock(object_permission_id="op-org")
+        with _entitlement_fault_globals():
+            with (
+                patch("litellm.proxy.auth.auth_checks.get_org_object", AsyncMock(return_value=org)),
+                patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=None)),
+            ):
+                allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert allowed == [], "an org ceiling we know exists but cannot read must deny, key auth included"
+
+    async def test_org_named_but_unloadable_ceiling_denies_tools(self):
+        auth = _key_auth_reaching("srv1", tools=["tool_a"], org_id="org-a")
+        org = MagicMock(object_permission_id="op-org")
+        with _entitlement_fault_globals():
+            with (
+                patch("litellm.proxy.auth.auth_checks.get_org_object", AsyncMock(return_value=org)),
+                patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=None)),
+            ):
+                tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        assert tools == [], "an org tool ceiling we know exists but cannot read must deny its tools"
+
+    async def test_org_without_a_resolvable_entitlement_places_no_ceiling(self):
+        """A deleted org and an org lookup that failed are both cases where we cannot point at a
+        ceiling; key auth keeps its long-standing fail-open behavior for them."""
+        from litellm.proxy.auth.auth_checks import OrganizationNotFoundError
+
+        auth = _key_auth_reaching("srv1", org_id="org-a")
+        for lookup, shape in (
+            (AsyncMock(return_value=MagicMock(object_permission_id=None)), "org names no permission"),
+            (AsyncMock(side_effect=OrganizationNotFoundError("Organization doesn't exist in db.")), "org deleted"),
+            (AsyncMock(side_effect=RuntimeError("connection reset by peer")), "org lookup failed"),
+        ):
+            with _entitlement_fault_globals():
+                with patch("litellm.proxy.auth.auth_checks.get_org_object", lookup):
+                    allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+            assert set(allowed) == {"srv1"}, f"{shape}: no ceiling we can point at, so key auth stays open"
+
+    async def test_keyless_org_ceiling_denies_on_either_fault_class(self):
+        """The keyless gateway-admitted path is untouched: it already denied on ANY org-ceiling
+        fault, and still denies on both classes, because a per-source org ceiling is the only org
+        bound a keyless subject has and an unbounded source would win the union."""
+        auth = _make_admitted_subject("sso-user", org_id="org-a", own_servers=["srv1"])
+        org = MagicMock(object_permission_id="op-org")
+        with _entitlement_fault_globals():
+            with patch("litellm.proxy.auth.auth_checks.get_org_object", AsyncMock(return_value=org)):
+                with patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=None)):
+                    named_unloadable = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+            with patch(
+                "litellm.proxy.auth.auth_checks.get_org_object",
+                AsyncMock(side_effect=RuntimeError("connection reset by peer")),
+            ):
+                indeterminate = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert named_unloadable == [] and indeterminate == []
+
+    async def test_keyless_source_never_consults_the_end_user_or_agent_levels(self):
+        """A keyless subject's grant sources carry neither end_user_id nor agent_id, so neither
+        level runs for it and neither new deny can reach its union. Pinned because a source that
+        DID consult them would fail closed on a fault and silently drop a team's grants."""
+        auth = _make_admitted_subject("sso-user", own_servers=["srv1"])
+        auth.end_user_id = "eu-1"
+        auth.agent_id = "agent-unloadable"
+        with _entitlement_fault_globals(_agent_prisma(object_permission_id="op-agent")):
+            with (
+                patch("litellm.proxy.auth.auth_checks.get_end_user_object", AsyncMock(side_effect=AssertionError)),
+                patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=None)),
+            ):
+                allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert set(allowed) == {"srv1"}
