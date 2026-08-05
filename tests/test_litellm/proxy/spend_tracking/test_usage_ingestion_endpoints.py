@@ -1,0 +1,183 @@
+import asyncio
+import os
+import sys
+from datetime import datetime, timezone
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
+
+sys.path.insert(0, os.path.abspath("../../.."))
+
+from litellm.proxy.spend_tracking.usage_ingestion_endpoints import (
+    ExternalUsageRecord,
+    KeyAttribution,
+    UsageIngestionDeps,
+    process_external_usage_record,
+)
+from litellm.proxy.utils import hash_token
+
+RAW_KEY = "sk-test-batch-dispatch-key"
+GENERATED_ID = "generated-uuid-1"
+DEFAULT_KEY = KeyAttribution(user_id="u-1", team_id="t-1", organization_id="o-1")
+
+
+class RecordingDeps:
+    def __init__(
+        self,
+        key: KeyAttribution | None = DEFAULT_KEY,
+        existing_ids: frozenset[str] = frozenset(),
+        compute_cost_result: float = 0.05,
+        compute_cost_error: Exception | None = None,
+    ):
+        self._key = key
+        self._existing_ids = existing_ids
+        self._compute_cost_result = compute_cost_result
+        self._compute_cost_error = compute_cost_error
+        self.spend_calls: list[dict[str, Any]] = []
+        self.compute_cost_calls: list[tuple[Any, str]] = []
+        self.exists_calls: list[str] = []
+
+    def as_deps(self) -> UsageIngestionDeps:
+        async def lookup_key(hashed: str) -> KeyAttribution | None:
+            self.looked_up_hashed = hashed
+            return self._key
+
+        async def spend_log_exists(request_id: str) -> bool:
+            self.exists_calls.append(request_id)
+            return request_id in self._existing_ids
+
+        async def record_spend(**kwargs: Any) -> None:
+            self.spend_calls.append(kwargs)
+
+        def compute_cost(response: Any, model: str) -> float:
+            self.compute_cost_calls.append((response, model))
+            if self._compute_cost_error is not None:
+                raise self._compute_cost_error
+            return self._compute_cost_result
+
+        return UsageIngestionDeps(
+            lookup_key=lookup_key,
+            spend_log_exists=spend_log_exists,
+            record_spend=record_spend,
+            compute_cost=compute_cost,
+            generate_request_id=lambda: GENERATED_ID,
+        )
+
+
+def make_record(**overrides: Any) -> ExternalUsageRecord:
+    base: dict[str, Any] = {
+        "api_key": RAW_KEY,
+        "model": "gpt-4o-mini",
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "start_time": datetime(2026, 8, 5, 12, 0, 0, tzinfo=timezone.utc),
+    }
+    base.update(overrides)
+    return ExternalUsageRecord(**base)
+
+
+def run(coro: Any) -> Any:
+    return asyncio.run(coro)
+
+
+def test_records_spend_with_explicit_cost_without_calling_pricing():
+    deps = RecordingDeps(compute_cost_error=RuntimeError("pricing must not be consulted"))
+    result = run(process_external_usage_record(make_record(cost=0.123, idempotency_key="batch-1-line-1"), deps.as_deps()))
+    assert result.status == "recorded"
+    assert result.spend == 0.123
+    assert result.request_id == "batch-1-line-1"
+    assert len(deps.spend_calls) == 1
+    assert deps.compute_cost_calls == []
+
+    call = deps.spend_calls[0]
+    assert call["token"] == hash_token(RAW_KEY)
+    assert call["token"] != RAW_KEY
+    assert call["user_id"] == "u-1"
+    assert call["team_id"] == "t-1"
+    assert call["org_id"] == "o-1"
+    assert call["response_cost"] == 0.123
+
+    response = call["completion_response"]
+    assert response.id == "batch-1-line-1"
+    assert response.usage.prompt_tokens == 100
+    assert response.usage.completion_tokens == 50
+    assert response.usage.total_tokens == 150
+
+    kwargs = call["kwargs"]
+    assert kwargs["call_type"] == "ingest_external_usage"
+    metadata = kwargs["litellm_params"]["metadata"]
+    assert metadata["user_api_key"] == hash_token(RAW_KEY)
+    assert metadata["user_api_key"] != RAW_KEY
+
+
+def test_computed_cost_used_when_no_explicit_cost():
+    deps = RecordingDeps(compute_cost_result=0.07)
+    result = run(process_external_usage_record(make_record(idempotency_key="k-2"), deps.as_deps()))
+    assert result.status == "recorded"
+    assert result.spend == 0.07
+    assert len(deps.compute_cost_calls) == 1
+    assert deps.compute_cost_calls[0][1] == "gpt-4o-mini"
+    assert deps.spend_calls[0]["response_cost"] == 0.07
+
+
+def test_unpriceable_model_without_explicit_cost_is_error_not_zero_spend():
+    deps = RecordingDeps(compute_cost_error=ValueError("unknown model"))
+    result = run(process_external_usage_record(make_record(idempotency_key="k-3"), deps.as_deps()))
+    assert result.status == "error"
+    assert result.spend is None
+    assert "explicit cost" in (result.error or "")
+    assert len(deps.spend_calls) == 0
+
+
+def test_unknown_key_is_rejected_and_never_books_spend():
+    deps = RecordingDeps(key=None)
+    result = run(process_external_usage_record(make_record(idempotency_key="k-4"), deps.as_deps()))
+    assert result.status == "error"
+    assert result.error == "api key not found"
+    assert len(deps.spend_calls) == 0
+
+
+def test_duplicate_idempotency_key_is_skipped_and_never_rebooks():
+    deps = RecordingDeps(existing_ids=frozenset({"k-5"}))
+    result = run(process_external_usage_record(make_record(idempotency_key="k-5"), deps.as_deps()))
+    assert result.status == "duplicate"
+    assert result.request_id == "k-5"
+    assert len(deps.spend_calls) == 0
+
+
+def test_missing_idempotency_key_generates_request_id_and_skips_dedup_probe():
+    deps = RecordingDeps()
+    result = run(process_external_usage_record(make_record(cost=0.01), deps.as_deps()))
+    assert result.status == "recorded"
+    assert result.request_id == GENERATED_ID
+    assert deps.spend_calls[0]["completion_response"].id == GENERATED_ID
+    assert deps.exists_calls == []
+
+
+def test_end_time_defaults_to_start_time_and_end_before_start_rejected():
+    deps = RecordingDeps()
+    start = datetime(2026, 8, 5, 12, 0, 0, tzinfo=timezone.utc)
+    run(process_external_usage_record(make_record(cost=0.01, start_time=start), deps.as_deps()))
+    assert deps.spend_calls[0]["start_time"] == start
+    assert deps.spend_calls[0]["end_time"] == start
+
+    earlier = datetime(2026, 8, 5, 11, 0, 0, tzinfo=timezone.utc)
+    with pytest.raises(ValidationError):
+        make_record(start_time=start, end_time=earlier)
+
+
+def test_tags_and_end_user_flow_into_payload():
+    deps = RecordingDeps()
+    result = run(
+        process_external_usage_record(
+            make_record(cost=0.01, idempotency_key="k-8", tags=["batch:job-42"], end_user_id="tenant-a"),
+            deps.as_deps(),
+        )
+    )
+    assert result.status == "recorded"
+    call = deps.spend_calls[0]
+    metadata = call["kwargs"]["litellm_params"]["metadata"]
+    assert metadata["tags"] == ["batch:job-42"]
+    assert metadata["user_api_key_end_user_id"] == "tenant-a"
+    assert call["end_user_id"] == "tenant-a"

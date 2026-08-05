@@ -1,0 +1,204 @@
+import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Final, Literal, NamedTuple
+
+from fastapi import APIRouter, Depends, status
+from pydantic import BaseModel, Field, model_validator
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import ProxyException
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.utils import hash_token
+
+router: Final = APIRouter()
+
+MAX_RECORDS_PER_REQUEST: Final = 1000
+
+
+class ExternalUsageRecord(BaseModel):
+    api_key: str = Field(min_length=1, description="Raw virtual key (sk-...) to attribute usage to. Never logged.")
+    model: str = Field(min_length=1)
+    prompt_tokens: int = Field(ge=0)
+    completion_tokens: int = Field(ge=0)
+    start_time: datetime
+    end_time: datetime | None = None
+    cost: float | None = Field(default=None, ge=0, description="Explicit cost in USD. Computed from litellm pricing when omitted.")
+    idempotency_key: str | None = Field(default=None, max_length=255, description="Becomes the spend-log request_id for dedup on retries.")
+    tags: list[str] | None = None
+    end_user_id: str | None = None
+
+    @model_validator(mode="after")
+    def end_time_not_before_start_time(self) -> "ExternalUsageRecord":
+        if self.end_time is not None and self.end_time < self.start_time:
+            raise ValueError("end_time must not be before start_time")
+        return self
+
+
+class UsageIngestRequest(BaseModel):
+    records: list[ExternalUsageRecord] = Field(min_length=1, max_length=MAX_RECORDS_PER_REQUEST)
+
+
+class UsageIngestRecordResult(BaseModel):
+    request_id: str
+    status: Literal["recorded", "duplicate", "error"]
+    spend: float | None = None
+    error: str | None = None
+
+
+class UsageIngestResponse(BaseModel):
+    results: list[UsageIngestRecordResult]
+
+
+class KeyAttribution(NamedTuple):
+    user_id: str | None
+    team_id: str | None
+    organization_id: str | None
+
+
+RecordSpendFn = Callable[..., Awaitable[None]]
+
+
+@dataclass(frozen=True, slots=True)
+class UsageIngestionDeps:
+    lookup_key: Callable[[str], Awaitable[KeyAttribution | None]]
+    spend_log_exists: Callable[[str], Awaitable[bool]]
+    record_spend: RecordSpendFn
+    compute_cost: Callable[[litellm.ModelResponse, str], float]
+    generate_request_id: Callable[[], str]
+
+
+def _build_usage_kwargs(record: ExternalUsageRecord, hashed_token: str) -> dict[str, object]:
+    metadata = {
+        "user_api_key": hashed_token,
+        "user_api_key_end_user_id": record.end_user_id,
+        "tags": list(record.tags) if record.tags else [],
+    }
+    return {
+        "model": record.model,
+        "call_type": "ingest_external_usage",
+        "litellm_params": {"model": record.model, "metadata": metadata},
+    }
+
+
+def _build_completion_response(record: ExternalUsageRecord, request_id: str) -> litellm.ModelResponse:
+    total_tokens: Final = record.prompt_tokens + record.completion_tokens
+    usage: Final = litellm.Usage(
+        prompt_tokens=record.prompt_tokens,
+        completion_tokens=record.completion_tokens,
+        total_tokens=total_tokens,
+    )
+    return litellm.ModelResponse(
+        id=request_id,
+        model=record.model,
+        created=int(record.start_time.timestamp()),
+        usage=usage,
+    )
+
+
+def _resolve_cost(deps: UsageIngestionDeps, record: ExternalUsageRecord, response: litellm.ModelResponse) -> float:
+    if record.cost is not None:
+        return record.cost
+    return deps.compute_cost(response, record.model)
+
+
+async def process_external_usage_record(record: ExternalUsageRecord, deps: UsageIngestionDeps) -> UsageIngestRecordResult:
+    request_id: Final = record.idempotency_key or deps.generate_request_id()
+    hashed_token: Final = hash_token(record.api_key)
+
+    key: Final = await deps.lookup_key(hashed_token)
+    if key is None:
+        return UsageIngestRecordResult(request_id=request_id, status="error", error="api key not found")
+
+    if record.idempotency_key is not None and await deps.spend_log_exists(request_id):
+        return UsageIngestRecordResult(request_id=request_id, status="duplicate")
+
+    response: Final = _build_completion_response(record, request_id)
+
+    try:
+        cost: Final = _resolve_cost(deps, record, response)
+    except Exception as e:  # noqa: BLE001  # pricing lookup raises arbitrary provider-specific errors; any failure means the record is unpriceable and must carry an explicit cost
+        verbose_proxy_logger.info("ingest usage: cost computation failed for model %s: %s", record.model, e)
+        return UsageIngestRecordResult(
+            request_id=request_id,
+            status="error",
+            error="could not compute cost for this model, pass an explicit cost",
+        )
+
+    await deps.record_spend(
+        token=hashed_token,
+        user_id=key.user_id,
+        end_user_id=record.end_user_id,
+        team_id=key.team_id,
+        kwargs=_build_usage_kwargs(record, hashed_token),
+        completion_response=response,
+        start_time=record.start_time,
+        end_time=record.end_time or record.start_time,
+        response_cost=cost,
+        org_id=key.organization_id,
+    )
+    return UsageIngestRecordResult(request_id=request_id, status="recorded", spend=cost)
+
+
+def _attribution_of(key_row: object) -> KeyAttribution:
+    return KeyAttribution(
+        user_id=getattr(key_row, "user_id", None),
+        team_id=getattr(key_row, "team_id", None),
+        organization_id=getattr(key_row, "organization_id", None),
+    )
+
+
+def default_ingestion_deps() -> UsageIngestionDeps:
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj
+
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    async def lookup_key(hashed_token: str) -> KeyAttribution | None:
+        row: Final = await prisma_client.db.litellm_verificationtoken.find_unique(where={"token": hashed_token})
+        if row is None:
+            return None
+        return _attribution_of(row)
+
+    async def spend_log_exists(request_id: str) -> bool:
+        row: Final = await prisma_client.db.litellm_spendlogs.find_unique(where={"request_id": request_id})
+        return row is not None
+
+    return UsageIngestionDeps(
+        lookup_key=lookup_key,
+        spend_log_exists=spend_log_exists,
+        record_spend=proxy_logging_obj.db_spend_update_writer.update_database,
+        compute_cost=lambda resp, model: litellm.completion_cost(completion_response=resp, model=model),
+        generate_request_id=lambda: str(uuid.uuid4()),
+    )
+
+
+@router.post(
+    "/spend/usage",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=UsageIngestResponse,
+)
+async def ingest_external_usage(request: UsageIngestRequest) -> UsageIngestResponse:
+    """
+    PROXY_ADMIN ONLY: record externally measured usage into the same spend pipeline as proxy-routed traffic.
+
+    For inference traffic that legitimately bypasses the proxy (for example async batch processors
+    dispatching directly to model gateways), so budgets and spend stay coherent in litellm as the
+    single metering system.
+
+    Attribution (user/team/org) is derived from the given virtual key. Records accept an optional
+    idempotency_key, stored as the spend-log request_id, so retries are deduplicated. When cost is
+    omitted it is computed from litellm pricing; records whose model cannot be priced are rejected
+    with an error instead of being booked as zero spend.
+    """
+    deps: Final = default_ingestion_deps()
+    results: Final = [await process_external_usage_record(record, deps) for record in request.records]
+    return UsageIngestResponse(results=results)
