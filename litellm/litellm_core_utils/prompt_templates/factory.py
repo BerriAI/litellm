@@ -380,7 +380,7 @@ def _render_chat_template(env, chat_template: str, bos_token: str, eos_token: st
         Rendered template string
     """
     try:
-        template: Final = env.from_string(chat_template)  # type: ignore
+        template: Final = env.from_string(chat_template)
     except Exception as e:
         raise e
 
@@ -471,7 +471,7 @@ async def _afetch_and_extract_template(
             and isinstance(tokenizer_config["tokenizer"], dict)
             and "chat_template" in tokenizer_config["tokenizer"]
         ):
-            tokenizer_data: dict = tokenizer_config["tokenizer"]  # type: ignore
+            tokenizer_data: dict = tokenizer_config["tokenizer"]
             bos_token = _extract_token_value(token_value=tokenizer_data.get("bos_token"))
             eos_token = _extract_token_value(token_value=tokenizer_data.get("eos_token"))
             chat_template = tokenizer_data["chat_template"]
@@ -486,13 +486,13 @@ async def _afetch_and_extract_template(
                     and "tokenizer" in tokenizer_config
                     and isinstance(tokenizer_config["tokenizer"], dict)
                 ):
-                    tokenizer_data: dict = tokenizer_config["tokenizer"]  # type: ignore
+                    tokenizer_data: dict = tokenizer_config["tokenizer"]
                     bos_token = _extract_token_value(token_value=tokenizer_data.get("bos_token"))
                     eos_token = _extract_token_value(token_value=tokenizer_data.get("eos_token"))
             else:
                 raise Exception("No chat template found")
 
-    return chat_template, bos_token, eos_token  # type: ignore
+    return chat_template, bos_token, eos_token
 
 
 def _fetch_and_extract_template(
@@ -525,7 +525,7 @@ def _fetch_and_extract_template(
             and isinstance(tokenizer_config["tokenizer"], dict)
             and "chat_template" in tokenizer_config["tokenizer"]
         ):
-            tokenizer_data: dict = tokenizer_config["tokenizer"]  # type: ignore
+            tokenizer_data: dict = tokenizer_config["tokenizer"]
             bos_token = _extract_token_value(token_value=tokenizer_data.get("bos_token"))
             eos_token = _extract_token_value(token_value=tokenizer_data.get("eos_token"))
             chat_template = tokenizer_data["chat_template"]
@@ -540,13 +540,13 @@ def _fetch_and_extract_template(
                     and "tokenizer" in tokenizer_config
                     and isinstance(tokenizer_config["tokenizer"], dict)
                 ):
-                    tokenizer_data: dict = tokenizer_config["tokenizer"]  # type: ignore
+                    tokenizer_data: dict = tokenizer_config["tokenizer"]
                     bos_token = _extract_token_value(token_value=tokenizer_data.get("bos_token"))
                     eos_token = _extract_token_value(token_value=tokenizer_data.get("eos_token"))
             else:
                 raise Exception("No chat template found")
 
-    return chat_template, bos_token, eos_token  # type: ignore
+    return chat_template, bos_token, eos_token
 
 
 async def ahf_chat_template(model: str, messages: list, chat_template: Any | None = None):
@@ -1067,9 +1067,7 @@ def anthropic_messages_pt_xml(messages: list):
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_text = messages[msg_i].get("content") or ""  # either string or none
             if messages[msg_i].get("tool_calls", []):  # support assistant tool invoke conversion
-                assistant_text += convert_to_anthropic_tool_invoke_xml(  # type: ignore
-                    messages[msg_i]["tool_calls"]
-                )
+                assistant_text += convert_to_anthropic_tool_invoke_xml(messages[msg_i]["tool_calls"])
 
             assistant_content.append({"type": "text", "text": assistant_text})
             msg_i += 1
@@ -1124,7 +1122,7 @@ def convert_to_azure_openai_messages(
         if m["role"] == "user" and isinstance(m.get("content"), list):
             for content in m.get("content", []):
                 if isinstance(content, dict) and content.get("type") == "image_url":
-                    _azure_image_url_helper(content)  # type: ignore
+                    _azure_image_url_helper(content)
     return messages
 
 
@@ -1475,7 +1473,7 @@ def convert_to_gemini_tool_call_result(
                             )
                         except Exception as e:
                             verbose_logger.warning("Failed to process file in tool response: %s", e)
-    name: str | None = message.get("name", "")  # type: ignore
+    name: str | None = message.get("name", "")
 
     # Recover name from last message with tool calls
     if last_message_with_tool_calls:
@@ -1521,7 +1519,7 @@ def convert_to_gemini_tool_call_result(
     # error call result so default to the successful result template
     _function_response: Final = VertexFunctionResponse(
         name=name,
-        response=response_data,  # type: ignore
+        response=response_data,
     )
     if gemini_call_id:
         _function_response["id"] = gemini_call_id
@@ -1693,7 +1691,7 @@ def convert_to_anthropic_tool_result(
     if anthropic_tool_result is None:
         raise Exception(f"Unable to parse anthropic tool result for message: {message}")
     if cache_control is not None:
-        anthropic_tool_result["cache_control"] = cache_control  # type: ignore
+        anthropic_tool_result["cache_control"] = cache_control
     return anthropic_tool_result
 
 
@@ -1841,7 +1839,7 @@ def add_cache_control_to_content(
 ):
     cache_control_param: Final = original_content_element.get("cache_control")
     if cache_control_param is not None and isinstance(cache_control_param, dict):
-        transformed_param: Final = ChatCompletionCachedContent(**cache_control_param)  # type: ignore
+        transformed_param: Final = ChatCompletionCachedContent(**cache_control_param)
 
         anthropic_content_element["cache_control"] = transformed_param
 
@@ -2020,7 +2018,7 @@ def _sanitize_empty_text_content(
 
         if rewrote_any:
             message = cast(AllMessageValues, dict(message))  # Make a copy
-            message["content"] = new_blocks  # type: ignore
+            message["content"] = new_blocks
             verbose_logger.debug(
                 "_sanitize_empty_text_content: Replaced empty text block(s) in %s message", message.get("role")
             )
@@ -2396,12 +2394,12 @@ def anthropic_messages_pt(
         user_content: list[AnthropicMessagesUserMessageValues] = []
         init_msg_i = msg_i
         if isinstance(messages[msg_i], BaseModel):
-            messages[msg_i] = dict(messages[msg_i])  # type: ignore
+            messages[msg_i] = dict(messages[msg_i])
         ## MERGE CONSECUTIVE USER CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
             user_message_types_block: (
                 ChatCompletionToolMessage | ChatCompletionUserMessage | ChatCompletionFunctionMessage
-            ) = messages[msg_i]  # type: ignore
+            ) = messages[msg_i]
             if user_message_types_block["role"] == "user":
                 if isinstance(user_message_types_block["content"], list):
                     for m in user_message_types_block["content"]:
@@ -2507,7 +2505,7 @@ def anthropic_messages_pt(
         assistant_content: list[AnthropicMessagesAssistantMessageValues] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            assistant_content_block: ChatCompletionAssistantMessage = messages[msg_i]  # type: ignore
+            assistant_content_block: ChatCompletionAssistantMessage = messages[msg_i]
 
             # Extract compaction_blocks from provider_specific_fields and add them first
             _provider_specific_fields_raw = assistant_content_block.get("provider_specific_fields")
@@ -2515,7 +2513,7 @@ def anthropic_messages_pt(
                 _compaction_blocks = _provider_specific_fields_raw.get("compaction_blocks")
                 if _compaction_blocks and isinstance(_compaction_blocks, list):
                     # Add compaction blocks at the beginning of assistant content : https://platform.claude.com/docs/en/build-with-claude/compaction
-                    assistant_content.extend(_compaction_blocks)  # type: ignore
+                    assistant_content.extend(_compaction_blocks)
 
             _raw_thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             thinking_blocks = (
@@ -2555,7 +2553,7 @@ def anthropic_messages_pt(
                 _web_search_results_tc = _provider_specific_fields_tc.get("web_search_results")
                 _tool_results_tc = _provider_specific_fields_tc.get("tool_results")
                 tool_invoke_results = convert_to_anthropic_tool_invoke(
-                    assistant_tool_calls,  # type: ignore
+                    assistant_tool_calls,
                     web_search_results=_web_search_results_tc,
                     tool_results=_tool_results_tc,
                 )
@@ -2706,7 +2704,7 @@ def anthropic_messages_pt(
                         # handle server_tool_use blocks (tool search, web search, etc.)
                         # Pass through as-is since these are Anthropic-native content types
                         elif m.get("type", "") == "server_tool_use" or m.get("type", "").endswith("_tool_result"):
-                            assistant_content.append(m)  # type: ignore
+                            assistant_content.append(m)
                 elif (
                     "content" in assistant_content_block
                     and isinstance(assistant_content_block["content"], str)
@@ -2834,10 +2832,10 @@ def parse_xml_params(xml_content, json_schema: dict | None = None):
             if child is not None and child.text is not None:
                 try:
                     # Attempt to decode the element's text as JSON
-                    params[child.tag] = json.loads(child.text)  # type: ignore
+                    params[child.tag] = json.loads(child.text)
                 except json.JSONDecodeError:
                     # If JSON decoding fails, use the original text
-                    params[child.tag] = child.text  # type: ignore
+                    params[child.tag] = child.text
 
     return params
 
@@ -3282,7 +3280,7 @@ def gemini_text_image_pt(messages: list):
     }
     """
     try:
-        pass  # type: ignore
+        pass
     except Exception:
         raise Exception("Importing google.generativeai failed, please run 'pip install -q google-generativeai")
 
@@ -3686,7 +3684,7 @@ def _convert_to_bedrock_tool_call_invoke(
                             # cache_control applies to the whole original
                             # tool call; attach after the last split block.
                             if tool.get("cache_control", None) is not None:
-                                _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                                _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                                     {"cache_control": tool["cache_control"]},
                                     block_type="content_block",
                                     model=model,
@@ -3703,7 +3701,7 @@ def _convert_to_bedrock_tool_call_invoke(
 
                 # Check for cache_control and add a separate cachePoint block
                 if tool.get("cache_control", None) is not None:
-                    cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                    cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                         {"cache_control": tool["cache_control"]},
                         block_type="content_block",
                         model=model,
@@ -4063,9 +4061,7 @@ def get_user_message_block_or_continue_message(
         if content_block.strip():
             return message
         else:
-            return ChatCompletionUserMessage(
-                **(user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE)  # type: ignore
-            )
+            return ChatCompletionUserMessage(**(user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE))
 
     # Handle list case
     if isinstance(content_block, list):
@@ -4079,9 +4075,7 @@ def get_user_message_block_or_continue_message(
             ],
         """
         if not content_block:
-            return ChatCompletionUserMessage(
-                **(user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE)  # type: ignore
-            )
+            return ChatCompletionUserMessage(**(user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE))
         # Create a copy of the message to avoid modifying the original
         modified_content_block: Final = content_block.copy()
 
@@ -4091,7 +4085,7 @@ def get_user_message_block_or_continue_message(
                 if not item["text"].strip():
                     # Replace empty text with continue message
                     _user_continue_message = ChatCompletionUserMessage(
-                        **(user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE)  # type: ignore
+                        **(user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE)
                     )
                     text = convert_content_list_to_str(_user_continue_message)
                     item["text"] = text
@@ -4178,14 +4172,12 @@ def skip_empty_text_blocks(
 
         # Type-specific casting based on message role
         if message["role"] == "assistant":
-            modified_message_alt["content"] = cast(  # type: ignore
+            modified_message_alt["content"] = cast(
                 list[OpenAIMessageContentListBlock] | None,
                 modified_content_block or None,
             )
         elif message["role"] == "user" and modified_content_block is not None:
-            modified_message_alt["content"] = cast(  # type: ignore
-                list[ChatCompletionTextObject] | None, modified_content_block
-            )
+            modified_message_alt["content"] = cast(list[ChatCompletionTextObject] | None, modified_content_block)
 
         return modified_message_alt
 
@@ -4356,10 +4348,10 @@ class BedrockConverseMessagesProcessor:
                                     format = element["image_url"].get("format")
                                 else:
                                     image_url = element["image_url"]
-                                _part = await BedrockImageProcessor.process_image_async(  # type: ignore
+                                _part = await BedrockImageProcessor.process_image_async(
                                     image_url=image_url, format=format
                                 )
-                                _parts.append(_part)  # type: ignore
+                                _parts.append(_part)
                             elif element["type"] == "file":
                                 _part = await BedrockConverseMessagesProcessor._async_process_file_message(
                                     message=cast(ChatCompletionFileObject, element)
@@ -4368,7 +4360,7 @@ class BedrockConverseMessagesProcessor:
                             elif element["type"] == "document":
                                 _part = BedrockConverseMessagesProcessor._process_document_message(element)
                                 _parts.append(_part)
-                            _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                            _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                                 message_block=cast(OpenAIMessageContentListBlock, element),
                                 block_type="content_block",
                                 model=model,
@@ -4378,7 +4370,7 @@ class BedrockConverseMessagesProcessor:
                     user_content.extend(_parts)
                 elif message_block["content"] and isinstance(message_block["content"], str):
                     _part = BedrockContentBlock(text=messages[msg_i]["content"])
-                    _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                    _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                         message_block, block_type="content_block", model=model
                     )
                     user_content.append(_part)
@@ -4425,7 +4417,7 @@ class BedrockConverseMessagesProcessor:
 
                 # Add a separate cachePoint block if cache_control is present
                 if tool_msg_cache_control is not None:
-                    cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                    cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                         {"cache_control": tool_msg_cache_control},
                         block_type="content_block",
                         model=model,
@@ -4501,12 +4493,10 @@ class BedrockConverseMessagesProcessor:
                                     image_url = element["image_url"]["url"]
                                 else:
                                     image_url = element["image_url"]
-                                assistants_part = await BedrockImageProcessor.process_image_async(  # type: ignore
-                                    image_url=image_url
-                                )
+                                assistants_part = await BedrockImageProcessor.process_image_async(image_url=image_url)
                                 assistants_parts.append(assistants_part)
                                 # Add cache point block for assistant content elements
-                        _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                        _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                             message_block=cast(OpenAIMessageContentListBlock, element),
                             block_type="content_block",
                             model=model,
@@ -4520,7 +4510,7 @@ class BedrockConverseMessagesProcessor:
                         assistant_content.append(BedrockContentBlock(text=_assistant_content))
                     # If content is empty/whitespace, skip it (don't add a placeholder)
                     # Add cache point block for assistant string content
-                    _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                    _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                         assistant_message_block, block_type="content_block", model=model
                     )
                     if _cache_point_block is not None:
@@ -4730,11 +4720,11 @@ def _bedrock_converse_messages_pt(
                                 format = element["image_url"].get("format")
                             else:
                                 image_url = element["image_url"]
-                            _part = BedrockImageProcessor.process_image_sync(  # type: ignore
+                            _part = BedrockImageProcessor.process_image_sync(
                                 image_url=image_url,
                                 format=format,
                             )
-                            _parts.append(_part)  # type: ignore
+                            _parts.append(_part)
                         elif element["type"] == "file":
                             _part = BedrockConverseMessagesProcessor._process_file_message(
                                 message=cast(ChatCompletionFileObject, element)
@@ -4743,7 +4733,7 @@ def _bedrock_converse_messages_pt(
                         elif element["type"] == "document":
                             _part = BedrockConverseMessagesProcessor._process_document_message(element)
                             _parts.append(_part)
-                        _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                        _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                             message_block=cast(OpenAIMessageContentListBlock, element),
                             block_type="content_block",
                             model=model,
@@ -4753,7 +4743,7 @@ def _bedrock_converse_messages_pt(
                 user_content.extend(_parts)
             elif message_block["content"] and isinstance(message_block["content"], str):
                 _part = BedrockContentBlock(text=messages[msg_i]["content"])
-                _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                     message_block, block_type="content_block", model=model
                 )
                 user_content.append(_part)
@@ -4802,7 +4792,7 @@ def _bedrock_converse_messages_pt(
 
             # Add a separate cachePoint block if cache_control is present
             if tool_msg_cache_control is not None:
-                cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                     {"cache_control": tool_msg_cache_control},
                     block_type="content_block",
                     model=model,
@@ -4881,12 +4871,10 @@ def _bedrock_converse_messages_pt(
                                 image_url = element["image_url"]["url"]
                             else:
                                 image_url = element["image_url"]
-                            assistants_part = BedrockImageProcessor.process_image_sync(  # type: ignore
-                                image_url=image_url
-                            )
+                            assistants_part = BedrockImageProcessor.process_image_sync(image_url=image_url)
                             assistants_parts.append(assistants_part)
                         # Add cache point block for assistant content elements
-                        _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                        _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                             message_block=cast(OpenAIMessageContentListBlock, element),
                             block_type="content_block",
                             model=model,
@@ -4899,7 +4887,7 @@ def _bedrock_converse_messages_pt(
                 if _assistant_content.strip():
                     assistant_content.append(BedrockContentBlock(text=_assistant_content))
                 # Add cache point block for assistant string content
-                _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                     assistant_message_block, block_type="content_block", model=model
                 )
                 if _cache_point_block is not None:
@@ -5060,7 +5048,7 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
         # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
         if _is_bedrock_tool_block(tool):
             # Already a BedrockToolBlock, pass it through
-            tool_block_list.append(tool)  # type: ignore
+            tool_block_list.append(tool)
             continue
 
         # Responses built-in tools (web_search, image_generation, namespace, tool_search,
@@ -5539,8 +5527,5 @@ def resolve_structured_messages(
     for handler in handlers_to_try:
         structured = handler.get_structured_messages(request_kwargs)
         if structured:
-            return [
-                msg if isinstance(msg, dict) else msg.model_dump()  # type: ignore
-                for msg in structured
-            ]
+            return [msg if isinstance(msg, dict) else msg.model_dump() for msg in structured]
     return None

@@ -5,19 +5,22 @@ import AddAutoRouterTab from "./add_auto_router_tab";
 import NotificationManager from "../molecules/notifications_manager";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { getMissingTiersError } from "./build_complexity_router_config";
+import { testAutoRouterRouting } from "../networking";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
+import { getAllPresets, getPresetByKey, getRequiredModelsInPreset } from "@/lib/autorouter_presets";
 
-// Every model referenced by both bundled family presets. A caller holding all of these can select
-// either preset; dropping any one greys out the preset that names it.
+const ANTHROPIC_PRESET = getPresetByKey("anthropic_family")!;
+const ANTHROPIC_TIERS = ANTHROPIC_PRESET.complexity_router_config.tiers;
+
+// Every model referenced by the bundled family presets, derived from the presets themselves so
+// that renaming a preset's models in autorouter_presets.json does not red these tests. A caller
+// holding all of these can select either preset; dropping any one greys out the preset that
+// names it.
 const ALL_FAMILY_MODELS: ModelGroup[] = [
-  { model_group: "claude-haiku-4-5", mode: "chat" },
-  { model_group: "claude-sonnet-4-5", mode: "chat" },
-  { model_group: "claude-opus-5", mode: "chat" },
-  { model_group: "gpt-5-nano", mode: "chat" },
-  { model_group: "gpt-5-mini", mode: "chat" },
-  { model_group: "gpt-5", mode: "chat" },
-  { model_group: "o3", mode: "chat" },
-];
+  ...new Set(getAllPresets().flatMap((preset) => [...getRequiredModelsInPreset(preset)])),
+].map((model_group) => ({ model_group, mode: "chat" }));
+
+const ANTHROPIC_ONLY_MODEL = ANTHROPIC_TIERS.COMPLEX[0];
 
 const openTemplateDropdown = (): void => {
   fireEvent.mouseDown(screen.getByTestId("template-selector").querySelector(".ant-select-selector")!);
@@ -42,6 +45,7 @@ const { mockFetchAvailableModels } = vi.hoisted(() => ({ mockFetchAvailableModel
 
 vi.mock("../networking", () => ({
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
+  testAutoRouterRouting: vi.fn(),
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
@@ -303,6 +307,80 @@ describe("AddAutoRouterTab", () => {
     expect(labels).toEqual(["Anthropic Family", "OpenAI Family", "Custom Configuration"]);
   });
 
+  describe("routing test", () => {
+    it("offers no routing test until the config is complete enough to route", async () => {
+      const actual = await vi.importActual<typeof import("./build_complexity_router_config")>(
+        "./build_complexity_router_config",
+      );
+      vi.mocked(getMissingTiersError).mockImplementation(actual.getMissingTiersError);
+
+      renderWithProviders(<Harness />);
+
+      expect(screen.getByTestId("auto-router-test-routing-btn")).toBeDisabled();
+    });
+
+    it("routes a prompt through the config on screen without creating the router", async () => {
+      const user = userEvent.setup();
+      vi.mocked(getMissingTiersError).mockReturnValue(null);
+      vi.mocked(testAutoRouterRouting).mockResolvedValue({
+        status: "success",
+        result: {
+          routed_model: "claude-opus-5",
+          routed_model_configured: true,
+          routing_decision: { routed_model: "claude-opus-5", tier: "COMPLEX", cause: "literal_keyword_match" },
+        },
+      });
+
+      renderWithProviders(<Harness />);
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "keyword-router");
+      expandDetailedConfiguration();
+      await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+      await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
+      const keywordsField = screen.getByText("Keywords 1").closest("div") as HTMLElement;
+      await user.type(within(keywordsField).getByRole("combobox"), "invoice{enter}");
+
+      await user.click(screen.getByTestId("auto-router-test-routing-btn"));
+      await user.type(await screen.findByTestId("auto-router-routing-test-prompt"), "reconcile this invoice");
+      await user.click(screen.getByTestId("auto-router-routing-test-send"));
+
+      await waitFor(() => expect(testAutoRouterRouting).toHaveBeenCalled());
+      const [accessToken, request] = vi.mocked(testAutoRouterRouting).mock.calls.at(-1)!;
+      expect(accessToken).toBe("token");
+      expect(request.prompt).toBe("reconcile this invoice");
+      expect(request.router_name).toBe("keyword-router");
+      expect(request.complexity_router_config).toMatchObject({
+        keyword_tier_rules: [{ keywords: ["invoice"], tier: "COMPLEX" }],
+      });
+      expect(await screen.findByTestId("auto-router-routing-test-routed-model")).toHaveTextContent("claude-opus-5");
+      expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
+    });
+
+    it("forgets the last prompt and result when the modal is reopened", async () => {
+      const user = userEvent.setup();
+      vi.mocked(getMissingTiersError).mockReturnValue(null);
+      vi.mocked(testAutoRouterRouting).mockResolvedValue({
+        status: "success",
+        result: {
+          routed_model: "claude-opus-5",
+          routed_model_configured: true,
+          routing_decision: { routed_model: "claude-opus-5", tier: "COMPLEX", cause: "heuristic_scorer" },
+        },
+      });
+
+      renderWithProviders(<Harness />);
+      await user.click(screen.getByTestId("auto-router-test-routing-btn"));
+      await user.type(await screen.findByTestId("auto-router-routing-test-prompt"), "reconcile this invoice");
+      await user.click(screen.getByTestId("auto-router-routing-test-send"));
+      expect(await screen.findByTestId("auto-router-routing-test-result")).toBeInTheDocument();
+
+      await user.click(screen.getAllByRole("button", { name: /^close$/i }).at(-1)!);
+      await user.click(screen.getByTestId("auto-router-test-routing-btn"));
+
+      expect(await screen.findByTestId("auto-router-routing-test-prompt")).toHaveValue("");
+      expect(screen.queryByTestId("auto-router-routing-test-result")).not.toBeInTheDocument();
+    });
+  });
+
   describe("template presets", () => {
     // Opens the dropdown once, then waits out the useQuery load: an open antd Select re-renders its
     // already-mounted options in place as state changes, so polling only re-reads the DOM here.
@@ -352,13 +430,15 @@ describe("AddAutoRouterTab", () => {
     });
 
     it("disables a preset missing one of its models, naming the missing model", async () => {
-      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS.filter((m) => m.model_group !== "claude-opus-5"));
+      mockFetchAvailableModels.mockResolvedValue(
+        ALL_FAMILY_MODELS.filter((m) => m.model_group !== ANTHROPIC_ONLY_MODEL),
+      );
 
       renderWithProviders(<Harness />);
       openTemplateDropdown();
 
       await waitFor(() => {
-        expect(optionByLabel("Anthropic Family")!.textContent).toContain("Missing: claude-opus-5");
+        expect(optionByLabel("Anthropic Family")!.textContent).toContain(`Missing: ${ANTHROPIC_ONLY_MODEL}`);
       });
       expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true);
     });
@@ -382,7 +462,8 @@ describe("AddAutoRouterTab", () => {
       expect(screen.queryByText("Advanced: Keyword/Semantic Matching")).not.toBeInTheDocument();
       expect(
         screen.getByText(
-          "Simple: claude-haiku-4-5 · Medium: claude-sonnet-4-5 · Complex: claude-opus-5 · Reasoning: claude-opus-5",
+          `Simple: ${ANTHROPIC_TIERS.SIMPLE.join(", ")} · Medium: ${ANTHROPIC_TIERS.MEDIUM.join(", ")} · ` +
+            `Complex: ${ANTHROPIC_TIERS.COMPLEX.join(", ")} · Reasoning: ${ANTHROPIC_TIERS.REASONING.join(", ")}`,
         ),
       ).toBeInTheDocument();
     });
@@ -424,15 +505,8 @@ describe("AddAutoRouterTab", () => {
 
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
       expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
-        auto_router_default_model: "claude-sonnet-4-5",
-        complexity_router_config: {
-          tiers: {
-            SIMPLE: ["claude-haiku-4-5"],
-            MEDIUM: ["claude-sonnet-4-5"],
-            COMPLEX: ["claude-opus-5"],
-            REASONING: ["claude-opus-5"],
-          },
-        },
+        auto_router_default_model: ANTHROPIC_TIERS.MEDIUM[0],
+        complexity_router_config: { tiers: ANTHROPIC_TIERS },
       });
     });
 

@@ -8,7 +8,7 @@ import time
 import traceback
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
-from typing import Any, Final, NoReturn, Union, cast
+from typing import Any, Final, NoReturn, TypeVar, cast
 
 import anyio
 import httpx
@@ -25,10 +25,13 @@ from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
+    CompletionTokensDetailsWrapper,
     Delta,
     LlmProviders,
     ModelResponse,
     ModelResponseStream,
+    PromptTokensDetailsWrapper,
     StreamingChoices,
     Usage,
 )
@@ -96,7 +99,7 @@ class _ProviderChunkEarlyReturn:
     value: Any
 
 
-_ProviderChunkResult = Union[_ProviderChunkParsed, _ProviderChunkEarlyReturn]
+_ProviderChunkResult = _ProviderChunkParsed | _ProviderChunkEarlyReturn
 
 
 class CustomStreamWrapper:
@@ -253,9 +256,7 @@ class CustomStreamWrapper:
             chunk = chunk.strip()
             self.complete_response = self.complete_response.strip()
 
-            if chunk.startswith(self.complete_response):
-                # Remove last_sent_chunk only if it appears at the start of the new chunk
-                chunk = chunk[len(self.complete_response) :]
+            chunk = chunk.removeprefix(self.complete_response)
 
             self.complete_response += chunk
             return chunk
@@ -893,7 +894,7 @@ class CustomStreamWrapper:
                         for choice in original_chunk.choices:
                             try:
                                 if isinstance(choice, BaseModel):
-                                    choice_json = choice.model_dump()  # type: ignore
+                                    choice_json = choice.model_dump()
                                     choice_json.pop(
                                         "finish_reason", None
                                     )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
@@ -1050,7 +1051,7 @@ class CustomStreamWrapper:
                 # Strip finish_reason from the content chunk so it appears
                 # only on the trailing empty-delta chunk (OpenAI spec).
                 # finish_reason_handler() will emit the proper terminal chunk.
-                chunk.choices[0].finish_reason = None  # type: ignore[assignment]
+                chunk.choices[0].finish_reason = None
             return _ProviderChunkEarlyReturn(chunk)
 
         if (
@@ -1139,19 +1140,17 @@ class CustomStreamWrapper:
                     self.received_finish_reason = "stop"
         elif self.custom_llm_provider == "vertex_ai" and not isinstance(chunk, ModelResponseStream):
             chunk = cast(Any, chunk)
-            import proto  # type: ignore
+            import proto
 
             if hasattr(chunk, "candidates") is True:
                 try:
                     try:
-                        completion_obj["content"] = chunk.text  # type: ignore
+                        completion_obj["content"] = chunk.text
                     except Exception as e:
                         original_exception: Final = e
                         if "Part has no text." in str(e):
                             ## check for function calling
-                            function_call: Final = (
-                                chunk.candidates[0].content.parts[0].function_call  # type: ignore
-                            )
+                            function_call: Final = chunk.candidates[0].content.parts[0].function_call
 
                             args_dict: Final = {}
 
@@ -1159,7 +1158,7 @@ class CustomStreamWrapper:
                             for key, val in function_call.args.items():
                                 if isinstance(
                                     val,
-                                    proto.marshal.collections.repeated.RepeatedComposite,  # type: ignore
+                                    proto.marshal.collections.repeated.RepeatedComposite,
                                 ):
                                     # If so, convert to list
                                     args_dict[key] = [v for v in val]
@@ -1190,15 +1189,12 @@ class CustomStreamWrapper:
                         else:
                             raise original_exception
                     if (
-                        hasattr(chunk.candidates[0], "finish_reason")  # type: ignore
-                        and chunk.candidates[0].finish_reason.name  # type: ignore
-                        != "FINISH_REASON_UNSPECIFIED"
+                        hasattr(chunk.candidates[0], "finish_reason")
+                        and chunk.candidates[0].finish_reason.name != "FINISH_REASON_UNSPECIFIED"
                     ):  # every non-final chunk in vertex ai has this
-                        self.received_finish_reason = map_finish_reason(  # type: ignore
-                            chunk.candidates[0].finish_reason.name
-                        )
+                        self.received_finish_reason = map_finish_reason(chunk.candidates[0].finish_reason.name)
                 except Exception:
-                    if chunk.candidates[0].finish_reason.name == "SAFETY":  # type: ignore
+                    if chunk.candidates[0].finish_reason.name == "SAFETY":
                         raise Exception(f"The response was blocked by VertexAI. {chunk}")
             else:
                 completion_obj["content"] = str(chunk)
@@ -1352,7 +1348,7 @@ class CustomStreamWrapper:
                     )
         return _ProviderChunkParsed(response_obj)
 
-    def chunk_creator(self, chunk: Any):  # type: ignore
+    def chunk_creator(self, chunk: Any):
         if hasattr(chunk, "id"):
             self.response_id = chunk.id
         model_response = self.model_response_creator()
@@ -1460,7 +1456,7 @@ class CustomStreamWrapper:
             ## RETURN ARG
             result: Final = self.return_processed_chunk_logic(
                 completion_obj=completion_obj,
-                model_response=model_response,  # type: ignore
+                model_response=model_response,
                 response_obj=response_obj,
             )
             return result
@@ -1702,7 +1698,7 @@ class CustomStreamWrapper:
                 ):
                     chunk = self.completion_stream
                 else:
-                    chunk = next(self.completion_stream)  # type: ignore[arg-type]
+                    chunk = next(self.completion_stream)
                 if chunk is not None and chunk != b"":
                     print_verbose(
                         f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else chunk}; custom_llm_provider: {self.custom_llm_provider}"
@@ -1951,7 +1947,7 @@ class CustomStreamWrapper:
                     if self.sent_last_chunk is True:
                         processed_chunk = await self._call_post_streaming_deployment_hook(processed_chunk)
                         # Add MCP metadata to final chunk if present (after hooks)
-                        processed_chunk = self._add_mcp_metadata_to_final_chunk(processed_chunk)  # type: ignore[reportArgumentType]
+                        processed_chunk = self._add_mcp_metadata_to_final_chunk(processed_chunk)
 
                     return processed_chunk
                 raise StopAsyncIteration
@@ -1961,7 +1957,7 @@ class CustomStreamWrapper:
                     if isinstance(self.completion_stream, str) or isinstance(self.completion_stream, bytes):
                         chunk = self.completion_stream
                     else:
-                        chunk = await asyncio.to_thread(_next_sync_or_exhausted, self.completion_stream)  # type: ignore[arg-type]
+                        chunk = await asyncio.to_thread(_next_sync_or_exhausted, self.completion_stream)
                         if chunk is _SYNC_ITER_EXHAUSTED:
                             raise StopAsyncIteration
                     if chunk is not None and chunk != b"":
@@ -2069,7 +2065,7 @@ class CustomStreamWrapper:
                 # end-of-stream blocks complete.  Scheduling here via
                 # create_task would race with unified_guardrail's
                 # end-of-stream block for short-stream providers.
-                self.logging_obj._deferred_stream_complete_args = (  # type: ignore[attr-defined]
+                self.logging_obj._deferred_stream_complete_args = (
                     complete_streaming_response,
                     cache_hit,
                 )
@@ -2233,11 +2229,33 @@ class CustomStreamWrapper:
         return chunk
 
 
+_TokenDetails = TypeVar("_TokenDetails", PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper)
+
+
+def _coerce_token_details(
+    usage: dict | BaseModel, field: str, details_type: type[_TokenDetails]
+) -> _TokenDetails | None:
+    raw = usage.get(field) if isinstance(usage, dict) else getattr(usage, field, None)
+    if raw is None:
+        return None
+    if isinstance(raw, details_type):
+        return raw
+    return details_type(**(raw if isinstance(raw, dict) else raw.model_dump()))
+
+
 def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+        attach_cache_creation_token_details,
+        capture_cache_creation_token_details,
+    )
+
     prompt_tokens: int = 0
     completion_tokens: int = 0
     latest_usage_chunk = None
+    prompt_tokens_details: PromptTokensDetailsWrapper | None = None
+    completion_tokens_details: CompletionTokensDetailsWrapper | None = None
+    cache_creation_token_details: CacheCreationTokenDetails | None = None
 
     for chunk in chunks:
         if "usage" in chunk and chunk["usage"] is not None:
@@ -2247,11 +2265,24 @@ def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
                 prompt_tokens = usage.get("prompt_tokens", 0) or 0
             if "completion_tokens" in usage:
                 completion_tokens = usage.get("completion_tokens", 0) or 0
+            incoming_prompt_tokens_details = _coerce_token_details(
+                usage, "prompt_tokens_details", PromptTokensDetailsWrapper
+            )
+            cache_creation_token_details = capture_cache_creation_token_details(
+                incoming_prompt_tokens_details, cache_creation_token_details
+            )
+            prompt_tokens_details = incoming_prompt_tokens_details or prompt_tokens_details
+            completion_tokens_details = (
+                _coerce_token_details(usage, "completion_tokens_details", CompletionTokensDetailsWrapper)
+                or completion_tokens_details
+            )
 
     returned_usage_chunk: Final = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=attach_cache_creation_token_details(prompt_tokens_details, cache_creation_token_details),
+        completion_tokens_details=completion_tokens_details,
     )
 
     if latest_usage_chunk is not None:

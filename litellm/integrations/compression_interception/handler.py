@@ -133,7 +133,7 @@ class CompressionInterceptionLogger(CustomLogger):
 
         self._prune_expired_cache()
 
-        compressed: Final = compress(  # type: ignore
+        compressed: Final = compress(
             messages=messages,
             model=model,
             call_type=CallTypes.anthropic_messages,

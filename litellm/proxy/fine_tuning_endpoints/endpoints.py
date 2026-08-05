@@ -132,7 +132,7 @@ async def create_fine_tuning_job(
         )
 
         ## CHECK IF MANAGED FILE ID
-        unified_file_id: Union[str, Literal[False]] = False
+        unified_file_id: str | Literal[False] = False
         training_file: Final = fine_tuning_request.training_file
         response: LiteLLMFineTuningJob | None = None
         if training_file:
@@ -269,7 +269,7 @@ async def retrieve_fine_tuning_job(
         custom_llm_provider = request_body.get("custom_llm_provider", None) or custom_llm_provider
 
         ## CHECK IF MANAGED FILE ID
-        unified_finetuning_job_id: Union[str, Literal[False]] = False
+        unified_finetuning_job_id: str | Literal[False] = False
         response: LiteLLMFineTuningJob | None = None
         if fine_tuning_job_id:
             unified_finetuning_job_id = _is_base64_encoded_unified_file_id(fine_tuning_job_id)
@@ -536,7 +536,7 @@ async def cancel_fine_tuning_job(
         custom_llm_provider: Final = request_body.get("custom_llm_provider", None)
 
         ## CHECK IF MANAGED FILE ID
-        unified_finetuning_job_id: Union[str, Literal[False]] = False
+        unified_finetuning_job_id: str | Literal[False] = False
         response: LiteLLMFineTuningJob | None = None
         if fine_tuning_job_id:
             unified_finetuning_job_id = _is_base64_encoded_unified_file_id(fine_tuning_job_id)

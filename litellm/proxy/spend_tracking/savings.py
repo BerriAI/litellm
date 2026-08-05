@@ -298,6 +298,7 @@ def compute_autorouter_savings(
     usage: Usage,
     conversation_continuing: bool = True,
     selected_info: ModelInfo | None = None,
+    baseline_info: ModelInfo | None = None,
     cost_breakdown: Mapping[str, object] | None = None,
 ) -> float:
     """Net dollars the router saved, or cost, by serving this request on ``selected_model``.
@@ -341,9 +342,12 @@ def compute_autorouter_savings(
     if baseline == selected:
         return 0.0
     basis: Final = _pricing_basis(cost_breakdown)
-    baseline_info: Final = _model_info(baseline)
+    effective_baseline_info: Final = baseline_info if baseline_info is not None else _model_info(baseline)
     baseline_cost: Final = _cost_of_usage(
-        baseline, _baseline_usage(usage, conversation_continuing, baseline_info), baseline_info, basis
+        baseline,
+        _baseline_usage(usage, conversation_continuing, effective_baseline_info),
+        effective_baseline_info,
+        basis,
     )
     # Falls back to pricing the request only when the biller recorded nothing, which is
     # every row written before the breakdown carried its basis.
@@ -369,11 +373,57 @@ def _usage_from_spend_log(usage_object: Mapping[str, object] | None) -> Usage | 
         return None
 
 
+def extract_cache_read_tokens(usage_object: Mapping[str, object] | None) -> int:
+    """Cache-read tokens from a logged usage object, whatever shape recorded them.
+
+    Anthropic writes a top-level ``cache_read_input_tokens``; OpenAI-compatible
+    providers (moonshotai, openai, deepseek, etc.) write
+    ``prompt_tokens_details.cached_tokens``. This is the one owner of that
+    normalization: callers hand over the usage object rather than threading a
+    count that could disagree with it.
+    """
+    if not usage_object:
+        return 0
+    explicit: Final = usage_object.get("cache_read_input_tokens")
+    if isinstance(explicit, (int, float)) and explicit:
+        return int(explicit)
+    details: Final = usage_object.get("prompt_tokens_details")
+    if not isinstance(details, Mapping):
+        return 0
+    cached: Final = details.get("cached_tokens")
+    return int(cached) if isinstance(cached, (int, float)) else 0
+
+
+def extract_cache_creation_tokens(usage_object: Mapping[str, object] | None) -> int:
+    """Cache-write tokens from a logged usage object, whatever shape recorded them.
+
+    Anthropic writes a top-level ``cache_creation_input_tokens``; OpenAI-compatible
+    providers (kimi-k2 etc.) write ``prompt_tokens_details.cache_write_tokens`` or
+    ``prompt_tokens_details.cache_creation_tokens``.
+    """
+    if not usage_object:
+        return 0
+    explicit: Final = usage_object.get("cache_creation_input_tokens")
+    if isinstance(explicit, (int, float)) and explicit:
+        return int(explicit)
+    details: Final = usage_object.get("prompt_tokens_details")
+    if not isinstance(details, Mapping):
+        return 0
+    written: Final = next(
+        (
+            value
+            for value in (details.get("cache_write_tokens"), details.get("cache_creation_tokens"))
+            if isinstance(value, (int, float)) and value
+        ),
+        0,
+    )
+    return int(written)
+
+
 def compute_savings_spend(
     model: str | None,
     custom_llm_provider: str | None,
     compression_saved_tokens: int,
-    cache_read_input_tokens: int,
     routing_decision: Mapping[str, object] | None = None,
     usage_object: Mapping[str, object] | None = None,
     model_id: str | None = None,
@@ -385,11 +435,13 @@ def compute_savings_spend(
 
     Compression savings price the tokens compression removed at the model's
     input rate. Prompt-caching savings price the cache-read tokens at the
-    difference between the input rate and the discounted cache-read rate.
-    Auto-router savings compare the served ``model`` against the counterfactual
-    baseline the router recorded on its ``routing_decision``, and are zero unless the
-    two differ. That record also says whether the conversation was already underway,
-    which is what tells a mid-conversation switch from a first turn.
+    difference between the input rate and the discounted cache-read rate; the
+    read count is derived here from ``usage_object`` so no caller can hand in a
+    count that disagrees with the usage record. Auto-router savings compare the
+    served ``model`` against the counterfactual baseline the router recorded on
+    its ``routing_decision``, and are zero unless the two differ. That record
+    also says whether the conversation was already underway, which is what tells
+    a mid-conversation switch from a first turn.
 
     ``llm_router`` is passed as a provider rather than a router because every spend write
     calls this and only auto-routed ones need one, so looking it up eagerly at the call
@@ -404,19 +456,21 @@ def compute_savings_spend(
     """
     input_cost, cache_read_cost = _input_and_cache_read_cost(model, custom_llm_provider)
     compression: Final = max(compression_saved_tokens, 0) * input_cost
+    cache_read_input_tokens: Final = extract_cache_read_tokens(usage_object)
     prompt_caching: Final = max(cache_read_input_tokens, 0) * max(input_cost - cache_read_cost, 0.0)
 
     usage: Final = _usage_from_spend_log(usage_object)
     if usage is None or not model:
         return SavingsSpend(compression=compression, prompt_caching=prompt_caching)
 
-    # The counterfactual is one model an operator would have run instead of the router,
-    # configured once for the proxy rather than derived per request. Unset means the
-    # driver is off; a routing decision is what says this request was auto-routed at all.
-    # Both are checked before anything is resolved, because every spend write reaches
-    # here and only auto-routed ones can produce a number.
-    baseline_model: Final = litellm.autorouter_savings_baseline_model
+    # The configured `autorouter_savings_baseline_model` wins; otherwise the baseline
+    # the deciding router recorded on its decision; neither means the driver is off.
     decision: Final = routing_decision if isinstance(routing_decision, Mapping) else {}
+    recorded: Final = decision.get("savings_baseline_model")
+    recorded_id: Final = decision.get("savings_baseline_deployment_id")
+    configured: Final = litellm.autorouter_savings_baseline_model
+    baseline_model: Final = configured or (recorded if isinstance(recorded, str) else None)
+    baseline_id: Final = recorded_id if configured is None and isinstance(recorded_id, str) else None
     autorouter: Final = (
         compute_autorouter_savings(
             baseline_model=baseline_model,
@@ -426,7 +480,10 @@ def compute_savings_spend(
             # Absent means the router never recorded a shape, which is the conservative
             # reading: charge the cache write rather than claim a first turn's saving.
             conversation_continuing=decision.get("conversation_continuing") is not False,
-            selected_info=_effective_model_info(llm_router() if llm_router else None, model_id, model or ""),
+            selected_info=_effective_model_info(
+                (router_instance := llm_router() if llm_router else None), model_id, model or ""
+            ),
+            baseline_info=_effective_model_info(router_instance, baseline_id, baseline_model or ""),
             cost_breakdown=cost_breakdown,
         )
         if decision and baseline_model

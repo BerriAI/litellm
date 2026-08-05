@@ -2066,10 +2066,47 @@ class TestJWTOAuth2Coexistence:
                 )
 
             assert exc_info.value.type == ProxyErrorTypes.auth_error
+            assert exc_info.value.code == "403"
             assert (
                 "Oauth2 token validation is only available for premium users"
                 in exc_info.value.message
             )
+            mock_oauth2.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_oauth2_disabled_unknown_key_stays_unauthorized(self):
+        """
+        The enterprise gate on the OAuth2 path is the only thing that turns 403
+        here. With `enable_oauth2_auth` off, an unknown opaque key is an
+        ordinary bad credential and must still be 401, so a blanket 403 is as
+        wrong in this direction as the 401 was in the gated one.
+        """
+        opaque_token = "some-opaque-m2m-oauth2-token"
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.headers = {"authorization": f"Bearer {opaque_token}"}
+        mock_request.query_params = {}
+
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+            patch("litellm.proxy.proxy_server.premium_user", False),
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+                new_callable=AsyncMock,
+            ) as mock_oauth2,
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await user_api_key_auth(
+                    request=mock_request,
+                    api_key=f"Bearer {opaque_token}",
+                )
+
+            assert exc_info.value.code == "401"
+            assert "premium" not in exc_info.value.message.lower()
             mock_oauth2.assert_not_called()
 
     @pytest.mark.asyncio
@@ -5681,3 +5718,101 @@ async def test_temp_budget_increase_applied_for_cached_key():
 
     cached_after = await user_api_key_cache.async_get_cache(key=hashed_token)
     assert cached_after.max_budget == 2.0
+
+
+async def _proxy_exception_for_key(
+    api_key: str,
+    general_settings: dict[str, bool],
+    premium_user: bool,
+) -> ProxyException:
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {api_key}"}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    user_api_key_cache = DualCache()
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", general_settings),
+        patch("litellm.proxy.proxy_server.premium_user", premium_user),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+        patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await _user_api_key_auth_builder(
+                request=mock_request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={"model": "gpt-4o-mini"},
+            )
+
+    return exc_info.value
+
+
+@pytest.mark.asyncio
+async def test_jwt_shaped_key_error_names_enable_jwt_auth_when_disabled():
+    """
+    A three-segment token presented while `general_settings.enable_jwt_auth`
+    is unset is never treated as JWT-shaped, so it falls through to the
+    virtual-key path and is rejected for not starting with 'sk-'. That reads
+    as a missing database row and sends the operator to inspect virtual keys,
+    when the real cause is the missing config key. The rejection must name
+    `enable_jwt_auth`, and must claim only that the key is JWT-shaped, since
+    segment count cannot tell a JWT from any other dotted credential.
+
+    The existing 'expected to start with sk-' text has to survive: the
+    Prometheus invalid-key filter and the admin UI both substring-match it.
+    Keys that are not JWT-shaped must not pick up the hint.
+    """
+    jwt_error = await _proxy_exception_for_key(
+        "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzdmMtMSJ9.c2lnbmF0dXJl", {}, True
+    )
+
+    assert jwt_error.code == "401"
+    assert "enable_jwt_auth" in jwt_error.message
+    assert "general_settings" in jwt_error.message
+    assert "expected to start with 'sk-'" in jwt_error.message
+    assert "structure of a JWT" in jwt_error.message
+    assert "is a JWT" not in jwt_error.message
+
+    opaque_error = await _proxy_exception_for_key("not-a-jwt-at-all", {}, True)
+    two_segment_error = await _proxy_exception_for_key(
+        "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzdmMtMSJ9", {}, True
+    )
+
+    assert "enable_jwt_auth" not in opaque_error.message
+    assert "enable_jwt_auth" not in two_segment_error.message
+
+
+@pytest.mark.asyncio
+async def test_unlicensed_jwt_auth_is_forbidden_not_unauthorized():
+    """
+    JWT auth is enterprise-gated. An unlicensed install must answer 403 like
+    every other enterprise gate; a 401 tells the client its credential was
+    wrong and invites a retry loop that can never succeed.
+    """
+    error = await _proxy_exception_for_key(
+        "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzdmMtMSJ9.c2lnbmF0dXJl",
+        {"enable_jwt_auth": True},
+        False,
+    )
+
+    assert error.code == "403"
+    assert "enterprise" in error.message.lower()

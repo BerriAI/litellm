@@ -47,7 +47,7 @@ class VertexEmbedding(VertexBase):
         litellm_params: dict | None = None,
     ) -> EmbeddingResponse:
         if aembedding is True:
-            return self.async_embedding(  # type: ignore
+            return self.async_embedding(
                 model=model,
                 input=input,
                 logging_obj=logging_obj,
@@ -105,7 +105,7 @@ class VertexEmbedding(VertexBase):
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client(params=_client_params)
         else:
-            client = client  # type: ignore
+            client = client
         ## LOGGING
         logging_obj.pre_call(
             input=vertex_request,
@@ -118,7 +118,7 @@ class VertexEmbedding(VertexBase):
         )
 
         try:
-            response: Final = client.post(url=api_base, headers=headers, json=vertex_request)  # type: ignore
+            response: Final = client.post(url=api_base, headers=headers, json=vertex_request)
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
@@ -199,7 +199,7 @@ class VertexEmbedding(VertexBase):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             client = get_async_httpx_client(params=_async_client_params, llm_provider=litellm.LlmProviders.VERTEX_AI)
         else:
-            client = client  # type: ignore
+            client = client
         ## LOGGING
         logging_obj.pre_call(
             input=vertex_request,
@@ -212,7 +212,7 @@ class VertexEmbedding(VertexBase):
         )
 
         try:
-            response: Final = await client.post(api_base, headers=headers, json=vertex_request)  # type: ignore
+            response: Final = await client.post(api_base, headers=headers, json=vertex_request)
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code

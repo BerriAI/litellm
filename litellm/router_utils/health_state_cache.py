@@ -6,7 +6,7 @@ and exposes it for router candidate filtering.
 """
 
 import time
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from typing_extensions import TypedDict
 
@@ -16,7 +16,7 @@ from litellm.caching.caching import DualCache
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 

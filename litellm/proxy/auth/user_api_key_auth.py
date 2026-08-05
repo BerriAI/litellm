@@ -252,8 +252,8 @@ async def _check_key_model_budget_with_fallback(
             raise e
         request_data["model"] = fallback_model
         _safe_set_request_parsed_body(request=request, parsed_body=request_data)
-        request._json = request_data  # type: ignore[attr-defined]
-        request._body = orjson.dumps(request_data)  # type: ignore[attr-defined]
+        request._json = request_data
+        request._body = orjson.dumps(request_data)
         path_params: Final = request.scope.get("path_params")
         if isinstance(path_params, dict) and "model" in path_params:
             path_params["model"] = fallback_model
@@ -438,7 +438,7 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     async def return_body():
         return _realtime_request_body(model)
 
-    request.body = return_body  # type: ignore
+    request.body = return_body
 
     authorization: Final = websocket.headers.get("authorization")
     # If no Authorization header, try the api-key header
@@ -629,7 +629,7 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
     is_mapped_pass_through_route: bool = False
     normalized_route: Final = normalize_route_for_root_path(route)
     if normalized_route is not None:
-        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:  # type: ignore
+        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
             if normalized_route.startswith(mapped_route):
                 is_mapped_pass_through_route = True
                 break
@@ -662,10 +662,8 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
                     headers = endpoint.get("headers", None)
                     if headers is not None:
                         header_key = headers.get("litellm_user_api_key", "")
-                        if (
-                            isinstance(request.headers, dict) and request.headers.get(key=header_key) is not None  # type: ignore
-                        ):
-                            api_key = request.headers.get(key=header_key)  # type: ignore
+                        if isinstance(request.headers, dict) and request.headers.get(key=header_key) is not None:
+                            api_key = request.headers.get(key=header_key)
     return api_key
 
 
@@ -676,6 +674,12 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
 # non-existent mapping. Sentinel tells _resolve_jwt_to_virtual_key to skip
 # the lookup and return None (caller proceeds to auth_builder).
 _JWT_PROXY_ADMIN_SENTINEL: Final = "__JWT_PROXY_ADMIN__"
+
+_JWT_AUTH_DISABLED_HINT = (
+    " This key has the structure of a JWT, but JWT auth is not enabled on this proxy, so it was treated as a"
+    " virtual key. Set `enable_jwt_auth: true` under `general_settings` in your proxy config to authenticate"
+    " with JWTs."
+)
 
 
 class _PendingAutoRegister(NamedTuple):
@@ -1134,7 +1138,7 @@ async def _user_api_key_auth_builder(
                 api_key = response
                 custom_auth_api_key = True
         elif user_custom_auth is not None:
-            response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
+            response = await user_custom_auth(request=request, api_key=api_key)
             validated = UserAPIKeyAuth.model_validate(response)
             if getattr(litellm, "enable_post_custom_auth_checks", False):
                 validated = await _run_post_custom_auth_checks(
@@ -1160,8 +1164,7 @@ async def _user_api_key_auth_builder(
 
         ######## Route Checks Before Reading DB / Cache for "token" ################
         if not _route_requires_auth_despite_public(route=route, general_settings=general_settings) and (
-            route in LiteLLMRoutes.public_routes.value  # type: ignore
-            or route_in_additonal_public_routes(current_route=route)
+            route in LiteLLMRoutes.public_routes.value or route_in_additonal_public_routes(current_route=route)
         ):
             # check if public endpoint
             return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
@@ -1189,9 +1192,12 @@ async def _user_api_key_auth_builder(
             from litellm.proxy.proxy_server import premium_user
 
             if premium_user is not True:
-                raise ValueError(
-                    "Oauth2 token validation is only available for premium users"
-                    + CommonProxyErrors.not_premium_user.value
+                raise ProxyException(
+                    message="Oauth2 token validation is only available for premium users. "
+                    + CommonProxyErrors.not_premium_user.value,
+                    type=ProxyErrorTypes.auth_error,
+                    param="premium_user",
+                    code=status.HTTP_403_FORBIDDEN,
                 )
 
             return await Oauth2Handler.check_oauth2_token(token=api_key)
@@ -1206,8 +1212,11 @@ async def _user_api_key_auth_builder(
                 from litellm.proxy.proxy_server import premium_user
 
                 if premium_user is not True:
-                    raise ValueError(
-                        f"JWT Auth is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}"
+                    raise ProxyException(
+                        message=f"JWT Auth is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}",
+                        type=ProxyErrorTypes.auth_error,
+                        param="premium_user",
+                        code=status.HTTP_403_FORBIDDEN,
                     )
                 # Try JWT-to-Virtual-Key mapping first to avoid
                 # unnecessary DB queries in auth_builder
@@ -1607,7 +1616,7 @@ async def _user_api_key_auth_builder(
                 verbose_logger.debug(e)  # moving from .warning to .debug as it spams logs when team missing from cache.
 
         try:
-            is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
+            is_master_key_valid = secrets.compare_digest(api_key, master_key)
         except Exception:
             is_master_key_valid = False
 
@@ -1653,7 +1662,7 @@ async def _user_api_key_auth_builder(
 
         ## IF it's not a master key
         ## Route should not be in master_key_only_routes
-        if route in LiteLLMRoutes.master_key_only_routes.value:  # type: ignore
+        if route in LiteLLMRoutes.master_key_only_routes.value:
             raise Exception(f"Tried to access route={route}, which is only for MASTER KEY")
 
         ## Check DB
@@ -1672,9 +1681,13 @@ async def _user_api_key_auth_builder(
             if isinstance(api_key, str):  # if generated token, make sure it starts with sk-.
                 _masked_key: Final = f"{api_key[:4]}****{api_key[-4:]}" if len(api_key) > 8 else "****"
                 if not api_key.startswith("sk-"):
+                    _hint = _JWT_AUTH_DISABLED_HINT if not enable_jwt_auth and JWTHandler.is_jwt(token=api_key) else ""
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail=(f"LiteLLM Virtual Key expected. Received={_masked_key}, expected to start with 'sk-'."),
+                        detail=(
+                            f"LiteLLM Virtual Key expected. Received={_masked_key}, "
+                            f"expected to start with 'sk-'.{_hint}"
+                        ),
                     )  # prevent token hashes from being used
             else:
                 verbose_logger.warning(
@@ -1800,7 +1813,7 @@ async def _user_api_key_auth_builder(
                                 where={
                                     "user_id": _user_id,
                                     "team_id": _team_id,
-                                },  # type: ignore
+                                },
                                 include={"litellm_budget_table": True},
                             )
                             if _db_member is not None:
@@ -2145,10 +2158,7 @@ async def _run_centralized_common_checks(
     # auth in the builder — the wrapper must not retroactively apply
     # authz on top, or k8s readiness probes and other unauthenticated
     # callers get 401.
-    if (
-        route in LiteLLMRoutes.public_routes.value  # type: ignore[attr-defined]
-        or route_in_additonal_public_routes(current_route=route)
-    ):
+    if route in LiteLLMRoutes.public_routes.value or route_in_additonal_public_routes(current_route=route):
         return
 
     # User-configured pass-through endpoints with ``auth: false`` are

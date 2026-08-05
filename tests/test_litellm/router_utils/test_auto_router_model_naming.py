@@ -113,6 +113,32 @@ def test_validate_rejects_unloadable_complexity_config(keyword_tier_rules, expec
 
 
 @pytest.mark.parametrize(
+    "tier_labels,expected_fragment",
+    [
+        ({"SIMPLE": "Cheap", "MEDIUM": "Cheap"}, "unique across tiers"),
+        ({"SIMPLE": "   "}, "non-empty"),
+        ({"SIMPLE": "COMPLEX"}, "another tier's canonical name"),
+    ],
+)
+def test_validate_rejects_ambiguous_tier_labels(tier_labels, expected_fragment):
+    """Ambiguous labels must be refused at /model/new and /model/update, not at load.
+
+    A stored config the router then refuses to build turns a 400 the operator could have fixed in
+    the form into a 500 on the next proxy start.
+    """
+    violation = validate_complexity_router_config_write(
+        complexity_router_config={
+            "tiers": VALID_TIERS,
+            "classifier_type": "heuristic",
+            "tier_labels": tier_labels,
+        }
+    )
+    assert violation is not None
+    assert "complexity_router_config is invalid" in violation
+    assert expected_fragment in violation
+
+
+@pytest.mark.parametrize(
     "complexity_router_config",
     [
         {"tiers": VALID_TIERS, "classifier_type": "heuristic"},
@@ -123,6 +149,12 @@ def test_validate_rejects_unloadable_complexity_config(keyword_tier_rules, expec
         },
         # extra="allow" on the model, so an unrecognised key is not this gate's business
         {"tiers": VALID_TIERS, "classifier_type": "heuristic", "some_future_key": "value"},
+        {
+            "tiers": VALID_TIERS,
+            "classifier_type": "heuristic",
+            "tier_labels": {"SIMPLE": "Cheap", "MEDIUM": "Standard", "COMPLEX": "Premium", "REASONING": "Deep"},
+        },
+        {"tiers": VALID_TIERS, "classifier_type": "heuristic", "tier_labels": {"REASONING": "Deep"}},
     ],
 )
 def test_validate_accepts_loadable_complexity_config(complexity_router_config):

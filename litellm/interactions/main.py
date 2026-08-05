@@ -171,7 +171,7 @@ async def acreate(
         else:
             response = init_response
 
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise litellm.exception_type(
             model=model,
@@ -255,7 +255,7 @@ def create(
     local_vars: Final = locals()
 
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acreate_interaction", False) is True
 
@@ -378,7 +378,7 @@ async def aget(
         else:
             response = init_response
 
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -402,7 +402,7 @@ def get(
     custom_llm_provider = custom_llm_provider or "gemini"
 
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aget_interaction", False) is True
 
@@ -480,7 +480,7 @@ async def adelete(
         else:
             response = init_response
 
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -504,7 +504,7 @@ def delete(
     custom_llm_provider = custom_llm_provider or "gemini"
 
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("adelete_interaction", False) is True
 
@@ -582,7 +582,7 @@ async def acancel(
         else:
             response = init_response
 
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -606,7 +606,7 @@ def cancel(
     custom_llm_provider = custom_llm_provider or "gemini"
 
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acancel_interaction", False) is True
 

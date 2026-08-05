@@ -30,7 +30,11 @@ from litellm.proxy._experimental.mcp_server.utils import (
     get_server_prefix,
     merge_mcp_headers,
 )
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+    user_api_key_has_admin_view,
+)
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
@@ -738,9 +742,7 @@ if MCP_AVAILABLE:
 
             # The full catalog (allowlist filter skipped) is admin-only so the
             # REST endpoint can't be used to enumerate deliberately-disabled tools.
-            apply_tool_filters: Final = not (
-                include_disabled_tools and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-            )
+            apply_tool_filters: Final = not (include_disabled_tools and user_api_key_has_admin_view(user_api_key_dict))
 
             if server_id is None:
                 server_id = mcp_server_name
