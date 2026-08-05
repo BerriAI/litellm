@@ -23,19 +23,17 @@ jobs:
         with:
           version: "3.11.1"
 
+      - name: Download and verify Helm Unit Test Plugin
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/helm-unittest.tgz" https://github.com/helm-unittest/helm-unittest/releases/download/v0.8.2/helm-unittest-linux-amd64-0.8.2.tgz
+          echo "56ab3091e6fa52a7c92ee951def9bed957f295d9ce98483aed404e748d7b3a94  $RUNNER_TEMP/helm-unittest.tgz" | sha256sum -c -
+
       - name: Install Helm Unit Test Plugin
         run: |
-          helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.8.2
-      - name: Verify Helm Unit Test Plugin integrity
-        run: |
-          EXPECTED_SHA="b94e638e72cf00034654b70944c0d20cb5d0c3cf"
           PLUGIN_DIR="$(helm env HELM_PLUGINS)/helm-unittest"
-          ACTUAL_SHA="$(git -C "$PLUGIN_DIR" rev-parse HEAD)"
-          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
-            echo "::error::Helm unittest plugin checksum mismatch! Expected $EXPECTED_SHA but got $ACTUAL_SHA"
-            exit 1
-          fi
-          echo "Helm unittest plugin integrity verified: $ACTUAL_SHA"
+          mkdir -p "$PLUGIN_DIR"
+          tar -xzf "$RUNNER_TEMP/helm-unittest.tgz" -C "$PLUGIN_DIR"
+          helm plugin list
 
       - name: Run unit tests
         run: |
