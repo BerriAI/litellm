@@ -1045,3 +1045,148 @@ class TestToolPermissionGuardrailInMemoryUpdate:
         assert all(rule.id != "bad" for rule in guardrail.rules)
         assert guardrail._check_tool_permission("Other")[0] is True
         assert guardrail._check_tool_permission("Secret")[0] is False
+
+
+class TestToolPermissionGuardrailAnthropicMessages:
+    """LIT-5250: /v1/messages responses arrive as Anthropic content blocks, not a
+    ModelResponse. Before the fix the hooks early-returned on that shape, so every
+    tool call an Anthropic-native client made bypassed the rules entirely.
+    """
+
+    def setup_method(self):
+        self.rules = [
+            {"id": "allow_bash", "tool_name": r"^Bash$", "decision": "allow"},
+            {"id": "deny_read", "tool_name": r"^Read$", "decision": "deny"},
+        ]
+        self.blocking = ToolPermissionGuardrail(
+            guardrail_name="anthropic-block",
+            rules=self.rules,
+            default_action="deny",
+            on_disallowed_action="block",
+        )
+        self.rewriting = ToolPermissionGuardrail(
+            guardrail_name="anthropic-rewrite",
+            rules=self.rules,
+            default_action="deny",
+            on_disallowed_action="rewrite",
+        )
+
+    def _response(self, *blocks):
+        return {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": list(blocks),
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+
+    def _tool_use(self, name, tool_id="tu_1"):
+        return {"type": "tool_use", "id": tool_id, "name": name, "input": {"command": "ls"}}
+
+    @pytest.mark.asyncio
+    async def test_denied_anthropic_tool_use_is_blocked(self):
+        response = self._response({"type": "text", "text": "reading"}, self._tool_use("Read"))
+
+        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException):
+                await self.blocking.async_post_call_success_hook(
+                    data={}, user_api_key_dict=UserAPIKeyAuth(), response=response
+                )
+
+    @pytest.mark.asyncio
+    async def test_allowed_anthropic_tool_use_passes_through_untouched(self):
+        response = self._response({"type": "text", "text": "listing"}, self._tool_use("Bash"))
+
+        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
+            result = await self.blocking.async_post_call_success_hook(
+                data={}, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+
+        assert [b["type"] for b in result["content"]] == ["text", "tool_use"]
+        assert result["stop_reason"] == "tool_use"
+
+    @pytest.mark.asyncio
+    async def test_rewrite_mode_strips_the_denied_anthropic_tool_use(self):
+        response = self._response({"type": "text", "text": "reading"}, self._tool_use("Read"))
+
+        with patch.object(self.rewriting, "should_run_guardrail", return_value=True):
+            result = await self.rewriting.async_post_call_success_hook(
+                data={}, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+
+        assert all(b["type"] != "tool_use" for b in result["content"]), (
+            "denied tool_use must not reach the client in rewrite mode"
+        )
+        assert any("Permission denied" in b.get("text", "") for b in result["content"])
+        assert result["stop_reason"] == "end_turn", (
+            "leaving stop_reason as tool_use makes the client wait for a tool result that will never come"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rewrite_mode_keeps_allowed_tool_use_when_only_one_is_denied(self):
+        response = self._response(self._tool_use("Bash", "tu_ok"), self._tool_use("Read", "tu_bad"))
+
+        with patch.object(self.rewriting, "should_run_guardrail", return_value=True):
+            result = await self.rewriting.async_post_call_success_hook(
+                data={}, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+
+        tool_ids = [b["id"] for b in result["content"] if b["type"] == "tool_use"]
+        assert tool_ids == ["tu_ok"]
+        assert result["stop_reason"] == "tool_use"
+
+    def _sse_chunks(self, tool_name, tool_id="tu_1"):
+        events = [
+            {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant",
+                                                  "model": "claude-sonnet-4-5", "content": [], "stop_reason": None,
+                                                  "usage": {"input_tokens": 10, "output_tokens": 0}}},
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "working"}},
+            {"type": "content_block_stop", "index": 0},
+            {"type": "content_block_start", "index": 1,
+             "content_block": {"type": "tool_use", "id": tool_id, "name": tool_name, "input": {}}},
+            {"type": "content_block_delta", "index": 1,
+             "delta": {"type": "input_json_delta", "partial_json": '{"command": "ls"}'}},
+            {"type": "content_block_stop", "index": 1},
+            {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 5}},
+            {"type": "message_stop"},
+        ]
+        return [f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in events]
+
+    async def _drain(self, guardrail, chunks):
+        async def _stream():
+            for chunk in chunks:
+                yield chunk
+
+        return [
+            c
+            async for c in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(), response=_stream(), request_data={}
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_denied_tool_use_in_anthropic_sse_stream_is_blocked(self):
+        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException):
+                await self._drain(self.blocking, self._sse_chunks("Read"))
+
+    @pytest.mark.asyncio
+    async def test_allowed_tool_use_in_anthropic_sse_stream_is_passed_through_verbatim(self):
+        chunks = self._sse_chunks("Bash")
+
+        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
+            out = await self._drain(self.blocking, chunks)
+
+        assert out == chunks, "an allowed stream must not be re-serialized"
+
+    @pytest.mark.asyncio
+    async def test_rewrite_mode_removes_denied_tool_use_from_anthropic_sse_stream(self):
+        with patch.object(self.rewriting, "should_run_guardrail", return_value=True):
+            out = await self._drain(self.rewriting, self._sse_chunks("Read"))
+
+        body = b"".join(c if isinstance(c, bytes) else str(c).encode() for c in out).decode()
+        assert '"type": "tool_use"' not in body, "denied tool_use must not survive into the rewritten stream"
+        assert "Permission denied" in body
