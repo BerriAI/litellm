@@ -373,7 +373,7 @@ def init_bedrock_client(
     # Iterate over parameters and update if needed
     for i, param in enumerate(params_to_check):
         if param and param.startswith("os.environ/"):
-            params_to_check[i] = get_secret(param)  # type: ignore
+            params_to_check[i] = get_secret(param)
     # Assign updated values back to parameters
     (
         aws_access_key_id,
@@ -415,13 +415,11 @@ def init_bedrock_client(
     import boto3
 
     if isinstance(timeout, float):
-        config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)  # type: ignore
+        config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)
     elif isinstance(timeout, httpx.Timeout):
-        config = boto3.session.Config(  # type: ignore
-            connect_timeout=timeout.connect, read_timeout=timeout.read
-        )
+        config = boto3.session.Config(connect_timeout=timeout.connect, read_timeout=timeout.read)
     else:
-        config = boto3.session.Config()  # type: ignore
+        config = boto3.session.Config()
 
     ### CHECK STS ###
     if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
@@ -784,7 +782,7 @@ def _get_bedrock_output_config_effort_ceiling(
 
     ceiling = model_info.get("bedrock_output_config_effort_ceiling")
     if isinstance(ceiling, str) and ceiling in _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER:
-        return ceiling  # type: ignore[return-value]
+        return ceiling
 
     model_cost_key: Final = model_info.get("key")
     if not isinstance(model_cost_key, str):
@@ -793,7 +791,7 @@ def _get_bedrock_output_config_effort_ceiling(
     local_model_info: Final = _get_local_model_cost_map().get(model_cost_key, {})
     ceiling = local_model_info.get("bedrock_output_config_effort_ceiling")
     if isinstance(ceiling, str) and ceiling in _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER:
-        return ceiling  # type: ignore[return-value]
+        return ceiling
     return None
 
 
@@ -1258,13 +1256,13 @@ class BedrockEventStreamDecoderBase:
             chunk = parsed_response.get("chunk")
             if not chunk:
                 return None
-            return chunk.get("bytes").decode()  # type: ignore[no-any-return]
+            return chunk.get("bytes").decode()
         else:
             chunk = response_dict.get("body")
             if not chunk:
                 return None
 
-            return chunk.decode()  # type: ignore[no-any-return]
+            return chunk.decode()
 
 
 def get_anthropic_beta_from_headers(headers: dict) -> list[str]:

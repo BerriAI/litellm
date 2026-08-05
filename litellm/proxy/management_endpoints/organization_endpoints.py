@@ -1534,7 +1534,7 @@ async def add_member_to_organization(
                 user_email=member.user_email,
             )
 
-            _returned_user = await prisma_client.insert_data(data=new_user_defaults, table_name="user")  # type: ignore
+            _returned_user = await prisma_client.insert_data(data=new_user_defaults, table_name="user")
             if _returned_user is not None:
                 user_object = LiteLLM_UserTable.model_validate(_returned_user.model_dump())
         elif existing_user_email_row is not None and len(existing_user_email_row) > 1:

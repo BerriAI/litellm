@@ -401,7 +401,7 @@ class MCPRequestHandler:
         async def mock_body():
             return b"{}"
 
-        request.body = mock_body  # type: ignore
+        request.body = mock_body
         # Inline import — auth_utils participates in a proxy import cycle.
         from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
             get_request_route,

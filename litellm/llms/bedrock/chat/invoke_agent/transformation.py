@@ -295,7 +295,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
             if event_type == "chunk" and payload:
                 # Extract base64 encoded content from chunk events
-                chunk_payload: InvokeAgentChunkPayload = payload  # type: ignore
+                chunk_payload: InvokeAgentChunkPayload = payload
                 encoded_bytes = chunk_payload.get("bytes", "")
                 if encoded_bytes:
                     try:
@@ -352,7 +352,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         if not payload:
             return None
 
-        trace_payload: Final[InvokeAgentTracePayload] = payload  # type: ignore
+        trace_payload: Final[InvokeAgentTracePayload] = payload
         return trace_payload.get("trace", {})
 
     def _extract_and_update_preprocessing_usage(

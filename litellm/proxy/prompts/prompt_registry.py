@@ -137,7 +137,7 @@ class InMemoryPromptRegistry:
             custom_prompt_callback = initializer(litellm_params, prompt)
             if not isinstance(custom_prompt_callback, CustomPromptManagement):
                 raise ValueError(f"CustomPromptManagement is required, got {type(custom_prompt_callback)}")
-            litellm.logging_callback_manager.add_litellm_callback(custom_prompt_callback)  # type: ignore
+            litellm.logging_callback_manager.add_litellm_callback(custom_prompt_callback)
         else:
             raise ValueError(f"Unsupported prompt: {prompt_integration}")
 

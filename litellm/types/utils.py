@@ -19,7 +19,7 @@ from typing import (
 
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import (
-    FileTypes as FileTypes,  # type: ignore
+    FileTypes as FileTypes,
 )
 from openai.types.chat.chat_completion import ChatCompletion as ChatCompletion
 from openai.types.completion_usage import (
@@ -1293,7 +1293,7 @@ class Message(SafeAttributeModel, OpenAIObject):
             init_values["reasoning_content"] = reasoning_content
 
         super(Message, self).__init__(
-            **init_values,  # type: ignore
+            **init_values,
             **params,
         )
 
@@ -1342,7 +1342,7 @@ class Message(SafeAttributeModel, OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
         except Exception:
@@ -1832,7 +1832,7 @@ class StreamingChoices(OpenAIObject):
         if finish_reason:
             self.finish_reason = map_finish_reason(finish_reason)
         else:
-            self.finish_reason = None  # type: ignore[assignment]
+            self.finish_reason = None
         self.index = index
         if delta is not None:
             if isinstance(delta, Delta):
@@ -1847,7 +1847,7 @@ class StreamingChoices(OpenAIObject):
         if logprobs is not None and isinstance(logprobs, dict):
             self.logprobs = ChoiceLogprobs(**logprobs)
         else:
-            self.logprobs = logprobs  # type: ignore
+            self.logprobs = logprobs
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -1978,7 +1978,7 @@ class ModelResponseStream(ModelResponseBase):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
         except Exception:
@@ -2011,12 +2011,12 @@ class ModelResponse(ModelResponseBase):
             new_choices: Final = []
             for choice in choices:
                 if isinstance(choice, Choices):
-                    _new_choice = choice  # type: ignore
+                    _new_choice = choice
                 elif isinstance(choice, dict):
-                    _new_choice = Choices(**choice)  # type: ignore
+                    _new_choice = Choices(**choice)
                 elif isinstance(choice, BaseModel):
                     dump = choice.model_dump() if hasattr(choice, "model_dump") else choice.dict()
-                    _new_choice = Choices(**dump)  # type: ignore
+                    _new_choice = Choices(**dump)
                 else:
                     _new_choice = choice
                 new_choices.append(_new_choice)
@@ -2077,7 +2077,7 @@ class ModelResponse(ModelResponseBase):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
         except Exception:
@@ -2149,7 +2149,7 @@ class EmbeddingResponse(OpenAIObject):
             self._response_headers = _response_headers
 
         model = model
-        super().__init__(model=model, object=object, data=data, usage=usage)  # type: ignore
+        super().__init__(model=model, object=object, data=data, usage=usage)
 
         if hidden_params:
             self._hidden_params = hidden_params
@@ -2170,7 +2170,7 @@ class EmbeddingResponse(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
         except Exception:
@@ -2221,7 +2221,7 @@ class TextChoices(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
         except Exception:
@@ -2304,12 +2304,12 @@ class TextCompletionResponse(OpenAIObject):
             usage = Usage()
 
         super(TextCompletionResponse, self).__init__(
-            id=id,  # type: ignore
-            object=object,  # type: ignore
-            created=created,  # type: ignore
-            model=model,  # type: ignore
-            choices=choices,  # type: ignore
-            usage=usage,  # type: ignore
+            id=id,
+            object=object,
+            created=created,
+            model=model,
+            choices=choices,
+            usage=usage,
             **params,
         )
 
@@ -2365,7 +2365,7 @@ class ImageObject(OpenAIImage):
         provider_specific_fields=None,
         **kwargs,
     ):
-        super().__init__(b64_json=b64_json, url=url, revised_prompt=revised_prompt)  # type: ignore
+        super().__init__(b64_json=b64_json, url=url, revised_prompt=revised_prompt)
         if provider_specific_fields:
             self.provider_specific_fields = provider_specific_fields
 
@@ -2385,7 +2385,7 @@ class ImageObject(OpenAIImage):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
         except Exception:
@@ -2421,7 +2421,7 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
 
-    usage: Optional[ImageUsage] = None  # type: ignore
+    usage: Optional[ImageUsage] = None
     """
     Users might use litellm with older python versions, we don't want this to break for them.
     Happens when their OpenAIImageResponse has the old OpenAI usage class.
@@ -2468,7 +2468,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             output_tokens=0,
             total_tokens=0,
         )
-        super().__init__(created=created, data=_data, usage=_usage)  # type: ignore
+        super().__init__(created=created, data=_data, usage=_usage)
 
         self.quality = kwargs.get("quality", None)
         self.output_format = kwargs.get("output_format", None)
@@ -2491,7 +2491,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
         except Exception:
@@ -2525,7 +2525,7 @@ class TranscriptionResponse(OpenAIObject):
     _response_headers: Optional[dict] = None
 
     def __init__(self, text=None):
-        super().__init__(text=text)  # type: ignore
+        super().__init__(text=text)
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -2543,7 +2543,7 @@ class TranscriptionResponse(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
         except Exception:
@@ -3821,7 +3821,7 @@ class SelectTokenizerResponse(TypedDict):
 
 class LiteLLMFineTuningJob(FineTuningJob):
     _hidden_params: dict = {}
-    seed: Optional[int] = None  # type: ignore
+    seed: Optional[int] = None
 
     def __init__(self, **kwargs):
         if "error" in kwargs and kwargs["error"] is not None:
@@ -3834,7 +3834,7 @@ class LiteLLMFineTuningJob(FineTuningJob):
 
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
-    usage: Optional[Usage] = None  # type: ignore[assignment]
+    usage: Optional[Usage] = None
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -3848,7 +3848,7 @@ class LiteLLMBatch(Batch):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
         except Exception:
@@ -3881,7 +3881,7 @@ class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
         except Exception:

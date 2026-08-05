@@ -150,7 +150,7 @@ def create_mock_braintrust_client():
 
     if _original_http_handler_post is None:
         _original_http_handler_post = HTTPHandler.post
-        HTTPHandler.post = _mock_http_handler_post  # type: ignore
+        HTTPHandler.post = _mock_http_handler_post
         verbose_logger.debug("[BRAINTRUST MOCK] Patched HTTPHandler.post")
 
     # CRITICAL: Call the factory's initialization function to patch AsyncHTTPHandler.post
