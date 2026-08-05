@@ -420,7 +420,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     budget_duration: str | None
 
     # per-deployment cooldown override
-    cooldown_time: Optional[float]
+    cooldown_time: float | None
 
 
 class DeploymentTypedDict(TypedDict, total=False):
