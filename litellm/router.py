@@ -8115,7 +8115,6 @@ class Router:
             self._initialize_deployment_for_pass_through(
                 deployment=deployment,
                 custom_llm_provider=custom_llm_provider,
-                model=deployment.litellm_params.model,
             )
 
         #########################################################
@@ -8142,55 +8141,39 @@ class Router:
 
         return deployment
 
-    def _initialize_deployment_for_pass_through(self, deployment: Deployment, custom_llm_provider: str, model: str):
+    def _initialize_deployment_for_pass_through(self, deployment: Deployment, custom_llm_provider: str):
         """
-        Optional: Initialize deployment for pass-through endpoints if `deployment.litellm_params.use_in_pass_through` is True
+        Optional: Register vertex credentials for pass-through endpoints if `deployment.litellm_params.use_in_pass_through` is True
 
-        Each provider uses diff .env vars for pass-through endpoints, this helper uses the deployment credentials to set the .env vars for pass-through endpoints
+        Other providers need no registration here: PassthroughEndpointRouter.get_credentials resolves their credentials per-request from the live router deployments
         """
-        if deployment.litellm_params.use_in_pass_through is True:
-            from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-                passthrough_endpoint_router,
+        if deployment.litellm_params.use_in_pass_through is not True:
+            return
+        if custom_llm_provider != "vertex_ai":
+            return
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            passthrough_endpoint_router,
+        )
+
+        credential_name: Final = deployment.litellm_params.litellm_credential_name
+        credential_values: Final = (
+            CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
+        )
+        vertex_project: Final = credential_values.get("vertex_project") or deployment.litellm_params.vertex_project
+        vertex_location: Final = credential_values.get("vertex_location") or deployment.litellm_params.vertex_location
+        vertex_credentials: Final = (
+            credential_values.get("vertex_credentials") or deployment.litellm_params.vertex_credentials
+        )
+
+        if vertex_project is None or vertex_location is None:
+            raise ValueError(
+                "vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints."
             )
-
-            if deployment.litellm_params.litellm_credential_name is not None:
-                credential_values = CredentialAccessor.get_credential_values(
-                    deployment.litellm_params.litellm_credential_name
-                )
-            else:
-                credential_values = {}
-
-            if custom_llm_provider == "vertex_ai":
-                vertex_project = credential_values.get("vertex_project") or deployment.litellm_params.vertex_project
-                vertex_location = credential_values.get("vertex_location") or deployment.litellm_params.vertex_location
-                vertex_credentials: Final = (
-                    credential_values.get("vertex_credentials") or deployment.litellm_params.vertex_credentials
-                )
-
-                if vertex_project is None or vertex_location is None:
-                    raise ValueError(
-                        "vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints."
-                    )
-                passthrough_endpoint_router.add_vertex_credentials(
-                    project_id=vertex_project,
-                    location=vertex_location,
-                    vertex_credentials=vertex_credentials,
-                )
-            else:
-                api_base: Final = credential_values.get("api_base") or deployment.litellm_params.api_base
-                api_key: Final = credential_values.get("api_key") or deployment.litellm_params.api_key
-                if api_key is None:
-                    verbose_router_logger.debug(
-                        "Skipping pass-through credential setup for deployment model=%s, custom_llm_provider=%s; no api_key set. Providers like bedrock resolve credentials at request time.",
-                        model,
-                        custom_llm_provider,
-                    )
-                    return
-                passthrough_endpoint_router.set_pass_through_credentials(
-                    custom_llm_provider=custom_llm_provider,
-                    api_base=api_base,
-                    api_key=api_key,
-                )
+        passthrough_endpoint_router.add_vertex_credentials(
+            project_id=vertex_project,
+            location=vertex_location,
+            vertex_credentials=vertex_credentials,
+        )
 
     def add_deployment(self, deployment: Deployment) -> Deployment | None:
         """
