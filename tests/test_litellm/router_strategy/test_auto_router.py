@@ -446,9 +446,9 @@ class TestAutoRouterEmbeddingInputCap:
     """The cap configured on the deployment is what the encoder enforces."""
 
     def test_should_default_the_cap_to_the_shared_constant(self):
-        from litellm.constants import DEFAULT_MAX_EMBEDDING_INPUT_CHARS
+        from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 
-        assert _auto_router(FixedRouteLayer(None)).max_input_chars == DEFAULT_MAX_EMBEDDING_INPUT_CHARS
+        assert _auto_router(FixedRouteLayer(None)).max_input_chars == DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 
     @pytest.mark.asyncio
     async def test_should_build_its_encoder_with_the_configured_cap(self):

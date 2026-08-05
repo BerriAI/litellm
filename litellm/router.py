@@ -42,9 +42,9 @@ from litellm.caching.caching import (
     RedisClusterCache,
 )
 from litellm.constants import (
+    DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
-    DEFAULT_MAX_EMBEDDING_INPUT_CHARS,
     DEFAULT_MAX_LRU_CACHE_SIZE,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -7615,7 +7615,7 @@ class Router:
             default_model=default_model,
             embedding_model=embedding_model,
             litellm_router_instance=self,
-            max_input_chars=(max_input_chars if max_input_chars is not None else DEFAULT_MAX_EMBEDDING_INPUT_CHARS),
+            max_input_chars=(max_input_chars if max_input_chars is not None else DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS),
         )
         self._register_pre_routing_strategy(
             registry=self.auto_routers,

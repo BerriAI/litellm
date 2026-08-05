@@ -6,7 +6,6 @@ from semantic_router.encoders.base import AsymmetricDenseMixin
 
 import litellm
 from litellm._logging import verbose_router_logger
-from litellm.constants import DEFAULT_MAX_EMBEDDING_INPUT_CHARS
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -52,7 +51,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         litellm_router_instance: "Router",
         model_name: str,
         score_threshold: float | None = None,
-        max_input_chars: int = DEFAULT_MAX_EMBEDDING_INPUT_CHARS,
+        max_input_chars: int = 0,
     ):
         """Initialize the LiteLLMEncoder.
 
@@ -63,9 +62,12 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         :type model_name: str
         :param score_threshold: The score threshold for the embeddings.
         :type score_threshold: float
-        :param max_input_chars: Longest doc, in characters, sent to the embedding model. Anything
-            longer is cut to this length. Raise it for an encoder with a large context window,
-            lower it for a 512-token one. Non-positive disables clamping.
+        :param max_input_chars: Longest doc, in characters, sent to the embedding model; anything
+            longer is cut to this length. Opt-in, defaulting to 0 (send docs whole), because a
+            caller that has to see the entire text to be correct must not be cut silently: a
+            semantic guard that inspects only a prefix can be walked past with a benign opener.
+            Callers that only rank text against short utterances, such as the auto-router, pass a
+            limit so the encoder's context window cannot fail their request.
         :type max_input_chars: int
         """
         super().__init__(
@@ -77,11 +79,10 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         self.max_input_chars = max_input_chars
 
     def _clamp(self, docs: list[str]) -> list[str]:  # mutable-ok: embedding() takes `input: str | list`
-        """Cut every doc to `max_input_chars`, keeping the head.
+        """Cut every doc to `max_input_chars`, keeping the head, or return them whole when unset.
 
         The head carries the ask often enough to place it against a route, and a cut prompt still
-        routes where an over-long one just errors out. Kept here rather than in each caller so the
-        auto-router, complexity-router, semantic guard and MCP tool filter share one limit.
+        routes where an over-long one just errors out.
         """
         limit: Final = self.max_input_chars
         if limit <= 0:

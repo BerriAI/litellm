@@ -5,7 +5,7 @@ Auto-Routing Strategy that works with a Semantic Router Config
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_router_logger
-from litellm.constants import DEFAULT_MAX_EMBEDDING_INPUT_CHARS
+from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 from litellm.integrations.custom_logger import CustomLogger
 
 if TYPE_CHECKING:
@@ -32,7 +32,7 @@ class AutoRouter(CustomLogger):
         litellm_router_instance: "Router",
         auto_router_config_path: str | None = None,
         auto_router_config: str | None = None,
-        max_input_chars: int = DEFAULT_MAX_EMBEDDING_INPUT_CHARS,
+        max_input_chars: int = DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     ):
         """
         Auto-Router class that uses a semantic router to route requests to the appropriate model.
@@ -154,10 +154,6 @@ class AutoRouter(CustomLogger):
             self.routelayer = routelayer
 
         message_content: Final = self._extract_text_from_messages(messages)
-
-        # `model` arrives as the auto-router alias, which is not a routable deployment: leaving it in
-        # place when nothing matched fails downstream with "Unmapped LLM provider", so every path that
-        # does not name a route resolves to the default model.
         route_name: Final = self._matched_route_name(routelayer, message_content)
 
         return PreRoutingHookResponse(
