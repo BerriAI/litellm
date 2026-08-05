@@ -130,7 +130,7 @@ if TYPE_CHECKING:
 
     from litellm.integrations.opentelemetry import OpenTelemetry
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
     OpenTelemetry = Any
@@ -640,7 +640,6 @@ except Exception:
     version = "0.0.0"
 litellm.suppress_debug_info = True
 import json
-from typing import Union
 
 from fastapi import (
     Depends,
@@ -6679,7 +6678,7 @@ class ProxyConfig:
                 await evict_config_param("anthropic_beta_headers_reload_config")
 
                 # Count providers in config
-                provider_count = sum(1 for k in new_config.keys() if k != "provider_aliases" and k != "description")
+                provider_count = sum(1 for k in new_config if k != "provider_aliases" and k != "description")
                 verbose_proxy_logger.info(
                     "Anthropic beta headers config reloaded successfully. Providers: %s", provider_count
                 )
@@ -8664,48 +8663,56 @@ class ProxyStartupEvent:
         - Sets up prisma client
         - Adds necessary views to proxy
         """
+        connected_client: PrismaClient | None = None
         try:
-            prisma_client: PrismaClient | None = None
-            if database_url is not None:
-                try:
-                    prisma_client = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)
-                except Exception as e:
-                    raise e
+            if database_url is None:
+                return None
 
-                try:
-                    await prisma_client.connect()
-                except Exception as e:
-                    if "P3018" in str(e) or "P3009" in str(e):
-                        verbose_proxy_logger.debug("CRITICAL: DATABASE MIGRATION FAILED")
-                        verbose_proxy_logger.debug("Your database is in a 'dirty' state.")
-                        verbose_proxy_logger.debug("FIX: Run 'prisma migrate resolve --applied <migration_name>'")
-                    raise e
+            prisma_client = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)
 
-                ## Start RDS IAM token refresh background task if enabled ##
-                # This proactively refreshes IAM tokens before they expire,
-                # preventing the 15-minute connection failure bug (#16220)
-                if hasattr(prisma_client, "db") and hasattr(prisma_client.db, "start_token_refresh_task"):
-                    await prisma_client.db.start_token_refresh_task()
+            try:
+                await prisma_client.connect()
+            except Exception as e:
+                if "P3018" in str(e) or "P3009" in str(e):
+                    verbose_proxy_logger.debug("CRITICAL: DATABASE MIGRATION FAILED")
+                    verbose_proxy_logger.debug("Your database is in a 'dirty' state.")
+                    verbose_proxy_logger.debug("FIX: Run 'prisma migrate resolve --applied <migration_name>'")
+                raise e
 
-                ## Add necessary views to proxy ##
-                asyncio.create_task(
-                    prisma_client.check_view_exists()
-                )  # check if all necessary views exist. Don't block execution
+            connected_client = prisma_client
 
-                asyncio.create_task(
-                    prisma_client._set_spend_logs_row_count_in_proxy_state()
-                )  # set the spend logs row count in proxy state. Don't block execution
+            ## Start RDS IAM token refresh background task if enabled ##
+            # This proactively refreshes IAM tokens before they expire,
+            # preventing the 15-minute connection failure bug (#16220)
+            if hasattr(prisma_client, "db") and hasattr(prisma_client.db, "start_token_refresh_task"):
+                await prisma_client.db.start_token_refresh_task()
 
-                # run a health check to ensure the DB is ready
-                if get_secret_bool("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", False) is not True:
-                    await prisma_client.health_check()
+            ## Add necessary views to proxy ##
+            asyncio.create_task(
+                prisma_client.check_view_exists()
+            )  # check if all necessary views exist. Don't block execution
 
-                if hasattr(prisma_client, "start_db_health_watchdog_task"):
-                    await prisma_client.start_db_health_watchdog_task()
+            asyncio.create_task(
+                prisma_client._set_spend_logs_row_count_in_proxy_state()
+            )  # set the spend logs row count in proxy state. Don't block execution
+
+            if hasattr(prisma_client, "start_db_health_watchdog_task"):
+                await prisma_client.start_db_health_watchdog_task()
+
+            # run a health check to ensure the DB is ready
+            if get_secret_bool("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", False) is not True:
+                await prisma_client.health_check()
+
             return prisma_client
         except Exception as e:
             PrismaDBExceptionHandler.handle_db_exception(e)
-            return None
+            if connected_client is not None:
+                verbose_proxy_logger.warning(
+                    "Retaining the connected Prisma client after a post-connect startup step failed: %s. "
+                    "The DB health watchdog keeps probing and reconnects once the database recovers.",
+                    e,
+                )
+            return connected_client
 
     @classmethod
     def _init_dd_tracer(cls):
@@ -8876,7 +8883,7 @@ async def model_list(
     # Check if scope=expand is requested and user has admin privileges
     should_expand_scope = False
     if scope == "expand":
-        should_expand_scope = await _user_has_admin_privileges(
+        should_expand_scope = _user_has_admin_view(user_api_key_dict) or await _user_has_admin_privileges(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -11479,7 +11486,7 @@ async def _populate_team_access_on_models(
     """
     user_teams: list[str] | Literal["*"] | None = None
     direct_access_models: list[str] = []
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+    if _user_has_admin_view(user_api_key_dict):
         user_teams = "*"
         direct_access_models = llm_router.get_model_ids(exclude_team_models=True)  # has access to all models
     elif user_api_key_dict.user_id is not None:
@@ -15188,7 +15195,7 @@ async def get_config_general_settings(
             )
 
 
-GeneralSettingsUILiteLLMValue = Union[float, bool, str, None]
+GeneralSettingsUILiteLLMValue = float | bool | str | None
 
 
 class GeneralSettingsUILiteLLMFieldSpec(TypedDict):
@@ -16122,7 +16129,7 @@ async def reload_anthropic_beta_headers(
         )
         await invalidate_config_param("anthropic_beta_headers_reload_config")
 
-        provider_count: Final = sum(1 for k in new_config.keys() if k not in ["provider_aliases", "description"])
+        provider_count: Final = sum(1 for k in new_config if k not in ["provider_aliases", "description"])
         verbose_proxy_logger.info(
             "Anthropic beta headers config reloaded successfully in current pod. Providers: %s", provider_count
         )

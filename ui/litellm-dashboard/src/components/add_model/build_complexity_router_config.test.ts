@@ -437,9 +437,8 @@ describe("getTierLabelsError", () => {
   });
 
   it("accepts a full distinct rename", () => {
-    expect(
-      getTierLabelsError({ SIMPLE: "Cheap", MEDIUM: "Standard", COMPLEX: "Premium", REASONING: "Deep" }),
-    ).toBeNull();
+    const fullRename = { SIMPLE: "Cheap", MEDIUM: "Standard", COMPLEX: "Premium", REASONING: "Deep" };
+    expect(getTierLabelsError(fullRename)).toBeNull();
   });
 
   it("rejects two tiers sharing a name, which would be ambiguous in the logs", () => {
@@ -473,9 +472,8 @@ describe("hydrateTierLabels", () => {
   });
 
   it("drops non-string and blank values a hand-edited config could hold", () => {
-    expect(hydrateTierLabels({ SIMPLE: 7, MEDIUM: "  ", COMPLEX: null, REASONING: "Deep" })).toEqual({
-      REASONING: "Deep",
-    });
+    const handEdited = { SIMPLE: 7, MEDIUM: "  ", COMPLEX: null, REASONING: "Deep" };
+    expect(hydrateTierLabels(handEdited)).toEqual({ REASONING: "Deep" });
   });
 
   it("ignores keys that are not tiers", () => {

@@ -4827,7 +4827,7 @@ class StandardLoggingPayloadSetup:
 
         # Populate well-known typed fields with int/str coercion where needed
         typed_keys: Final[dict] = {}
-        for key in StandardLoggingAdditionalHeaders.__annotations__.keys():
+        for key in StandardLoggingAdditionalHeaders.__annotations__:
             _key = key.lower().replace("_", "-")
             typed_keys[_key] = key
             if _key in additiona_headers:
@@ -4859,7 +4859,7 @@ class StandardLoggingPayloadSetup:
             usage_object=None,
         )
         if hidden_params is not None:
-            for key in StandardLoggingHiddenParams.__annotations__.keys():
+            for key in StandardLoggingHiddenParams.__annotations__:
                 if key in hidden_params:
                     if key == "additional_headers":
                         clean_hidden_params["additional_headers"] = StandardLoggingPayloadSetup.get_additional_headers(
@@ -5501,7 +5501,7 @@ def get_standard_logging_metadata(
     )
     if isinstance(metadata, dict):
         # Update the clean_metadata with values from input metadata that match StandardLoggingMetadata fields
-        for key in StandardLoggingMetadata.__annotations__.keys():
+        for key in StandardLoggingMetadata.__annotations__:
             if key in metadata:
                 clean_metadata[key] = metadata[key]
 

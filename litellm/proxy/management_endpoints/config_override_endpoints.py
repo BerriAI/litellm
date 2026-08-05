@@ -54,7 +54,7 @@ def _redact_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """
     if not config:
         return {}
-    return {k: _AUDIT_REDACTED for k in config.keys()}
+    return {k: _AUDIT_REDACTED for k in config}
 
 
 def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:

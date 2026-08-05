@@ -20,7 +20,6 @@ from typing import (
     Protocol,
     TypeAlias,
     TypedDict,
-    Union,
 )
 
 from litellm import DualCache
@@ -59,7 +58,7 @@ if TYPE_CHECKING:
     from litellm.types.agents import AgentResponse
     from litellm.types.caching import RedisPipelineIncrementOperation
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
     InternalUsageCache = _InternalUsageCache
 else:
     Span = Any

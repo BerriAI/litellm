@@ -30,7 +30,6 @@ from openai import AsyncOpenAI
 from typing_extensions import overload
 
 import litellm
-import litellm.litellm_core_utils
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
 from litellm._logging import verbose_router_logger
@@ -241,7 +240,7 @@ if TYPE_CHECKING:
         ResponsesAPIResponse,
     )
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
     AutoRouter = Any
@@ -6353,10 +6352,7 @@ class Router:
 
         if hasattr(original_exception, "message") and litellm.expose_router_debug_in_errors:
             # add the available fallbacks to the exception
-            original_exception.message += ". Received Model Group={}\nAvailable Model Group Fallbacks={}".format(
-                model_group,
-                mask_sensitive_structure(fallback_model_group),
-            )
+            original_exception.message += f". Received Model Group={model_group}\nAvailable Model Group Fallbacks={mask_sensitive_structure(fallback_model_group)}"
             if len(fallback_failure_exception_str) > 0:
                 original_exception.message += f"\nError doing the fallback: {fallback_failure_exception_str}"
 
@@ -7489,7 +7485,7 @@ class Router:
                 litellm_params=litellm_params,
                 model_info=_model_info,
             )
-            for field in CustomPricingLiteLLMParams.model_fields.keys():
+            for field in CustomPricingLiteLLMParams.model_fields:
                 if deployment.litellm_params.get(field) is not None:
                     _model_info[field] = deployment.litellm_params[field]
 
@@ -8238,7 +8234,7 @@ class Router:
         self._add_deployment(deployment=deployment)
 
         _model_info_dict: Final[dict] = deployment.model_info.model_dump(exclude_none=True)
-        for field in CustomPricingLiteLLMParams.model_fields.keys():
+        for field in CustomPricingLiteLLMParams.model_fields:
             field_value = deployment.litellm_params.get(field)
             if field_value is not None:
                 _model_info_dict[field] = field_value
@@ -9483,7 +9479,7 @@ class Router:
         else:
             # When model_name is None, return all model IDs
             # Use the index map keys for O(n) where n = total deployments
-            for model_id in self.model_id_to_deployment_index_map.keys():
+            for model_id in self.model_id_to_deployment_index_map:
                 idx = self.model_id_to_deployment_index_map[model_id]
                 model = self.model_list[idx]
                 if "model_info" in model and "id" in model["model_info"]:
