@@ -838,6 +838,40 @@ async def test_init_held_async_handler_survives_external_client_close():
     await handler.close()
 
 
+@pytest.mark.asyncio
+async def test_init_held_async_handler_survives_evicted_client_close():
+    from litellm.caching.evicted_client_closer import EvictedClientCloser
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    cache = LLMClientCache(evicted_client_closer=EvictedClientCloser(grace_seconds=0))
+    handler = AsyncHTTPHandler(timeout=42.5)
+    held_client = handler.client
+    cache.set_cache("init-held-handler", handler, litellm_owned_client=True, ttl=0)
+    await asyncio.sleep(0.02)
+    assert cache.get_cache("init-held-handler") is None
+    await asyncio.sleep(0.05)
+    assert held_client.is_closed
+
+    async def respond(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await _read_http_request(reader)
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(respond, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        response = await handler.post(f"http://127.0.0.1:{port}/v1/compress", json={"messages": []})
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert response.status_code == 200
+    assert handler.client is not held_client
+    assert handler.client.timeout == httpx.Timeout(42.5)
+    await handler.close()
+
+
 def test_init_held_sync_handler_recreates_closed_client():
     from http.server import BaseHTTPRequestHandler, HTTPServer
 

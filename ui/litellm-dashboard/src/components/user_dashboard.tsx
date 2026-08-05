@@ -5,6 +5,7 @@ import { jwtDecode } from "jwt-decode";
 import React, { useEffect, useState } from "react";
 import { fetchTeams } from "./common_components/fetch_teams";
 import { KeyResponse, Team } from "./key_team_helpers/key_list";
+import { effectiveSessionRole } from "@/utils/roles";
 import {
   getProxyBaseUrl,
   getProxyUISettings,
@@ -97,30 +98,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, []);
 
-  function formatUserRole(userRole: string) {
-    if (!userRole) {
-      return "Undefined Role";
-    }
-    switch (userRole.toLowerCase()) {
-      case "app_owner":
-        return "App Owner";
-      case "demo_app_owner":
-        return "App Owner";
-      case "proxy_admin":
-        return "Admin";
-      case "proxy_admin_viewer":
-        return "Admin Viewer";
-      case "app_user":
-        return "App User";
-      case "internal_user":
-        return "Internal User";
-      case "internal_user_viewer":
-        return "Internal Viewer";
-      default:
-        return "Unknown Role";
-    }
-  }
-
   // console.log(`selectedTeam: ${Object.entries(selectedTeam)}`);
   // Moved useEffect inside the component and used a condition to run fetch only if the params are available
   useEffect(() => {
@@ -134,8 +111,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
         // check if userRole is defined
         if (decoded.user_role) {
-          const formattedUserRole = formatUserRole(decoded.user_role);
-          setUserRole(formattedUserRole);
+          setUserRole(effectiveSessionRole(decoded.user_role));
         } else {
         }
 

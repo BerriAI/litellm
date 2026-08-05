@@ -1081,7 +1081,7 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params["maxTokens"] = thinking_token_budget + DEFAULT_MAX_TOKENS
 
     @overload
-    def _get_cache_point_block(
+    def get_cache_point_block(
         self,
         message_block: OpenAIMessageContentListBlock
         | ChatCompletionUserMessage
@@ -1093,7 +1093,7 @@ class AmazonConverseConfig(BaseConfig):
         pass
 
     @overload
-    def _get_cache_point_block(
+    def get_cache_point_block(
         self,
         message_block: OpenAIMessageContentListBlock
         | ChatCompletionUserMessage
@@ -1104,7 +1104,7 @@ class AmazonConverseConfig(BaseConfig):
     ) -> ContentBlock | None:
         pass
 
-    def _get_cache_point_block(
+    def get_cache_point_block(
         self,
         message_block: OpenAIMessageContentListBlock
         | ChatCompletionUserMessage
@@ -1149,14 +1149,14 @@ class AmazonConverseConfig(BaseConfig):
                 system_prompt_indices.append(idx)
                 if isinstance(message["content"], str) and message["content"]:
                     system_content_blocks.append(SystemContentBlock(text=message["content"]))
-                    cache_block = self._get_cache_point_block(message, block_type="system", model=model)
+                    cache_block = self.get_cache_point_block(message, block_type="system", model=model)
                     if cache_block:
                         system_content_blocks.append(cache_block)
                 elif isinstance(message["content"], list):
                     for m in message["content"]:
                         if m.get("type") == "text" and m.get("text"):
                             system_content_blocks.append(SystemContentBlock(text=m["text"]))
-                            cache_block = self._get_cache_point_block(m, block_type="system", model=model)
+                            cache_block = self.get_cache_point_block(m, block_type="system", model=model)
                             if cache_block:
                                 system_content_blocks.append(cache_block)
         if len(system_prompt_indices) > 0:
