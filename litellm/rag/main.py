@@ -305,7 +305,7 @@ async def _execute_query_pipeline(
         if isinstance(logging_obj, LiteLLMLoggingObj):
             logging_obj.model_call_details["additional_response_cost"] = sub_call_cost
 
-    return response  # type: ignore[return-value]
+    return response
 
 
 @client
@@ -451,7 +451,7 @@ def ingest(
 
         if _is_async:
             return _execute_ingest_pipeline(
-                ingest_options=ingest_options,  # type: ignore
+                ingest_options=ingest_options,
                 file_data=file_data,
                 file_url=file_url,
                 file_id=file_id,
@@ -460,7 +460,7 @@ def ingest(
         else:
             return asyncio.get_event_loop().run_until_complete(
                 _execute_ingest_pipeline(
-                    ingest_options=ingest_options,  # type: ignore
+                    ingest_options=ingest_options,
                     file_data=file_data,
                     file_url=file_url,
                     file_id=file_id,

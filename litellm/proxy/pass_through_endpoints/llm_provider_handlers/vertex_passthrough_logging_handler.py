@@ -830,7 +830,7 @@ class VertexPassthroughLoggingHandler:
                 import asyncio
 
                 asyncio.create_task(
-                    managed_files_hook.store_unified_object_id(  # type: ignore
+                    managed_files_hook.store_unified_object_id(
                         unified_object_id=unified_object_id,
                         file_object=batch_object,
                         litellm_parent_otel_span=None,

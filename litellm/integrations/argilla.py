@@ -10,7 +10,7 @@ import types
 from typing import Any, Final
 
 import httpx
-from pydantic import BaseModel  # type: ignore
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
@@ -56,8 +56,8 @@ class ArgillaLogger(CustomBatchLogger):
             argilla_base_url=argilla_base_url,
         )
         self.sampling_rate: float = (
-            float(os.getenv("ARGILLA_SAMPLING_RATE"))  # type: ignore
-            if os.getenv("ARGILLA_SAMPLING_RATE") is not None and os.getenv("ARGILLA_SAMPLING_RATE").strip().isdigit()  # type: ignore
+            float(os.getenv("ARGILLA_SAMPLING_RATE"))
+            if os.getenv("ARGILLA_SAMPLING_RATE") is not None and os.getenv("ARGILLA_SAMPLING_RATE").strip().isdigit()
             else 1.0
         )
 
@@ -196,9 +196,9 @@ class ArgillaLogger(CustomBatchLogger):
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             sampling_rate: Final = (
-                float(os.getenv("LANGSMITH_SAMPLING_RATE"))  # type: ignore
+                float(os.getenv("LANGSMITH_SAMPLING_RATE"))
                 if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
-                and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()  # type: ignore
+                and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()
                 else 1.0
             )
             random_sample: Final = random.random()

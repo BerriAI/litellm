@@ -138,6 +138,23 @@ async def test_should_pass_credentials_to_afile_retrieve():
 
 
 @pytest.mark.asyncio
+async def test_get_user_created_file_ids_skips_rows_without_file_object():
+    managed_files = _make_managed_files_instance()
+    managed_files.prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(file_object=_make_file_object().model_dump()),
+            MagicMock(file_object=None),
+        ]
+    )
+
+    files = await managed_files.get_user_created_file_ids(
+        _make_user_api_key_dict(), ["file-output-abc"]
+    )
+
+    assert [file.id for file in files] == ["file-output-abc"]
+
+
+@pytest.mark.asyncio
 async def test_should_fallback_when_no_router():
     """
     When llm_router is not available, afile_retrieve should still be called

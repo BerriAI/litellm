@@ -311,7 +311,7 @@ class DotpromptManager(CustomPromptManagement):
     def _create_message(self, role: str, content: str) -> AllMessageValues:
         """Create a message with the specified role and content."""
         return {
-            "role": role,  # type: ignore
+            "role": role,
             "content": content,
         }
 

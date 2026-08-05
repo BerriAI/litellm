@@ -534,11 +534,9 @@ class Cache:
                 if isinstance(cached_response, dict):
                     pass
                 else:
-                    cached_response = json.loads(
-                        cached_response  # type: ignore
-                    )  # Convert string to dictionary
+                    cached_response = json.loads(cached_response)  # Convert string to dictionary
             except Exception:
-                cached_response = ast.literal_eval(cached_response)  # type: ignore
+                cached_response = ast.literal_eval(cached_response)
             return cached_response
         return cached_result
 

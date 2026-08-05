@@ -116,7 +116,7 @@ def _load_private_key_from_env(env_var: str) -> RSAPrivateKey:
             key_bytes = f.read()
     else:
         key_bytes = key_material.encode("utf-8")
-    return serialization.load_pem_private_key(key_bytes, password=None)  # type: ignore[return-value]
+    return serialization.load_pem_private_key(key_bytes, password=None)
 
 
 def _generate_rsa_key_pair() -> RSAPrivateKey:
@@ -153,7 +153,7 @@ async def _fetch_jwks(jwks_uri: str) -> list[dict[str, Any]]:
     if cached is not None:
         keys, fetched_at = cached
         if now - fetched_at < _JWKS_CACHE_TTL:
-            return keys  # type: ignore[return-value]
+            return keys
 
     from litellm.llms.custom_httpx.http_handler import (
         get_async_httpx_client,
@@ -165,7 +165,7 @@ async def _fetch_jwks(jwks_uri: str) -> list[dict[str, Any]]:
     resp.raise_for_status()
     keys = resp.json().get("keys", [])
     _jwks_cache[jwks_uri] = (keys, now)
-    return keys  # type: ignore[return-value]
+    return keys
 
 
 async def _fetch_oidc_discovery(discovery_uri: str) -> dict[str, Any]:
@@ -178,7 +178,7 @@ async def _fetch_oidc_discovery(discovery_uri: str) -> dict[str, Any]:
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     resp: Final = await client.get(discovery_uri, headers={"Accept": "application/json"})
     resp.raise_for_status()
-    return resp.json()  # type: ignore[return-value]
+    return resp.json()
 
 
 class MCPJWTSigner(CustomGuardrail):
@@ -422,9 +422,7 @@ class MCPJWTSigner(CustomGuardrail):
         try:
             jwks_set: Final = PyJWKSet.from_dict({"keys": jwks_keys})
         except Exception as exc:
-            raise jwt.exceptions.PyJWKSetError(  # type: ignore[attr-defined]
-                f"Failed to parse JWKS from {jwks_uri!r}: {exc}"
-            ) from exc
+            raise jwt.exceptions.PyJWKSetError(f"Failed to parse JWKS from {jwks_uri!r}: {exc}") from exc
 
         signing_jwk = None
         for jwk_obj in jwks_set.keys:
@@ -433,9 +431,7 @@ class MCPJWTSigner(CustomGuardrail):
                 break
 
         if signing_jwk is None:
-            raise jwt.exceptions.PyJWKSetError(  # type: ignore[attr-defined]
-                f"No JWKS key matching kid={kid!r} at {jwks_uri!r}"
-            )
+            raise jwt.exceptions.PyJWKSetError(f"No JWKS key matching kid={kid!r} at {jwks_uri!r}")
 
         # Use the algorithm declared by the JWKS key entry, not the token header.
         # PyJWT populates algorithm_name from the key's `alg` field; when absent
@@ -485,7 +481,7 @@ class MCPJWTSigner(CustomGuardrail):
         resp.raise_for_status()
         result: Final[dict[str, Any]] = resp.json()
         if not result.get("active", False):
-            raise jwt.exceptions.ExpiredSignatureError(  # type: ignore[attr-defined]
+            raise jwt.exceptions.ExpiredSignatureError(
                 "MCPJWTSigner: incoming token is inactive (introspection returned active=false)"
             )
         return result

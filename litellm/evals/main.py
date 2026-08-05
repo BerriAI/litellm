@@ -141,7 +141,7 @@ def create_eval(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acreate_eval", False) is True
 
@@ -153,7 +153,7 @@ def create_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -162,15 +162,15 @@ def create_eval(
 
         # Build create request
         create_request: Final[CreateEvalRequest] = {
-            "data_source_config": data_source_config,  # type: ignore
-            "testing_criteria": testing_criteria,  # type: ignore
+            "data_source_config": data_source_config,
+            "testing_criteria": testing_criteria,
         }
         if name is not None:
             create_request["name"] = name
 
         # Merge extra_body if provided
         if extra_body:
-            create_request.update(extra_body)  # type: ignore
+            create_request.update(extra_body)
 
         # Validate environment and get headers
         headers = extra_headers or {}
@@ -199,7 +199,7 @@ def create_eval(
         )
 
         # Make HTTP request
-        response: Final = base_llm_http_handler.create_eval_handler(  # type: ignore
+        response: Final = base_llm_http_handler.create_eval_handler(
             url=url,
             request_body=request_body,
             evals_api_provider_config=evals_api_provider_config,
@@ -326,7 +326,7 @@ def list_evals(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("alist_evals", False) is True
 
@@ -338,7 +338,7 @@ def list_evals(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -354,13 +354,13 @@ def list_evals(
         if before is not None:
             list_params["before"] = before
         if order is not None:
-            list_params["order"] = order  # type: ignore
+            list_params["order"] = order
         if order_by is not None:
-            list_params["order_by"] = order_by  # type: ignore
+            list_params["order_by"] = order_by
 
         # Merge extra_query if provided
         if extra_query:
-            list_params.update(extra_query)  # type: ignore
+            list_params.update(extra_query)
 
         # Validate environment and get headers
         headers = extra_headers or {}
@@ -385,7 +385,7 @@ def list_evals(
         )
 
         # Make HTTP request
-        response: Final = base_llm_http_handler.list_evals_handler(  # type: ignore
+        response: Final = base_llm_http_handler.list_evals_handler(
             url=url,
             query_params=query_params,
             evals_api_provider_config=evals_api_provider_config,
@@ -492,7 +492,7 @@ def get_eval(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aget_eval", False) is True
 
@@ -504,7 +504,7 @@ def get_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -536,7 +536,7 @@ def get_eval(
         )
 
         # Make HTTP request
-        response: Final = base_llm_http_handler.get_eval_handler(  # type: ignore
+        response: Final = base_llm_http_handler.get_eval_handler(
             url=url,
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
@@ -657,7 +657,7 @@ def update_eval(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aupdate_eval", False) is True
 
@@ -669,7 +669,7 @@ def update_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -723,7 +723,7 @@ def update_eval(
 
         # Merge extra_body if provided
         if extra_body:
-            update_request.update(extra_body)  # type: ignore
+            update_request.update(extra_body)
 
         # Validate environment and get headers
         headers = extra_headers or {}
@@ -755,7 +755,7 @@ def update_eval(
         )
 
         # Make HTTP request
-        response: Final = base_llm_http_handler.update_eval_handler(  # type: ignore
+        response: Final = base_llm_http_handler.update_eval_handler(
             url=url,
             request_body=request_body,
             evals_api_provider_config=evals_api_provider_config,
@@ -862,7 +862,7 @@ def delete_eval(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("adelete_eval", False) is True
 
@@ -874,7 +874,7 @@ def delete_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -906,7 +906,7 @@ def delete_eval(
         )
 
         # Make HTTP request
-        response: Final = base_llm_http_handler.delete_eval_handler(  # type: ignore
+        response: Final = base_llm_http_handler.delete_eval_handler(
             url=url,
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
@@ -1012,7 +1012,7 @@ def cancel_eval(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acancel_eval", False) is True
 
@@ -1024,7 +1024,7 @@ def cancel_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -1060,7 +1060,7 @@ def cancel_eval(
         )
 
         # Make HTTP request
-        response: Final = base_llm_http_handler.cancel_eval_handler(  # type: ignore
+        response: Final = base_llm_http_handler.cancel_eval_handler(
             url=url,
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
@@ -1191,7 +1191,7 @@ def create_run(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acreate_run", False) is True
 
@@ -1203,7 +1203,7 @@ def create_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -1212,7 +1212,7 @@ def create_run(
 
         # Build create request
         create_request: Final[CreateRunRequest] = {
-            "data_source": data_source,  # type: ignore
+            "data_source": data_source,
         }
         if name is not None:
             create_request["name"] = name
@@ -1221,7 +1221,7 @@ def create_run(
 
         # Merge extra_body if provided
         if extra_body:
-            create_request.update(extra_body)  # type: ignore
+            create_request.update(extra_body)
 
         # Validate environment and get headers
         headers = extra_headers or {}
@@ -1248,7 +1248,7 @@ def create_run(
         )
 
         # Make HTTP request (default 600s timeout for long-running operations)
-        response: Final = base_llm_http_handler.create_run_handler(  # type: ignore
+        response: Final = base_llm_http_handler.create_run_handler(
             url=url,
             request_body=request_body,
             evals_api_provider_config=evals_api_provider_config,
@@ -1375,7 +1375,7 @@ def list_runs(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("alist_runs", False) is True
 
@@ -1387,7 +1387,7 @@ def list_runs(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -1403,11 +1403,11 @@ def list_runs(
         if before is not None:
             list_params["before"] = before
         if order is not None:
-            list_params["order"] = order  # type: ignore
+            list_params["order"] = order
 
         # Merge extra_query if provided
         if extra_query:
-            list_params.update(extra_query)  # type: ignore
+            list_params.update(extra_query)
 
         # Validate environment and get headers
         headers = extra_headers or {}
@@ -1433,7 +1433,7 @@ def list_runs(
         )
 
         # Make HTTP request
-        response: Final = base_llm_http_handler.list_runs_handler(  # type: ignore
+        response: Final = base_llm_http_handler.list_runs_handler(
             url=url,
             query_params=query_params,
             evals_api_provider_config=evals_api_provider_config,
@@ -1545,7 +1545,7 @@ def get_run(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aget_run", False) is True
 
@@ -1557,7 +1557,7 @@ def get_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -1590,7 +1590,7 @@ def get_run(
         )
 
         # Make HTTP request
-        response: Final = base_llm_http_handler.get_run_handler(  # type: ignore
+        response: Final = base_llm_http_handler.get_run_handler(
             url=url,
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
@@ -1701,7 +1701,7 @@ def cancel_run(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acancel_run", False) is True
 
@@ -1713,7 +1713,7 @@ def cancel_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -1750,7 +1750,7 @@ def cancel_run(
         )
 
         # Make HTTP request
-        response: Final = base_llm_http_handler.cancel_run_handler(  # type: ignore
+        response: Final = base_llm_http_handler.cancel_run_handler(
             url=url,
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
@@ -1866,7 +1866,7 @@ def delete_run(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("adelete_run", False) is True
 
@@ -1878,7 +1878,7 @@ def delete_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: BaseEvalsAPIConfig | None = ProviderConfigManager.get_provider_evals_api_config(
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -1915,7 +1915,7 @@ def delete_run(
         )
 
         # Make HTTP request
-        response: Final = base_llm_http_handler.delete_run_handler(  # type: ignore
+        response: Final = base_llm_http_handler.delete_run_handler(
             url=url,
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,

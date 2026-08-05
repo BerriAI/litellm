@@ -65,7 +65,7 @@ def map_aiohttp_exceptions() -> typing.Iterator[None]:
         mapped_exc = None
 
         for from_exc, to_exc in AIOHTTP_EXC_MAP.items():
-            if not isinstance(exc, from_exc):  # type: ignore
+            if not isinstance(exc, from_exc):
                 continue
             if mapped_exc is None or issubclass(to_exc, mapped_exc):
                 mapped_exc = to_exc
@@ -340,7 +340,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             # requests (e.g. DELETE /responses/{id}), which upstream APIs reject.
             data = request.content or None
         except httpx.RequestNotRead:
-            data = request.stream  # type: ignore
+            data = request.stream
             request.headers.pop("transfer-encoding", None)  # handled by aiohttp
 
         # Only pass ssl kwarg when explicitly configured, to avoid

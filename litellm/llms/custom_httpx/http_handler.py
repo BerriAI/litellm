@@ -603,8 +603,8 @@ class AsyncHTTPHandler:
         response: Final = await self.client.get(
             url,
             params=params,
-            headers=headers,  # type: ignore
-            follow_redirects=_follow_redirects,  # type: ignore
+            headers=headers,
+            follow_redirects=_follow_redirects,
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
         return response
@@ -613,7 +613,7 @@ class AsyncHTTPHandler:
     async def post(
         self,
         url: str,
-        data: dict | str | bytes | None = None,  # type: ignore
+        data: dict | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -683,7 +683,7 @@ class AsyncHTTPHandler:
     async def put(
         self,
         url: str,
-        data: dict | str | bytes | None = None,  # type: ignore
+        data: dict | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -706,7 +706,7 @@ class AsyncHTTPHandler:
                 params=params,
                 headers=headers,
                 timeout=timeout,
-                content=request_content,  # type: ignore
+                content=request_content,
             )
             response: Final = await self.client.send(req)
             response.raise_for_status()
@@ -747,7 +747,7 @@ class AsyncHTTPHandler:
     async def patch(
         self,
         url: str,
-        data: dict | str | bytes | None = None,  # type: ignore
+        data: dict | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -770,7 +770,7 @@ class AsyncHTTPHandler:
                 params=params,
                 headers=headers,
                 timeout=timeout,
-                content=request_content,  # type: ignore
+                content=request_content,
             )
             response: Final = await self.client.send(req)
             response.raise_for_status()
@@ -811,7 +811,7 @@ class AsyncHTTPHandler:
     async def delete(
         self,
         url: str,
-        data: dict | str | bytes | None = None,  # type: ignore
+        data: dict | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -834,7 +834,7 @@ class AsyncHTTPHandler:
                 params=params,
                 headers=headers,
                 timeout=timeout,
-                content=request_content,  # type: ignore
+                content=request_content,
             )
             response: Final = await self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -863,7 +863,7 @@ class AsyncHTTPHandler:
         self,
         url: str,
         client: httpx.AsyncClient,
-        data: dict | str | bytes | None = None,  # type: ignore
+        data: dict | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -885,7 +885,7 @@ class AsyncHTTPHandler:
             json=json,
             params=params,
             headers=headers,
-            content=request_content,  # type: ignore
+            content=request_content,
         )
         response: Final = await client.send(req, stream=stream)
         response.raise_for_status()
@@ -1191,13 +1191,13 @@ class HTTPHandler:
                 req = self.client.build_request(
                     "POST",
                     url,
-                    data=request_data,  # type: ignore
+                    data=request_data,
                     json=json,
                     params=params,
                     headers=headers,
                     timeout=timeout,
                     files=files,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             else:
                 req = self.client.build_request(
@@ -1208,7 +1208,7 @@ class HTTPHandler:
                     params=params,
                     headers=headers,
                     files=files,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -1248,7 +1248,7 @@ class HTTPHandler:
                     params=params,
                     headers=headers,
                     timeout=timeout,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             else:
                 req = self.client.build_request(
@@ -1258,7 +1258,7 @@ class HTTPHandler:
                     json=json,
                     params=params,
                     headers=headers,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -1298,7 +1298,7 @@ class HTTPHandler:
                     params=params,
                     headers=headers,
                     timeout=timeout,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             else:
                 req = self.client.build_request(
@@ -1308,7 +1308,7 @@ class HTTPHandler:
                     json=json,
                     params=params,
                     headers=headers,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
             return response
@@ -1326,7 +1326,7 @@ class HTTPHandler:
     def delete(
         self,
         url: str,
-        data: dict | str | bytes | None = None,  # type: ignore
+        data: dict | str | bytes | None = None,
         json: dict | None = None,
         params: dict | None = None,
         headers: dict | None = None,
@@ -1347,7 +1347,7 @@ class HTTPHandler:
                     params=params,
                     headers=headers,
                     timeout=timeout,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             else:
                 req = self.client.build_request(
@@ -1357,7 +1357,7 @@ class HTTPHandler:
                     json=json,
                     params=params,
                     headers=headers,
-                    content=request_content,  # type: ignore
+                    content=request_content,
                 )
             response: Final = self.client.send(req, stream=stream)
             response.raise_for_status()

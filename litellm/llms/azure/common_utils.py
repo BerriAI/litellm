@@ -500,15 +500,15 @@ class BaseAzureLLM(BaseOpenAILLM):
             verbose_logger.debug("Using Azure v1 API with base_url: %s", v1_params["base_url"])
 
             if _is_async is True:
-                openai_client = AsyncOpenAI(**v1_params)  # type: ignore
+                openai_client = AsyncOpenAI(**v1_params)
             else:
-                openai_client = OpenAI(**v1_params)  # type: ignore
+                openai_client = OpenAI(**v1_params)
         else:
             # Traditional Azure API uses AzureOpenAI client
             if _is_async is True:
                 openai_client = AsyncAzureOpenAI(**azure_client_params)
             else:
-                openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
+                openai_client = AzureOpenAI(**azure_client_params)
 
         # save client in-memory cache
         self.set_cached_openai_client(
@@ -666,9 +666,9 @@ class BaseAzureLLM(BaseOpenAILLM):
                 azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
 
             if acompletion is True:
-                client = AsyncAzureOpenAI(**azure_client_params)  # type: ignore
+                client = AsyncAzureOpenAI(**azure_client_params)
             else:
-                client = AzureOpenAI(**azure_client_params)  # type: ignore
+                client = AzureOpenAI(**azure_client_params)
         return client
 
     @staticmethod
