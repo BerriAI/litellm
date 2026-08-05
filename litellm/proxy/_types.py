@@ -1,7 +1,7 @@
 import enum
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Union
 
@@ -2903,6 +2903,8 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     models: list[str] = []
     model_rpm_limit: dict | None = None
     model_tpm_limit: dict | None = None
+    model_itpm_limit: Mapping[str, int] | None = None
+    model_otpm_limit: Mapping[str, int] | None = None
     blocked: bool = False
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
@@ -2935,6 +2937,8 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     models: list[str] | None = None
     model_rpm_limit: dict | None = None
     model_tpm_limit: dict | None = None
+    model_itpm_limit: Mapping[str, int] | None = None
+    model_otpm_limit: Mapping[str, int] | None = None
     blocked: bool | None = None
     budget_id: str | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
@@ -4072,6 +4076,8 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "model_itpm_limit",
+    "model_otpm_limit",
     "mcp_rpm_limit",
     "tag_rpm_limit",
     "rpm_limit_type",
