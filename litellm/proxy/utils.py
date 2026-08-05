@@ -2104,6 +2104,7 @@ class ProxyLogging:
             original_exception=original_exception,
             error_type=error_type,
             route=user_api_key_dict.request_route,
+            team_id=user_api_key_dict.team_id,
         ):
             await self._handle_logging_proxy_only_error(
                 request_data=request_data,
@@ -2177,6 +2178,7 @@ class ProxyLogging:
         original_exception: Exception,
         error_type: ProxyErrorTypes | None = None,
         route: str | None = None,
+        team_id: str | None = None,
     ) -> bool:
         """
         Return True if the error is a Proxy Only LLM API Error
@@ -2195,10 +2197,15 @@ class ProxyLogging:
         # Note: This fixes a security issue where we
         #       would log temporary keys/auth info
         #       from management endpoints
+        # Info-route failures from UI session tokens are excluded:
+        # they are the dashboard polling itself with an expired
+        # session token, not API traffic worth a SpendLogs row.
         #########################################################
         if route is None:
             return False
-        if not (RouteChecks.is_llm_api_route(route) or RouteChecks.is_info_route(route)):
+        if not RouteChecks.should_log_proxy_failure_for_route(
+            route=route, team_id=team_id, original_exception=original_exception
+        ):
             return False
 
         return isinstance(original_exception, (HTTPException, ProxyException)) or (

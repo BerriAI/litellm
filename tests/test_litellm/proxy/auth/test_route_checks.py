@@ -3192,3 +3192,117 @@ def test_internal_user_blocked_from_search_tool_writes(route):
     assert "Only proxy admin" in str(exc_info.value)
     assert f"Route={route}" in str(exc_info.value)
     assert "Your role=internal_user" in str(exc_info.value)
+
+
+def _expired_key_exc() -> Exception:
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    return ProxyException(
+        message="Authentication Error - Expired Key.",
+        type=ProxyErrorTypes.expired_key,
+        param="sk-...abcd",
+        code=401,
+    )
+
+
+def test_should_log_proxy_failure_for_route_ui_session_token():
+    """Expired-key failures from the UI session token on info routes are the
+    dashboard polling itself with a dead session token — they must not reach
+    the failure-logging paths. The same routes stay logged for regular keys,
+    and LLM API routes stay logged for everyone, including the UI session
+    token (playground test calls)."""
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    # info route + UI session token + expired key -> suppressed
+    assert (
+        RouteChecks.should_log_proxy_failure_for_route(
+            route="/key/list",
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+            original_exception=_expired_key_exc(),
+        )
+        is False
+    )
+    # info route + regular team -> logged
+    assert (
+        RouteChecks.should_log_proxy_failure_for_route(
+            route="/key/list", team_id="my-team", original_exception=_expired_key_exc()
+        )
+        is True
+    )
+    # info route + unresolved team (e.g. garbage key) -> logged
+    assert (
+        RouteChecks.should_log_proxy_failure_for_route(
+            route="/key/list", team_id=None, original_exception=_expired_key_exc()
+        )
+        is True
+    )
+    # LLM API route + UI session token (playground) -> logged
+    assert (
+        RouteChecks.should_log_proxy_failure_for_route(
+            route="/chat/completions",
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+            original_exception=_expired_key_exc(),
+        )
+        is True
+    )
+    # management route -> never logged, regardless of team
+    assert (
+        RouteChecks.should_log_proxy_failure_for_route(
+            route="/key/generate", team_id="my-team"
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize("route", ["/models", "/v1/models"])
+def test_should_log_proxy_failure_overlapping_model_routes(route):
+    """``/models`` and ``/v1/models`` are in BOTH info_routes and the LLM API
+    route set, and the dashboard polls them. The info-route branch must be
+    evaluated first, or the UI-session exclusion never applies to them."""
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    assert (
+        RouteChecks.should_log_proxy_failure_for_route(
+            route=route,
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+            original_exception=_expired_key_exc(),
+        )
+        is False
+    )
+    # still logged for a regular key on the same route
+    assert (
+        RouteChecks.should_log_proxy_failure_for_route(
+            route=route, team_id="my-team", original_exception=_expired_key_exc()
+        )
+        is True
+    )
+
+
+def test_should_log_proxy_failure_ui_session_non_expiry_failures_still_logged():
+    """Only the expired-key failure is suppressed. A live UI session hitting
+    an authorization denial / rate limit / guardrail block on an info route
+    must still leave an audit trail."""
+    from fastapi import HTTPException
+
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    for exc in (
+        HTTPException(status_code=401, detail="Authentication Error"),
+        ProxyException(
+            message="Rate limit",
+            type=ProxyErrorTypes.budget_exceeded,
+            param=None,
+            code=429,
+        ),
+        Exception("Key is blocked. Update via `/key/unblock` if you're an admin."),
+        None,
+    ):
+        assert (
+            RouteChecks.should_log_proxy_failure_for_route(
+                route="/key/list",
+                team_id=UI_SESSION_TOKEN_TEAM_ID,
+                original_exception=exc,
+            )
+            is True
+        )

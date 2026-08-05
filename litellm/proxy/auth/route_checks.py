@@ -4,12 +4,15 @@ from typing import Final
 from fastapi import HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import (
     CommonProxyErrors,
     KeyManagementRoutes,
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
     UserAPIKeyAuth,
 )
 
@@ -438,6 +441,46 @@ class RouteChecks:
         Check if route is an info route
         """
         return route in LiteLLMRoutes.info_routes.value
+
+    @staticmethod
+    def should_log_proxy_failure_for_route(
+        route: str,
+        team_id: str | None = None,
+        original_exception: Exception | None = None,
+    ) -> bool:
+        """
+        Whether a proxy-gate failure (auth error, rate limit, guardrail block)
+        on this route should reach the failure-logging paths — the SpendLogs
+        DB row and the failure callbacks.
+
+        - Info routes (checked first — ``/models``/``/v1/models`` are also LLM
+          API routes, and the exclusion below must apply to them too): log,
+          EXCEPT expired-key failures from UI session tokens
+          (``team_id == UI_SESSION_TOKEN_TEAM_ID``). The dashboard polls info
+          routes (``/key/list``, ``/user/info``, ``/models``, ...) with its
+          session token; once that token expires, every open browser tab keeps
+          replaying it, and each 401 used to be written to SpendLogs as an LLM
+          request carrying a session id — noise that reads as key abuse. Other
+          failure types (authorization denials, rate limits, guardrail blocks)
+          from UI sessions stay logged, so a live low-privilege session probing
+          info routes still leaves an audit trail.
+        - LLM API routes: always log.
+        - Anything else (management endpoints): never log, so temporary
+          keys/auth info can't leak into logs.
+        """
+        if RouteChecks.is_info_route(route=route):
+            if team_id == UI_SESSION_TOKEN_TEAM_ID and RouteChecks._is_expired_key_error(original_exception):
+                return False
+            return True
+        if RouteChecks.is_llm_api_route(route=route):
+            return True
+        return False
+
+    @staticmethod
+    def _is_expired_key_error(e: Exception | None) -> bool:
+        """True if ``e`` is the typed expired-key auth failure raised by
+        ``user_api_key_auth`` (``ProxyErrorTypes.expired_key``)."""
+        return isinstance(e, ProxyException) and e.type == ProxyErrorTypes.expired_key
 
     @staticmethod
     def _is_azure_openai_route(route: str) -> bool:

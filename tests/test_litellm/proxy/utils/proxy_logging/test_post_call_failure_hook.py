@@ -64,6 +64,66 @@ def test_is_proxy_only_llm_api_missing_exception_raises(proxy_logging):
         proxy_logging._is_proxy_only_llm_api_error()  # type: ignore[call-arg]
 
 
+def test_is_proxy_only_llm_api_ui_session_token(proxy_logging):
+    """Expired-key failures from UI session tokens on info routes are the
+    dashboard polling itself with a dead session token — they must not be
+    handed to the failure-logging paths (they used to land in SpendLogs typed
+    as LLM requests). Regular keys on info routes, the UI session token on LLM
+    routes (playground), the overlapping ``/models`` route, and non-expiry
+    failure types all keep logging."""
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy._types import ProxyException
+
+    expired = ProxyException(
+        message="Authentication Error - Expired Key.",
+        type=ProxyErrorTypes.expired_key,
+        param="sk-...abcd",
+        code=401,
+    )
+
+    snapshot = {
+        "ui_session_info_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=expired,
+            error_type=ProxyErrorTypes.auth_error,
+            route="/key/list",
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+        ),
+        # /models is in BOTH info_routes and the LLM route set
+        "ui_session_models_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=expired,
+            error_type=ProxyErrorTypes.auth_error,
+            route="/models",
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+        ),
+        "regular_key_info_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=expired,
+            error_type=ProxyErrorTypes.auth_error,
+            route="/key/list",
+            team_id="my-team",
+        ),
+        "ui_session_llm_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=expired,
+            error_type=ProxyErrorTypes.auth_error,
+            route="/chat/completions",
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+        ),
+        # a live UI session denied on an info route still gets logged
+        "ui_session_non_expiry_failure": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=HTTPException(status_code=401, detail="denied"),
+            error_type=ProxyErrorTypes.auth_error,
+            route="/key/list",
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+        ),
+    }
+    assert snapshot == {
+        "ui_session_info_route": False,
+        "ui_session_models_route": False,
+        "regular_key_info_route": True,
+        "ui_session_llm_route": True,
+        "ui_session_non_expiry_failure": True,
+    }
+
+
 # ---------------------------------------------------------------------------
 # post_call_failure_hook
 # ---------------------------------------------------------------------------
