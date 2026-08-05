@@ -746,7 +746,7 @@ class TestSingletonMutation:
     def test_default_config_not_mutated(self, mock_router_instance):
         """Test that creating routers without config doesn't mutate defaults."""
         from litellm.router_strategy.complexity_router.config import (
-    DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+            DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
             ComplexityRouterConfig,
         )
 
@@ -4050,18 +4050,14 @@ class TestRoutingDecisionIsPerAttempt:
         {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}},
     ]
 
-    @pytest.mark.parametrize(
-        "seed, bucket", [({}, "metadata"), ({"litellm_metadata": {}}, "litellm_metadata")]
-    )
+    @pytest.mark.parametrize("seed, bucket", [({}, "metadata"), ({"litellm_metadata": {}}, "litellm_metadata")])
     @pytest.mark.asyncio
     async def test_fallback_to_plain_model_group_clears_the_earlier_decision(self, seed, bucket):
         router = Router(model_list=self.MODEL_LIST)
         request_kwargs: Dict = dict(seed)
         messages = [{"role": "user", "content": "Hello!"}]
 
-        await router.async_pre_routing_hook(
-            model="smart-router", request_kwargs=request_kwargs, messages=messages
-        )
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=request_kwargs, messages=messages)
         assert "routing_decision" in request_kwargs[bucket]
 
         # The fallback attempt reuses the same kwargs and selects no strategy.
@@ -4112,7 +4108,6 @@ class TestRecordRoutingDecision:
         request_kwargs: Dict = {}
         Router._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
         assert request_kwargs == {}
-
 
     def test_clearing_the_decision_takes_the_savings_facts_with_it(self):
         """A fallback to a plain model group re-enters the hook with the same
@@ -4393,7 +4388,12 @@ class TestContextAwareClassifier:
                 id="multiple-reminders-stripped",
             ),
             pytest.param(
-                [{"role": "user", "content": [{"type": "text", "text": _REMINDER}, {"type": "text", "text": "and now?"}]}],
+                [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": _REMINDER}, {"type": "text", "text": "and now?"}],
+                    }
+                ],
                 "and now?",
                 id="reminder-in-its-own-content-part",
             ),
@@ -4780,9 +4780,7 @@ class TestContextAwareClassifier:
         assert reported > 100
 
     @pytest.mark.asyncio
-    async def test_no_trajectory_signal_when_request_had_no_messages(
-        self, llm_complexity_router, mock_router_instance
-    ):
+    async def test_no_trajectory_signal_when_request_had_no_messages(self, llm_complexity_router, mock_router_instance):
         """On the prompt-only path there is no conversation to measure, so the depth line is omitted
         rather than asserting a false "~0 tokens" to the classifier."""
         mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
@@ -4794,9 +4792,7 @@ class TestContextAwareClassifier:
         assert "what is 2+2" in user_payload
 
     @pytest.mark.asyncio
-    async def test_single_turn_request_sends_no_conversation_context(
-        self, llm_complexity_router, mock_router_instance
-    ):
+    async def test_single_turn_request_sends_no_conversation_context(self, llm_complexity_router, mock_router_instance):
         """A single-turn request carries no conversation, so the classifier sees only the ask.
 
         Found in QA: the depth line gated on `messages` being non-empty, so single-turn requests got a
@@ -4846,7 +4842,6 @@ class TestContextAwareClassifier:
         assert "sharding strategy" not in user_payload
         assert user_payload.strip() == "Classify this message:\nwhat is 2+2"
 
-
     @pytest.mark.asyncio
     @pytest.mark.parametrize("include_assistant,plan_is_quoted", [(True, True), (False, False)])
     async def test_assistant_turn_carrying_the_difficulty_reaches_the_classifier(
@@ -4887,7 +4882,6 @@ class TestContextAwareClassifier:
         assert (f"[1] user: {ask}" in user_payload) is plan_is_quoted
         assert (f"[1] {ask}" in user_payload) is not plan_is_quoted
         assert user_payload.endswith("Classify this message:\nyes.")
-
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("include_assistant", [True, False])
@@ -5010,9 +5004,6 @@ class TestClassifierTrustBoundary:
         assert hostile not in system_message["content"]
         assert hostile in user_message["content"]
 
-
-
-
     @pytest.mark.parametrize(
         "window_size,conversation_is_quoted",
         [
@@ -5038,7 +5029,6 @@ class TestClassifierTrustBoundary:
         assert ("using the earlier turns quoted above it as context" in system_prompt) is conversation_is_quoted
         assert ('short reply such as "yes" or "continue"' in system_prompt) is conversation_is_quoted
         assert ("Classify only the current message" in system_prompt) is not conversation_is_quoted
-
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("include_assistant", [True, False])
@@ -5209,7 +5199,10 @@ class TestConversationShapeDiscriminator:
     def test_a_system_prompt_does_not_make_a_first_turn_look_continued(self):
         from litellm.router_strategy.complexity_router.complexity_router import _conversation_is_continuing
 
-        assert _conversation_is_continuing([{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}]) is False
+        assert (
+            _conversation_is_continuing([{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}])
+            is False
+        )
 
     def test_unreadable_messages_stay_conservative(self):
         """No messages says nothing about the baseline's cache, so it keeps charging the
@@ -5233,5 +5226,62 @@ class TestConversationShapeDiscriminator:
         )
         builds = source.split("self._build_routing_decision(")[1:]
         assert builds
-        missing = [i for i, block in enumerate(builds) if "conversation_continuing=conversation_continuing" not in block.split("),")[0]]
+        missing = [
+            i
+            for i, block in enumerate(builds)
+            if "conversation_continuing=conversation_continuing" not in block.split("),")[0]
+        ]
         assert not missing, f"routing decisions {missing} do not carry the conversation shape"
+
+
+class TestSavingsBaselineOnDecision:
+    """The derived counterfactual rides on every routing decision.
+
+    The deciding instance records it because one model name can carry several
+    tag-scoped routers with different tier ladders, and by spend-write time which
+    of them routed the request is gone.
+    """
+
+    @staticmethod
+    def _router_with_tiers(tiers: dict) -> ComplexityRouter:
+        parent = Router(
+            model_list=[
+                {"model_name": "cheap", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
+                {"model_name": "mid", "litellm_params": {"model": "anthropic/claude-sonnet-5"}},
+                {"model_name": "top", "litellm_params": {"model": "anthropic/claude-fable-5"}},
+            ]
+        )
+        return ComplexityRouter(
+            model_name="savings-router",
+            litellm_router_instance=parent,
+            complexity_router_config={"tiers": tiers},
+        )
+
+    def test_derives_the_priciest_model_of_the_reasoning_tier(self):
+        router = self._router_with_tiers({"SIMPLE": "cheap", "MEDIUM": "mid", "REASONING": ["cheap", "top"]})
+        assert router.savings_baseline_model == "anthropic/claude-fable-5"
+
+    def test_falls_back_to_the_hardest_configured_tier_when_reasoning_is_absent(self):
+        """A deployment that only defines SIMPLE and MEDIUM is still measured against
+        the best it could actually have picked, not a tier it never had."""
+        router = self._router_with_tiers({"SIMPLE": "cheap", "MEDIUM": "mid"})
+        assert router.savings_baseline_model == "anthropic/claude-sonnet-5"
+
+    def test_a_configured_proxy_wide_baseline_disables_derivation(self, monkeypatch):
+        """When the operator names the counterfactual, deriving one underneath would
+        price candidates per decision only to be ignored by the spend writer."""
+        monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", "claude-opus-5")
+        router = self._router_with_tiers({"SIMPLE": "cheap", "REASONING": "top"})
+        assert router.savings_baseline_model is None
+
+    def test_the_decision_record_carries_the_derived_baseline(self):
+        router = self._router_with_tiers({"SIMPLE": "cheap", "REASONING": "top"})
+        decision = router._build_routing_decision(routed_model="cheap", cause="heuristic_scorer")
+        assert decision["savings_baseline_model"] == "anthropic/claude-fable-5"
+
+    def test_an_unresolvable_baseline_is_omitted_not_recorded_as_none(self):
+        """A key with a null value would survive JSON serialization and reach the spend
+        writer as a non-string, so nothing beats absence."""
+        router = self._router_with_tiers({"SIMPLE": "utter-nonsense-no-provider-owns"})
+        decision = router._build_routing_decision(routed_model="cheap", cause="heuristic_scorer")
+        assert "savings_baseline_model" not in decision

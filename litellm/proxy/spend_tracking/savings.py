@@ -410,13 +410,18 @@ def compute_savings_spend(
     if usage is None or not model:
         return SavingsSpend(compression=compression, prompt_caching=prompt_caching)
 
-    # The counterfactual is one model an operator would have run instead of the router,
-    # configured once for the proxy rather than derived per request. Unset means the
-    # driver is off; a routing decision is what says this request was auto-routed at all.
-    # Both are checked before anything is resolved, because every spend write reaches
-    # here and only auto-routed ones can produce a number.
-    baseline_model: Final = litellm.autorouter_savings_baseline_model
+    # The counterfactual is one model an operator would have run instead of the router.
+    # `litellm_settings.autorouter_savings_baseline_model` wins when set; otherwise the
+    # baseline the deciding router derived from its hardest tier and recorded on its
+    # decision, so the driver is on by default for auto-routed traffic. Neither present
+    # means the driver is off; a routing decision is what says this request was
+    # auto-routed at all. Both are checked before anything is resolved, because every
+    # spend write reaches here and only auto-routed ones can produce a number.
     decision: Final = routing_decision if isinstance(routing_decision, Mapping) else {}
+    recorded: Final = decision.get("savings_baseline_model")
+    baseline_model: Final = litellm.autorouter_savings_baseline_model or (
+        recorded if isinstance(recorded, str) else None
+    )
     autorouter: Final = (
         compute_autorouter_savings(
             baseline_model=baseline_model,

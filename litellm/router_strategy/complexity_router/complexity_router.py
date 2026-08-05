@@ -477,6 +477,37 @@ class ComplexityRouter(CustomLogger):
 
         verbose_router_logger.debug("ComplexityRouter initialized for %s with tiers: %s", model_name, self.config.tiers)
 
+    def _hardest_tier_models(self) -> tuple[str, ...]:
+        """The model pool of the most severe tier this router configures.
+
+        The hardest *configured* tier, not REASONING unconditionally: a deployment
+        that only defines SIMPLE and MEDIUM is still measured against the best it
+        could actually have picked.
+        """
+        for tier in reversed(TIER_SEVERITY_ORDER):
+            models = self.config.tiers.get(tier.value)
+            if models:
+                return tuple(models) if isinstance(models, list) else (models,)
+        return ()
+
+    @property
+    def savings_baseline_model(self) -> str | None:
+        """The derived model this router's savings are measured against, or ``None``.
+
+        ``None`` whenever `litellm_settings.autorouter_savings_baseline_model` is set:
+        the spend writer reads that setting directly and it overrides anything a router
+        would derive, so deriving underneath it would price candidates per decision
+        only to be ignored. The property re-checks the setting per call because it is a
+        module attribute an operator can flip on a running proxy.
+        """
+        import litellm
+        from litellm.router_strategy.savings_baseline import resolve_baseline
+
+        if litellm.autorouter_savings_baseline_model is not None:
+            return None
+        baseline: Final = resolve_baseline(self.litellm_router_instance, self._hardest_tier_models())
+        return baseline.model if baseline is not None else None
+
     def _estimate_tokens(self, text: str) -> int:
         """
         Estimate token count from text.
@@ -716,6 +747,11 @@ class ComplexityRouter(CustomLogger):
             cause=cause,
             conversation_continuing=conversation_continuing,
         )
+        # Recorded here rather than resolved at spend-write time: one model name can
+        # carry several tag-scoped routers with different tier ladders, and only the
+        # deciding instance knows which of them routed the request.
+        if (baseline := self.savings_baseline_model) is not None:
+            decision["savings_baseline_model"] = baseline
         if tier is not None:
             decision["tier"] = tier.value
         if score is not None:
