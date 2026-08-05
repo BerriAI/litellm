@@ -271,6 +271,81 @@ async def test_get_current_spend_floors_window_against_spend_logs(monkeypatch):
     )
 
 
+def _make_window_spend_prisma(row=None, spend_logs_total=0.0):
+    prisma = MagicMock()
+    prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=row)
+    prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[{"api_key": "tok", "_sum": {"spend": spend_logs_total}}]
+    )
+    return prisma
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_floors_window_against_maintained_row(monkeypatch):
+    """The floor re-check runs every few seconds per pod, so the window branch
+    must read the maintained row and leave the unindexed spend-logs scan alone."""
+    from datetime import timezone
+    from types import SimpleNamespace
+
+    window_start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    fake_prisma = _make_window_spend_prisma(
+        row=SimpleNamespace(window_start=window_start, spend=15.0),
+        spend_logs_total=100.0,
+    )
+    fake_cache = _make_spend_counter_cache(redis_get_value=2.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+
+    counter_key = "spend:key:tok:window:7d"
+    result = await ps.get_current_spend(
+        counter_key=counter_key,
+        fallback_spend=0.0,
+        max_budget=10.0,
+        window_entity_type="Key",
+        window_entity_id="tok",
+        window_duration="7d",
+        window_start=window_start,
+    )
+
+    assert result == 15.0
+    fake_prisma.db.litellm_spendlogs.group_by.assert_not_awaited()
+    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
+        key=counter_key, value=15.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_floors_window_against_logs_when_row_stale(monkeypatch):
+    """A row left behind at a crossed window boundary must not be read as the
+    current window's spend; the aggregate stays the fallback."""
+    from datetime import timedelta, timezone
+    from types import SimpleNamespace
+
+    window_start = datetime(2026, 1, 8, tzinfo=timezone.utc)
+    fake_prisma = _make_window_spend_prisma(
+        row=SimpleNamespace(
+            window_start=window_start - timedelta(days=7), spend=999.0
+        ),
+        spend_logs_total=15.0,
+    )
+    fake_cache = _make_spend_counter_cache(redis_get_value=2.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:tok:window:7d",
+        fallback_spend=0.0,
+        max_budget=10.0,
+        window_entity_type="Key",
+        window_entity_id="tok",
+        window_duration="7d",
+        window_start=window_start,
+    )
+
+    assert result == 15.0
+    fake_prisma.db.litellm_spendlogs.group_by.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_get_current_spend_fail_closed_rejects_when_unverifiable(monkeypatch):
     """With fail_closed_budget_enforcement on, an admit decision backed only by a
@@ -895,6 +970,7 @@ async def test_init_and_increment_window_spend_counter_increments_when_initializ
         counter_key="spend:key:k:window:1d",
         entity_type="Key",
         entity_id="k",
+        window_duration="1d",
         window_start=datetime(2024, 1, 1),
         increment=5.0,
     )
@@ -922,6 +998,7 @@ async def test_init_and_increment_window_spend_counter_missing_window_start_inva
         counter_key="spend:key:k:window:1d",
         entity_type="Key",
         entity_id="k",
+        window_duration="1d",
         window_start=None,
         increment=5.0,
     )
@@ -1059,6 +1136,7 @@ async def test_ensure_window_spend_counter_initialized_warm_returns_true(monkeyp
         counter_key="spend:key:k:window:1d",
         entity_type="Key",
         entity_id="k",
+        window_duration="1d",
         window_start=datetime(2024, 1, 1),
     )
 
@@ -1091,6 +1169,7 @@ async def test_ensure_window_spend_counter_initialized_db_failure_invalid_return
         counter_key="spend:key:k:window:1d",
         entity_type="Key",
         entity_id="k",
+        window_duration="1d",
         window_start=datetime(2024, 1, 1),
     )
 

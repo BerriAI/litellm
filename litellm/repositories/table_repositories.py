@@ -62,6 +62,10 @@ class SpendLogsRepository(PrismaTableRepository):
     table_name = "litellm_spendlogs"
 
 
+class BudgetWindowSpendRepository(PrismaTableRepository):
+    table_name = "litellm_budgetwindowspend"
+
+
 class ClaudeCodePluginRepository(PrismaTableRepository):
     table_name = "litellm_claudecodeplugintable"
 
