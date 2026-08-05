@@ -42,13 +42,9 @@ def _drive_to_team_block(client: BudgetClient, key: str, team_id: str) -> None:
     pytest.fail(f"team model_max_budget on {CAPPED_MODEL} never enforced")
 
 
-# User flow (TLDR^2)
-# 1. Admin caps claude-haiku tiny on the team, leaves gemini roomy
-# 2. Alice's team key burns through the claude cap
-# 3. Bob's untouched team key is refused claude on its first try
-# 4. Bob's same key still gets gemini answers
 @pytest.mark.covers("quota_management.budget.team_model_max.enforced_across_keys")
 def test_team_model_cap_blocks_sibling_key(client: BudgetClient, resources: ResourceManager) -> None:
+    # Step 0: admin creates the team (claude capped tiny, gemini roomy) and two plain team keys
     team_id = client.create_team(
         alias=f"e2e-team-model-max-{unique_marker()}",
         model_max_budget={
@@ -62,8 +58,10 @@ def test_team_model_cap_blocks_sibling_key(client: BudgetClient, resources: Reso
     bystander = client.generate_key(team_id=team_id)
     resources.defer(lambda: client.delete_key(bystander))
 
+    # Step 1: Alice's key burns through the claude cap
     _drive_to_team_block(client, spender, team_id)
 
+    # Step 2: Bob's untouched key is refused claude on its first try
     first = _call(client, bystander, CAPPED_MODEL)
     assert is_budget_block(first), (
         f"sibling team key served {CAPPED_MODEL} after the team cap was exhausted: "
@@ -71,19 +69,15 @@ def test_team_model_cap_blocks_sibling_key(client: BudgetClient, resources: Reso
     )
     _assert_team_model_block(first, team_id)
 
+    # Step 3: Bob's same key still gets gemini answers
     other = _call(client, bystander, FREE_MODEL)
     assert not is_budget_block(other), f"{FREE_MODEL} was blocked by {CAPPED_MODEL}'s team cap: {other.body}"
     require_successful_call(other)
 
 
-# User flow (TLDR^2)
-# 1. Admin caps claude-haiku tiny on the team
-# 2. Admin issues Carol a team key with its own big claude budget
-# 3. Carol keeps getting claude answers past the team cap
-# 4. Dave's plain key still starts fresh: Carol spent none of the team cap
-# 5. Dave's own claude use then exhausts the team cap and is refused
 @pytest.mark.covers("quota_management.budget.team_model_max.key_override_wins")
 def test_key_override_exempts_from_team_cap(client: BudgetClient, resources: ResourceManager) -> None:
+    # Step 0: admin creates the capped team, Carol's key with its own big claude budget, Dave's plain key
     team_id = client.create_team(
         alias=f"e2e-team-model-max-override-{unique_marker()}",
         model_max_budget=model_budget(CAPPED_MODEL, 1e-6),
@@ -94,6 +88,7 @@ def test_key_override_exempts_from_team_cap(client: BudgetClient, resources: Res
     plain = client.generate_key(team_id=team_id)
     resources.defer(lambda: client.delete_key(plain))
 
+    # Step 1: Carol keeps getting claude answers past the team cap
     require_successful_call(_call(client, override, CAPPED_MODEL))
     time.sleep(SPEND_FLUSH_SECONDS)
     second = _call(client, override, CAPPED_MODEL)
@@ -101,8 +96,10 @@ def test_key_override_exempts_from_team_cap(client: BudgetClient, resources: Res
     require_successful_call(second)
     time.sleep(SPEND_FLUSH_SECONDS)
 
+    # Step 2: Dave's first claude call still succeeds; Carol spent none of the team cap
     fresh = _call(client, plain, CAPPED_MODEL)
     assert not is_budget_block(fresh), f"override key's spend drove the shared team counter: {fresh.body}"
     require_successful_call(fresh)
 
+    # Step 3: Dave's own claude use exhausts the team cap and is refused
     _drive_to_team_block(client, plain, team_id)
