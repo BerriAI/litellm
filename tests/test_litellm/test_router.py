@@ -6021,16 +6021,16 @@ def test_initialize_deployment_for_pass_through_keeps_bedrock_iam_deployment():
     ]
 
 
-def test_initialize_deployment_for_pass_through_sets_credentials_with_api_key():
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-        passthrough_endpoint_router,
+def test_pass_through_deployment_api_key_resolves_via_get_credentials():
+    from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+        PassthroughEndpointRouter,
     )
 
-    passthrough_endpoint_router.credentials.clear()
     router = _router_with_two_pass_through_deployments([False, False])
+    passthrough_router = PassthroughEndpointRouter(llm_router_getter=lambda: router)
     assert len(router.get_model_list()) == 2
     assert (
-        passthrough_endpoint_router.get_credentials(
+        passthrough_router.get_credentials(
             custom_llm_provider="openai", region_name=None
         )
         == "sk-fake-for-tests"
@@ -7194,3 +7194,97 @@ def test_model_info_is_active_for_environment_matrix(monkeypatch):
     monkeypatch.delenv("LITELLM_ENVIRONMENT")
     with pytest.raises(ValueError, match="LITELLM_ENVIRONMENT"):
         model_info_is_active_for_environment(model_info={"supported_environments": ["production"]})
+
+
+def test_pre_call_checks_uses_deployment_model_when_model_info_lookup_raises(monkeypatch):
+    """
+    The supported-params check must run against the deployment's own
+    provider-qualified model. Resolving the per-deployment model only after the
+    model-info lookup leaves it unset whenever that lookup raises (an
+    unregistered custom model), so the check falls back to the bare model group
+    name and the request dies with 'LLM Provider NOT provided'.
+    """
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "custom-alias",
+                "litellm_params": {"model": "hosted_vllm/not-in-the-catalog"},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    def _raise_unmapped(**kwargs):
+        raise ValueError("This model isn't mapped yet")
+
+    monkeypatch.setattr(router, "get_router_model_info", _raise_unmapped)
+
+    seen: list[tuple] = []
+    original_get_supported_openai_params = litellm.get_supported_openai_params
+
+    def _record(model, custom_llm_provider=None, **kwargs):
+        seen.append((model, custom_llm_provider))
+        return original_get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider, **kwargs)
+
+    monkeypatch.setattr(litellm, "get_supported_openai_params", _record)
+
+    deployments = [
+        {
+            "litellm_params": {"model": "hosted_vllm/not-in-the-catalog"},
+            "model_info": {"id": "d1"},
+        }
+    ]
+    result = router._pre_call_checks(
+        model="custom-alias",
+        healthy_deployments=deployments,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={},
+    )
+
+    assert len(result) == 1
+    assert seen == [("not-in-the-catalog", "hosted_vllm")]
+
+
+def test_pre_call_checks_keeps_deployment_when_provider_is_unresolvable(monkeypatch):
+    """
+    Pre-call checks filter deployments; they must never be the thing that fails
+    a request. A deployment whose provider cannot be resolved simply skips the
+    supported-params check instead of raising out of deployment selection.
+    """
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "custom-alias",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    def _raise_no_provider(**kwargs):
+        raise litellm.BadRequestError(
+            message="LLM Provider NOT provided.",
+            model="custom-alias",
+            llm_provider="",
+        )
+
+    monkeypatch.setattr(litellm, "get_llm_provider", _raise_no_provider)
+
+    deployments = [
+        {
+            "litellm_params": {"model": "some-unresolvable-model"},
+            "model_info": {"id": "d1"},
+        }
+    ]
+    result = router._pre_call_checks(
+        model="custom-alias",
+        healthy_deployments=deployments,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={},
+    )
+
+    assert len(result) == 1

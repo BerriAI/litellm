@@ -4329,6 +4329,81 @@ class TestPriceDataReloadIntegration:
         mock_prisma.db.litellm_config.update_many.assert_not_called()
         mock_prisma.db.litellm_config.upsert.assert_not_called()
 
+    def test_scheduled_reload_replays_runtime_registrations(self):
+        """The scheduled reload is the trigger a pod hits on its own, so it must
+        both preserve runtime-registered model metadata and run to completion.
+        The swap happens early in the handler, so a failure in the bookkeeping
+        after it is swallowed by the surrounding except and would otherwise
+        leave the metadata correct while the path is quietly broken"""
+        from litellm import utils as litellm_utils
+        from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
+        proxy_config.model_cost_map_loaded_at = frozen_now - timedelta(hours=9)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+            return_value=_reload_schedule_row({"interval_hours": 6}, reload_revision=7)
+        )
+        mock_prisma.db.litellm_config.update_many = AsyncMock(return_value=None)
+
+        original_model_cost = litellm.model_cost
+        original_registry = dict(litellm_utils._runtime_registered_model_cost)
+        try:
+            litellm.register_model(
+                model_cost={"custom/deployment-model": {"litellm_provider": "custom", "max_input_tokens": 4321}}
+            )
+
+            with (
+                patch(
+                    "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+                    new=AsyncMock(
+                        return_value=ModelCostMapReloaded(
+                            model_cost_map={"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}}
+                        )
+                    ),
+                ),
+                patch("litellm.proxy.proxy_server.utc_now", return_value=frozen_now),
+                patch("litellm.proxy.proxy_server.verbose_proxy_logger") as mock_logger,
+            ):
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+            mock_logger.exception.assert_not_called()
+            assert litellm.model_cost["custom/deployment-model"]["max_input_tokens"] == 4321
+            assert "gpt-4o" in litellm.model_cost
+            assert proxy_config.model_cost_map_applied_revision == 7
+        finally:
+            litellm.model_cost = original_model_cost
+            litellm_utils._runtime_registered_model_cost.clear()
+            litellm_utils._runtime_registered_model_cost.update(original_registry)
+            _invalidate_model_cost_lowercase_map()
+
+    def test_swap_in_model_cost_map_counts_the_fetched_catalog_only(self):
+        """The count the reload endpoints report describes the price data, so it
+        is taken before the runtime registrations are written back into the same
+        dict. Counting after would inflate it by however many deployments and
+        overrides this pod happens to be carrying"""
+        from litellm import utils as litellm_utils
+        from litellm.proxy.proxy_server import _swap_in_model_cost_map
+
+        original_model_cost = litellm.model_cost
+        original_registry = dict(litellm_utils._runtime_registered_model_cost)
+        try:
+            litellm.register_model(
+                model_cost={"custom/deployment-model": {"litellm_provider": "custom", "max_input_tokens": 4321}}
+            )
+
+            models_count = _swap_in_model_cost_map({"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}})
+
+            assert models_count == 1
+            assert litellm.model_cost["custom/deployment-model"]["max_input_tokens"] == 4321
+        finally:
+            litellm.model_cost = original_model_cost
+            litellm_utils._runtime_registered_model_cost.clear()
+            litellm_utils._runtime_registered_model_cost.update(original_registry)
+            _invalidate_model_cost_lowercase_map()
+
     def test_manual_reload_preserves_interval_hours(self):
         """
         Regression: manual reload owns only the run columns, so it never reads or rewrites

@@ -22,9 +22,14 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.router_strategy.complexity_router.complexity_router import (
+    _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
+    _CLASSIFICATION_WITH_CONVERSATION,
+    TIER_SEVERITY_ORDER_LABELED,
     ComplexityRouter,
     DimensionScore,
     KeywordOverride,
+    _classification_system_rubric,
+    classification_system_prompt,
 )
 from litellm.router_strategy.complexity_router.config import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
@@ -2398,6 +2403,84 @@ class TestLexicalKeywordTierRules:
             tier=ComplexityTier.REASONING, matched_keyword="k8s"
         )
         assert router._lexical_tier_override("what is a k8scluster thing") is None
+
+
+class TestCjkKeywordTierRules:
+    """CJK keyword_tier_rules must fire mid-sentence, where regex word boundaries cannot."""
+
+    def _router(self, mock_router_instance, basic_config, keywords: List[str]) -> ComplexityRouter:
+        return ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "keyword_tier_rules": [{"keywords": keywords, "tier": "REASONING"}],
+            },
+        )
+
+    @pytest.mark.parametrize(
+        "keyword, prompt",
+        [
+            ("发票", "我需要开发票"),
+            ("退款", "我要退款，谢谢"),
+            ("账单查询", "我的账单查询怎么做"),
+            ("API文档", "请问在哪里看API文档"),
+            ("請求", "這個請求要怎麼處理"),
+            ("見積", "見積をお願いします"),
+            ("キャンセル", "注文をキャンセルしたい"),
+            ("\U00030000", "这个\U00030000很少见"),
+        ],
+    )
+    def test_cjk_keyword_matches_without_surrounding_whitespace(
+        self, mock_router_instance, basic_config, keyword, prompt
+    ):
+        """CJK is written without spaces, so `\\b<kw>\\b` never fires between two CJK characters."""
+        router = self._router(mock_router_instance, basic_config, [keyword])
+        assert router._lexical_tier_override(prompt) == KeywordOverride(
+            tier=ComplexityTier.REASONING, matched_keyword=keyword
+        )
+
+    def test_cjk_keyword_does_not_match_unrelated_prompt(self, mock_router_instance, basic_config):
+        """Substring matching must still be a real test, not a match-all."""
+        router = self._router(mock_router_instance, basic_config, ["发票"])
+        assert router._lexical_tier_override("我想查一下订单状态") is None
+
+    @pytest.mark.asyncio
+    async def test_cjk_keyword_overrides_scoring_end_to_end(self, mock_router_instance, basic_config):
+        """The whole hook, not just the matcher: a Chinese prompt reaches the tier it was mapped to."""
+        prompt = "我需要开发票"
+        router = self._router(mock_router_instance, basic_config, ["发票"])
+        scored_tier, _, _ = router.classify(prompt)
+        assert scored_tier != ComplexityTier.REASONING
+
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        assert result is not None
+        assert result.model == "o1-preview"
+
+    def test_latin_keywords_keep_word_boundary_matching(self, mock_router_instance, basic_config):
+        """The CJK gate reads the keyword, so a Latin keyword is unaffected by the prompt's script."""
+        router = self._router(mock_router_instance, basic_config, ["k8s"])
+        assert router._lexical_tier_override("what is a k8scluster thing") is None
+        assert router._lexical_tier_override("running my k8s cluster") == KeywordOverride(
+            tier=ComplexityTier.REASONING, matched_keyword="k8s"
+        )
+
+    def test_latin_keyword_against_cjk_prompt_still_needs_a_boundary(self, mock_router_instance, basic_config):
+        """A Latin keyword glued to CJK characters is still a substring false positive."""
+        router = self._router(mock_router_instance, basic_config, ["api"])
+        assert router._lexical_tier_override("请解释一下rapid这个词") is None
+        assert router._lexical_tier_override("请问 api 怎么调用") == KeywordOverride(
+            tier=ComplexityTier.REASONING, matched_keyword="api"
+        )
+
+    def test_accented_latin_keeps_word_boundary_semantics(self, complexity_router):
+        """Guards the alternative fix (ASCII-only lookarounds), which would break diacritics."""
+        assert complexity_router._keyword_matches("un café apiculteur", "api") is False
+        assert complexity_router._keyword_matches("appelle l' api maintenant", "api") is True
 
 
 def _make_embedding_response(vectors: List[List[float]]) -> "litellm.EmbeddingResponse":
@@ -5279,7 +5362,7 @@ class TestClassifierTrustBoundary:
         how the LLM-as-a-judge guardrail assembles its call: a static system constant, all caller
         content quoted in the user turn.
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+        from litellm.router_strategy.complexity_router.complexity_router import classification_system_prompt
 
         router = ComplexityRouter(
             model_name="test-router",
@@ -5300,7 +5383,7 @@ class TestClassifierTrustBoundary:
         )
 
         system_message, user_message = mock_router_instance.acompletion.call_args.kwargs["messages"]
-        assert system_message["content"] == _classification_system_prompt(router.config.classifier_context_window_size)
+        assert system_message["content"] == classification_system_prompt(router.config.classifier_context_window_size)
         assert hostile not in system_message["content"]
         assert hostile in user_message["content"]
 
@@ -5322,9 +5405,9 @@ class TestClassifierTrustBoundary:
         invites it to guess high. Above 0 the window is quoted but nothing otherwise tells the model it
         exists or that its view is bounded.
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+        from litellm.router_strategy.complexity_router.complexity_router import classification_system_prompt
 
-        system_prompt = _classification_system_prompt(window_size)
+        system_prompt = classification_system_prompt(window_size)
 
         assert ("using the earlier turns quoted above it as context" in system_prompt) is conversation_is_quoted
         assert ('short reply such as "yes" or "continue"' in system_prompt) is conversation_is_quoted
@@ -5341,7 +5424,7 @@ class TestClassifierTrustBoundary:
         pre-context sentence, which is the exact configuration the reported misclassification was
         raised against: window at its default, assistant turns off.
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+        from litellm.router_strategy.complexity_router.complexity_router import classification_system_prompt
 
         router = ComplexityRouter(
             model_name="test-complexity-router",
@@ -5356,7 +5439,7 @@ class TestClassifierTrustBoundary:
         await router.aclassify("yes.", messages=[{"role": "user", "content": "yes."}])
 
         system_content = mock_router_instance.acompletion.call_args.kwargs["messages"][0]["content"]
-        assert system_content == _classification_system_prompt(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
+        assert system_content == classification_system_prompt(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
 
     def test_a_window_of_zero_still_sends_the_original_wording(self):
         """With no conversation quoted, the original line is the correct one and must stay reachable.
@@ -5365,9 +5448,9 @@ class TestClassifierTrustBoundary:
         was handed a window and told in the same breath to disregard it, so a request whose difficulty
         was established earlier came back SIMPLE on the word "yes".
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+        from litellm.router_strategy.complexity_router.complexity_router import classification_system_prompt
 
-        assert _classification_system_prompt(0).endswith(
+        assert classification_system_prompt(0).endswith(
             "Classify only the current message; use the other sections to disambiguate its difficulty."
         )
 
@@ -5379,9 +5462,9 @@ class TestClassifierTrustBoundary:
         the model to disregard buys nothing, so the replacement is pinned here rather than left to be
         rediscovered.
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+        from litellm.router_strategy.complexity_router.complexity_router import classification_system_prompt
 
-        system_prompt = _classification_system_prompt(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
+        system_prompt = classification_system_prompt(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
 
         assert "Classify only the current message" not in system_prompt
         assert "using the earlier turns quoted above it as context" in system_prompt
@@ -5532,6 +5615,362 @@ class TestConversationShapeDiscriminator:
             if "conversation_continuing=conversation_continuing" not in block.split("),")[0]
         ]
         assert not missing, f"routing decisions {missing} do not carry the conversation shape"
+
+
+class TestCustomClassifierSystemPrompt:
+    """An operator-supplied classifier prompt replaces the built-in rubric entirely."""
+
+    def test_default_prompt_carries_rubric_and_conversation_closing(self):
+        prompt = classification_system_prompt(5)
+        assert _classification_system_rubric(TIER_SEVERITY_ORDER_LABELED) in prompt
+        assert _CLASSIFICATION_WITH_CONVERSATION in prompt
+        assert _CLASSIFICATION_CURRENT_MESSAGE_ONLY not in prompt
+
+    def test_default_prompt_uses_single_message_closing_without_context_window(self):
+        prompt = classification_system_prompt(0)
+        assert _classification_system_rubric(TIER_SEVERITY_ORDER_LABELED) in prompt
+        assert _CLASSIFICATION_CURRENT_MESSAGE_ONLY in prompt
+        assert _CLASSIFICATION_WITH_CONVERSATION not in prompt
+
+    def test_explicit_none_is_byte_identical_to_omitting_the_argument(self):
+        assert classification_system_prompt(5, None) == classification_system_prompt(5)
+
+    @pytest.mark.parametrize("context_window_size", [0, 5])
+    def test_custom_prompt_replaces_rubric_and_closing_at_any_window_size(self, context_window_size):
+        """Full replacement: neither the rubric nor either closing line may be appended, or the
+        system role would argue with itself about what it is grading."""
+        custom = "Grade the data sensitivity of the request."
+        prompt = classification_system_prompt(context_window_size, custom)
+        assert prompt == custom
+        assert _classification_system_rubric(TIER_SEVERITY_ORDER_LABELED) not in prompt
+        assert _CLASSIFICATION_WITH_CONVERSATION not in prompt
+        assert _CLASSIFICATION_CURRENT_MESSAGE_ONLY not in prompt
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\n\t "])
+    def test_blank_system_prompt_is_rejected(self, blank):
+        """A blank string would send an empty system role, leaving the classifier no rubric at
+        all; omitting the field is how you ask for the default."""
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(
+                classifier_type="llm",
+                classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400, "system_prompt": blank},
+            )
+
+    def test_unset_system_prompt_defaults_to_none(self):
+        config = ComplexityRouterConfig(
+            classifier_type="llm", classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400}
+        )
+        assert config.classifier_llm_config is not None
+        assert config.classifier_llm_config.system_prompt is None
+
+    @pytest.mark.asyncio
+    async def test_custom_prompt_is_sent_verbatim_as_the_system_role(self, mock_router_instance, llm_classifier_config):
+        custom = "Classify the data sensitivity: SIMPLE=public, MEDIUM=internal, COMPLEX=confidential, REASONING=regulated."
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_llm_config": {
+                    **llm_classifier_config["classifier_llm_config"],
+                    "system_prompt": custom,
+                },
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+        outcome = await router.aclassify("my ssn is 000-00-0000")
+        assert outcome.tier == ComplexityTier.COMPLEX
+        messages = mock_router_instance.acompletion.call_args.kwargs["messages"]
+        assert messages[0] == {"role": "system", "content": custom}
+        assert "Tiers:" not in messages[0]["content"]
+        # The user role still carries the request being classified.
+        assert "000-00-0000" in messages[1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_a_prompt_that_invents_tier_names_falls_back_instead_of_raising(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        """The most likely custom-prompt mistake: renaming the buckets. The four names are pinned by
+        the structured-output schema, so an off-schema tier has to land on the configured fallback
+        rather than escaping as an exception to the caller's request."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_llm_config": {
+                    **llm_classifier_config["classifier_llm_config"],
+                    "system_prompt": "Answer with PUBLIC, INTERNAL, or SECRET.",
+                },
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o",
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SECRET"}'))
+        outcome = await router.aclassify("my ssn is 000-00-0000")
+        assert outcome.cause == "default_model_fallback"
+
+    @pytest.mark.asyncio
+    async def test_no_custom_prompt_keeps_the_built_in_rubric_on_the_wire(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        await llm_complexity_router.aclassify("hi")
+        messages = mock_router_instance.acompletion.call_args.kwargs["messages"]
+        assert messages[0]["content"] == classification_system_prompt(
+            llm_complexity_router.config.classifier_context_window_size
+        )
+
+
+class TestClassifierFallbackChoice:
+    """classifier_fallback decides what runs when the LLM classifier fails."""
+
+    @pytest.fixture
+    def default_model_fallback_router(self, mock_router_instance, llm_classifier_config):
+        return ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o",
+            },
+        )
+
+    def test_fallback_defaults_to_heuristic(self):
+        assert ComplexityRouterConfig().classifier_fallback == "heuristic"
+
+    def test_default_model_fallback_requires_a_default_model(self, mock_router_instance, llm_classifier_config):
+        """Without one there is nowhere to route, so this must fail at config time rather than
+        at the first classifier timeout in production."""
+        with pytest.raises(ValueError, match="requires a default model"):
+            ComplexityRouter(
+                model_name="test-complexity-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={**llm_classifier_config, "classifier_fallback": "default_model"},
+            )
+
+    def test_deployment_level_default_model_satisfies_the_requirement(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        """complexity_router_default_model arrives outside complexity_router_config, so a config-model
+        validator would have rejected this valid deployment."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**llm_classifier_config, "classifier_fallback": "default_model"},
+            default_model="gpt-4o",
+        )
+        assert router.config.default_model == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_classifier_failure_routes_to_default_model_without_scoring(
+        self, default_model_fallback_router, mock_router_instance
+    ):
+        """A classifier on some other taxonomy has no use for a complexity score, so the heuristic
+        scorer must not run at all."""
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        with patch.object(
+            ComplexityRouter, "_score_and_classify", side_effect=AssertionError("heuristic scorer must not run")
+        ):
+            outcome = await default_model_fallback_router.aclassify("Hello!")
+        assert outcome.cause == "default_model_fallback"
+        assert outcome.score is None
+
+    @pytest.mark.asyncio
+    async def test_heuristic_fallback_still_scores(self, llm_complexity_router, mock_router_instance):
+        """The pre-existing default must be unchanged by the new option."""
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        outcome = await llm_complexity_router.aclassify("Hello!")
+        assert outcome.cause == "heuristic_scorer"
+        assert outcome.score is not None
+
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_routes_to_default_model_on_classifier_failure(
+        self, default_model_fallback_router, mock_router_instance
+    ):
+        """The tier pool for the resolved tier must not get a say: a multi-model pool would
+        otherwise land somewhere other than the known destination the operator asked for."""
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        response = await default_model_fallback_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "prove the Riemann hypothesis step by step"}],
+        )
+        assert response is not None
+        assert response.model == "gpt-4o"
+        assert response.routing_decision is not None
+        assert response.routing_decision["cause"] == "default_model_fallback"
+        # No tier was decided, so the provenance record must not claim one. The internal
+        # outcome carries a tier only because the plugin path needs a pool to pick from.
+        assert "tier" not in response.routing_decision
+
+    @pytest.mark.asyncio
+    async def test_a_classifier_failure_does_not_pin_the_session_to_the_default_model(self, mock_router_instance):
+        """One transient timeout must not hold a session on default_model for the whole affinity TTL:
+        that turn was never classified, so there is nothing worth pinning and the next turn retries."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {
+                    "SIMPLE": "gpt-4o-mini",
+                    "MEDIUM": "gpt-4o",
+                    "COMPLEX": "claude-sonnet-4-20250514",
+                    "REASONING": "o1-preview",
+                },
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o",
+                "session_affinity": True,
+            },
+        )
+        mock_router_instance.cache = DualCache()
+        request_kwargs: Dict = {"metadata": {"session_id": "session-flaky"}}
+
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        first = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert first is not None
+        assert first.model == "gpt-4o"
+
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+        second = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "prove the Riemann hypothesis"}],
+        )
+        assert second is not None
+        assert second.model == "o1-preview"
+        assert second.routing_decision is not None
+        assert second.routing_decision["cause"] == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_a_successful_classification_still_pins_the_session(self, mock_router_instance):
+        """Guard on the fix above: only the failed-classifier cause is unpinnable, so an ordinary
+        turn on a default_model-fallback router must still pin exactly as it did before."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": "o1-preview"},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o",
+                "session_affinity": True,
+            },
+        )
+        mock_router_instance.cache = DualCache()
+        request_kwargs: Dict = {"metadata": {"session_id": "session-steady"}}
+
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+        first = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "prove the Riemann hypothesis"}],
+        )
+        assert first is not None
+        assert first.model == "o1-preview"
+
+        with patch.object(router, "aclassify", side_effect=AssertionError("pinned turn must not reclassify")):
+            second = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=request_kwargs,
+                messages=[{"role": "user", "content": "Hello!"}],
+            )
+        assert second is not None
+        assert second.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_default_model_fallback_does_not_bypass_routing_plugins(self, mock_router_instance):
+        """A failed classifier must not become a way around a policy plugin: default_model is never
+        checked against the plugin pipeline, so with plugins configured this path has to fall through
+        to the tier pool, which does run them. Mirrors the no-user-message path's guard."""
+
+        class ExcludeDefaultModel:
+            async def run(self, context):
+                context.candidate_models = [m for m in context.candidate_models if m != "gpt-4o-default"]
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"MEDIUM": ["gpt-4o-default", "gpt-4o-nano"]},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o-default",
+                "plugins": [ExcludeDefaultModel()],
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        response = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        assert response is not None
+        assert response.model == "gpt-4o-nano"
+        # The plugin path needs a pool to filter, but no tier was ever classified: the
+        # classifier failed. Recording MEDIUM as the request's tier would attribute a
+        # classification that never happened, so the pool is reported as a signal instead.
+        assert response.routing_decision is not None
+        assert response.routing_decision["cause"] == "default_model_fallback"
+        assert "tier" not in response.routing_decision
+        assert "plugin-filtered-pool:MEDIUM" in response.routing_decision["signals"]
+
+    @pytest.mark.asyncio
+    async def test_default_model_fallback_with_plugins_reports_the_empty_tier_not_the_plugins(
+        self, mock_router_instance
+    ):
+        """default_model in no tier pool resolves to MEDIUM, so an empty MEDIUM pool used to raise
+        'No candidate models left for tier MEDIUM after routing-plugin filtering' and send the
+        operator hunting for a policy plugin that never narrowed anything. Flagged by Greptile."""
+
+        class AllowAll:
+            async def run(self, context):
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"COMPLEX": ["o1-preview"]},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o-default",
+                "plugins": [AllowAll()],
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        with pytest.raises(ValueError, match="No models configured for tier MEDIUM"):
+            await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "hello"}],
+            )
+
+    @pytest.mark.asyncio
+    async def test_successful_classification_ignores_the_fallback_setting(
+        self, default_model_fallback_router, mock_router_instance
+    ):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+        response = await default_model_fallback_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert response is not None
+        assert response.model == "o1-preview"
+        assert response.routing_decision is not None
+        assert response.routing_decision["cause"] == "llm_classifier"
 
 
 class TestSavingsBaselineOnDecision:
