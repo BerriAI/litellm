@@ -12878,9 +12878,11 @@ export interface paths {
          *
          *     Attribution (user/team/org) is derived from the given virtual key. Records accept an optional
          *     idempotency_key, stored as the spend-log request_id: the reservation insert, counter updates and
-         *     dedup are checked atomically at the database primary key, so overlapping retries are safe. When
-         *     cost is omitted it is computed from litellm pricing; records whose model cannot be priced are
-         *     rejected with an error instead of being booked as zero spend.
+         *     dedup are checked atomically at the database primary key, so overlapping retries are safe. The
+         *     reservation row is always written (even when disable_spend_logs is set), because it is both the
+         *     dedup anchor and the audit record for the booked usage. When cost is omitted it is computed from
+         *     litellm pricing; records whose model cannot be priced are rejected with an error instead of
+         *     being booked as zero spend.
          */
         post: operations["ingest_external_usage_spend_usage_post"];
         delete?: never;
