@@ -1044,6 +1044,40 @@ async def test_iter_with_keepalive_enables_after_fallback_raises_interval():
     assert len(real_chunks) == 3
 
 
+@pytest.mark.asyncio
+async def test_iter_with_keepalive_activates_from_a_fully_disabled_start():
+    """Greptile P1: a stream can start on a deployment with keepalive off
+    (keepalive_seconds passed in as 0, not merely a long interval) and fall back
+    mid-stream to one that enables it. The 0-second start must not be treated as
+    a one-time decision to skip heartbeats for the rest of the stream: no task
+    is created while inactive, but every chunk still re-resolves so the fallback
+    chunk can switch the stream into task-wrapped mode."""
+    import asyncio
+
+    async def _slow_stream():
+        yield _simple_chunk(content="first")
+        yield _simple_chunk(content="second")
+        await asyncio.sleep(0.3)
+        yield _simple_chunk(content="third")
+
+    def _resolver(item):
+        # "first" resolves to stay off; "second" (the fallback chunk) resolves
+        # as if the fallback deployment newly enabled a short interval.
+        return 0.0 if item.choices[0].delta.content == "first" else 0.05
+
+    items = []
+    async for item in _iter_with_keepalive(_slow_stream(), _resolver, keepalive_seconds=0):
+        items.append(item)
+
+    sentinels = [i for i in items if i is ps._STREAM_KEEPALIVE]
+    real_chunks = [i for i in items if i is not ps._STREAM_KEEPALIVE]
+
+    assert len(sentinels) >= 2, (
+        f"expected >= 2 sentinels once the resolver activates from a disabled start; got {len(sentinels)}"
+    )
+    assert len(real_chunks) == 3
+
+
 def test_resolve_keepalive_seconds_client_value_ignored_without_override_permission(monkeypatch):
     """keepalive_seconds is operator-only by default: a deployment that hasn't set
     allow_client_keepalive_override must not let a client's request-level value

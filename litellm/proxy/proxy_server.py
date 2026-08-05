@@ -7548,23 +7548,30 @@ async def _iter_with_keepalive(
 ) -> AsyncGenerator[Any, None]:
     """Wrap `aiter` with idle-gap heartbeats, re-resolving the interval after each
     real chunk via `resolve_keepalive_seconds`. A mid-stream router fallback can
-    swap in a deployment with a different (or disabled) keepalive policy partway
-    through the same stream; re-resolving against each chunk's own identity
-    (rather than trusting the interval picked before iteration started) keeps the
-    heartbeat behavior in sync with whichever deployment actually produced it."""
-    if keepalive_seconds <= 0:
-        async for item in aiter:
-            yield item
-        return
-
+    swap in a deployment with a different keepalive policy, including one that
+    newly enables or newly disables heartbeats, partway through the same stream;
+    re-resolving against each chunk's own identity (rather than trusting the
+    interval picked before iteration started, or picked the last time it went
+    inactive) keeps the heartbeat behavior in sync with whichever deployment
+    actually produced it, in both directions. While the interval is <= 0, no
+    task is created and no timeout is awaited: a chunk is forwarded the moment
+    it arrives, at the same cost as a bare `async for`."""
     pending: asyncio.Task[Any] | None = None  # rebind-ok: rebound each loop iteration
     current_keepalive_seconds = keepalive_seconds  # rebind-ok: re-resolved after each chunk
     try:
         while True:
+            if current_keepalive_seconds <= 0:
+                try:
+                    item = await aiter.__anext__()
+                except StopAsyncIteration:
+                    break
+                yield item
+                current_keepalive_seconds = resolve_keepalive_seconds(item)
+                continue
+
             if pending is None:
                 pending = asyncio.create_task(aiter.__anext__())
-            timeout = current_keepalive_seconds if current_keepalive_seconds > 0 else None
-            done, _ = await asyncio.wait((pending,), timeout=timeout)
+            done, _ = await asyncio.wait((pending,), timeout=current_keepalive_seconds)
             if not done:
                 yield _STREAM_KEEPALIVE
                 continue
@@ -7727,14 +7734,19 @@ async def async_data_generator(
         else:
             stream_iterator = response
 
-        _ka_secs: Final = _resolve_keepalive_seconds(request_data, response)
+        # A stream can start on a deployment with keepalive off and fall back
+        # mid-stream to one that enables it: only skip wrapping altogether when
+        # there's no router to ever fall back through in the first place (in
+        # which case _resolve_keepalive_seconds can never return non-zero for
+        # any chunk of this stream), not merely because the first chunk's
+        # deployment happens to start with it off.
         stream_source: Final = (
             _iter_with_keepalive(
                 stream_iterator.__aiter__(),
                 lambda item: _resolve_keepalive_seconds(request_data, item),
-                _ka_secs,
+                _resolve_keepalive_seconds(request_data, response),
             )
-            if _ka_secs > 0
+            if llm_router is not None
             else stream_iterator
         )
 
