@@ -5,6 +5,7 @@ import os
 import socket
 import ssl
 import sys
+import threading
 import time
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional
@@ -510,13 +511,32 @@ class AsyncHTTPHandler:
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
-        self.client = self.create_client(
+        self.ssl_verify = ssl_verify
+        self.shared_session = shared_session
+        self._owns_client = True
+        self._client = self.create_client(
             timeout=timeout,
             event_hooks=event_hooks,
             ssl_verify=ssl_verify,
             shared_session=shared_session,
         )
         self.client_alias = client_alias
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        if self._owns_client and self._client.is_closed:
+            self._client = self.create_client(
+                timeout=self.timeout,
+                event_hooks=self.event_hooks,
+                ssl_verify=self.ssl_verify,
+                shared_session=self.shared_session,
+            )
+        return self._client
+
+    @client.setter
+    def client(self, client: httpx.AsyncClient) -> None:
+        self._client = client
+        self._owns_client = False
 
     def create_client(
         self,
@@ -557,14 +577,14 @@ class AsyncHTTPHandler:
 
     async def close(self):
         # Close the client when you're done with it
-        await self.client.aclose()
+        await self._client.aclose()
 
     async def __aenter__(self):
         return self.client
 
     async def __aexit__(self):
         # close the client when exiting
-        await self.client.aclose()
+        await self._client.aclose()
 
     async def get(
         self,
@@ -1069,37 +1089,50 @@ class HTTPHandler:
         disable_default_headers: bool
         | None = False,  # arize phoenix returns different API responses when user agent header in request
     ):
-        if timeout is None:
-            timeout = _DEFAULT_TIMEOUT
+        self.timeout = timeout
+        self.ssl_verify = ssl_verify
+        self.disable_default_headers = disable_default_headers
+        self._owns_client = client is None
+        self._heal_lock = threading.Lock()
+        self._client = self.create_client() if client is None else client
 
+    def create_client(self) -> httpx.Client:
         # Get unified SSL configuration
-        ssl_config: Final = get_ssl_configuration(ssl_verify)
+        ssl_config: Final = get_ssl_configuration(self.ssl_verify)
 
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
         cert: Final = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
-        default_headers: Final = get_default_headers() if not disable_default_headers else None
+        default_headers: Final = get_default_headers() if not self.disable_default_headers else None
 
-        if client is None:
-            transport: Final = self._create_sync_transport()
+        # Create a client with a connection pool
+        return httpx.Client(
+            transport=self._create_sync_transport(),
+            timeout=self.timeout if self.timeout is not None else _DEFAULT_TIMEOUT,
+            verify=ssl_config,
+            cert=cert,
+            headers=default_headers,
+            follow_redirects=True,
+        )
 
-            # Create a client with a connection pool
-            self.client = httpx.Client(
-                transport=transport,
-                timeout=timeout,
-                verify=ssl_config,
-                cert=cert,
-                headers=default_headers,
-                follow_redirects=True,
-            )
-        else:
-            self.client = client
+    @property
+    def client(self) -> httpx.Client:
+        if self._owns_client and self._client.is_closed:
+            with self._heal_lock:
+                if self._owns_client and self._client.is_closed:
+                    self._client = self.create_client()
+        return self._client
+
+    @client.setter
+    def client(self, client: httpx.Client) -> None:
+        self._client = client
+        self._owns_client = False
 
     def close(self):
         # Close the client when you're done with it
-        self.client.close()
+        self._client.close()
 
     def get(
         self,

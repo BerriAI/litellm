@@ -483,6 +483,15 @@ class ComplexityRouterConfig(BaseModel):
         description="RoutingPlugin instances that narrow the classified tier's candidate models before selection",
     )
 
+    reminder_markers: tuple[str, str] | None = Field(
+        default=None,
+        description=(
+            "Override the (open, close) marker pair used to recognize and strip harness-injected "
+            "reminder blocks before classification. Defaults to Claude Code's convention, "
+            "('<system-reminder>', '</system-reminder>'), when unset. Matching is case-insensitive."
+        ),
+    )
+
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)  # Allow additional fields
 
     @field_validator("tiers", mode="before")
@@ -543,6 +552,18 @@ class ComplexityRouterConfig(BaseModel):
                 "plugins and adaptive=True cannot both be set: adaptive's bandit selection doesn't yet "
                 "consume plugin-narrowed candidate pools. Disable adaptive or remove plugins."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_reminder_markers(self) -> "ComplexityRouterConfig":
+        if self.reminder_markers is None:
+            return self
+        open_marker, close_marker = (marker.strip().lower() for marker in self.reminder_markers)
+        if not open_marker or not close_marker:
+            raise ValueError("reminder_markers entries must not be blank")
+        if open_marker == close_marker:
+            raise ValueError("reminder_markers open and close must be different strings")
+        self.reminder_markers = (open_marker, close_marker)
         return self
 
 
