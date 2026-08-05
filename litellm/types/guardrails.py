@@ -757,6 +757,16 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    scan_only_tool_results: Optional[bool] = Field(
+        default=None,
+        description=(
+            "When True, unified guardrails only evaluate tool results, the untrusted data an "
+            "agent feeds back into the model, and skip system, user, and assistant content. "
+            "Intended for agent harnesses whose own prompt scaffolding is trusted but often "
+            "trips prompt-attack detectors."
+        ),
+    )
+
     # Lakera specific params
     category_thresholds: Optional[LakeraCategoryThresholds] = Field(
         default=None,
