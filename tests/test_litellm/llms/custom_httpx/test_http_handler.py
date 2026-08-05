@@ -793,3 +793,95 @@ class TestDefaultCachedClientTimeoutHonorsRequestTimeout:
         litellm.in_memory_llm_clients_cache = LLMClientCache()
         client = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK)
         assert client.timeout.read == 300.0
+
+
+async def _read_http_request(reader: asyncio.StreamReader) -> None:
+    raw = b""
+    while b"\r\n\r\n" not in raw:
+        chunk = await reader.read(1024)
+        if not chunk:
+            return
+        raw += chunk
+    head, _, body = raw.partition(b"\r\n\r\n")
+    content_length = next(
+        (int(line.split(b":", 1)[1]) for line in head.split(b"\r\n") if line.lower().startswith(b"content-length")),
+        0,
+    )
+    while len(body) < content_length:
+        body += await reader.read(content_length - len(body))
+
+
+@pytest.mark.asyncio
+async def test_init_held_async_handler_survives_external_client_close():
+    handler = AsyncHTTPHandler(timeout=42.5)
+    held_client = handler.client
+    await held_client.aclose()
+    assert held_client.is_closed
+
+    async def respond(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await _read_http_request(reader)
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(respond, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        response = await handler.post(f"http://127.0.0.1:{port}/v1/compress", json={"messages": []})
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert response.status_code == 200
+    assert handler.client is not held_client
+    assert handler.client.timeout == httpx.Timeout(42.5)
+    await handler.close()
+
+
+def test_init_held_sync_handler_recreates_closed_client():
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class OkRequestHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, format, *args):
+            pass
+
+    handler = HTTPHandler(timeout=7)
+    held_client = handler.client
+    held_client.close()
+
+    server = HTTPServer(("127.0.0.1", 0), OkRequestHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        response = handler.get(f"http://127.0.0.1:{server.server_port}/")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status_code == 200
+    assert handler.client is not held_client
+    assert handler.client.timeout == httpx.Timeout(7)
+    handler.close()
+
+
+def test_caller_supplied_sync_client_is_not_replaced_when_closed():
+    supplied = httpx.Client()
+    handler = HTTPHandler(client=supplied)
+    supplied.close()
+    assert handler.client is supplied
+
+
+@pytest.mark.asyncio
+async def test_assigned_async_client_is_not_replaced():
+    handler = AsyncHTTPHandler()
+    await handler.client.aclose()
+    replacement = MagicMock()
+    handler.client = replacement
+    assert handler.client is replacement
