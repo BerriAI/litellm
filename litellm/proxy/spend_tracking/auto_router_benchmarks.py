@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 MAX_WINDOW_DAYS: Final = 30
+AUTO_ROUTER_SESSION_RETENTION_DAYS: Final = MAX_WINDOW_DAYS + 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,13 +229,17 @@ def summarize(counters: _Counters) -> AutoRouterBenchmark:
     )
 
 
-def clamp_window(start_date: date, end_date: date) -> tuple[datetime, datetime]:
-    """The half-open UTC interval to read, clamped to ``MAX_WINDOW_DAYS``; ``end_date`` is
-    inclusive to the caller, so the upper bound is the start of the following day."""
-    span_start: Final = max(start_date, end_date - timedelta(days=MAX_WINDOW_DAYS - 1))
+def clamp_window(start_date: date, end_date: date, today: date) -> tuple[datetime, datetime]:
+    """The half-open UTC interval to read, clamped into the most recent ``MAX_WINDOW_DAYS``
+    ending ``today``; ``end_date`` is inclusive to the caller, so the upper bound is the
+    start of the following day. This recency clamp is what makes garbage collecting rows
+    past ``AUTO_ROUTER_SESSION_RETENTION_DAYS`` safe: a pruned row is one no window can
+    read. A window entirely before the horizon degenerates to an empty interval."""
+    span_end: Final = min(end_date, today)
+    span_start: Final = max(start_date, today - timedelta(days=MAX_WINDOW_DAYS - 1))
     return (
         datetime.combine(span_start, time.min, tzinfo=timezone.utc),
-        datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=timezone.utc),
+        datetime.combine(span_end + timedelta(days=1), time.min, tzinfo=timezone.utc),
     )
 
 
@@ -270,7 +275,7 @@ async def fetch_benchmarks(
 ) -> AutoRouterBenchmarksResponse:
     """Benchmarks for the window actually read; sessions are attributed to the window they
     started in, and the response echoes the clamped dates rather than the requested ones."""
-    window_start, window_end = clamp_window(start_date, end_date)
+    window_start, window_end = clamp_window(start_date, end_date, today=datetime.now(timezone.utc).date())
     rows: Final = await prisma_client.db.query_raw(
         _AGGREGATE_SQL,
         window_start.isoformat(),

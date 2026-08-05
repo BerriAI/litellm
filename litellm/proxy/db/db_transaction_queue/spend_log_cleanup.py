@@ -15,6 +15,9 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import (
     SpendLogsPartitionManager,
 )
+from litellm.proxy.spend_tracking.auto_router_benchmarks import (
+    AUTO_ROUTER_SESSION_RETENTION_DAYS,
+)
 from litellm.proxy.utils import PrismaClient
 
 
@@ -187,7 +190,7 @@ class SpendLogCleanup:
         )
 
     async def _delete_old_auto_router_sessions(self, prisma_client: PrismaClient, cutoff_date: datetime) -> int:
-        """Expire auto-router rollups on the spend-log cutoff.
+        """Expire auto-router rollups past the given cutoff.
 
         Keyed on last activity rather than session start, so a conversation still running
         when the cutoff passes is not pruned out from under itself.
@@ -200,22 +203,28 @@ class SpendLogCleanup:
             time_column="last_turn_at",
         )
 
+    def _auto_router_session_cutoff(self, retention_seconds: float | None) -> datetime:
+        """Rows the benchmarks endpoint can no longer read are collected at the read
+        horizon even with no retention configured; a shorter configured retention wins."""
+        now: Final = datetime.now(timezone.utc)
+        horizon: Final = now - timedelta(days=AUTO_ROUTER_SESSION_RETENTION_DAYS)
+        return horizon if retention_seconds is None else max(horizon, now - timedelta(seconds=retention_seconds))
+
     async def cleanup_old_spend_logs(self, prisma_client: PrismaClient) -> None:
         """
         Main cleanup function. Deletes old spend logs in batches.
         If pod_lock_manager is available, ensures only one pod runs cleanup.
         If no pod_lock_manager, runs cleanup without distributed locking.
+
+        Spend logs and their tool index only expire when
+        ``maximum_spend_logs_retention_period`` is configured. The auto-router rollup is
+        collected on every run regardless; see ``_auto_router_session_cutoff``.
         """
         lock_acquired = False
         try:
             verbose_proxy_logger.info("Cleanup job triggered at %s", datetime.now())
 
-            if not self._should_delete_spend_logs():
-                return
-
-            if self.retention_seconds is None:
-                verbose_proxy_logger.error("Retention seconds is None, cannot proceed with cleanup")
-                return
+            retention_seconds: Final = self.retention_seconds if self._should_delete_spend_logs() else None
 
             # If we have a pod lock manager, try to acquire the lock
             if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
@@ -233,33 +242,38 @@ class SpendLogCleanup:
                     verbose_proxy_logger.info("Another pod is already running cleanup")
                     return
 
-            cutoff_date: Final = datetime.now(timezone.utc) - timedelta(seconds=float(self.retention_seconds))
-            verbose_proxy_logger.info("Removing logs older than %s", cutoff_date.isoformat())
+            if retention_seconds is not None:
+                cutoff_date: Final = datetime.now(timezone.utc) - timedelta(seconds=float(retention_seconds))
+                verbose_proxy_logger.info("Removing logs older than %s", cutoff_date.isoformat())
 
-            if self.general_settings.get(
-                "use_spend_logs_partitioning", False
-            ) and await self.partition_manager.is_partitioned(prisma_client):
-                await self.partition_manager.ensure_partitions(prisma_client)
-                dropped: Final = await self.partition_manager.drop_partitions_older_than(prisma_client, cutoff_date)
-                verbose_proxy_logger.info(
-                    "Dropped %d expired spend-log partitions: %s",
-                    len(dropped),
-                    dropped,
-                )
-                # DROP only reclaims whole expired partitions. Expired rows can
-                # still sit in the DEFAULT partition (backfill, coverage gaps)
-                # or in a partition that spans the cutoff, so retention must
-                # also delete those stragglers row-wise.
-                total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
-                verbose_proxy_logger.info("Deleted %s expired logs not covered by dropped partitions", total_deleted)
-            else:
-                total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
-                verbose_proxy_logger.info("Deleted %s logs", total_deleted)
+                if self.general_settings.get(
+                    "use_spend_logs_partitioning", False
+                ) and await self.partition_manager.is_partitioned(prisma_client):
+                    await self.partition_manager.ensure_partitions(prisma_client)
+                    dropped: Final = await self.partition_manager.drop_partitions_older_than(prisma_client, cutoff_date)
+                    verbose_proxy_logger.info(
+                        "Dropped %d expired spend-log partitions: %s",
+                        len(dropped),
+                        dropped,
+                    )
+                    # DROP only reclaims whole expired partitions. Expired rows can
+                    # still sit in the DEFAULT partition (backfill, coverage gaps)
+                    # or in a partition that spans the cutoff, so retention must
+                    # also delete those stragglers row-wise.
+                    total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
+                    verbose_proxy_logger.info(
+                        "Deleted %s expired logs not covered by dropped partitions", total_deleted
+                    )
+                else:
+                    total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
+                    verbose_proxy_logger.info("Deleted %s logs", total_deleted)
 
-            index_deleted: Final = await self._delete_old_tool_index_rows(prisma_client, cutoff_date)
-            verbose_proxy_logger.info("Deleted %s expired tool index rows", index_deleted)
+                index_deleted: Final = await self._delete_old_tool_index_rows(prisma_client, cutoff_date)
+                verbose_proxy_logger.info("Deleted %s expired tool index rows", index_deleted)
 
-            sessions_deleted: Final = await self._delete_old_auto_router_sessions(prisma_client, cutoff_date)
+            sessions_deleted: Final = await self._delete_old_auto_router_sessions(
+                prisma_client, self._auto_router_session_cutoff(retention_seconds)
+            )
             verbose_proxy_logger.info("Deleted %s expired auto-router session rollups", sessions_deleted)
 
         except Exception as e:

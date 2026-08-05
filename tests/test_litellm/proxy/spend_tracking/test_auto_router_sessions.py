@@ -6,12 +6,16 @@ here, is deciding whether a request is an auto-routed turn at all and what it co
 """
 
 import datetime as dt
+from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
 from litellm.proxy.spend_tracking.auto_router_sessions import (
     CACHE_TTL_1H_SECONDS,
     CACHE_TTL_5M_SECONDS,
+    AutoRouterSessionQueue,
+    TurnFacts,
     build_turn_facts,
     ttl_seconds,
 )
@@ -139,3 +143,50 @@ class TestCacheEvidence:
             },
         }
         assert ttl_seconds(usage) is None
+
+
+class TestFlushOrdering:
+    @pytest.mark.asyncio
+    async def test_turns_apply_in_session_key_order_and_in_time_order_within_a_session(self):
+        """Key order means every pod locks rollup rows in the same sequence (no cross-pod
+        deadlock); time order within a session is what classification depends on."""
+        recorded: list[tuple[object, ...]] = []
+
+        class _DB:
+            def batch_(self):
+                return self
+
+            async def __aenter__(self):
+                return SimpleNamespace(execute_raw=lambda sql, *params: recorded.append(params))
+
+            async def __aexit__(self, *exc: object) -> bool:
+                return False
+
+        base = TurnFacts(
+            api_key="k",
+            session_id="a",
+            model_group="g",
+            router_kind="complexity",
+            baseline_model=None,
+            model="m",
+            started_at=0.0,
+            total_tokens=0,
+            spend=0.0,
+            baseline_spend=0.0,
+            cache_hit=False,
+            cache_creation_tokens=0,
+            cached_prefix_tokens=0,
+            ttl_seconds=None,
+        )
+        queue = AutoRouterSessionQueue()
+        for turn in (
+            replace(base, session_id="b", started_at=3.0),
+            replace(base, started_at=4.0),
+            replace(base, started_at=2.0),
+            replace(base, session_id="b", started_at=1.0),
+        ):
+            queue.update_queue.put_nowait(turn)
+
+        await queue.flush(SimpleNamespace(db=_DB()))
+
+        assert [(params[1], params[6]) for params in recorded] == [("a", 2.0), ("a", 4.0), ("b", 1.0), ("b", 3.0)]

@@ -193,11 +193,16 @@ async def test_cleanup_old_spend_logs_batch_deletion():
     tool_index_sql = mock_db.execute_raw.call_args_list[3][0][0]
     assert 'DELETE FROM "LiteLLM_SpendLogToolIndex"' in tool_index_sql
 
-    # The auto-router rollup expires on the same cutoff, keyed on last activity so a
-    # conversation still running when the cutoff passes is not pruned mid-session
-    session_sql = mock_db.execute_raw.call_args_list[4][0][0]
+    # The auto-router rollup expires on the same cutoff when retention is shorter than
+    # its read horizon, keyed on last activity so a conversation still running when the
+    # cutoff passes is not pruned mid-session
+    from datetime import datetime, timedelta, timezone
+
+    session_sql, session_cutoff = mock_db.execute_raw.call_args_list[4][0][:2]
     assert 'DELETE FROM "LiteLLM_AutoRouterSession"' in session_sql
     assert '"last_turn_at" <' in session_sql
+    expected_session_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    assert abs((session_cutoff - expected_session_cutoff).total_seconds()) < 60
 
     # The LiteLLM_DailyToolSpend rollup must outlive spend-log retention: it is
     # the only copy of tool spend history once its per-request sources expire,
@@ -349,22 +354,32 @@ async def test_cleanup_uses_delete_when_not_partitioned():
 @pytest.mark.asyncio
 async def test_cleanup_old_spend_logs_no_retention_period():
     """
-    Test that no logs are deleted when no retention period is set
+    With no retention period set, spend logs are untouched but the auto-router rollup is
+    still collected at its read horizon: rows past it are unreadable by the benchmarks
+    endpoint, so the table stays bounded without any configuration.
     """
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy.spend_tracking.auto_router_benchmarks import AUTO_ROUTER_SESSION_RETENTION_DAYS
+
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.execute_raw = AsyncMock()
+    mock_prisma_client.db.execute_raw = AsyncMock(return_value=0)
 
     cleaner = SpendLogCleanup(general_settings={})  # no retention
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
 
-    mock_prisma_client.db.execute_raw.assert_not_called()
+    assert mock_prisma_client.db.execute_raw.await_count == 1
+    session_sql, cutoff = mock_prisma_client.db.execute_raw.call_args_list[0][0][:2]
+    assert 'DELETE FROM "LiteLLM_AutoRouterSession"' in session_sql
+    expected_cutoff = datetime.now(timezone.utc) - timedelta(days=AUTO_ROUTER_SESSION_RETENTION_DAYS)
+    assert abs((cutoff - expected_cutoff).total_seconds()) < 60
 
 
 @pytest.mark.asyncio
 async def test_lock_not_released_when_not_acquired():
     """
-    Lock release should be skipped when _should_delete_spend_logs returns False
-    before the lock is ever acquired.
+    When another pod holds the cleanup lock, nothing is deleted (including the always-on
+    rollup collection) and the lock is not released by this pod.
     """
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.execute_raw = AsyncMock()
@@ -372,17 +387,17 @@ async def test_lock_not_released_when_not_acquired():
     mock_redis_cache = MagicMock()
     mock_pod_lock_manager = MagicMock()
     mock_pod_lock_manager.redis_cache = mock_redis_cache
-    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=False)
     mock_pod_lock_manager.release_lock = AsyncMock()
 
-    # No retention setting → _should_delete_spend_logs() returns False before lock is acquired
     cleaner = SpendLogCleanup(general_settings={})
     cleaner.pod_lock_manager = mock_pod_lock_manager
 
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
 
-    mock_pod_lock_manager.acquire_lock.assert_not_called()
+    mock_pod_lock_manager.acquire_lock.assert_called_once()
     mock_pod_lock_manager.release_lock.assert_not_called()
+    mock_prisma_client.db.execute_raw.assert_not_called()
 
 
 @pytest.mark.asyncio

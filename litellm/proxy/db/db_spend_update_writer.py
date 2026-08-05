@@ -852,9 +852,6 @@ class DBSpendUpdateWriter:
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-        ################## Auto-Router Benchmarks Rollup ##################
-        await self.auto_router_session_queue.flush(prisma_client=prisma_client)
-
     async def _commit_spend_updates_to_db_with_redis(
         self,
         prisma_client: PrismaClient,

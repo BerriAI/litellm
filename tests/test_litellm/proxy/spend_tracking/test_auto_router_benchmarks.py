@@ -273,17 +273,33 @@ class TestTotals:
 
 
 class TestWindow:
+    TODAY = dt.date(2026, 8, 3)
+
     def test_end_date_is_inclusive(self):
-        start, end = clamp_window(dt.date(2026, 8, 3), dt.date(2026, 8, 3))
+        start, end = clamp_window(dt.date(2026, 8, 3), dt.date(2026, 8, 3), today=self.TODAY)
         assert start == dt.datetime(2026, 8, 3, tzinfo=dt.timezone.utc)
         assert end == dt.datetime(2026, 8, 4, tzinfo=dt.timezone.utc)
 
     def test_a_wider_request_is_clamped_to_the_cap_measured_in_dates_spanned(self):
-        start, end = clamp_window(dt.date(2020, 1, 1), dt.date(2026, 8, 3))
+        start, end = clamp_window(dt.date(2020, 1, 1), dt.date(2026, 8, 3), today=self.TODAY)
         assert (end.date() - start.date()).days == MAX_WINDOW_DAYS
         assert start == dt.datetime(2026, 7, 5, tzinfo=dt.timezone.utc)
 
     def test_a_window_inside_the_cap_is_left_alone(self):
-        start, end = clamp_window(dt.date(2026, 8, 1), dt.date(2026, 8, 3))
+        start, end = clamp_window(dt.date(2026, 8, 1), dt.date(2026, 8, 3), today=self.TODAY)
         assert start == dt.datetime(2026, 8, 1, tzinfo=dt.timezone.utc)
         assert end == dt.datetime(2026, 8, 4, tzinfo=dt.timezone.utc)
+
+    def test_the_window_cannot_start_before_the_recency_horizon(self):
+        """Retention leans on this: a row older than the horizon is one no window can
+        read, so pruning it is garbage collection rather than data loss."""
+        start, _ = clamp_window(dt.date(2026, 6, 1), dt.date(2026, 7, 10), today=self.TODAY)
+        assert start == dt.datetime(2026, 7, 5, tzinfo=dt.timezone.utc)
+
+    def test_a_future_end_date_is_clamped_to_today(self):
+        _, end = clamp_window(dt.date(2026, 8, 1), dt.date(2026, 9, 9), today=self.TODAY)
+        assert end == dt.datetime(2026, 8, 4, tzinfo=dt.timezone.utc)
+
+    def test_a_window_entirely_before_the_horizon_reads_nothing(self):
+        start, end = clamp_window(dt.date(2026, 1, 1), dt.date(2026, 2, 1), today=self.TODAY)
+        assert end <= start

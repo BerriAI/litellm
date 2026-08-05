@@ -182,10 +182,12 @@ ON CONFLICT (api_key, session_id, model_group) DO UPDATE SET
 
 
 class AutoRouterSessionQueue(BaseUpdateQueue):
-    """Stages turns in memory; writes an interval as one ordered batch on the spend flush.
+    """Stages turns in memory; a dedicated scheduler job writes an interval as one batch,
+    kept off the spend commit so a busy interval never delays budget enforcement.
 
-    Batched because a busy interval drains up to ``MAX_IN_MEMORY_QUEUE_FLUSH_COUNT`` turns.
-    Ordered because a session's classification depends on the turn before it. Never raises.
+    Sorted by session key so every pod locks rows in the same order (no cross-pod
+    deadlock), with a session's turns in the time order its classification depends on.
+    Never raises.
     """
 
     async def flush(self, prisma_client: PrismaClient) -> None:
@@ -194,7 +196,7 @@ class AutoRouterSessionQueue(BaseUpdateQueue):
             return
         try:
             async with prisma_client.db.batch_() as batcher:
-                for turn in sorted(staged, key=lambda staged_turn: staged_turn.started_at):
+                for turn in sorted(staged, key=lambda t: (t.api_key, t.session_id, t.model_group, t.started_at)):
                     batcher.execute_raw(_UPSERT_SQL, *bind(turn))
         except Exception as e:  # noqa: BLE001  # a dashboard rollup must never fail spend tracking
             verbose_proxy_logger.warning("auto_router_sessions: dropped %d turns (%s)", len(staged), e)
