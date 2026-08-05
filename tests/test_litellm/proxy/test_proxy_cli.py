@@ -1952,7 +1952,7 @@ class TestRunServerDbSetup:
         generate_calls = [
             call
             for call in mock_subprocess_run.call_args_list
-            if call.args and call.args[0][:2] == ["prisma", "generate"]
+            if call.args and call.args[0][:2] == ("prisma", "generate")
         ]
         assert generate_calls == []
 
