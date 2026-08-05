@@ -74,6 +74,14 @@ EXPECTED = {
 # 4-5 predates adaptive thinking and must NOT claim it.
 ADAPTIVE = {"snowflake/claude-opus-4-6", "snowflake/claude-opus-4-7"}
 
+# Opus 4.7/4.8 reject top_p/top_k and temperature != 1, and litellm's drop/raise gating for
+# that is cost-map driven - so every variant must carry an explicit
+# `supports_sampling_params: false`. Enforced repo-wide by
+# test_claude_fable_5_config.py::test_sampling_params_flag_on_all_models_that_removed_them,
+# which caught this entry missing the flag; asserted here too so the reason travels with the
+# entry rather than living only in an unrelated file.
+NO_SAMPLING_PARAMS = {"snowflake/claude-opus-4-7"}
+
 REPO_ROOT = Path(__file__).parents[2]
 MAIN_PATH = REPO_ROOT / "model_prices_and_context_window.json"
 BACKUP_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
@@ -101,6 +109,11 @@ def test_model_pricing_metadata(model):
     assert info["output_cost_per_token"], f"{model} has a falsy output_cost_per_token"
 
     assert info.get("supports_adaptive_thinking", False) is (model in ADAPTIVE)
+
+    if model in NO_SAMPLING_PARAMS:
+        assert info.get("supports_sampling_params") is False, (
+            f"{model} must declare supports_sampling_params=false"
+        )
 
 
 @pytest.mark.parametrize("model", sorted(EXPECTED))
