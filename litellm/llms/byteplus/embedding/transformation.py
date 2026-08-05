@@ -99,9 +99,26 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
+        is_multimodal = (
+            "vision" in model.lower()
+            or "multimodal" in model.lower()
+            or optional_params.get("is_multimodal", False)
+        )
+
+        raw_input = input if isinstance(input, list) else [input]
+        formatted_input: list[Any] = []
+        if is_multimodal:
+            for item in raw_input:
+                if isinstance(item, str):
+                    formatted_input.append({"type": "text", "text": item})
+                else:
+                    formatted_input.append(item)
+        else:
+            formatted_input = raw_input  # type: ignore[assignment]
+
         data: dict[str, Any] = {
             "model": model,
-            "input": input if isinstance(input, list) else [input],
+            "input": formatted_input,
         }
 
         for key in ["encoding_format", "dimensions", "instructions", "sparse_embedding", "user"]:
