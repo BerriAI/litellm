@@ -1,4 +1,4 @@
-from typing import Any, Optional, Union
+from typing import Any, Final, Optional, Union
 
 from openai._models import BaseModel as OpenAIObject
 from pydantic import BaseModel, ConfigDict
@@ -72,6 +72,6 @@ class HiddenParams(OpenAIObject):
 
     def model_dump(self, **kwargs):
         # Override model_dump to include private attributes
-        data = super().model_dump(**kwargs)
+        data: Final = super().model_dump(**kwargs)
         data["_response_ms"] = self._response_ms
         return data

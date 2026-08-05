@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.secret_managers.main import get_secret_str
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -36,6 +38,6 @@ class LlamafileChatConfig(OpenAIGPTConfig):
         does not require an API key, but the underlying OpenAI library may expect one anyway.
         """
         api_base = LlamafileChatConfig._resolve_api_base(api_base)
-        dynamic_api_key = LlamafileChatConfig._resolve_api_key(api_key)
+        dynamic_api_key: Final = LlamafileChatConfig._resolve_api_key(api_key)
 
         return api_base, dynamic_api_key
