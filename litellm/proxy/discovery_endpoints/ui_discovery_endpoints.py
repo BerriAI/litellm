@@ -2,6 +2,7 @@
 import os
 from collections.abc import Mapping
 from functools import lru_cache
+from typing import Final
 
 from fastapi import APIRouter
 from pydantic import ValidationError
@@ -12,7 +13,7 @@ from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
     UiDiscoveryEndpoints,
 )
 
-router = APIRouter()
+router: Final = APIRouter()
 
 NATIVE_OIDC_SETTING_KEYS = (
     "native_oidc_issuer",
@@ -81,23 +82,23 @@ async def get_ui_config():
     from litellm.proxy.proxy_server import general_settings
     from litellm.proxy.utils import get_proxy_base_url, get_server_root_path
 
-    native_oidc = _build_native_oidc_config(general_settings)
+    native_oidc: Final = _build_native_oidc_config(general_settings)
 
-    auto_redirect_ui_login_to_sso = (
+    auto_redirect_ui_login_to_sso: Final = (
         os.getenv("AUTO_REDIRECT_UI_LOGIN_TO_SSO", "false").lower() == "true"
         or general_settings.get("auto_redirect_ui_login_to_sso", False) is True
     )
-    admin_ui_disabled = os.getenv("DISABLE_ADMIN_UI", "false").lower() == "true"
-    hide_default_credentials_hint = bool(
+    admin_ui_disabled: Final = os.getenv("DISABLE_ADMIN_UI", "false").lower() == "true"
+    hide_default_credentials_hint: Final = bool(
         os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
         or general_settings.get("hide_default_credentials_hint", False) is True
     )
 
-    sso_configured = _has_user_setup_sso()
+    sso_configured: Final = _has_user_setup_sso()
 
     from litellm.proxy.proxy_server import proxy_config
 
-    is_control_plane = len(proxy_config.worker_registry) > 0
+    is_control_plane: Final = len(proxy_config.worker_registry) > 0
 
     return UiDiscoveryEndpoints(
         server_root_path=get_server_root_path(),

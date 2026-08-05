@@ -65,23 +65,24 @@ def is_valid_scope_token(value: str) -> bool:
     return is_valid_nqchar_string(value)
 
 
-def validate_scope_tokens(scopes: Iterable[str]) -> tuple[str, ...]:
+def validate_scope_tokens(scopes: Iterable[object]) -> tuple[str, ...]:
     """Validate each scope independently, rejecting duplicates and preserving order.
 
     Raises ValueError with a message that never echoes the offending value.
     """
-    validated = tuple(scopes)
-    for scope in validated:
+    validated: list[str] = []
+    for scope in scopes:
         if not isinstance(scope, str) or not is_valid_scope_token(scope):
             raise ValueError("must contain only RFC 6749 scope-tokens")
+        validated.append(scope)
     if len(frozenset(validated)) != len(validated):
         raise ValueError("must not contain duplicate scopes")
     if not validated:
         raise ValueError("must contain at least one scope")
-    return validated
+    return tuple(validated)
 
 
-def _validate_url_shape(value: str, *, allow_query: bool) -> None:
+def _validate_url_shape(value: object, *, allow_query: bool) -> None:
     """Shared safety checks for issuer identifiers and provider endpoints."""
     if not isinstance(value, str) or not value:
         raise ValueError("must be a non-empty string")

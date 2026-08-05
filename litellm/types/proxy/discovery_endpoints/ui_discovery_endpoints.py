@@ -1,6 +1,4 @@
 from collections.abc import Sequence
-from typing import Any
-
 from pydantic import (
     BaseModel,
     ConfigDict,

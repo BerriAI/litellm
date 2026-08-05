@@ -141,11 +141,23 @@ async def test_list_keys_include_created_by_keys():
     where_condition = mock_find_many.call_args.kwargs["where"]
     print(f"where_condition with include_created_by_keys=True: {where_condition}")
 
-    # Verify the structure contains AND with OR conditions
-    assert "AND" in where_condition
-    assert "OR" in where_condition["AND"][1]
+    def _flatten_and(node):
+        if set(node.keys()) == {"AND"}:
+            return [c for child in node["AND"] for c in _flatten_and(child)]
+        return [node]
 
-    or_conditions = where_condition["AND"][1]["OR"]
+    def _find_visibility_or(node):
+        return next(
+            c["OR"]
+            for c in _flatten_and(node)
+            if "OR" in c and any("user_id" in branch or "created_by" in branch for branch in c["OR"])
+        )
+
+    conditions = _flatten_and(where_condition)
+    assert {"key_alias": test_key_alias} in conditions
+    assert {"token": test_key_hash} in conditions
+
+    or_conditions = _find_visibility_or(where_condition)
 
     # Should have 2 OR conditions: user's own keys and created_by keys
     assert len(or_conditions) == 2
@@ -163,11 +175,10 @@ async def test_list_keys_include_created_by_keys():
     assert user_condition is not None, "User condition should be present"
     assert created_by_condition is not None, "Created by condition should be present"
 
-    # Verify user condition has all the filters
     assert user_condition["user_id"] == test_user_id
     assert user_condition["organization_id"] == test_org_id
-    assert user_condition["key_alias"] == test_key_alias
-    assert user_condition["token"] == test_key_hash
+    assert "key_alias" not in user_condition
+    assert "token" not in user_condition
 
     # Verify created_by condition only has the created_by filter (no other filters applied)
     # This is the current behavior - created_by keys don't inherit other filters
@@ -218,7 +229,7 @@ async def test_list_keys_include_created_by_keys():
     where_condition_with_exclude = mock_find_many.call_args.kwargs["where"]
     print(f"where_condition with exclude_team_id: {where_condition_with_exclude}")
 
-    or_conditions_with_exclude = where_condition_with_exclude["AND"][1]["OR"]
+    or_conditions_with_exclude = _find_visibility_or(where_condition_with_exclude)
 
     # Find the user condition and created_by condition
     user_condition_with_exclude = None
@@ -6444,6 +6455,75 @@ def test_build_key_filter_conditions_agent_id_narrows_visibility():
     assert "agent_id" not in json.dumps(where_without)
 
 
+def test_build_key_filter_conditions_key_alias_narrows_team_admin_visibility():
+    """
+    LIT-3243: key_alias sat only in the own-keys OR branch, so a team admin's
+    admin-team branch matched every team key and the filter was a no-op. It
+    must be a top-level AND so it narrows every visibility branch.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="team-admin-user",
+        team_id=None,
+        organization_id=None,
+        key_alias="member-key-alias",
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=["team-a"],
+        member_team_ids=["team-a"],
+        include_created_by_keys=False,
+    )
+
+    assert where.get("AND"), f"expected top-level AND, got: {where}"
+    assert {"key_alias": "member-key-alias"} in where["AND"], f"key_alias not ANDed: {where}"
+    assert json.dumps({"team_id": {"in": ["team-a"]}}) in json.dumps(where)
+
+    where_substring = _build_key_filter_conditions(
+        user_id="team-admin-user",
+        team_id=None,
+        organization_id=None,
+        key_alias="member-key",
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=["team-a"],
+        member_team_ids=["team-a"],
+        include_created_by_keys=False,
+        use_substring_matching=True,
+    )
+    assert {"key_alias": {"contains": "member-key", "mode": "insensitive"}} in where_substring["AND"], (
+        f"substring key_alias not ANDed: {where_substring}"
+    )
+
+
+def test_build_key_filter_conditions_key_hash_narrows_team_admin_visibility():
+    """
+    Same class as LIT-3243: key_hash must AND across all visibility branches
+    instead of sitting in the own-keys branch where the admin-team branch
+    bypasses it.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="team-admin-user",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash="hashed-token-123",
+        exclude_team_id=None,
+        admin_team_ids=["team-a"],
+        member_team_ids=["team-a"],
+        include_created_by_keys=False,
+    )
+
+    assert where.get("AND"), f"expected top-level AND, got: {where}"
+    assert {"token": "hashed-token-123"} in where["AND"], f"key_hash not ANDed: {where}"
+
+
 @pytest.mark.asyncio
 async def test_generate_key_negative_max_budget():
     """
@@ -8877,21 +8957,10 @@ async def test_build_key_filter_project_id_and_access_group_id():
         access_group_id=access_group_id,
     )
 
-    # After project_id: {"AND": [visibility_where, {"project_id": ...}]}
-    # After access_group_id: {"AND": [above, {"access_group_ids": ...}]}
     assert "AND" in where
     outer_and = where["AND"]
-    assert len(outer_and) == 2
-
-    # The access_group_ids filter is the outermost AND
-    access_group_filter = outer_and[1]
-    assert access_group_filter == {"access_group_ids": {"hasSome": [access_group_id]}}
-
-    # The project_id filter is nested one level in
-    inner = outer_and[0]
-    assert "AND" in inner
-    inner_and = inner["AND"]
-    assert {"project_id": project_id} in inner_and
+    assert {"project_id": project_id} in outer_and
+    assert {"access_group_ids": {"hasSome": [access_group_id]}} in outer_and
 
 
 @pytest.mark.asyncio
@@ -8953,9 +9022,8 @@ async def test_build_key_filter_admin_substring_matching():
         use_substring_matching=True,
     )
 
-    # Single OR condition is flattened into the top-level where dict
-    assert where["user_id"] == {"contains": user_id, "mode": "insensitive"}
-    assert where["key_alias"] == {"contains": key_alias, "mode": "insensitive"}
+    assert where["AND"][0]["user_id"] == {"contains": user_id, "mode": "insensitive"}
+    assert {"key_alias": {"contains": key_alias, "mode": "insensitive"}} in where["AND"]
 
 
 @pytest.mark.asyncio
@@ -8985,10 +9053,9 @@ async def test_build_key_filter_non_admin_exact_matching():
         use_substring_matching=False,
     )
 
-    # Single OR condition is flattened into the top-level where dict
     # Exact match — no contains/insensitive wrapping
-    assert where["user_id"] == user_id
-    assert where["key_alias"] == key_alias
+    assert where["AND"][0]["user_id"] == user_id
+    assert {"key_alias": key_alias} in where["AND"]
 
 
 @pytest.mark.asyncio
