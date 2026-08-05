@@ -7643,6 +7643,7 @@ async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
     counter_cache = DualCache()
     window_start = datetime.now(timezone.utc) - timedelta(hours=1)
     fake_prisma = MagicMock()
+    fake_prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
         return_value=[{"api_key": "key-window", "_sum": {"spend": 2.25}}]
     )
@@ -7657,6 +7658,7 @@ async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
             counter_key="spend:key:key-window:window:1h",
             entity_type="Key",
             entity_id="key-window",
+            window_duration="1h",
             window_start=window_start,
             increment=0.5,
         )
@@ -7766,6 +7768,7 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
+    fake_prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
         return_value=[{"api_key": "key-window-stale-local", "_sum": {"spend": 2.25}}]
     )
@@ -7780,6 +7783,7 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
             counter_key=counter_key,
             entity_type="Key",
             entity_id="key-window-stale-local",
+            window_duration="1h",
             window_start=window_start,
             increment=0.5,
         )
@@ -7830,6 +7834,7 @@ async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed()
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
+    fake_prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
         return_value=[
             {"api_key": "key-window-concurrent-seed", "_sum": {"spend": 2.25}}
@@ -7846,6 +7851,7 @@ async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed()
             counter_key=counter_key,
             entity_type="Key",
             entity_id="key-window-concurrent-seed",
+            window_duration="1h",
             window_start=window_start,
             increment=0.5,
         )
@@ -7880,6 +7886,7 @@ async def test_window_spend_counter_skips_invalid_window_start():
             counter_key="spend:key:key-invalid-window:window:not-a-duration",
             entity_type="Key",
             entity_id="key-invalid-window",
+            window_duration="not-a-duration",
             window_start=None,
             increment=0.5,
         )
@@ -7912,6 +7919,7 @@ async def test_window_spend_counter_does_not_seed_zero_when_db_unavailable():
             counter_key=counter_key,
             entity_type="Key",
             entity_id="key-window-db-unavailable",
+            window_duration="1h",
             window_start=datetime.now(timezone.utc) - timedelta(hours=1),
         )
 
