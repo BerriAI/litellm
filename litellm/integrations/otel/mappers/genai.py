@@ -8,6 +8,7 @@ table: one lambda per mapping operation, applied against the typed span data.
 """
 
 from collections.abc import Callable
+from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
@@ -155,7 +156,7 @@ class GenAIMapper:
                 return {}
 
     def _llm_call(self, data: LLMCallSpanData) -> AttributeMap:
-        attrs = collect(self._LLM_CALL_ATTRS, data)
+        attrs: Final = collect(self._LLM_CALL_ATTRS, data)
         if data.tools:
             attrs[LiteLLM.TOOLS_DECLARED] = len(data.tools)
             attrs.update(
@@ -174,11 +175,11 @@ class GenAIMapper:
 
     @classmethod
     def _service(cls, data: ServiceSpanData) -> AttributeMap:
-        attrs = collect(cls._SERVICE_ATTRS, data)
+        attrs: Final = collect(cls._SERVICE_ATTRS, data)
         # An outbound datastore call (DB_CALL / CLIENT span) also carries db.*
         # semconv. Internal services (router, budget jobs, …) have no db.system,
         # so they get only the litellm.service.* keys above.
-        system = db_system(data.service_name)
+        system: Final = db_system(data.service_name)
         if system is not None:
             attrs[DB.SYSTEM_NAME] = system
             if data.call_type:

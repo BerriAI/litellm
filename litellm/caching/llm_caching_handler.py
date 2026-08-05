@@ -3,6 +3,7 @@ Add the event loop to the cache key, to prevent event loop closed errors.
 """
 
 import asyncio
+from typing import Final
 
 from .in_memory_cache import InMemoryCache
 
@@ -25,8 +26,8 @@ class LLMClientCache(InMemoryCache):
         If none, use the key as is.
         """
         try:
-            event_loop = asyncio.get_running_loop()
-            stringified_event_loop = str(id(event_loop))
+            event_loop: Final = asyncio.get_running_loop()
+            stringified_event_loop: Final = str(id(event_loop))
             return f"{key}-{stringified_event_loop}"
         except RuntimeError:  # handle no current running event loop
             return key

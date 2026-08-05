@@ -15,7 +15,7 @@ const staticImageData: Plugin = {
 const config: ViteUserConfig = {
   plugins: [staticImageData],
   test: {
-    environment: "jsdom",
+    environment: "./tests/jsdomFetchEnv.ts",
     setupFiles: ["tests/setupTests.ts"],
     globals: true,
     css: true, // lets you import CSS/modules without extra mocks

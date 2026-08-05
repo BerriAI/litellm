@@ -4,6 +4,8 @@ RecursiveCharacterTextSplitter for RAG ingestion.
 A simple implementation that splits text recursively by different separators.
 """
 
+from typing import Final
+
 from litellm.constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE
 
 
@@ -37,7 +39,7 @@ class RecursiveCharacterTextSplitter:
             # Max depth reached, return text as-is split into chunk_size pieces
             return [text[i : i + self.chunk_size] for i in range(0, len(text), self.chunk_size)]
 
-        final_chunks: list[str] = []
+        final_chunks: Final[list[str]] = []
 
         # Get the appropriate separator
         separator = separators[-1]
@@ -87,8 +89,8 @@ class RecursiveCharacterTextSplitter:
 
     def _merge_splits(self, splits: list[str], separator: str) -> list[str]:
         """Merge splits into chunks respecting chunk_size and chunk_overlap."""
-        chunks: list[str] = []
-        current_chunk: list[str] = []
+        chunks: Final[list[str]] = []
+        current_chunk: Final[list[str]] = []
         current_length = 0
 
         for split in splits:
@@ -119,7 +121,7 @@ class RecursiveCharacterTextSplitter:
 
     def _force_split(self, text: str) -> list[str]:
         """Force split text by chunk_size when no separator works."""
-        chunks: list[str] = []
+        chunks: Final[list[str]] = []
         start = 0
 
         while start < len(text):

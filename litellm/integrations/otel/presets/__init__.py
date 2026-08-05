@@ -9,6 +9,7 @@ the factory in ``litellm_logging`` can resolve a name and build a single
 """
 
 from collections.abc import Callable
+from typing import Final
 
 from litellm.integrations.otel.presets.agentops import agentops_preset
 from litellm.integrations.otel.presets.arize import arize_dynamic_headers, arize_preset
@@ -25,7 +26,7 @@ from litellm.types.utils import StandardCallbackDynamicParams
 
 #: Callback name → preset. The ``Preset`` annotation makes mypy verify every
 #: registered value matches the preset interface.
-PRESET_BY_CALLBACK: dict[str, Preset] = {
+PRESET_BY_CALLBACK: Final[dict[str, Preset]] = {
     "agentops": agentops_preset,
     "arize": arize_preset,
     "arize_phoenix": phoenix_preset,
@@ -39,7 +40,7 @@ PRESET_BY_CALLBACK: dict[str, Preset] = {
 #: routing). Only integrations that support dynamic credentials appear here —
 #: Arize-Phoenix/Langtrace/Levo/AgentOps don't, so they use the logger's
 #: default tracer.
-DYNAMIC_HEADERS_BY_CALLBACK: dict[str, Callable[[StandardCallbackDynamicParams], dict[str, str]]] = {
+DYNAMIC_HEADERS_BY_CALLBACK: Final[dict[str, Callable[[StandardCallbackDynamicParams], dict[str, str]]]] = {
     "arize": arize_dynamic_headers,
     "langfuse_otel": langfuse_dynamic_headers,
     "weave_otel": weave_dynamic_headers,
@@ -54,10 +55,10 @@ def dynamic_otlp_headers(
 
     ``None`` means "no per-request routing" — the caller uses its default tracer.
     """
-    builder = DYNAMIC_HEADERS_BY_CALLBACK.get(callback_name or "")
+    builder: Final = DYNAMIC_HEADERS_BY_CALLBACK.get(callback_name or "")
     if builder is None or not dynamic_params:
         return None
-    headers = builder(dynamic_params)
+    headers: Final = builder(dynamic_params)
     return headers or None
 
 
