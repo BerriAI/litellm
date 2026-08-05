@@ -7,14 +7,18 @@ on:
       - litellm_internal_staging
       - litellm_oss_staging
       - "litellm_**"
+  push:
+    branches:
+      - main
+      - litellm_internal_staging
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   proxy-endpoints:
@@ -25,7 +29,9 @@ jobs:
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: >-
+        tests/test_litellm/proxy/analytics_endpoints
         tests/test_litellm/proxy/management_endpoints
+        tests/test_litellm/proxy/memory
         tests/test_litellm/proxy/guardrails
         tests/test_litellm/proxy/management_helpers
         tests/test_litellm/proxy/anthropic_endpoints

@@ -7,6 +7,8 @@ module should touch a failed upstream response's body.
 
 from __future__ import annotations
 
+from typing import Final
+
 import httpx
 
 from litellm._logging import verbose_logger
@@ -63,18 +65,21 @@ def _classify_oauth_error_code(
 ) -> UpstreamOAuthFault:
     """Blame assignment for a contract-conformant OAuth error code, shared by the token and DCR
     classifiers. Codes by which the upstream blames itself keep that blame; ``invalid_target`` is a
-    gateway capability gap (RFC 8707 resource indicators, LIT-4339) no matter whose credentials were
-    presented; credential-indicting codes follow the credential source; everything else, including
-    codes we do not recognize, is the caller's to act on. The upstream's HTTP status is deliberately
-    never consulted: status derives from this classification at render time, which is what keeps
-    status and code from contradicting each other."""
+    gateway configuration gap (the RFC 8707 resource indicator this server sends, or fails to send)
+    no matter whose credentials were presented; credential-indicting codes follow the credential
+    source; everything else, including codes we do not recognize, is the caller's to act on. The
+    upstream's HTTP status is deliberately never consulted: status derives from this classification
+    at render time, which is what keeps status and code from contradicting each other."""
     if code == "server_error" or code == "temporarily_unavailable":
         return UpstreamReportedFault(code=code)
     if code in GATEWAY_CAPABILITY_CODES:
         verbose_logger.warning(
             "MCP server %s: the upstream authorization server rejected the request with "
-            "invalid_target; it may require RFC 8707 resource indicators, which the gateway "
-            "does not send yet (tracked as LIT-4339)",
+            "invalid_target, meaning it did not accept the RFC 8707 resource indicator for this "
+            "request. Set upstream_resource on this server to the exact resource identifier the "
+            "authorization server expects (or to 'auto' to send the server's own canonical url); "
+            "if it is already set and the authorization server does not support resource "
+            "indicators, unset it and express the target audience through scopes instead",
             log_context,
         )
         return GatewayRejected(code=code)
@@ -98,9 +103,9 @@ def classify_upstream_token_rejection(
     """Classify a token-endpoint rejection into exactly one fault: a body with an RFC 6749 §5.2
     ``error`` field goes through blame assignment (:func:`_classify_oauth_error_code`); anything
     without a usable ``error`` field is an upstream protocol fault."""
-    parsed = _safe_json(response)
-    fields = parsed if isinstance(parsed, dict) else {}
-    code = _bounded_field(fields.get("error"))
+    parsed: Final = _safe_json(response)
+    fields: Final = parsed if isinstance(parsed, dict) else {}
+    code: Final = _bounded_field(fields.get("error"))
     if code is None:
         _log_out_of_contract("token", response, log_context)
         return UpstreamProtocolFault(note=f"upstream token endpoint returned HTTP {response.status_code}")
@@ -118,9 +123,9 @@ def classify_upstream_dcr_rejection(response: httpx.Response, log_context: str) 
     ``error`` / ``error_description`` and go through the same blame assignment as token errors
     (registration sends no client credentials, so credential codes stay caller-actionable); anything
     without a usable ``error`` field is an upstream protocol fault."""
-    parsed = _safe_json(response)
-    fields = parsed if isinstance(parsed, dict) else {}
-    code = _bounded_field(fields.get("error"))
+    parsed: Final = _safe_json(response)
+    fields: Final = parsed if isinstance(parsed, dict) else {}
+    code: Final = _bounded_field(fields.get("error"))
     if code is None:
         _log_out_of_contract("registration", response, log_context)
         return UpstreamProtocolFault(note=f"upstream registration failed with HTTP {response.status_code}")

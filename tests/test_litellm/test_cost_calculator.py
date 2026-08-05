@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm.cost_calculator import (
+    BaseTokenUsageProcessor,
     RealtimeAPITokenUsageProcessor,
     completion_cost,
     cost_per_token,
@@ -1013,9 +1014,9 @@ def test_tiered_pricing_only_deployment_selects_router_model_id():
     router = Router(
         model_list=[
             {
-                "model_name": "qwen-3.7-plus",
+                "model_name": "qwen-tier-only",
                 "litellm_params": {
-                    "model": "dashscope/qwen3.7-plus",
+                    "model": "dashscope/qwen-tier-only-test",
                     "api_key": "sk-fake",
                 },
                 "model_info": {
@@ -1036,10 +1037,12 @@ def test_tiered_pricing_only_deployment_selects_router_model_id():
     assert entry.get("input_cost_per_token") is None
     assert entry.get("tiered_pricing") is not None
     # The stripped shared alias must not carry tiered pricing.
-    assert litellm.model_cost["dashscope/qwen3.7-plus"].get("tiered_pricing") is None
+    assert (
+        litellm.model_cost["dashscope/qwen-tier-only-test"].get("tiered_pricing") is None
+    )
 
     selected = _select_model_name_for_cost_calc(
-        model="dashscope/qwen3.7-plus",
+        model="dashscope/qwen-tier-only-test",
         completion_response=None,
         custom_pricing=True,
         custom_llm_provider="dashscope",
@@ -3128,7 +3131,7 @@ def test_custom_pricing_applies_cache_creation_input_cost_via_cache_write_tokens
 
 
 def test_extract_cache_read_tokens_anthropic_top_level():
-    from litellm.proxy.db.db_spend_update_writer import _extract_cache_read_tokens
+    from litellm.proxy.spend_tracking.savings import extract_cache_read_tokens as _extract_cache_read_tokens
 
     usage_obj = {
         "prompt_tokens": 100,
@@ -3140,7 +3143,7 @@ def test_extract_cache_read_tokens_anthropic_top_level():
 
 
 def test_extract_cache_read_tokens_openai_compatible_fallback():
-    from litellm.proxy.db.db_spend_update_writer import _extract_cache_read_tokens
+    from litellm.proxy.spend_tracking.savings import extract_cache_read_tokens as _extract_cache_read_tokens
 
     # Anthropic field absent — fall back to prompt_tokens_details.cached_tokens.
     usage_obj = {
@@ -3151,7 +3154,7 @@ def test_extract_cache_read_tokens_openai_compatible_fallback():
 
 
 def test_extract_cache_read_tokens_zero_when_missing():
-    from litellm.proxy.db.db_spend_update_writer import _extract_cache_read_tokens
+    from litellm.proxy.spend_tracking.savings import extract_cache_read_tokens as _extract_cache_read_tokens
 
     assert _extract_cache_read_tokens({}) == 0
     assert _extract_cache_read_tokens({"cache_read_input_tokens": None}) == 0
@@ -3162,9 +3165,7 @@ def test_extract_cache_read_tokens_zero_when_missing():
 
 
 def test_extract_cache_creation_tokens_anthropic_top_level():
-    from litellm.proxy.db.db_spend_update_writer import (
-        _extract_cache_creation_tokens,
-    )
+    from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens as _extract_cache_creation_tokens
 
     usage_obj = {
         "prompt_tokens": 100,
@@ -3176,9 +3177,7 @@ def test_extract_cache_creation_tokens_anthropic_top_level():
 
 
 def test_extract_cache_creation_tokens_openai_cache_write_alias():
-    from litellm.proxy.db.db_spend_update_writer import (
-        _extract_cache_creation_tokens,
-    )
+    from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens as _extract_cache_creation_tokens
 
     # kimi-k2 emits cache_write_tokens.
     usage_obj = {
@@ -3189,9 +3188,7 @@ def test_extract_cache_creation_tokens_openai_cache_write_alias():
 
 
 def test_extract_cache_creation_tokens_openai_cache_creation_alias():
-    from litellm.proxy.db.db_spend_update_writer import (
-        _extract_cache_creation_tokens,
-    )
+    from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens as _extract_cache_creation_tokens
 
     # Other OpenAI-compatible providers emit cache_creation_tokens.
     usage_obj = {
@@ -3202,9 +3199,7 @@ def test_extract_cache_creation_tokens_openai_cache_creation_alias():
 
 
 def test_extract_cache_creation_tokens_zero_when_missing():
-    from litellm.proxy.db.db_spend_update_writer import (
-        _extract_cache_creation_tokens,
-    )
+    from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens as _extract_cache_creation_tokens
 
     assert _extract_cache_creation_tokens({}) == 0
     assert _extract_cache_creation_tokens({"cache_creation_input_tokens": None}) == 0
@@ -3479,3 +3474,59 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+
+
+def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
+    """
+    cache_write_tokens and cache_creation_tokens mirror each other on
+    PromptTokensDetailsWrapper, so field-iterating aggregation must sum the pair
+    once: a single 50-token usage stays 50 and two combine to 100, not double.
+    """
+    single = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cache_write_tokens=50),
+    )
+    combined = BaseTokenUsageProcessor.combine_usage_objects([single])
+    assert combined.prompt_tokens_details is not None
+    assert combined.prompt_tokens_details.cache_write_tokens == 50
+    assert combined.prompt_tokens_details.cache_creation_tokens == 50
+
+    anthropic_style = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        cache_creation_input_tokens=50,
+    )
+    combined_pair = BaseTokenUsageProcessor.combine_usage_objects([anthropic_style, anthropic_style])
+    assert combined_pair.prompt_tokens_details is not None
+    assert combined_pair.prompt_tokens_details.cache_write_tokens == 100
+    assert combined_pair.prompt_tokens_details.cache_creation_tokens == 100
+
+
+def test_completion_cost_prices_anthropic_shaped_cache_read_tokens():
+    """Regression: an Anthropic /v1/messages response reports cache reads as top-level
+    cache_read_input_tokens with input_tokens excluding them. Reading that usage as
+    Responses API usage dropped the cache tokens and billed the whole prompt at the
+    uncached input rate, overstating spend on cache hits."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "gpt-5.6-sol",
+        "stop_reason": "end_turn",
+        "content": [{"type": "text", "text": "1"}],
+        "usage": {"input_tokens": 3, "output_tokens": 5, "cache_read_input_tokens": 4014},
+    }
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="gpt-5.6-sol",
+        custom_llm_provider="openai",
+    )
+
+    assert cost == pytest.approx(3 * 5e-6 + 4014 * 5e-7 + 5 * 3e-5, rel=1e-9)

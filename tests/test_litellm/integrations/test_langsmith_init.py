@@ -347,3 +347,90 @@ class TestLangsmithRedactUserApiKeyInfo:
         assert "user_api_key_user_id" not in nested
         assert nested["session_id"] == "sess-1"
         assert extra["session_id"] == "sess-1"
+
+    def test_redact_enabled_strips_user_api_key_info_from_inputs(self, reset_redact_flag):
+        """
+        Regression (LIT-4306): `inputs` is the whole StandardLoggingPayload, so
+        `redact_user_api_key_info` has to cover `inputs.metadata` the same way it
+        covers `extra` - including the nested `requester_metadata` copy. Before
+        the fix `extra` was redacted and `inputs` shipped every user_api_key_*
+        field verbatim.
+        """
+        litellm.redact_user_api_key_info = True
+        logger = self._logger()
+        metadata = self._metadata_with_user_api_key_fields()
+        metadata["user_api_key_auth_metadata"] = {"priority": "high"}
+        payload = {
+            "id": "run-1",
+            "response": {"choices": []},
+            "metadata": metadata,
+            "startTime": 1.0,
+            "endTime": 2.0,
+            "request_tags": [],
+            "error_str": None,
+            "status": "success",
+            "response_cost": 0.0,
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        }
+        credentials = {
+            "LANGSMITH_API_KEY": "test-key",
+            "LANGSMITH_PROJECT": "test-project",
+            "LANGSMITH_BASE_URL": "https://api.smith.langchain.com",
+        }
+
+        data = logger._prepare_log_data(
+            kwargs={"litellm_params": {"metadata": metadata}, "standard_logging_object": payload},
+            response_obj=None,
+            start_time=1.0,
+            end_time=2.0,
+            credentials=credentials,
+        )
+
+        inputs_metadata = data["inputs"]["metadata"]
+        assert [k for k in inputs_metadata if k.startswith("user_api_key")] == []
+        assert [k for k in inputs_metadata["requester_metadata"] if k.startswith("user_api_key")] == []
+        # inputs and extra must agree - they go through the same redaction now
+        assert [k for k in data["extra"] if k.startswith("user_api_key")] == []
+        # non-identity payload is untouched
+        assert inputs_metadata["model"] == "gpt-4"
+        assert inputs_metadata["requester_metadata"]["session_id"] == "sess-1"
+        assert data["inputs"]["total_tokens"] == 2
+        # the shared standard_logging_object other loggers read is not mutated
+        assert "user_api_key_hash" in payload["metadata"]
+        assert "user_api_key_user_id" in payload["metadata"]["requester_metadata"]
+
+    def test_redact_disabled_keeps_user_api_key_info_in_inputs(self, reset_redact_flag):
+        """Flag off: the identity fields stay. The flag governs them, not this fix."""
+        litellm.redact_user_api_key_info = False
+        logger = self._logger()
+        metadata = self._metadata_with_user_api_key_fields()
+        payload = {
+            "id": "run-1",
+            "response": {"choices": []},
+            "metadata": metadata,
+            "startTime": 1.0,
+            "endTime": 2.0,
+            "request_tags": [],
+            "error_str": None,
+            "status": "success",
+            "response_cost": 0.0,
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        }
+
+        data = logger._prepare_log_data(
+            kwargs={"litellm_params": {"metadata": metadata}, "standard_logging_object": payload},
+            response_obj=None,
+            start_time=1.0,
+            end_time=2.0,
+            credentials={
+                "LANGSMITH_API_KEY": "test-key",
+                "LANGSMITH_PROJECT": "test-project",
+                "LANGSMITH_BASE_URL": "https://api.smith.langchain.com",
+            },
+        )
+
+        assert data["inputs"]["metadata"]["user_api_key_hash"] == "abc123"

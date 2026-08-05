@@ -2,7 +2,20 @@ import { describe, expect, it } from "vitest";
 
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import type { ToolSpendDailyEntry, ToolSpendEntry } from "@/components/networking";
-import { buildDailyToolSeries, computeCacheLeakage, isAnthropicModel, topToolsBySpend } from "./costOptimizationUtils";
+import {
+  SAVINGS_COLORS,
+  SAVINGS_DRIVERS,
+  SAVINGS_SERIES,
+  buildDailyToolSeries,
+  computeCacheLeakage,
+  formatRangeLabel,
+  isAnthropicModel,
+  localIsoDay,
+  toCumulative,
+  topToolsBySpend,
+  usd,
+  withStartAnchor,
+} from "./costOptimizationUtils";
 
 const metrics = (overrides: Partial<SpendMetrics>): SpendMetrics => ({
   spend: 0,
@@ -219,5 +232,132 @@ describe("topToolsBySpend", () => {
 
   it("sorts by spend descending and truncates to the limit", () => {
     expect(topToolsBySpend(byTool, 2).map((t) => t.tool_name)).toEqual(["b", "c"]);
+  });
+});
+
+describe("localIsoDay", () => {
+  it("reads the date off the viewer's clock rather than shifting it to UTC", () => {
+    expect(localIsoDay(new Date(2026, 6, 23, 23, 30))).toBe("2026-07-23");
+    expect(localIsoDay(new Date(2026, 0, 5, 0, 30))).toBe("2026-01-05");
+  });
+});
+
+describe("toCumulative", () => {
+  const point = (date: string, compression: number, caching: number, autorouter: number = 0) => ({
+    date,
+    Compression: compression,
+    "Prompt caching": caching,
+    "Auto-router": autorouter,
+  });
+
+  it("turns each reading into everything saved up to that point", () => {
+    const running = toCumulative([point("Jul 1", 1, 10), point("Jul 2", 2, 20), point("Jul 3", 3, 30)]);
+    expect(running.map((p) => p.Compression)).toEqual([1, 3, 6]);
+    expect(running.map((p) => p["Prompt caching"])).toEqual([10, 30, 60]);
+    expect(running.map((p) => p["Auto-router"])).toEqual([0, 0, 0]);
+  });
+
+  it("accumulates each driver on its own, so one flat series cannot lift the other", () => {
+    const running = toCumulative([point("Jul 1", 0, 5), point("Jul 2", 0, 5)]);
+    expect(running.map((p) => p.Compression)).toEqual([0, 0]);
+    expect(running.map((p) => p["Prompt caching"])).toEqual([5, 10]);
+    expect(running.map((p) => p["Auto-router"])).toEqual([0, 0]);
+  });
+
+  it("never falls, even across a quiet interval", () => {
+    const running = toCumulative([point("Jul 1", 4, 0), point("Jul 2", 0, 0), point("Jul 3", 1, 0)]);
+    expect(running.map((p) => p.Compression)).toEqual([4, 4, 5]);
+  });
+
+  it("keeps the labels and length of the readings it was given", () => {
+    const running = toCumulative([point("9am", 1, 1), point("10am", 1, 1)]);
+    expect(running.map((p) => p.date)).toEqual(["9am", "10am"]);
+    expect(toCumulative([])).toEqual([]);
+  });
+
+  it("accumulates auto-router savings like other drivers", () => {
+    const running = toCumulative([point("Jul 1", 1, 1, 5), point("Jul 2", 1, 1, 10)]);
+    expect(running.map((p) => p["Auto-router"])).toEqual([5, 15]);
+  });
+});
+
+describe("withStartAnchor", () => {
+  const point = (date: string, compression: number, caching: number, autorouter: number = 0) => ({
+    date,
+    Compression: compression,
+    "Prompt caching": caching,
+    "Auto-router": autorouter,
+  });
+
+  it("lifts a single-day cumulative off a floating dot by prepending a $0 origin", () => {
+    const anchored = withStartAnchor([point("Jul 24", 12, 30)], "Jul 24");
+    expect(anchored).toEqual([point("Jul 24", 0, 0), point("Jul 24", 12, 30)]);
+  });
+
+  it("starts the range at zero without disturbing the running totals that follow", () => {
+    const anchored = withStartAnchor([point("Jul 16", 5, 1), point("Jul 17", 9, 4)], "Jul 16");
+    expect(anchored.map((p) => p.Compression)).toEqual([0, 5, 9]);
+    expect(anchored.map((p) => p["Prompt caching"])).toEqual([0, 1, 4]);
+    expect(anchored.map((p) => p["Auto-router"])).toEqual([0, 0, 0]);
+  });
+
+  it("leaves an empty series alone so the chart's own no-data state can show", () => {
+    expect(withStartAnchor([], "Jul 24")).toEqual([]);
+  });
+});
+
+describe("formatRangeLabel", () => {
+  it("reads as a range across days", () => {
+    expect(formatRangeLabel(new Date(2026, 6, 16), new Date(2026, 6, 23))).toBe("Jul 16 \u2013 Jul 23");
+  });
+
+  it("collapses to one date when both ends are the same day", () => {
+    expect(formatRangeLabel(new Date(2026, 6, 23), new Date(2026, 6, 23))).toBe("Jul 23");
+  });
+
+  it("is empty until both ends are picked", () => {
+    expect(formatRangeLabel(undefined, new Date(2026, 6, 23))).toBe("");
+    expect(formatRangeLabel(new Date(2026, 6, 23), undefined)).toBe("");
+  });
+});
+
+describe("usd", () => {
+  it("keeps four decimals for sub-dollar amounts so small savings stay visible", () => {
+    expect(usd(0.05)).toBe("$0.0500");
+    expect(usd(1.5)).toBe("$1.50");
+    expect(usd(0)).toBe("$0.00");
+  });
+
+  it("signs a loss ahead of the symbol and keeps its precision", () => {
+    // A driver can be negative once a model switch is charged for its cold cache.
+    // Sizing decimals off the raw value would render this as "$-0.00".
+    expect(usd(-0.05)).toBe("-$0.0500");
+    expect(usd(-0.0004)).toBe("-$0.0004");
+    expect(usd(-12.4)).toBe("-$12.40");
+  });
+});
+
+describe("savings driver colours", () => {
+  it("keeps a driver's colour when a driver above it is filtered out", () => {
+    // Charts colour by position in the data they are given, and the donut is given
+    // only drivers that saved something. Compression is zero on any deployment not
+    // running the compression guardrail, so the survivors must not slide onto the
+    // colours of the drivers dropped above them.
+    const totals = { Compression: 0, "Prompt caching": 4, "Auto-router": 7 } as const;
+    const plotted = SAVINGS_DRIVERS.map(({ name, color }) => ({ name, color, usd: totals[name] })).filter(
+      (d) => d.usd > 0,
+    );
+
+    expect(plotted.map((d) => [d.name, d.color])).toEqual([
+      ["Prompt caching", "blue"],
+      ["Auto-router", "amber"],
+    ]);
+  });
+
+  it("agrees with the legend, which is built from the unfiltered list", () => {
+    const legend = new Map(SAVINGS_SERIES.map((name, i) => [SAVINGS_COLORS[i], name]));
+    for (const { name, color } of SAVINGS_DRIVERS) {
+      expect(legend.get(color)).toBe(name);
+    }
   });
 });

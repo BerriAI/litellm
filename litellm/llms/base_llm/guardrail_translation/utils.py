@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, List, Optional
+from typing import Any, Final
 
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues
@@ -17,7 +17,7 @@ def _anthropic_stream_chunk_events(item: Any) -> list[dict]:
     else:
         return []
 
-    events: list[dict] = []
+    events: Final[list[dict]] = []
     for block in chunk.split("\n\n"):
         for line in block.splitlines():
             stripped = line.strip()
@@ -35,7 +35,7 @@ def _anthropic_stream_chunk_events(item: Any) -> list[dict]:
     return events
 
 
-def _usage_from_anthropic_stream_chunks(original_response: list[Any]) -> Optional[AnthropicUsage]:
+def _usage_from_anthropic_stream_chunks(original_response: list[Any]) -> AnthropicUsage | None:
     input_tokens = 0
     output_tokens = 0
     found_usage = False
@@ -64,7 +64,7 @@ def _usage_from_anthropic_stream_chunks(original_response: list[Any]) -> Optiona
     return AnthropicUsage(input_tokens=input_tokens, output_tokens=output_tokens)
 
 
-def blocked_response_usage(original_response: Optional[Any]) -> AnthropicUsage:
+def blocked_response_usage(original_response: Any | None) -> AnthropicUsage:
     """
     Token usage for a synthetic guardrail-blocked response.
 
@@ -76,7 +76,7 @@ def blocked_response_usage(original_response: Optional[Any]) -> AnthropicUsage:
     """
     usage_obj: Any = None
     if isinstance(original_response, list):
-        stream_usage = _usage_from_anthropic_stream_chunks(original_response)
+        stream_usage: Final = _usage_from_anthropic_stream_chunks(original_response)
         if stream_usage is not None:
             return stream_usage
     elif isinstance(original_response, dict):
@@ -96,7 +96,7 @@ def blocked_response_usage(original_response: Optional[Any]) -> AnthropicUsage:
 
 
 def effective_skip_system_message_for_guardrail(guardrail_to_apply: Any) -> bool:
-    per = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
+    per: Final = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
     if per is not None:
         return bool(per)
     import litellm
@@ -105,7 +105,7 @@ def effective_skip_system_message_for_guardrail(guardrail_to_apply: Any) -> bool
 
 
 def effective_skip_tool_message_for_guardrail(guardrail_to_apply: Any) -> bool:
-    per = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
+    per: Final = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
     if per is not None:
         return bool(per)
     import litellm
@@ -114,12 +114,12 @@ def effective_skip_tool_message_for_guardrail(guardrail_to_apply: Any) -> bool:
 
 
 def openai_messages_without_system(
-    messages: List[AllMessageValues],
-) -> List[AllMessageValues]:
+    messages: list[AllMessageValues],
+) -> list[AllMessageValues]:
     return [m for m in messages if str((m or {}).get("role") or "").lower() != "system"]
 
 
 def openai_messages_without_tool(
-    messages: List[AllMessageValues],
-) -> List[AllMessageValues]:
+    messages: list[AllMessageValues],
+) -> list[AllMessageValues]:
     return [m for m in messages if str((m or {}).get("role") or "").lower() != "tool"]

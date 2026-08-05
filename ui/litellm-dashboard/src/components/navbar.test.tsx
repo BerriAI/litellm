@@ -152,6 +152,12 @@ describe("Navbar", () => {
     expect(screen.getByRole("button", { name: /open account menu/i })).toBeInTheDocument();
   });
 
+  it("should link the logo to the UI home route rather than the proxy origin", () => {
+    renderWithProviders(<Navbar {...defaultProps} />);
+
+    expect(screen.getByRole("link", { name: /litellm brand/i })).toHaveAttribute("href", "/ui");
+  });
+
   it("should display user information in dropdown", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Navbar {...defaultProps} />);

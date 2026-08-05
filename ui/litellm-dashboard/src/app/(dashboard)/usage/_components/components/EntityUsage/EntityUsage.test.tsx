@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
 import EntityUsage from "./EntityUsage";
@@ -25,8 +25,17 @@ vi.mock("@/components/networking", () => ({
 
 // Mock the child components to simplify testing
 vi.mock("@/components/activity_metrics", () => ({
-  ActivityMetrics: () => <div>Activity Metrics</div>,
-  processActivityData: () => ({ data: [], metadata: {} }),
+  ActivityMetrics: ({ modelMetrics }: { modelMetrics?: { __source?: string } }) => (
+    <div>
+      <span>Activity Metrics</span>
+      <span>{`metrics-source:${modelMetrics?.__source ?? "none"}`}</span>
+    </div>
+  ),
+  processActivityData: (_data: unknown, key: string) => ({ __source: key }),
+}));
+
+vi.mock("../EndpointUsage/EndpointUsage", () => ({
+  default: () => <div>Endpoint Usage Panel</div>,
 }));
 
 vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
@@ -481,6 +490,54 @@ describe("EntityUsage", () => {
     expect(screen.getAllByText("Activity Metrics")[1]).toBeInTheDocument();
   });
 
+  const selectedPanels = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll("div.tremor-TabPanel-root")).filter(
+      (panel) => panel.getAttribute("aria-selected") === "true",
+    );
+
+  it.each([
+    ["Cost", "Tag Spend Overview"],
+    ["Model Activity", "metrics-source:model_groups"],
+    ["Key Activity", "metrics-source:api_keys"],
+    ["Endpoint Activity", "Endpoint Usage Panel"],
+  ])("shows only the %s panel for a non-team entity type", async (tabLabel, marker) => {
+    const { container } = render(<EntityUsage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByText(tabLabel));
+    });
+
+    const selected = selectedPanels(container);
+    expect(selected).toHaveLength(1);
+    expect(selected[0].textContent).toContain(marker);
+  });
+
+  it.each([
+    ["Cost", "Team Spend Overview"],
+    ["Model Activity", "metrics-source:model_groups"],
+    ["Agent Activity", "metrics-source:entities"],
+    ["Key Activity", "metrics-source:api_keys"],
+    ["Endpoint Activity", "Endpoint Usage Panel"],
+  ])("shows only the %s panel for the team entity type", async (tabLabel, marker) => {
+    const { container } = render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByText(tabLabel));
+    });
+
+    const selected = selectedPanels(container);
+    expect(selected).toHaveLength(1);
+    expect(selected[0].textContent).toContain(marker);
+  });
+
   it("should handle empty data gracefully", async () => {
     const emptyData = {
       results: [],
@@ -527,15 +584,41 @@ describe("EntityUsage", () => {
     expect(screen.getByText("Request / Token Consumption")).toBeInTheDocument();
   });
 
-  it("should display Top Models title for non-agent entity types", async () => {
+  it("should display Top Public Model Names title for non-agent entity types", async () => {
     render(<EntityUsage {...defaultProps} entityType="tag" />);
 
     await waitFor(() => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
     });
 
-    const topModelsElements = screen.getAllByText("Top Models");
-    expect(topModelsElements.length).toBeGreaterThan(0);
+    expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
+  });
+
+  it("defaults Model Activity to public model names and toggles to litellm models", async () => {
+    const { container } = render(<EntityUsage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByText("Model Activity"));
+    });
+
+    const modelActivityPanel = () => selectedPanels(container)[0] as HTMLElement;
+    expect(modelActivityPanel().textContent).toContain("metrics-source:model_groups");
+
+    act(() => {
+      fireEvent.click(within(modelActivityPanel()).getByText("Litellm Model Name"));
+    });
+
+    expect(modelActivityPanel().textContent).toContain("metrics-source:models");
+
+    act(() => {
+      fireEvent.click(within(modelActivityPanel()).getByText("Public Model Name"));
+    });
+
+    expect(modelActivityPanel().textContent).toContain("metrics-source:model_groups");
   });
 
   it("should display Top Agents title for agent entity type", async () => {
