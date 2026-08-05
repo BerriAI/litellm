@@ -198,6 +198,11 @@ def _get_standard_record_attrs() -> frozenset:
 
 _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
 
+# CorrelationContextFilter is the only legitimate source for these two JSON fields;
+# see JsonFormatter.format() for why they're excluded from the generic message-content
+# and extra-attribute promotion paths.
+_RESERVED_CORRELATION_FIELDS: Final = frozenset(("trace_id", "session_id"))
+
 
 class JsonFormatter(Formatter):
     def __init__(self):
@@ -216,13 +221,18 @@ class JsonFormatter(Formatter):
             "timestamp": self.formatTime(record),
         }
 
-        # Parse embedded JSON or Python dict repr in message so sub-fields become first-class properties
+        # Parse embedded JSON or Python dict repr in message so sub-fields become first-class properties.
+        # trace_id/session_id are excluded here unconditionally (not just "if not already
+        # set") - CorrelationContextFilter is the only legitimate source for these two
+        # fields, and a message that merely happens to parse as JSON/dict (e.g. a proxy
+        # log line dumping raw request headers) must never be able to claim them, even on
+        # a record the filter hasn't stamped yet (no correlation context active for it).
         parsed = _try_parse_json_message(message_str)
         if parsed is None:
             parsed = _try_parse_embedded_python_dict(message_str)
         if parsed is not None:
             for key, value in parsed.items():
-                if key not in json_record:
+                if key not in json_record and key not in _RESERVED_CORRELATION_FIELDS:
                     json_record[key] = value
 
         # Include extra attributes passed via logger.debug("msg", extra={...})
@@ -237,7 +247,7 @@ class JsonFormatter(Formatter):
         # claimed the key at the parsed-message step above, and the extra-attributes
         # loop's "key not in json_record" guard would then skip the real value -
         # letting a caller-supplied header spoof another request's correlation ids.
-        for reserved_key in ("trace_id", "session_id"):
+        for reserved_key in _RESERVED_CORRELATION_FIELDS:
             value = getattr(record, reserved_key, None)
             if value:
                 json_record[reserved_key] = value

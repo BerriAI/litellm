@@ -462,6 +462,20 @@ def test_trace_id_and_session_id_cannot_be_spoofed_by_message_content(monkeypatc
         session_id_var.set("")
 
 
+def test_trace_id_and_session_id_cannot_be_injected_with_no_active_context(monkeypatch):
+    """A message that happens to parse as JSON/dict with "trace_id"/"session_id" keys
+    must not surface those fields at all when CorrelationContextFilter hasn't stamped
+    this record - e.g. a log line emitted before Logging.__init__() runs for a request
+    (request_correlation_in_logs on, but no genuine trace/session id active yet)."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_capture_logger("test.no_context_spoof_attempt")
+    trace_id_var.set("")
+    session_id_var.set("")
+    lg.info('{"trace_id": "attacker-supplied-trace", "session_id": "attacker-supplied-session"}')
+    assert "trace_id" not in cap.records[0]
+    assert "session_id" not in cap.records[0]
+
+
 def test_session_id_absent_when_not_set():
     """session_id must NOT appear in JSON record when not set for this context."""
     lg, cap = _make_capture_logger("test.no_session")

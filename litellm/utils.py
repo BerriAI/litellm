@@ -1052,7 +1052,7 @@ def function_setup(
         ):
             stream = True
         get_litellm_logging_class: Final = getattr(sys.modules[__name__], "get_litellm_logging_class")
-        logging_obj: Final = get_litellm_logging_class()(  # Victim for object pool
+        logging_obj = get_litellm_logging_class()(  # Victim for object pool
             model=model,
             messages=messages,
             stream=stream,
