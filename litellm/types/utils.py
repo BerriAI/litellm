@@ -2807,6 +2807,8 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
     conversation_continuing: bool
+    savings_baseline_model: str
+    savings_baseline_deployment_id: str
 
 
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
@@ -2827,6 +2829,8 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[FrozenSet[str]] = frozenset(
         "escalated",
         "tier_boundaries",
         "conversation_continuing",
+        "savings_baseline_model",
+        "savings_baseline_deployment_id",
     }
 )
 
