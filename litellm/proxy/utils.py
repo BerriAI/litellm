@@ -4971,12 +4971,12 @@ class PrismaClient:
         return (self.db,)
 
     def _engine_generations(self) -> tuple[int, ...]:
-        return tuple(w._engine_generation for w in self._prisma_wrappers())
+        return tuple(w.engine_generation for w in self._prisma_wrappers())
 
     def _is_planned_engine_recreate_error(self, e: Exception, generations_before: tuple[int, ...]) -> bool:
         if not PrismaDBExceptionHandler.is_database_transport_error(e):
             return False
-        if any(w._reconnection_lock.locked() for w in self._prisma_wrappers()):
+        if any(w.recreate_in_flight for w in self._prisma_wrappers()):
             return True
         return self._engine_generations() != generations_before
 
