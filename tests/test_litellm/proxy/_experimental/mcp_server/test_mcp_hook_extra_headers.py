@@ -783,7 +783,7 @@ class TestMcpRateLimitServerNameSurfacing:
 
         captured = {}
 
-        def capture_convert(request_obj, kwargs):
+        def capture_convert(request_obj, kwargs, litellm_logging_obj=None):
             captured["kwargs"] = kwargs
             return {"model": "fake"}
 

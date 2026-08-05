@@ -81,6 +81,26 @@ def test_convert_mcp_to_llm_format_missing_request_obj_raises(proxy_logging):
         proxy_logging._convert_mcp_to_llm_format(request_obj=None, kwargs={})
 
 
+def test_convert_mcp_to_llm_format_seeds_logging_obj(proxy_logging, make_mcp_request_obj):
+    """The synthetic guardrail request must carry the request's logging object, otherwise
+    the guardrail's recorded evaluation has nowhere to land and MCP spend-log rows report
+    guardrail_information as null."""
+    sentinel = object()
+    out = proxy_logging._convert_mcp_to_llm_format(
+        request_obj=make_mcp_request_obj(tool_name="search", arguments={}),
+        kwargs={},
+        litellm_logging_obj=sentinel,
+    )
+    assert out["litellm_logging_obj"] is sentinel
+
+
+def test_convert_mcp_to_llm_format_logging_obj_defaults_to_none(proxy_logging, make_mcp_request_obj):
+    out = proxy_logging._convert_mcp_to_llm_format(
+        request_obj=make_mcp_request_obj(tool_name="search", arguments={}), kwargs={}
+    )
+    assert out["litellm_logging_obj"] is None
+
+
 # ---------------------------------------------------------------------------
 # _convert_llm_result_to_mcp_response
 # ---------------------------------------------------------------------------
