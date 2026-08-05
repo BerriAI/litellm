@@ -4491,9 +4491,6 @@ class Router:
 
             data: Final = deployment["litellm_params"].copy()
             deployment_model_name: Final = data["model"]
-            # Wildcard deployments provide provider credentials but must keep
-            # the concrete model requested by the caller. Passing the wildcard
-            # through prevents model-cost lookups and Responses API bridging.
             model_name = (
                 model
                 if "*" in deployment_model_name and "*" not in model
