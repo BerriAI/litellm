@@ -1,6 +1,6 @@
 import ssl
 from enum import Enum
-from typing import Union
+from typing import Final, Union
 
 
 class httpxSpecialProvider(str, Enum):

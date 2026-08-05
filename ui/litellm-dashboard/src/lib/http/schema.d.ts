@@ -760,6 +760,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/test_routing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Auto Router Routing
+         * @description Route a single prompt through a complexity-router config and report where it landed.
+         *
+         *     Answers "which model would this prompt get?" for a config that only exists in a form,
+         *     so an auto router can be checked before it is created. The prompt is classified by the
+         *     same pre-routing hook a live request runs, then dropped: nothing is sent to the model it
+         *     routed to, and no auto router is created. A heuristic config therefore spends nothing, while
+         *     an `llm` classifier or semantic keyword matching bills its classifier/embedding call to the
+         *     calling key, like Test Connection does.
+         *
+         *     **Example Request:**
+         *     ```json
+         *     {
+         *         "prompt": "think step by step about how to shard this table",
+         *         "complexity_router_config": {
+         *             "tiers": {"SIMPLE": ["gpt-4o-mini"], "REASONING": ["o3"]},
+         *             "classifier_type": "heuristic"
+         *         }
+         *     }
+         *     ```
+         */
+        post: operations["preview_auto_router_routing_auto_router_test_routing_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/azure/{endpoint}": {
         parameters: {
             query?: never;
@@ -1451,11 +1489,15 @@ export interface paths {
         put?: never;
         /**
          * Register Plugin
-         * @description Register a plugin in the LiteLLM marketplace.
+         * @description Register a new plugin in the LiteLLM marketplace.
          *
          *     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
          *     GitHub/GitLab/Bitbucket. Claude Code will clone from the git source
          *     when users install.
+         *
+         *     This endpoint is create-only and never overwrites. If a plugin with
+         *     the same name already exists it returns 409 Conflict; use
+         *     PUT /claude-code/plugins/{plugin_name} to update an existing plugin.
          *
          *     Parameters:
          *         - name: Plugin name (kebab-case)
@@ -1468,7 +1510,7 @@ export interface paths {
          *         - category: Plugin category (optional)
          *
          *     Returns:
-         *         Registration status and plugin information.
+         *         Registration status (action is always "created") and plugin information.
          *
          *     Example:
          *         ```bash
@@ -1508,7 +1550,45 @@ export interface paths {
          *         Plugin details including source and metadata.
          */
         get: operations["get_plugin_claude_code_plugins__plugin_name__get"];
-        put?: never;
+        /**
+         * Update Plugin
+         * @description Update an existing plugin in the LiteLLM marketplace.
+         *
+         *     The plugin is identified by its name in the path, which is the resource
+         *     identity and cannot be changed here. This is a full replace, not a merge:
+         *     the manifest is rebuilt from the request body, so any optional field left
+         *     out is reset to its default (e.g. an omitted version is cleared, not kept).
+         *     Send the full desired state.
+         *
+         *     Returns 404 if no plugin with the given name exists; use
+         *     POST /claude-code/plugins to create a new plugin.
+         *
+         *     Parameters:
+         *         - plugin_name: Name of the plugin to update (path parameter)
+         *         - source: Git source reference (github, url, or git-subdir format)
+         *         - version: Semantic version (optional)
+         *         - description: Plugin description (optional)
+         *         - author: Author information (optional)
+         *         - homepage: Plugin homepage URL (optional)
+         *         - keywords: Search keywords (optional)
+         *         - category: Plugin category (optional)
+         *
+         *     Returns:
+         *         Update status (action is always "updated") and plugin information.
+         *
+         *     Example:
+         *         ```bash
+         *         curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \
+         *           -H "Authorization: Bearer sk-..." \
+         *           -H "Content-Type: application/json" \
+         *           -d '{
+         *             "source": {"source": "github", "repo": "org/my-plugin"},
+         *             "version": "2.0.0",
+         *             "description": "My awesome plugin"
+         *           }'
+         *         ```
+         */
+        put: operations["update_plugin_claude_code_plugins__plugin_name__put"];
         post?: never;
         /**
          * Delete Plugin
@@ -2621,10 +2701,20 @@ export interface paths {
         put?: never;
         /**
          * Cursor Chat Completions
-         * @description Cursor-specific endpoint that accepts Responses API input format but returns chat completions format.
+         * @description Cursor BYOK endpoint. Accepts both request shapes Cursor sends to its OpenAI-compatible
+         *     base URL and always answers in chat completions format.
          *
-         *     This endpoint handles requests from Cursor IDE which sends Responses API format (`input` field)
-         *     but expects chat completions format response (`choices`, `messages`, etc.).
+         *     Cursor agent mode sends Responses API format bodies (`input`, flat tool defs, `reasoning`,
+         *     custom tools) to the chat/completions path while expecting chat completions responses;
+         *     those are routed through the Responses API pipeline and converted back. Genuine chat
+         *     completions bodies (`messages` present) are routed through the standard chat completions
+         *     pipeline, after normalizing each level of the `tools` array and `tool_choice` to the chat
+         *     completions shapes OpenAI requires. Cursor mixes Responses API shapes into chat bodies
+         *     per level, independently: a flat tool def (`{"type": "custom", "name": "ApplyPatch", ...}`)
+         *     gets nested under `custom`, and a flat grammar format
+         *     (`{"type": "grammar", "definition", "syntax"}`) gets wrapped as
+         *     `{"type": "grammar", "grammar": {...}}` wherever it appears, including inside tool defs
+         *     Cursor already sent pre-nested.
          *
          *     ```bash
          *     curl -X POST http://localhost:4000/cursor/chat/completions     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
@@ -2635,6 +2725,58 @@ export interface paths {
          *     ```
          */
         post: operations["cursor_chat_completions_cursor_chat_completions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cursor/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cursor Model List
+         * @description OpenAI-compatible model listing for the Cursor BYOK base URL.
+         *
+         *     Clients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and
+         *     verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
+         *     route those requests fall through to the Cursor Cloud Agents passthrough, which
+         *     demands a Cursor API key and 401s, so key verification silently fails before any
+         *     chat request is ever sent. Delegates to the standard `/v1/models` handler.
+         */
+        get: operations["cursor_model_list_cursor_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cursor/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cursor Model List
+         * @description OpenAI-compatible model listing for the Cursor BYOK base URL.
+         *
+         *     Clients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and
+         *     verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
+         *     route those requests fall through to the Cursor Cloud Agents passthrough, which
+         *     demands a Cursor API key and 401s, so key verification silently fails before any
+         *     chat request is ever sent. Delegates to the standard `/v1/models` handler.
+         */
+        get: operations["cursor_model_list_cursor_v1_models_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4233,6 +4375,27 @@ export interface paths {
          *     Only the /update/ui_theme_settings endpoint requires authentication for admins to change settings.
          */
         get: operations["get_ui_theme_settings_get_ui_theme_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/get/user_banner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get User Banner
+         * @description Get the admin-published dashboard banner.
+         *     Readable by any authenticated user; rendered on every dashboard page.
+         */
+        get: operations["get_user_banner_get_user_banner_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6873,6 +7036,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/key/spend/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Key Spend Report
+         * @description Get spend for the calling api_key over a date range, with a per-model breakdown.
+         *
+         *     Same row shape as `/global/spend/report?api_key=...`, but callable by any key:
+         *     non-admin callers are always scoped to their own api_key, while proxy admins
+         *     may pass `?api_key=` to view any key.
+         */
+        get: operations["get_key_spend_report_key_spend_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/key/unblock": {
         parameters: {
             query?: never;
@@ -9128,6 +9315,31 @@ export interface paths {
          *     ```
          */
         post: operations["new_organization_organization_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organization/spend/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Organization Spend Report
+         * @description Get spend for an organization over a date range, grouped by api_key with a per-model and per-team breakdown.
+         *
+         *     Covers spend logged against the organization directly and against any of its
+         *     teams. Callable by proxy admins (any organization) and org admins (their own
+         *     organizations). Defaults to the calling key's organization_id when
+         *     `?organization_id=` is omitted.
+         */
+        get: operations["get_organization_spend_report_organization_spend_report_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -13884,6 +14096,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/spend/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Spend Report
+         * @description Get spend for the calling key's team over a date range, grouped by api_key with a per-model breakdown.
+         *
+         *     Callable by any key that belongs to a team: non-admin callers are always
+         *     scoped to their key's team_id, while proxy admins may pass `?team_id=` to
+         *     view any team.
+         */
+        get: operations["get_team_spend_report_team_spend_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/unblock": {
         parameters: {
             query?: never;
@@ -14492,6 +14728,27 @@ export interface paths {
         patch: operations["update_ui_theme_settings_update_ui_theme_settings_patch"];
         trace?: never;
     };
+    "/update/user_banner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update User Banner
+         * @description Publish, edit, or unpublish the dashboard banner.
+         *     Only proxy admins are allowed to modify it.
+         */
+        patch: operations["update_user_banner_update_user_banner_patch"];
+        trace?: never;
+    };
     "/upload/logo": {
         parameters: {
             query?: never;
@@ -14904,6 +15161,30 @@ export interface paths {
          *     ```
          */
         post: operations["new_user_user_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user/spend/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get User Spend Report
+         * @description Get spend for the calling user over a date range, grouped by api_key with a per-model breakdown.
+         *
+         *     Same row shape as `/global/spend/report?internal_user_id=...`, but callable by
+         *     any key with a user: non-admin callers are always scoped to their own user_id,
+         *     while proxy admins may pass `?internal_user_id=` to view any user.
+         */
+        get: operations["get_user_spend_report_user_spend_report_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -20558,6 +20839,19 @@ export interface components {
             /** Results */
             results: components["schemas"]["TagActiveUsersResponse"][];
         };
+        /** AdaptiveRouterWeights */
+        AdaptiveRouterWeights: {
+            /**
+             * Cost
+             * @default 0.3
+             */
+            cost: number;
+            /**
+             * Quality
+             * @default 0.7
+             */
+            quality: number;
+        };
         /** AddTeamCallback */
         AddTeamCallback: {
             /** Callback Name */
@@ -20957,6 +21251,53 @@ export interface components {
             updated_values?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /**
+         * AutoRouterRoutingTestRequest
+         * @description A single prompt to classify against a complexity-router config that need not be saved yet.
+         */
+        AutoRouterRoutingTestRequest: {
+            /** @description The complexity router config to route against, in the shape /model/new accepts */
+            complexity_router_config: components["schemas"]["RequestComplexityRouterConfig"];
+            /**
+             * Default Model
+             * @description Model to route to when no tier resolves, i.e. complexity_router_default_model
+             */
+            default_model?: string | null;
+            /**
+             * Prompt
+             * @description The prompt to route, as an end user would send it
+             */
+            prompt: string;
+            /**
+             * Router Name
+             * @description Name reported as the router in the routing decision. Display only
+             * @default auto_router_routing_test
+             */
+            router_name: string;
+            /**
+             * Team Id
+             * @description Team the router is being created for. Required for a team admin, who may only test their own team's routers
+             */
+            team_id?: string | null;
+        };
+        /**
+         * AutoRouterRoutingTestResponse
+         * @description Where one prompt would have been routed, and why.
+         */
+        AutoRouterRoutingTestResponse: {
+            /**
+             * Routed Model
+             * @description The model group the router picked
+             */
+            routed_model: string;
+            /**
+             * Routed Model Configured
+             * @description Whether routed_model is a model group this proxy actually serves
+             */
+            routed_model_configured: boolean;
+            /** @description The decision record this request would have written to its log row */
+            routing_decision: components["schemas"]["StandardLoggingRoutingDecision"];
         };
         /** BaseLitellmParams */
         "BaseLitellmParams-Input": {
@@ -22173,6 +22514,15 @@ export interface components {
              */
             type: "ephemeral";
         };
+        /** ChatCompletionCustomToolCallPayload */
+        ChatCompletionCustomToolCallPayload: {
+            /** Input */
+            input: string;
+            /** Name */
+            name: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** ChatCompletionDeveloperMessage */
         ChatCompletionDeveloperMessage: {
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
@@ -22258,6 +22608,20 @@ export interface components {
             format?: string;
             /** Url */
             url: string;
+        };
+        /** ChatCompletionMessageCustomToolCall */
+        ChatCompletionMessageCustomToolCall: {
+            custom: components["schemas"]["ChatCompletionCustomToolCallPayload"];
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @default custom
+             * @constant
+             */
+            type: "custom";
+        } & {
+            [key: string]: unknown;
         };
         /** ChatCompletionMessageToolCall */
         ChatCompletionMessageToolCall: {
@@ -22483,6 +22847,23 @@ export interface components {
             enabled: boolean;
         };
         /**
+         * ClassifierLLMConfig
+         * @description Configuration for the LLM-based complexity classifier.
+         */
+        ClassifierLLMConfig: {
+            /**
+             * Model
+             * @description Model name (from the router's model_list) to call for classification
+             */
+            model: string;
+            /**
+             * Timeout Ms
+             * @description Timeout budget for the classification call, in milliseconds
+             * @default 3000
+             */
+            timeout_ms: number;
+        };
+        /**
          * CloudZeroExportRequest
          * @description Request model for CloudZero export operations
          */
@@ -22614,6 +22995,12 @@ export interface components {
              */
             timezone?: string | null;
         };
+        /**
+         * ComplexityTier
+         * @description Complexity tiers for routing decisions.
+         * @enum {string}
+         */
+        ComplexityTier: "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
         /**
          * ComplianceCheckRequest
          * @description Request payload for compliance check endpoints.
@@ -24996,6 +25383,19 @@ export interface components {
             tpm_limit?: number | null;
             /** Tpm Limit Type */
             tpm_limit_type?: ("guaranteed_throughput" | "best_effort_throughput" | "dynamic") | null;
+        };
+        /**
+         * KeywordTierRule
+         * @description A deterministic override: if any keyword matches, route to this tier.
+         */
+        KeywordTierRule: {
+            /**
+             * Keywords
+             * @description Keywords/phrases that trigger this rule (lexical or semantic match)
+             */
+            keywords: string[];
+            /** @description Tier to route to when this rule matches */
+            tier: components["schemas"]["ComplexityTier"];
         };
         /** LakeraCategoryThresholds */
         LakeraCategoryThresholds: {
@@ -27897,7 +28297,7 @@ export interface components {
             /** Thinking Blocks */
             thinking_blocks?: (components["schemas"]["ChatCompletionThinkingBlock"] | components["schemas"]["ChatCompletionRedactedThinkingBlock"])[] | null;
             /** Tool Calls */
-            tool_calls: components["schemas"]["ChatCompletionMessageToolCall"][] | null;
+            tool_calls: (components["schemas"]["ChatCompletionMessageToolCall"] | components["schemas"]["ChatCompletionMessageCustomToolCall"])[] | null;
         } & {
             [key: string]: unknown;
         };
@@ -29494,6 +29894,44 @@ export interface components {
             version: string | null;
         };
         /**
+         * PluginResponse
+         * @description Plugin information in API responses.
+         */
+        PluginResponse: {
+            /**
+             * Description
+             * @description Plugin description
+             */
+            description?: string | null;
+            /**
+             * Enabled
+             * @description Whether plugin is enabled
+             */
+            enabled: boolean;
+            /**
+             * Id
+             * @description Plugin unique ID
+             */
+            id: string;
+            /**
+             * Name
+             * @description Plugin name
+             */
+            name: string;
+            /**
+             * Source
+             * @description Git source reference
+             */
+            source: {
+                [key: string]: string;
+            };
+            /**
+             * Version
+             * @description Plugin version
+             */
+            version?: string | null;
+        };
+        /**
          * PolicyAttachmentCreateRequest
          * @description Request body for creating a policy attachment.
          */
@@ -30765,10 +31203,210 @@ export interface components {
              */
             version: string | null;
         };
+        /**
+         * RegisterPluginResponse
+         * @description Response from plugin registration.
+         */
+        RegisterPluginResponse: {
+            /**
+             * Action
+             * @description Action taken (created/updated)
+             */
+            action: string;
+            /** @description Plugin information */
+            plugin: components["schemas"]["PluginResponse"];
+            /**
+             * Status
+             * @description Operation status
+             */
+            status: string;
+        };
         /** RejectMCPServerRequest */
         RejectMCPServerRequest: {
             /** Review Notes */
             review_notes?: string | null;
+        };
+        /**
+         * RequestComplexityRouterConfig
+         * @description The part of a complexity-router config a request can carry.
+         *
+         *     `plugins` holds live RoutingPlugin objects, which no JSON body can express and which have no
+         *     OpenAPI schema, so it is closed off here rather than left as an arbitrary-type field.
+         */
+        RequestComplexityRouterConfig: {
+            /**
+             * Adaptive
+             * @description Enable adaptive bandit selection with soft complexity floors
+             * @default false
+             */
+            adaptive: boolean;
+            /**
+             * Adaptive Eligible
+             * @description When adaptive=True: 'all' scores every pool model with a tier-distance penalty (soft floors); 'classified_tier' Thompson-samples only inside the classified tier's pool
+             * @default all
+             * @enum {string}
+             */
+            adaptive_eligible: "all" | "classified_tier";
+            /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
+            adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
+            /**
+             * Classifier Context Include Assistant Turns
+             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies share classifier_context_per_turn_chars with user turns, so raise it if replies are truncated before the part that carries the difficulty. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
+             * @default false
+             */
+            classifier_context_include_assistant_turns: boolean;
+            /**
+             * Classifier Context Per Turn Chars
+             * @description Maximum character length for each prior turn's text in the classifier context window. Turns exceeding this are truncated. Only applies when classifier_type is 'llm'.
+             * @default 200
+             */
+            classifier_context_per_turn_chars: number;
+            /**
+             * Classifier Context Window Size
+             * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM classifier prompt, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model, which may be a different deployment or provider than the routed completion model; that call already carries the current user ask and the caller's system prompt in full. Set to 0 to send neither prior turns nor any conversation context beyond the current ask. Only applies when classifier_type is 'llm'.
+             * @default 3
+             */
+            classifier_context_window_size: number;
+            /** @description Configuration for the LLM classifier; required when classifier_type is 'llm' */
+            classifier_llm_config?: components["schemas"]["ClassifierLLMConfig"] | null;
+            /**
+             * Classifier Type
+             * @description Classification strategy: local regex/keyword scoring, or an LLM call
+             * @default heuristic
+             * @enum {string}
+             */
+            classifier_type: "heuristic" | "llm";
+            /**
+             * Code Keywords
+             * @description Keywords indicating code-related content
+             */
+            code_keywords?: string[] | null;
+            /**
+             * Custom Technical Keywords
+             * @description Domain-specific technical keywords appended to the effective base list (technical_keywords if set, otherwise DEFAULT_TECHNICAL_KEYWORDS). Order is preserved; duplicates are removed case-insensitively against the base list and within this list.
+             */
+            custom_technical_keywords?: string[] | null;
+            /**
+             * Default Model
+             * @description Default model to use if tier cannot be determined
+             */
+            default_model?: string | null;
+            /**
+             * Dimension Weights
+             * @description Weights for each scoring dimension
+             */
+            dimension_weights?: {
+                [key: string]: number;
+            };
+            /**
+             * Embedding Model
+             * @description Embedding model (LiteLLM model name) used when semantic_keyword_matching is enabled
+             */
+            embedding_model?: string | null;
+            /**
+             * Escalation Keywords
+             * @description Case-sensitive phrases a user can include to force a bump to the next-higher complexity tier when they aren't satisfied with results (they can force a stronger model, but not choose which one). Defaults to ['LITELLM ESCALATE'] when unset; set to an empty list to disable.
+             */
+            escalation_keywords?: string[] | null;
+            /**
+             * Keyword Tier Rules
+             * @description Rules that force a specific tier when their keywords match the prompt
+             */
+            keyword_tier_rules?: components["schemas"]["KeywordTierRule"][] | null;
+            /**
+             * Match Threshold
+             * @description Minimum cosine similarity for a semantic keyword match
+             * @default 0.5
+             */
+            match_threshold: number;
+            /**
+             * Plugins
+             * @description Not settable over HTTP; routing plugins are runtime objects
+             */
+            plugins?: null;
+            /**
+             * Reasoning Keywords
+             * @description Keywords indicating reasoning-required content
+             */
+            reasoning_keywords?: string[] | null;
+            /**
+             * Reminder Markers
+             * @description Override the (open, close) marker pair used to recognize and strip harness-injected reminder blocks before classification. Defaults to Claude Code's convention, ('<system-reminder>', '</system-reminder>'), when unset. Matching is case-insensitive.
+             */
+            reminder_markers?: [
+                string,
+                string
+            ] | null;
+            /**
+             * Return Raw Model Name
+             * @description Return the resolved raw model name in the response model field instead of the client-requested complexity-router alias
+             * @default false
+             */
+            return_raw_model_name: boolean;
+            /**
+             * Semantic Keyword Matching
+             * @description Match keyword_tier_rules by embedding similarity instead of literal text
+             * @default false
+             */
+            semantic_keyword_matching: boolean;
+            /**
+             * Session Affinity
+             * @description When True and a session_id is resolvable on the request, pin the model chosen on the session's first turn and reuse it for every later turn, skipping re-classification. Off by default so every turn is classified on its own merits and routed to the cheapest adequate tier. Set True to keep a multi-turn session on one model, which preserves provider prompt caches and avoids cross-model conversation-history errors.
+             * @default false
+             */
+            session_affinity: boolean;
+            /**
+             * Session Affinity Ttl Seconds
+             * @description TTL for the session affinity pin; refreshed on every cache hit
+             * @default 3600
+             */
+            session_affinity_ttl_seconds: number;
+            /**
+             * Simple Keywords
+             * @description Keywords indicating simple/basic queries
+             */
+            simple_keywords?: string[] | null;
+            /**
+             * Technical Keywords
+             * @description Keywords indicating technical content
+             */
+            technical_keywords?: string[] | null;
+            /**
+             * Tier Boundaries
+             * @description Score boundaries between tiers. These keys (simple_medium, medium_complex, complex_reasoning) name the gaps between the default tier names and are not renameable by tier_labels; they are scorer knobs persisted by name on every routing decision
+             */
+            tier_boundaries?: {
+                [key: string]: number;
+            };
+            /**
+             * Tier Distance Penalty
+             * @description Score penalty per tier-step away from the classified tier when adaptive=True
+             * @default 0.5
+             */
+            tier_distance_penalty: number;
+            /**
+             * Tier Labels
+             * @description Display names for the complexity tiers, so a deployment can use its own vocabulary (e.g. Cheap/Standard/Premium/Deep) in the dashboard, spend logs, and the LLM classifier rubric. Purely operator-facing: config keys stay canonical (tiers, keyword_tier_rules[].tier, tier_boundaries), API callers never see these names, and the heuristic scorer never reads them. Unlisted tiers keep their canonical name. Partial maps are allowed.
+             */
+            tier_labels?: {
+                [key: string]: string;
+            };
+            /**
+             * Tiers
+             * @description Mapping of complexity tiers to a model or model pool. A list is randomly picked from when adaptive=False, and used as a soft-floor home pool when adaptive=True
+             */
+            tiers?: {
+                [key: string]: string | string[];
+            };
+            /**
+             * Token Thresholds
+             * @description Token count thresholds for simple/complex classification
+             */
+            token_thresholds?: {
+                [key: string]: number;
+            };
+        } & {
+            [key: string]: unknown;
         };
         /** ResetSpendRequest */
         ResetSpendRequest: {
@@ -31492,6 +32130,64 @@ export interface components {
              * @default 0
              */
             total_tokens: number;
+        };
+        /**
+         * StandardLoggingRoutingDecision
+         * @description Per-request provenance for a pre-routing strategy (auto-router) decision.
+         */
+        StandardLoggingRoutingDecision: {
+            /**
+             * Cause
+             * @enum {string}
+             */
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "literal_keyword_match" | "semantic_keyword_match" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            /** Classifier Model */
+            classifier_model?: string;
+            /** Conversation Continuing */
+            conversation_continuing?: boolean;
+            /** Escalated */
+            escalated?: boolean;
+            /** Escalation Keyword */
+            escalation_keyword?: string;
+            /** Matched Keyword */
+            matched_keyword?: string;
+            /** Request Type */
+            request_type?: string;
+            /** Routed Model */
+            routed_model?: string;
+            /** Router Model Name */
+            router_model_name?: string;
+            /**
+             * Router Type
+             * @enum {string}
+             */
+            router_type?: "complexity" | "adaptive" | "quality";
+            /** Savings Baseline Deployment Id */
+            savings_baseline_deployment_id?: string;
+            /** Savings Baseline Model */
+            savings_baseline_model?: string;
+            /** Score */
+            score?: number;
+            /** Signals */
+            signals?: string[];
+            /** Tier */
+            tier?: string;
+            tier_boundaries?: components["schemas"]["StandardLoggingRoutingDecisionTierBoundaries"];
+            /** Tier Label */
+            tier_label?: string;
+        };
+        /**
+         * StandardLoggingRoutingDecisionTierBoundaries
+         * @description Snapshot of the complexity scorer's tier boundaries at decision time, so a
+         *     historical spend log row stays explainable after the router config changes.
+         */
+        StandardLoggingRoutingDecisionTierBoundaries: {
+            /** Complex Reasoning */
+            complex_reasoning: number;
+            /** Medium Complex */
+            medium_complex: number;
+            /** Simple Medium */
+            simple_medium: number;
         };
         /**
          * SuccessfulKeyUpdate
@@ -32854,6 +33550,64 @@ export interface components {
             model_names?: string[] | null;
         };
         /**
+         * UpdatePluginRequest
+         * @description Request body for replacing an existing plugin.
+         *
+         *     The plugin name is the resource identity and is supplied as the path
+         *     parameter, so it cannot be changed here. This is a full replace: omitted
+         *     fields reset to their defaults, so version is cleared rather than
+         *     defaulting to the create-time "1.0.0".
+         */
+        UpdatePluginRequest: {
+            /** @description Plugin author */
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /**
+             * Category
+             * @description Plugin category
+             */
+            category?: string | null;
+            /**
+             * Description
+             * @description Plugin description
+             */
+            description?: string | null;
+            /**
+             * Domain
+             * @description Skill domain (e.g., 'Productivity')
+             */
+            domain?: string | null;
+            /**
+             * Homepage
+             * @description Plugin homepage URL
+             */
+            homepage?: string | null;
+            /**
+             * Keywords
+             * @description Search keywords
+             */
+            keywords?: string[] | null;
+            /**
+             * Namespace
+             * @description Skill namespace within domain (e.g., 'workflows')
+             */
+            namespace?: string | null;
+            /**
+             * Source
+             * @description Git source reference. Supported formats:
+             *     - GitHub: {'source': 'github', 'repo': 'org/repo'}
+             *     - Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}
+             *     - Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}
+             */
+            source: {
+                [key: string]: string;
+            };
+            /**
+             * Version
+             * @description Semantic version; cleared if omitted
+             */
+            version?: string | null;
+        };
+        /**
          * UpdateProjectRequest
          * @description Request model for POST /project/update
          */
@@ -33103,6 +33857,12 @@ export interface components {
                     [key: string]: unknown;
                 };
             };
+        };
+        /** UpdateUserBannerResponse */
+        UpdateUserBannerResponse: {
+            banner: components["schemas"]["UserBanner"];
+            /** Message */
+            message: string;
         };
         /** UpdateUserRequest */
         UpdateUserRequest: {
@@ -33710,6 +34470,56 @@ export interface components {
             user_spend?: number | null;
             /** User Tpm Limit */
             user_tpm_limit?: number | null;
+        };
+        /** UserBanner */
+        UserBanner: {
+            /**
+             * Enabled
+             * @description If true, the banner is shown to all authenticated dashboard users.
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Message
+             * @description Banner text shown to dashboard users. Markdown is supported.
+             * @default
+             */
+            message: string;
+            /**
+             * Revision
+             * @description Server-stamped opaque publish identity; a fresh value is generated on every update so clients re-surface dismissed banners on republish.
+             * @default
+             */
+            revision: string;
+            /**
+             * Severity
+             * @description Visual style of the banner.
+             * @default info
+             * @enum {string}
+             */
+            severity: "info" | "warning" | "error";
+        };
+        /** UserBannerUpdate */
+        UserBannerUpdate: {
+            /**
+             * Enabled
+             * @description If true, the banner is shown to all authenticated dashboard users.
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Message
+             * @description Banner text shown to dashboard users. Markdown is supported.
+             * @default
+             */
+            message: string;
+            /**
+             * Severity
+             * @description Visual style of the banner.
+             * @default info
+             * @enum {string}
+             */
+            severity: "info" | "warning" | "error";
         };
         /**
          * UserHeaderMapping
@@ -35515,6 +36325,39 @@ export interface operations {
             };
         };
     };
+    preview_auto_router_routing_auto_router_test_routing_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoRouterRoutingTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterRoutingTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     azure_proxy_route_azure__endpoint__get: {
         parameters: {
             query?: never;
@@ -36773,7 +37616,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["RegisterPluginResponse"];
                 };
             };
             /** @description Validation Error */
@@ -36805,6 +37648,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_plugin_claude_code_plugins__plugin_name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePluginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterPluginResponse"];
                 };
             };
             /** @description Validation Error */
@@ -38553,6 +39431,46 @@ export interface operations {
         };
     };
     cursor_chat_completions_cursor_chat_completions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    cursor_model_list_cursor_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    cursor_model_list_cursor_v1_models_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -40777,6 +41695,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UIThemeSettingsResponse"];
+                };
+            };
+        };
+    };
+    get_user_banner_get_user_banner_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserBanner"];
                 };
             };
         };
@@ -43269,6 +44207,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_key_spend_report_key_spend_report_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend (YYYY-MM-DD) */
+                start_date?: string | null;
+                /** @description Time till which to view spend (YYYY-MM-DD) */
+                end_date?: string | null;
+                /** @description View spend for a specific api_key. Proxy admin only; other callers are scoped to their own key. */
+                api_key?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -46275,6 +47251,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NewOrganizationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_organization_spend_report_organization_spend_report_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend (YYYY-MM-DD) */
+                start_date?: string | null;
+                /** @description Time till which to view spend (YYYY-MM-DD) */
+                end_date?: string | null;
+                /** @description View spend for a specific organization_id. Proxy admins may pass any organization; org admins are scoped to organizations they administer. */
+                organization_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -51345,6 +52359,44 @@ export interface operations {
             };
         };
     };
+    get_team_spend_report_team_spend_report_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend (YYYY-MM-DD) */
+                start_date?: string | null;
+                /** @description Time till which to view spend (YYYY-MM-DD) */
+                end_date?: string | null;
+                /** @description View spend for a specific team_id. Proxy admin only; other callers are scoped to their key's team. */
+                team_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     unblock_team_team_unblock_post: {
         parameters: {
             query?: never;
@@ -52167,6 +53219,39 @@ export interface operations {
             };
         };
     };
+    update_user_banner_update_user_banner_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserBannerUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateUserBannerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     upload_logo_upload_logo_post: {
         parameters: {
             query?: never;
@@ -52575,6 +53660,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NewUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_spend_report_user_spend_report_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend (YYYY-MM-DD) */
+                start_date?: string | null;
+                /** @description Time till which to view spend (YYYY-MM-DD) */
+                end_date?: string | null;
+                /** @description View spend for a specific internal_user_id. Proxy admin only; other callers are scoped to their own user_id. */
+                internal_user_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */

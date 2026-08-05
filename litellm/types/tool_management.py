@@ -3,7 +3,7 @@ Pydantic models for Tool Policy management endpoints.
 """
 
 from datetime import datetime
-from typing import Dict, List, Literal, Optional
+from typing import Dict, Final, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 

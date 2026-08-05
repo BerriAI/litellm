@@ -9,7 +9,7 @@ have been aggregated across models.
 """
 
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Final, NamedTuple
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -38,14 +38,14 @@ def _input_and_cache_read_cost(model: str | None, custom_llm_provider: str | Non
     if not model:
         return 0.0, 0.0
     try:
-        info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; degrade to zero savings
         verbose_proxy_logger.debug(
             "savings: no model info for provider=%s model=%s (%s)", custom_llm_provider, model, e
         )
         return 0.0, 0.0
-    input_cost = float(info.get("input_cost_per_token") or 0.0)
-    cache_read_cost = info.get("cache_read_input_token_cost")
+    input_cost: Final = float(info.get("input_cost_per_token") or 0.0)
+    cache_read_cost: Final = info.get("cache_read_input_token_cost")
     if cache_read_cost is None:
         return input_cost, input_cost
     return input_cost, float(cache_read_cost)
@@ -119,7 +119,7 @@ class PricingBasis(NamedTuple):
     data_residency: str | None = None
 
 
-_STANDARD_RATES = PricingBasis()
+_STANDARD_RATES: Final = PricingBasis()
 
 
 def _pricing_basis(cost_breakdown: Mapping[str, object] | None) -> PricingBasis:
@@ -135,8 +135,8 @@ def _pricing_basis(cost_breakdown: Mapping[str, object] | None) -> PricingBasis:
     """
     if not cost_breakdown:
         return _STANDARD_RATES
-    service_tier = cost_breakdown.get("service_tier")
-    data_residency = cost_breakdown.get("data_residency")
+    service_tier: Final = cost_breakdown.get("service_tier")
+    data_residency: Final = cost_breakdown.get("data_residency")
     return PricingBasis(
         service_tier=service_tier if isinstance(service_tier, str) else None,
         data_residency=data_residency if isinstance(data_residency, str) else None,
@@ -158,8 +158,8 @@ def _recorded_token_cost(cost_breakdown: Mapping[str, object] | None) -> float |
     """
     if not cost_breakdown:
         return None
-    input_cost = cost_breakdown.get("input_cost")
-    output_cost = cost_breakdown.get("output_cost")
+    input_cost: Final = cost_breakdown.get("input_cost")
+    output_cost: Final = cost_breakdown.get("output_cost")
     if not isinstance(input_cost, (int, float)) or not isinstance(output_cost, (int, float)):
         return None
     return float(input_cost) + float(output_cost)
@@ -191,15 +191,15 @@ def _cost_of_usage(
 
 def _cache_token_split(usage: Usage) -> tuple[int, int]:
     """``(cache_read_tokens, cache_creation_tokens)`` for a request."""
-    details = usage.prompt_tokens_details
+    details: Final = usage.prompt_tokens_details
     if details is None:
         return 0, 0
-    read = getattr(details, "cached_tokens", 0) or 0
+    read: Final = getattr(details, "cached_tokens", 0) or 0
     created = (getattr(details, "cache_creation_tokens", 0) or 0) or (getattr(details, "cache_write_tokens", 0) or 0)
     return int(read), int(created)
 
 
-_CACHE_SPLIT_FIELDS = frozenset(
+_CACHE_SPLIT_FIELDS: Final = frozenset(
     ("cached_tokens", "cache_creation_tokens", "cache_write_tokens", "cache_creation_token_details", "text_tokens")
 )
 
@@ -253,7 +253,7 @@ def _baseline_usage(usage: Usage, conversation_continuing: bool, baseline_info: 
     the next time a priced field is added.
     """
     cache_read, cache_creation = _cache_token_split(usage)
-    details = usage.prompt_tokens_details
+    details: Final = usage.prompt_tokens_details
     if details is None or (cache_read <= 0 and cache_creation <= 0):
         return usage
 
@@ -261,7 +261,7 @@ def _baseline_usage(usage: Usage, conversation_continuing: bool, baseline_info: 
     # charge is dropped: on one model that cache was already warm, so the baseline would
     # have read them rather than paying to create them. The 5m/1h breakdown goes with
     # them; left behind it re-charges the write.
-    warm = conversation_continuing and cache_creation > 0 and cache_read <= cache_creation
+    warm: Final = conversation_continuing and cache_creation > 0 and cache_read <= cache_creation
     reads = cache_read + cache_creation if warm else cache_read
     writes = 0 if warm else cache_creation
 
@@ -271,7 +271,7 @@ def _baseline_usage(usage: Usage, conversation_continuing: bool, baseline_info: 
     if (reads, writes) == (cache_read, cache_creation):
         return usage
 
-    other_modalities = sum(
+    other_modalities: Final = sum(
         (getattr(details, field, 0) or 0) for field in ("audio_tokens", "image_tokens", "video_tokens")
     )
     return Usage(
@@ -298,6 +298,7 @@ def compute_autorouter_savings(
     usage: Usage,
     conversation_continuing: bool = True,
     selected_info: ModelInfo | None = None,
+    baseline_info: ModelInfo | None = None,
     cost_breakdown: Mapping[str, object] | None = None,
 ) -> float:
     """Net dollars the router saved, or cost, by serving this request on ``selected_model``.
@@ -330,8 +331,8 @@ def compute_autorouter_savings(
     # No provider argument for the baseline on purpose: it arrives from the routing
     # metadata as a single self-describing string, already qualified by the auto-router,
     # so there is no second field that could disagree with it.
-    baseline = _resolve_model(baseline_model, None)
-    selected = _resolve_model(selected_model, selected_provider)
+    baseline: Final = _resolve_model(baseline_model, None)
+    selected: Final = _resolve_model(selected_model, selected_provider)
     if baseline is None or selected is None:
         return 0.0
     # Same model is only the same cost when it is also the same deployment. Two
@@ -340,10 +341,13 @@ def compute_autorouter_savings(
     # name alone reports as zero.
     if baseline == selected:
         return 0.0
-    basis = _pricing_basis(cost_breakdown)
-    baseline_info = _model_info(baseline)
-    baseline_cost = _cost_of_usage(
-        baseline, _baseline_usage(usage, conversation_continuing, baseline_info), baseline_info, basis
+    basis: Final = _pricing_basis(cost_breakdown)
+    effective_baseline_info: Final = baseline_info if baseline_info is not None else _model_info(baseline)
+    baseline_cost: Final = _cost_of_usage(
+        baseline,
+        _baseline_usage(usage, conversation_continuing, effective_baseline_info),
+        effective_baseline_info,
+        basis,
     )
     # Falls back to pricing the request only when the biller recorded nothing, which is
     # every row written before the breakdown carried its basis.
@@ -403,21 +407,22 @@ def compute_savings_spend(
     something introduced here, and moving those numbers is its own change.
     """
     input_cost, cache_read_cost = _input_and_cache_read_cost(model, custom_llm_provider)
-    compression = max(compression_saved_tokens, 0) * input_cost
-    prompt_caching = max(cache_read_input_tokens, 0) * max(input_cost - cache_read_cost, 0.0)
+    compression: Final = max(compression_saved_tokens, 0) * input_cost
+    prompt_caching: Final = max(cache_read_input_tokens, 0) * max(input_cost - cache_read_cost, 0.0)
 
-    usage = _usage_from_spend_log(usage_object)
+    usage: Final = _usage_from_spend_log(usage_object)
     if usage is None or not model:
         return SavingsSpend(compression=compression, prompt_caching=prompt_caching)
 
-    # The counterfactual is one model an operator would have run instead of the router,
-    # configured once for the proxy rather than derived per request. Unset means the
-    # driver is off; a routing decision is what says this request was auto-routed at all.
-    # Both are checked before anything is resolved, because every spend write reaches
-    # here and only auto-routed ones can produce a number.
-    baseline_model = litellm.autorouter_savings_baseline_model
-    decision = routing_decision if isinstance(routing_decision, Mapping) else {}
-    autorouter = (
+    # The configured `autorouter_savings_baseline_model` wins; otherwise the baseline
+    # the deciding router recorded on its decision; neither means the driver is off.
+    decision: Final = routing_decision if isinstance(routing_decision, Mapping) else {}
+    recorded: Final = decision.get("savings_baseline_model")
+    recorded_id: Final = decision.get("savings_baseline_deployment_id")
+    configured: Final = litellm.autorouter_savings_baseline_model
+    baseline_model: Final = configured or (recorded if isinstance(recorded, str) else None)
+    baseline_id: Final = recorded_id if configured is None and isinstance(recorded_id, str) else None
+    autorouter: Final = (
         compute_autorouter_savings(
             baseline_model=baseline_model,
             selected_model=model,
@@ -426,7 +431,10 @@ def compute_savings_spend(
             # Absent means the router never recorded a shape, which is the conservative
             # reading: charge the cache write rather than claim a first turn's saving.
             conversation_continuing=decision.get("conversation_continuing") is not False,
-            selected_info=_effective_model_info(llm_router() if llm_router else None, model_id, model or ""),
+            selected_info=_effective_model_info(
+                (router_instance := llm_router() if llm_router else None), model_id, model or ""
+            ),
+            baseline_info=_effective_model_info(router_instance, baseline_id, baseline_model or ""),
             cost_breakdown=cost_breakdown,
         )
         if decision and baseline_model

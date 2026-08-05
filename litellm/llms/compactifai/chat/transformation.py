@@ -2,7 +2,7 @@
 CompactifAI chat completion transformation
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -36,7 +36,7 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
         Get API base and key for CompactifAI provider.
         """
         api_base = api_base or "https://api.compactif.ai/v1"
-        dynamic_api_key = api_key or get_secret_str("COMPACTIFAI_API_KEY") or ""
+        dynamic_api_key: Final = api_key or get_secret_str("COMPACTIFAI_API_KEY") or ""
         return api_base, dynamic_api_key
 
     def transform_response(
@@ -66,7 +66,7 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
         )
 
         ## RESPONSE OBJECT
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         # Handle JSON mode if needed
         if json_mode:
@@ -79,7 +79,7 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
                         message["content"] = tool_calls[0]["function"].get("arguments", "")
                         message["tool_calls"] = None
 
-        returned_response = ModelResponse(**response_json)
+        returned_response: Final = ModelResponse(**response_json)
 
         # Set model name with provider prefix
         returned_response.model = f"compactifai/{model}"

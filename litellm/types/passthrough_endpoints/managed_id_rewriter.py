@@ -55,7 +55,9 @@ class ManagedObjectRow(ManagedResourceRow, Protocol):
     unified_object_id: str
 
 
-RowT = TypeVar("RowT", bound=ManagedResourceRow)
+RowT = TypeVar(
+    "RowT", bound=ManagedResourceRow
+)  # rebind-ok: TypeVar declarations must stay bare assignments for pyright
 
 
 class ManagedTable(Protocol[RowT]):

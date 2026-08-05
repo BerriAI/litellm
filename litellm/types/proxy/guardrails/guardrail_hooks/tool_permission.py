@@ -1,5 +1,5 @@
 # Tool Permission Guardrail Type Definitions
-from typing import Dict, List, Literal, Optional
+from typing import Dict, Final, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -32,7 +32,7 @@ class ToolPermissionRule(BaseModel):
         if value is None:
             return None
         if isinstance(value, str):
-            stripped = value.strip()
+            stripped: Final = value.strip()
             if not stripped:
                 return None
             return stripped

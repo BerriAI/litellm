@@ -10,6 +10,13 @@ from litellm.repositories.object_permission_repository import (
     ObjectPermissionRepository,
 )
 from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.prisma_protocols import (
+    BatchTable,
+    PrismaBatch,
+    PrismaRecord,
+    ReadOnlyTable,
+    SpendLinkedTable,
+)
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,
@@ -62,6 +69,13 @@ from litellm.repositories.table_repositories import (
     WorkflowRunRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.unit_of_work import (
+    KeySpendResetWrites,
+    SpendResetUnitOfWork,
+    TeamSpendResetWrites,
+    UserSpendResetWrites,
+    spend_reset_unit_of_work,
+)
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
@@ -73,6 +87,7 @@ __all__ = [
     "AdaptiveRouterStateRepository",
     "AgentsRepository",
     "AuditLogRepository",
+    "BatchTable",
     "BudgetRepository",
     "CacheConfigRepository",
     "ClaudeCodePluginRepository",
@@ -91,6 +106,7 @@ __all__ = [
     "HealthCheckRepository",
     "InvitationLinkRepository",
     "JWTKeyMappingRepository",
+    "KeySpendResetWrites",
     "MCPServerRepository",
     "MCPToolsetRepository",
     "MCPUserCredentialsRepository",
@@ -106,24 +122,32 @@ __all__ = [
     "OrganizationRepository",
     "PolicyAttachmentRepository",
     "PolicyRepository",
+    "PrismaBatch",
+    "PrismaRecord",
     "PrismaTableRepository",
     "ProjectRepository",
     "PromptRepository",
+    "ReadOnlyTable",
     "SSOConfigRepository",
     "SearchToolsRepository",
     "SkillsRepository",
+    "SpendLinkedTable",
     "SpendLogGuardrailIndexRepository",
     "SpendLogToolIndexRepository",
     "SpendLogsRepository",
+    "SpendResetUnitOfWork",
     "TagRepository",
     "TeamMembershipRepository",
     "TeamRepository",
+    "TeamSpendResetWrites",
     "ToolRepository",
     "UISettingsRepository",
     "UserNotificationsRepository",
     "UserRepository",
+    "UserSpendResetWrites",
     "VerificationTokenRepository",
     "WorkflowEventRepository",
     "WorkflowMessageRepository",
     "WorkflowRunRepository",
+    "spend_reset_unit_of_work",
 ]
