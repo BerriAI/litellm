@@ -106,8 +106,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           NODE_OPTIONS: --max-old-space-size=12288
         run: |
-          uv run --no-sync basedpyright --outputjson > "$RUNNER_TEMP/basedpyright.json" || test "$?" -eq 1
-          uv run --no-sync python scripts/type_check_gate.py --base "$BASE_SHA" < "$RUNNER_TEMP/basedpyright.json"
+          (uv run --no-sync basedpyright --outputjson || true) | uv run --no-sync python scripts/type_check_gate.py --base "$BASE_SHA"
 
       - name: Check tests/e2e basedpyright (zero errors)
         env:
