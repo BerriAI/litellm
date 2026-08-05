@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
     Delta,
     LlmProviders,
@@ -2251,11 +2252,17 @@ def _coerce_token_details(
 
 def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+        attach_cache_creation_token_details,
+        capture_cache_creation_token_details,
+    )
+
     prompt_tokens: int = 0
     completion_tokens: int = 0
     latest_usage_chunk = None
     prompt_tokens_details: PromptTokensDetailsWrapper | None = None
     completion_tokens_details: CompletionTokensDetailsWrapper | None = None
+    cache_creation_token_details: CacheCreationTokenDetails | None = None
 
     for chunk in chunks:
         if "usage" in chunk and chunk["usage"] is not None:
@@ -2265,10 +2272,13 @@ def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
                 prompt_tokens = usage.get("prompt_tokens", 0) or 0
             if "completion_tokens" in usage:
                 completion_tokens = usage.get("completion_tokens", 0) or 0
-            prompt_tokens_details = (
-                _coerce_token_details(usage, "prompt_tokens_details", PromptTokensDetailsWrapper)
-                or prompt_tokens_details
+            incoming_prompt_tokens_details = _coerce_token_details(
+                usage, "prompt_tokens_details", PromptTokensDetailsWrapper
             )
+            cache_creation_token_details = capture_cache_creation_token_details(
+                incoming_prompt_tokens_details, cache_creation_token_details
+            )
+            prompt_tokens_details = incoming_prompt_tokens_details or prompt_tokens_details
             completion_tokens_details = (
                 _coerce_token_details(usage, "completion_tokens_details", CompletionTokensDetailsWrapper)
                 or completion_tokens_details
@@ -2278,7 +2288,7 @@ def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
-        prompt_tokens_details=prompt_tokens_details,
+        prompt_tokens_details=attach_cache_creation_token_details(prompt_tokens_details, cache_creation_token_details),
         completion_tokens_details=completion_tokens_details,
     )
 
