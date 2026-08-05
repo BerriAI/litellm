@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, TypeVar, Union, cast, overload
 
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
@@ -175,6 +175,9 @@ else:
 unified_guardrail: Final = UnifiedLLMGuardrails()
 
 NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES: "frozenset[CallTypes]" = frozenset({CallTypes.anthropic_messages})
+
+_GuardrailResultT = TypeVar("_GuardrailResultT")
+_ChunkT = TypeVar("_ChunkT")
 
 
 def print_verbose(print_statement):
@@ -336,7 +339,7 @@ def _accepts_litellm_call_info(cb: CustomLogger) -> bool:
     return _CALLBACK_ACCEPTS_CALL_INFO[key]
 
 
-def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: Any) -> None:
+def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: CustomLogger) -> None:
     """
     If `exc` is an HTTPException with a dict `detail`, mutate it in place to
     add `guardrail_name` and `guardrail_mode` taken from the callback instance.
@@ -667,7 +670,7 @@ class ProxyLogging:
 
         return synthetic_data
 
-    def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> Any | None:
+    def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> MCPPreCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP response format.
         """
@@ -793,7 +796,7 @@ class ProxyLogging:
             verbose_proxy_logger.error("Error in manual argument parsing: %s", e)
             return None
 
-    def _convert_llm_result_to_mcp_during_response(self, llm_result, request_obj) -> Any | None:
+    def _convert_llm_result_to_mcp_during_response(self, llm_result, request_obj) -> MCPDuringCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP during call response format.
         """
@@ -1605,7 +1608,9 @@ class ProxyLogging:
                 break
 
     @staticmethod
-    async def _run_guardrail_with_metrics(callback: Any, coro: Awaitable[Any], hook_type: str) -> Any:
+    async def _run_guardrail_with_metrics(
+        callback: CustomGuardrail, coro: Awaitable[_GuardrailResultT], hook_type: str
+    ) -> _GuardrailResultT:
         """
         Await `coro`, recording its latency and status to the
         `litellm_guardrail_latency_seconds` metric under `hook_type`, and
@@ -1637,8 +1642,8 @@ class ProxyLogging:
 
     @staticmethod
     async def _wrap_streaming_iterator_with_enrichment(
-        callback: Any, gen: AsyncGenerator[Any, None]
-    ) -> AsyncGenerator[Any, None]:
+        callback: CustomLogger, gen: AsyncGenerator[_ChunkT, None]
+    ) -> AsyncGenerator[_ChunkT, None]:
         """
         Yield from `gen`; if iteration raises an HTTPException with dict detail,
         enrich the detail with the originating callback's `guardrail_name` and

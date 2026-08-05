@@ -1895,7 +1895,7 @@ class Router:
 
         return silent_kwargs
 
-    def _silent_experiment_completion(self, silent_model: str, messages: list[Any], **kwargs):
+    def _silent_experiment_completion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
         """
         Run a silent experiment in the background (thread).
         """
@@ -7084,7 +7084,9 @@ class Router:
         except Exception as e:
             raise e
 
-    async def async_deployment_callback_on_failure(self, kwargs, completion_response: Any | None, start_time, end_time):
+    async def async_deployment_callback_on_failure(
+        self, kwargs, completion_response: object | None, start_time, end_time
+    ):
         """
         Update RPM usage for a deployment
         """
@@ -11004,7 +11006,7 @@ class Router:
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None,
+        messages: list[dict[str, str]] | None,  # mutable-ok: feeds RoutingContext.raw_messages: list[dict[str, Any]]
     ) -> RoutingContext:
         """
         Build a RoutingContext for `model`, run it through `self.routing_plugins`
@@ -11103,7 +11105,7 @@ class Router:
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None = None,
+        messages: list[dict[str, str]] | None = None,  # mutable-ok: passed straight through to _run_routing_plugins
         input: str | list | None = None,
         specific_deployment: bool | None = False,
     ) -> PreRoutingHookResponse | None:

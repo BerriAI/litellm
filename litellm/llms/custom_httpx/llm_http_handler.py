@@ -1048,7 +1048,7 @@ class BaseLLMHTTPHandler:
         api_key: str | None = None,
         api_base: str | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
-        litellm_params: dict[str, Any] | None = None,
+        litellm_params: dict[str, object] | None = None,  # mutable-ok: transform_rerank_request expects a real dict
     ) -> RerankResponse:
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
@@ -1413,7 +1413,7 @@ class BaseLLMHTTPHandler:
         headers: dict[str, object] | None,
         provider_config: BaseOCRConfig,
         litellm_params: dict,
-    ) -> tuple[dict[str, Any], str, dict[str, Any], None]:
+    ) -> tuple[Mapping[str, object], str, Mapping[str, object], None]:
         """
         Shared logic for preparing OCR requests.
         Returns: (headers, complete_url, data, files)
@@ -1479,7 +1479,7 @@ class BaseLLMHTTPHandler:
         headers: dict[str, object] | None,
         provider_config: BaseOCRConfig,
         litellm_params: dict,
-    ) -> tuple[dict[str, Any], str, dict[str, Any], None]:
+    ) -> tuple[Mapping[str, object], str, Mapping[str, object], None]:
         """
         Async version of _prepare_ocr_request for providers that need async transforms.
         Returns: (headers, complete_url, data, files)
@@ -5844,7 +5844,9 @@ class BaseLLMHTTPHandler:
                 ssl_context.verify_mode = ssl.CERT_NONE
             backend_ws: Final = await self._open_realtime_backend_ws(websockets, url, headers, ssl_context)
             async with backend_ws:
-                _request_data: Final[dict[str, Any]] = {}
+                _request_data: Final[
+                    dict[str, object]
+                ] = {}  # mutable-ok: RealTimeStreaming.request_data expects a real dict
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata
                 realtime_streaming: Final = RealTimeStreaming(
@@ -6247,7 +6249,9 @@ class BaseLLMHTTPHandler:
                     yield backend
 
             async with _backend_connection() as backend_ws:
-                _request_data: Final[dict[str, Any]] = {}
+                _request_data: Final[
+                    dict[str, object]
+                ] = {}  # mutable-ok: RealTimeStreaming.request_data expects a real dict
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata
 
@@ -9444,7 +9448,9 @@ class BaseLLMHTTPHandler:
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
             )
-        all_optional_params: Final[dict[str, Any]] = dict(litellm_params)
+        all_optional_params: Final[dict[str, object]] = dict(
+            litellm_params
+        )  # mutable-ok: sign_request's optional_params expects a real dict
         all_optional_params.update(vector_store_search_optional_params or {})
         headers, signed_json_body = vector_store_provider_config.sign_request(
             headers=headers,
@@ -9540,7 +9546,9 @@ class BaseLLMHTTPHandler:
             extra_body=extra_body,
         )
 
-        all_optional_params: Final[dict[str, Any]] = dict(litellm_params)
+        all_optional_params: Final[dict[str, object]] = dict(
+            litellm_params
+        )  # mutable-ok: sign_request's optional_params expects a real dict
         all_optional_params.update(vector_store_search_optional_params or {})
 
         headers, signed_json_body = vector_store_provider_config.sign_request(
@@ -9860,15 +9868,11 @@ class BaseLLMHTTPHandler:
 
         url: Final = api_base
 
-        params: Final[dict[str, Any]] = {}
-        if after is not None:
-            params["after"] = after
-        if before is not None:
-            params["before"] = before
-        if limit is not None:
-            params["limit"] = limit
-        if order is not None:
-            params["order"] = order
+        params: Final[Mapping[str, object]] = {
+            key: value
+            for key, value in {"after": after, "before": before, "limit": limit, "order": order}.items()
+            if value is not None
+        }
 
         logging_obj.pre_call(
             input="",
@@ -9938,15 +9942,11 @@ class BaseLLMHTTPHandler:
 
         url: Final = api_base
 
-        params: Final[dict[str, Any]] = {}
-        if after is not None:
-            params["after"] = after
-        if before is not None:
-            params["before"] = before
-        if limit is not None:
-            params["limit"] = limit
-        if order is not None:
-            params["order"] = order
+        params: Final[Mapping[str, object]] = {
+            key: value
+            for key, value in {"after": after, "before": before, "limit": limit, "order": order}.items()
+            if value is not None
+        }
 
         logging_obj.pre_call(
             input="",
