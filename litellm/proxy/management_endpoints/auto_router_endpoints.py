@@ -207,6 +207,7 @@ async def preview_auto_router_routing(
         litellm_router_instance=llm_router,
         complexity_router_config=data.complexity_router_config.model_dump(exclude_none=True),
         default_model=data.default_model,
+        derive_savings_baseline=False,
     )
 
     request_kwargs: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
