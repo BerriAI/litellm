@@ -170,7 +170,7 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Set up Python
@@ -185,13 +185,14 @@ jobs:
 
       - name: Run secret scan test
         run: |
-          uv run --frozen --with 'pytest==9.0.2' pytest tests/litellm/test_no_hardcoded_secrets.py -v
+          uv run --no-project --with 'pytest==9.0.2' pytest tests/litellm/test_no_hardcoded_secrets.py -v
 
       - name: Run ggshield secret scan
         env:
           GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
         run: |
           if [ -n "$GITGUARDIAN_API_KEY" ]; then
+            git fetch --no-tags --unshallow origin
             uv tool run --from 'ggshield==1.48.0' ggshield secret scan repo .
           else
             echo "GITGUARDIAN_API_KEY not set, skipping ggshield scan"
