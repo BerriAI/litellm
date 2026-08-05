@@ -7551,7 +7551,7 @@ class Router:
             if "responses/" in _model_name:
                 _stripped_model_name: Final = _model_name.replace("responses/", "")
                 _backend_alias_cost[_stripped_model_name] = _shared_model_info
-            litellm.register_model(model_cost=_backend_alias_cost)
+            litellm.register_model(model_cost=_backend_alias_cost, warn_on_missing_cache_cost=False)
 
             ## Check if LLM Deployment is allowed for this deployment
             if self.deployment_is_active_for_environment(deployment=deployment) is not True:
@@ -8276,7 +8276,7 @@ class Router:
         if "responses/" in _model_name:
             _stripped_model_name: Final = _model_name.replace("responses/", "")
             _backend_alias_cost[_stripped_model_name] = _shared_model_info
-        litellm.register_model(model_cost=_backend_alias_cost)
+        litellm.register_model(model_cost=_backend_alias_cost, warn_on_missing_cache_cost=False)
 
         # add to model names
         self._add_model_to_list_and_index_map(model=_deployment, model_id=deployment.model_info.id)

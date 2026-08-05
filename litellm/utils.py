@@ -2672,7 +2672,7 @@ def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
     return None
 
 
-def register_model(model_cost: str | dict):
+def register_model(model_cost: str | dict, *, warn_on_missing_cache_cost: bool = True):
     """
     Register new / Override existing models (and their pricing) to specific providers.
     Provide EITHER a model cost dictionary or a url to a hosted json blob
@@ -2686,6 +2686,11 @@ def register_model(model_cost: str | dict):
             "mode": "chat"
         },
     }
+
+    Set `warn_on_missing_cache_cost=False` when the caller has already stripped
+    per-deployment cache pricing out of `model_cost` on purpose, as the router does
+    for shared backend keys. The warning tells you to add fields the caller did
+    supply and the caller then discarded, so it cannot be acted on from config.
     """
 
     loaded_model_cost = {}
@@ -2725,7 +2730,8 @@ def register_model(model_cost: str | dict):
                         if value.get(field) is None and builtin_entry.get(field) is not None:
                             existing_model[field] = builtin_entry[field]
                 elif (
-                    value.get("cache_creation_input_token_cost") is None
+                    warn_on_missing_cache_cost
+                    and value.get("cache_creation_input_token_cost") is None
                     and value.get("cache_read_input_token_cost") is None
                 ):
                     verbose_logger.warning(
