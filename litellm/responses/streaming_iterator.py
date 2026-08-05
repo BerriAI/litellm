@@ -1388,9 +1388,9 @@ class ResponsesWebSocketStreaming:
         try:
             while True:
                 try:
-                    raw_response = await self.backend_ws.recv(decode=False)  # type: ignore[union-attr]
+                    raw_response = await self.backend_ws.recv(decode=False)
                 except TypeError:
-                    raw_response = await self.backend_ws.recv()  # type: ignore[union-attr, assignment]
+                    raw_response = await self.backend_ws.recv()
 
                 if isinstance(raw_response, bytes):
                     response_str = raw_response.decode("utf-8")
@@ -1422,7 +1422,7 @@ class ResponsesWebSocketStreaming:
 
                 await self.websocket.send_text(output_masked_str)
 
-        except websockets.exceptions.ConnectionClosed as e:  # type: ignore
+        except websockets.exceptions.ConnectionClosed as e:
             verbose_logger.debug("Responses WS backend connection closed: %s", e)
         except Exception as e:
             verbose_logger.exception("Error in responses WS backend_to_client: %s", e)
@@ -1720,14 +1720,14 @@ class ResponsesWebSocketStreaming:
                 masked_first: Final = await self._mask_response_create(self.first_message)
                 self._store_input(masked_first)
                 self._store_event(masked_first)
-                await self.backend_ws.send(masked_first)  # type: ignore[union-attr]
+                await self.backend_ws.send(masked_first)
 
             while True:
                 message = await self.websocket.receive_text()
                 masked = await self._mask_response_create(message)
                 self._store_input(masked)
                 self._store_event(masked)
-                await self.backend_ws.send(masked)  # type: ignore[union-attr]
+                await self.backend_ws.send(masked)
 
         except Exception as e:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)
@@ -2141,7 +2141,7 @@ class ManagedResponsesWebSocketHandler:
         """
         completed_event: dict[str, Any] | None = None
         stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
-        async for chunk in stream_response:  # type: ignore[union-attr]
+        async for chunk in stream_response:
             if chunk is None:
                 continue
             # Read type from the object before serializing to avoid double JSON parse

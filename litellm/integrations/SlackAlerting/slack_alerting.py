@@ -709,7 +709,7 @@ class SlackAlerting(CustomBatchLogger):
         """Format an alert message for slack"""
         headers: Final = {f"{key} Name": key_val, "Provider": provider}
         if api_base is not None:
-            headers["API Base"] = api_base  # type: ignore
+            headers["API Base"] = api_base
 
         headers_str = "\n"
         for k, v in headers.items():
@@ -767,14 +767,11 @@ class SlackAlerting(CustomBatchLogger):
 
         # Convert deployment_ids back to set if it was stored as a list
         if outage_value is not None:
-            outage_value = self._restore_outage_value_from_cache(outage_value)  # type: ignore
+            outage_value = self._restore_outage_value_from_cache(outage_value)
 
         if (
             getattr(exception, "status_code", None) is None
-            or (
-                exception.status_code != 408  # type: ignore
-                and exception.status_code < 500  # type: ignore
-            )
+            or (exception.status_code != 408 and exception.status_code < 500)
             or self.llm_router is None
         ):
             return
@@ -784,7 +781,7 @@ class SlackAlerting(CustomBatchLogger):
             _deployment_set.add(deployment_id)
             outage_value = ProviderRegionOutageModel(
                 provider_region_id=cache_key,
-                alerts=[exception.status_code],  # type: ignore
+                alerts=[exception.status_code],
                 minor_alert_sent=False,
                 major_alert_sent=False,
                 last_updated_at=time.time(),
@@ -802,7 +799,7 @@ class SlackAlerting(CustomBatchLogger):
             return
 
         if len(outage_value["alerts"]) < self.alerting_args.max_outage_alert_list_size:
-            outage_value["alerts"].append(exception.status_code)  # type: ignore
+            outage_value["alerts"].append(exception.status_code)
         else:  # prevent memory leaks
             pass
         _deployment_set = outage_value["deployment_ids"]
@@ -884,13 +881,10 @@ class SlackAlerting(CustomBatchLogger):
         max_alerts_size = 10
         """
         try:
-            outage_value: OutageModel | None = await self.internal_usage_cache.async_get_cache(key=deployment_id)  # type: ignore
+            outage_value: OutageModel | None = await self.internal_usage_cache.async_get_cache(key=deployment_id)
             if (
                 getattr(exception, "status_code", None) is None
-                or (
-                    exception.status_code != 408  # type: ignore
-                    and exception.status_code < 500  # type: ignore
-                )
+                or (exception.status_code != 408 and exception.status_code < 500)
                 or self.llm_router is None
             ):
                 return
@@ -912,7 +906,7 @@ class SlackAlerting(CustomBatchLogger):
             if outage_value is None:
                 outage_value = OutageModel(
                     model_id=deployment_id,
-                    alerts=[exception.status_code],  # type: ignore
+                    alerts=[exception.status_code],
                     minor_alert_sent=False,
                     major_alert_sent=False,
                     last_updated_at=time.time(),
@@ -927,7 +921,7 @@ class SlackAlerting(CustomBatchLogger):
                 return
 
             if len(outage_value["alerts"]) < self.alerting_args.max_outage_alert_list_size:
-                outage_value["alerts"].append(exception.status_code)  # type: ignore
+                outage_value["alerts"].append(exception.status_code)
             else:  # prevent memory leaks
                 pass
 
@@ -1483,10 +1477,10 @@ Model Info:
 
                 if isinstance(response_obj, litellm.ModelResponse) and (
                     hasattr(response_obj, "usage")
-                    and response_obj.usage is not None  # type: ignore
-                    and hasattr(response_obj.usage, "completion_tokens")  # type: ignore
+                    and response_obj.usage is not None
+                    and hasattr(response_obj.usage, "completion_tokens")
                 ):
-                    completion_tokens: Final = response_obj.usage.completion_tokens  # type: ignore
+                    completion_tokens: Final = response_obj.usage.completion_tokens
                     if completion_tokens is not None and completion_tokens > 0:
                         final_value = float(response_s.total_seconds() / completion_tokens)
                 if isinstance(final_value, timedelta):

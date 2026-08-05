@@ -47,14 +47,14 @@ class RedisClusterCache(RedisCache):
         """
         Overrides `_run_redis_mget_operation` in redis_cache.py
         """
-        return self.redis_client.mget_nonatomic(keys=keys)  # type: ignore
+        return self.redis_client.mget_nonatomic(keys=keys)
 
     async def _async_run_redis_mget_operation(self, keys: list[str]) -> list[Any]:
         """
         Overrides `_async_run_redis_mget_operation` in redis_cache.py
         """
         async_redis_cluster_client: Final = self.init_async_client()
-        return await async_redis_cluster_client.mget_nonatomic(keys=keys)  # type: ignore
+        return await async_redis_cluster_client.mget_nonatomic(keys=keys)
 
     async def test_connection(self) -> dict:
         """
@@ -78,14 +78,14 @@ class RedisClusterCache(RedisCache):
             # Create a fresh Redis Cluster client with current settings
             redis_client: Final = redis_async.RedisCluster(
                 startup_nodes=new_startup_nodes,
-                **cluster_kwargs,  # type: ignore
+                **cluster_kwargs,
             )
 
             # Test the connection
-            ping_result: Final = await redis_client.ping()  # type: ignore[attr-defined, misc]
+            ping_result: Final = await redis_client.ping()
 
             # Close the connection
-            await redis_client.aclose()  # type: ignore[attr-defined]
+            await redis_client.aclose()
 
             if ping_result:
                 return {

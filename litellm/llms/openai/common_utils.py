@@ -27,7 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
 
 def _get_client_init_params(cls: type) -> tuple[str, ...]:
     """Extract __init__ parameter names (excluding 'self') from a class."""
-    return tuple(p for p in inspect.signature(cls.__init__).parameters if p != "self")  # type: ignore[misc]
+    return tuple(p for p in inspect.signature(cls.__init__).parameters if p != "self")
 
 
 _OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(OpenAI)

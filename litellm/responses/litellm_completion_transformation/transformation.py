@@ -215,7 +215,7 @@ class LiteLLMCompletionResponsesConfig:
             tools,
             web_search_options,
         ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            responses_api_request.get("tools") or []  # type: ignore
+            responses_api_request.get("tools") or []
         )
 
         if web_search_options is not None and LiteLLMCompletionResponsesConfig._should_drop_derived_web_search_options(
@@ -1239,7 +1239,7 @@ class LiteLLMCompletionResponsesConfig:
             stripped: Final = content_type[len("input_") :]
             # Validate stripped type is valid, otherwise default to "text"
             if stripped in ValidChatCompletionMessageContentTypes:
-                return stripped  # type: ignore
+                return stripped
             # Handle input_audio -> input_audio (it's already valid)
             if stripped == "audio":
                 return "input_audio"
@@ -1251,7 +1251,7 @@ class LiteLLMCompletionResponsesConfig:
 
         # Return as-is if it's a valid type, otherwise default to "text"
         if content_type in ValidChatCompletionMessageContentTypes:
-            return content_type  # type: ignore
+            return content_type
 
         return "text"
 
@@ -1309,13 +1309,13 @@ class LiteLLMCompletionResponsesConfig:
                     },
                 }
                 if tool.get("cache_control"):
-                    chat_completion_tool["cache_control"] = tool.get("cache_control")  # type: ignore
+                    chat_completion_tool["cache_control"] = tool.get("cache_control")
                 if tool.get("defer_loading"):
-                    chat_completion_tool["defer_loading"] = tool.get("defer_loading")  # type: ignore
+                    chat_completion_tool["defer_loading"] = tool.get("defer_loading")
                 if tool.get("allowed_callers"):
-                    chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")  # type: ignore
+                    chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")
                 if tool.get("input_examples"):
-                    chat_completion_tool["input_examples"] = tool.get("input_examples")  # type: ignore
+                    chat_completion_tool["input_examples"] = tool.get("input_examples")
                 chat_completion_tools.append(cast(ChatCompletionToolParam, chat_completion_tool))
             elif tool.get("type") == "custom":
                 converted = convert_custom_tool_to_function_tool(tool)
@@ -1351,7 +1351,7 @@ class LiteLLMCompletionResponsesConfig:
         result: Final[list[dict[str, Any]]] = []
         for tool in chat_completion_tools:
             if not isinstance(tool, dict):
-                result.append(tool)  # type: ignore
+                result.append(tool)
                 continue
             if tool.get("type") == "function":
                 fn = cast(dict[str, Any], tool.get("function") or {})
@@ -1435,9 +1435,7 @@ class LiteLLMCompletionResponsesConfig:
                         provider_specific_fields = getattr(tool, "provider_specific_fields")
                         if not isinstance(provider_specific_fields, dict):
                             provider_specific_fields = (
-                                dict(provider_specific_fields)  # type: ignore
-                                if hasattr(provider_specific_fields, "__dict__")
-                                else {}
+                                dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
                             )
                     elif hasattr(function_definition, "provider_specific_fields") and getattr(
                         function_definition, "provider_specific_fields", None
@@ -1445,9 +1443,7 @@ class LiteLLMCompletionResponsesConfig:
                         provider_specific_fields = getattr(function_definition, "provider_specific_fields")
                         if not isinstance(provider_specific_fields, dict):
                             provider_specific_fields = (
-                                dict(provider_specific_fields)  # type: ignore
-                                if hasattr(provider_specific_fields, "__dict__")
-                                else {}
+                                dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
                             )
 
                     output_tool_call: ResponseFunctionToolCall = ResponseFunctionToolCall(
@@ -1465,7 +1461,7 @@ class LiteLLMCompletionResponsesConfig:
                             output_tool_call,
                             "provider_specific_fields",
                             provider_specific_fields,
-                        )  # type: ignore
+                        )
 
                     responses_tools.append(output_tool_call)
         return responses_tools
@@ -1531,17 +1527,13 @@ class LiteLLMCompletionResponsesConfig:
             provider_specific_fields = (
                 dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
             )
-        elif hasattr(tool_call_item, "get") and callable(tool_call_item.get):  # type: ignore
-            provider_fields: Final = tool_call_item.get("provider_specific_fields")  # type: ignore
+        elif hasattr(tool_call_item, "get") and callable(tool_call_item.get):
+            provider_fields: Final = tool_call_item.get("provider_specific_fields")
             if provider_fields:
                 provider_specific_fields = (
                     provider_fields
                     if isinstance(provider_fields, dict)
-                    else (
-                        dict(provider_fields)  # type: ignore
-                        if hasattr(provider_fields, "__dict__")
-                        else {}
-                    )
+                    else (dict(provider_fields) if hasattr(provider_fields, "__dict__") else {})
                 )
 
         function_dict: Final[dict[str, Any]] = {
@@ -2026,6 +2018,12 @@ class LiteLLMCompletionResponsesConfig:
 
             if hasattr(prompt_details, "audio_tokens") and prompt_details.audio_tokens is not None:
                 input_details_dict["audio_tokens"] = prompt_details.audio_tokens
+
+            cache_write_tokens = getattr(prompt_details, "cache_write_tokens", None) or getattr(
+                prompt_details, "cache_creation_tokens", None
+            )
+            if cache_write_tokens is not None:
+                input_details_dict["cache_write_tokens"] = cache_write_tokens
 
             if input_details_dict:
                 response_usage.input_tokens_details = InputTokensDetails(**input_details_dict)

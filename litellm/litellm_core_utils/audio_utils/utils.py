@@ -99,10 +99,10 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
     elif hasattr(audio_file, "read") and not isinstance(audio_file, (str, bytes, bytearray, tuple, os.PathLike)):
         # File-like object (IO) - check this after all other types
         filename = getattr(audio_file, "name", "audio.wav")
-        file_content = audio_file.read()  # type: ignore
+        file_content = audio_file.read()
         # Reset file pointer if possible
         if hasattr(audio_file, "seek"):
-            audio_file.seek(0)  # type: ignore
+            audio_file.seek(0)
     else:
         raise ValueError(f"Unsupported audio_file type: {type(audio_file)}")
 
@@ -211,9 +211,9 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
                 current_position: Final = file_content_obj.tell() if hasattr(file_content_obj, "tell") else None
                 if hasattr(file_content_obj, "seek"):
                     file_content_obj.seek(0)
-                file_content = file_content_obj.read()  # type: ignore
+                file_content = file_content_obj.read()
                 if current_position is not None and hasattr(file_content_obj, "seek"):
-                    file_content_obj.seek(current_position)  # type: ignore
+                    file_content_obj.seek(current_position)
             except (OSError, AttributeError):
                 file_content = None
         else:
