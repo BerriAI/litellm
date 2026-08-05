@@ -250,3 +250,25 @@ def test_weave_endpoint_completed_to_otel_path():
         )
         assert dest is not None
         assert dest.endpoint == expected
+
+
+def test_generic_fallback_pins_http_even_for_a_grpc_default_backend(monkeypatch):
+    """Regression: an ``arize`` credential carrying only ``otel_endpoint`` is built by the
+    generic passthrough, but resolved under the ``arize`` name, so the router applied
+    Arize's intrinsic gRPC transport to the plain HTTP URL the admin typed. Nothing was
+    ever delivered while ``/team/info`` kept advertising the destination as active.
+    """
+    monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+    dest = build_destination("arize", {"otel_endpoint": "http://collector.internal:4318/v1/traces"})
+    assert dest is not None
+    assert dest.endpoint == "http://collector.internal:4318/v1/traces"
+    assert dest.protocol == "otlp_http"
+
+
+def test_adapter_built_arize_destination_keeps_its_grpc_default(monkeypatch):
+    """The HTTP pin belongs to the generic passthrough alone; a credential the Arize
+    adapter accepts still points at Arize's own gRPC endpoint."""
+    monkeypatch.delenv("ARIZE_PROJECT_NAME", raising=False)
+    dest = build_destination("arize", {"arize_space_id": "S", "arize_api_key": "K"})
+    assert dest is not None
+    assert dest.protocol is None
