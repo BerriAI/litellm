@@ -1,6 +1,7 @@
+from collections.abc import Mapping
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Dict, Final, List, Literal, Mapping, Set, Union
+from typing import Any, Final, Literal
 
 from typing_extensions import Required, TypedDict
 
@@ -54,7 +55,7 @@ class FileType(Enum):
     XLSX = "XLSX"
 
 
-FILE_EXTENSIONS: Final[Mapping[FileType, List[str]]] = MappingProxyType(
+FILE_EXTENSIONS: Final[Mapping[FileType, list[str]]] = MappingProxyType(
     {
         FileType.AAC: ["aac"],
         FileType.CSV: ["csv"],
@@ -249,7 +250,7 @@ Other FileType Groupings
 """
 # Accepted file types for GEMINI 1.5 through Vertex AI
 # https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/send-multimodal-prompts#gemini-send-multimodal-samples-images-nodejs
-GEMINI_1_5_ACCEPTED_FILE_TYPES: Final[Set[FileType]] = {
+GEMINI_1_5_ACCEPTED_FILE_TYPES: Final[set[FileType]] = {
     # Image
     FileType.PNG,
     FileType.JPEG,
@@ -302,8 +303,8 @@ class TwoStepFileUploadRequest(TypedDict):
 
     method: Required[str]
     url: Required[str]
-    headers: Required[Dict[str, str]]
-    data: Required[Union[str, bytes, Dict[str, Any]]]
+    headers: Required[dict[str, str]]
+    data: Required[str | bytes | dict[str, Any]]
 
 
 class TwoStepFileUploadConfig(TypedDict, total=False):

@@ -33,4 +33,4 @@ class httpxSpecialProvider(str, Enum):
     ModelCostMap = "model_cost_map"
 
 
-VerifyTypes = Union[str, bool, ssl.SSLContext]
+VerifyTypes = str | bool | ssl.SSLContext

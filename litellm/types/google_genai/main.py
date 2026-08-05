@@ -1,8 +1,5 @@
 # Import types from the Google GenAI SDK
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypeAlias
-
-from pydantic import BaseModel
-from typing_extensions import TypedDict
+from typing import TYPE_CHECKING, Any
 
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 
@@ -20,40 +17,39 @@ if TYPE_CHECKING:
     ToolConfigDict = _genai_types.ToolConfigDict
 
     class GenerateContentRequestDict(GenerateContentRequestParametersDict):  # type: ignore[misc, valid-type]
-        generationConfig: Optional[Any]
-        tools: Optional[ToolConfigDict]  # type: ignore[assignment, valid-type]
+        generationConfig: Any | None
+        tools: ToolConfigDict | None  # type: ignore[assignment, valid-type]
 
     class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject):  # type: ignore[misc, valid-type]
         _hidden_params: dict = {}
-        pass
 
 else:
     # Fallback types when google.genai is not available
     ContentListUnion = Any
-    ContentListUnionDict = Dict[str, Any]
-    GenerateContentConfigOrDict = Dict[str, Any]
-    GoogleGenAIGenerateContentResponse = Dict[str, Any]
-    GenerateContentContentListUnionDict = Dict[str, Any]
+    ContentListUnionDict = dict[str, Any]
+    GenerateContentConfigOrDict = dict[str, Any]
+    GoogleGenAIGenerateContentResponse = dict[str, Any]
+    GenerateContentContentListUnionDict = dict[str, Any]
 
     # Create a proper fallback class that can be instantiated
     class GenerateContentConfigDict(dict):  # type: ignore[misc]
-        def __init__(self, **kwargs):  # type: ignore
+        def __init__(self, **kwargs) -> None:  # type: ignore
             super().__init__(**kwargs)
 
     class GenerateContentRequestParametersDict(dict):  # type: ignore[misc]
-        def __init__(self, **kwargs):  # type: ignore
+        def __init__(self, **kwargs) -> None:  # type: ignore
             super().__init__(**kwargs)
 
-    ToolConfigDict = Dict[str, Any]
+    ToolConfigDict = dict[str, Any]
 
     class GenerateContentRequestDict(GenerateContentRequestParametersDict):  # type: ignore[misc]
-        def __init__(self, **kwargs):  # type: ignore
+        def __init__(self, **kwargs) -> None:  # type: ignore
             # Extract specific fields
             self.generationConfig = kwargs.get("generationConfig")
             self.tools = kwargs.get("tools")
             super().__init__(**kwargs)
 
     class GenerateContentResponse(BaseLiteLLMOpenAIResponseObject):  # type: ignore[misc]
-        def __init__(self, **kwargs):  # type: ignore
+        def __init__(self, **kwargs) -> None:  # type: ignore
             super().__init__(**kwargs)
             self._hidden_params = kwargs.get("_hidden_params", {})

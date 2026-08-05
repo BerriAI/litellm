@@ -26616,7 +26616,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: string | number | null;
+            stream_timeout?: number | string | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -35175,7 +35175,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: string | number | null;
+            stream_timeout?: number | string | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
