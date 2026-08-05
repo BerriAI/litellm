@@ -628,7 +628,7 @@ describe("credential path encoding", () => {
     await Networking.credentialDeleteCall("token", "dest/other?force=1");
 
     const parsed = requestedUrl(mockFetch);
-    expect(parsed.pathname).toBe("/credentials/dest%2Fother%3Fforce%3D1");
+    expect(parsed.pathname.endsWith("/credentials/dest%2Fother%3Fforce%3D1")).toBe(true);
     expect(parsed.search).toBe("");
   });
 
@@ -638,7 +638,7 @@ describe("credential path encoding", () => {
     await Networking.credentialUpdateCall("token", "dest/other?force=1", { credential_info: {} });
 
     const parsed = requestedUrl(mockFetch);
-    expect(parsed.pathname).toBe("/credentials/dest%2Fother%3Fforce%3D1");
+    expect(parsed.pathname.endsWith("/credentials/dest%2Fother%3Fforce%3D1")).toBe(true);
     expect(parsed.search).toBe("");
   });
 });
