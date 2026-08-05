@@ -382,8 +382,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     ## RESPONSES API → CHAT COMPLETIONS BRIDGE ##
     use_chat_completions_api: Optional[bool]
     ## PASS-THROUGH ENDPOINTS ##
-    use_in_pass_through: Optional[bool]
-    litellm_credential_name: Optional[str]
+    use_in_pass_through: bool | None
+    litellm_credential_name: str | None
     ## UNIFIED PROJECT/REGION ##
     region_name: Optional[str]
     ## VERTEX AI ##
