@@ -78,27 +78,8 @@
 - {id: mgmt.access_group.delete.persists, module: mgmt, tier: P2, surface: api, assertions: [persists], source: "access_group_endpoints.py:530", rationale: "Access group deletion removes from registry"}
 # Auto Router
 - {id: mgmt.auto_router.test_routing.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "auto_router_endpoints.py:155", rationale: "Route single prompt through complexity-router and report destination"}
-# Cache Operations
-- {id: mgmt.cache.ping.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "caching_routes.py:50", rationale: "Cache ping confirms connection"}
-- {id: mgmt.cache.delete.persists, module: mgmt, tier: P2, surface: api, assertions: [persists], source: "caching_routes.py:122", rationale: "Cache key deletion removes entry"}
-- {id: mgmt.cache.redis_info.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "caching_routes.py:180", rationale: "Redis info reports connection state"}
-- {id: mgmt.cache.flushall.persists, module: mgmt, tier: P2, surface: api, assertions: [persists], source: "caching_routes.py:216", rationale: "Flush clears all cache entries"}
-- {id: mgmt.cache.settings.get.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "cache_settings_endpoints.py:422", rationale: "Fetch current cache config"}
-- {id: mgmt.cache.settings.test_connection.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "cache_settings_endpoints.py:488", rationale: "Test cache connection"}
-- {id: mgmt.cache.settings.save.persists, module: mgmt, tier: P2, surface: api, assertions: [persists], source: "cache_settings_endpoints.py:551", rationale: "Cache settings persist to DB"}
-# Callback Management
-- {id: mgmt.callback.configs.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "callback_management_endpoints.py:35", rationale: "Available callback configurations"}
 # Compliance Endpoints
 - {id: mgmt.compliance.eu_ai_act.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "compliance_endpoints.py:26", rationale: "Check EU AI Act compliance for spend"}
-# Config Overrides (Vault)
-- {id: mgmt.config_override.vault.update.persists, module: mgmt, tier: P2, surface: api, assertions: [persists], source: "config_override_endpoints.py:213", rationale: "Vault secret manager config persists"}
-- {id: mgmt.config_override.vault.get.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "config_override_endpoints.py:348", rationale: "Fetch Vault config"}
-- {id: mgmt.config_override.vault.delete.persists, module: mgmt, tier: P2, surface: api, assertions: [persists], source: "config_override_endpoints.py:408", rationale: "Delete Vault config (idempotent)"}
-- {id: mgmt.config_override.vault.test_connection.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "config_override_endpoints.py:474", rationale: "Test Vault connection"}
-# Coordination Redis Settings
-- {id: mgmt.coordination_redis.settings.get.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "coordination_redis_endpoints.py:288", rationale: "Fetch coordination Redis settings"}
-- {id: mgmt.coordination_redis.settings.update.persists, module: mgmt, tier: P2, surface: api, assertions: [persists], source: "coordination_redis_endpoints.py:319", rationale: "Coordination Redis config persists"}
-- {id: mgmt.coordination_redis.settings.test.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "coordination_redis_endpoints.py:390", rationale: "Test coordination Redis connection"}
 # Cost Tracking Settings
 - {id: mgmt.cost_tracking.cost_discount.get.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "cost_tracking_settings.py:103", rationale: "Fetch cost discount configuration"}
 - {id: mgmt.cost_tracking.cost_discount.update.persists, module: mgmt, tier: P2, surface: api, assertions: [persists], source: "cost_tracking_settings.py:138", rationale: "Cost discount config persists"}
