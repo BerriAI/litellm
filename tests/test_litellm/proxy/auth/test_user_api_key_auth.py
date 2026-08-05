@@ -5681,3 +5681,64 @@ async def test_temp_budget_increase_applied_for_cached_key():
 
     cached_after = await user_api_key_cache.async_get_cache(key=hashed_token)
     assert cached_after.max_budget == 2.0
+
+
+@pytest.mark.asyncio
+async def test_cached_proxy_admin_key_is_rejected_when_blocked():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/35535
+
+    The cached PROXY_ADMIN early return checked expiry but never `blocked`, so a
+    blocked admin key served from the auth cache kept authenticating. The DB-fetch
+    path caches the row before the blocked check runs, so the very next request was
+    served from cache and authorized.
+    """
+    from litellm.proxy.utils import hash_token
+
+    api_key = "sk-blocked-admin-regression"
+    hashed_token = hash_token(api_key)
+
+    user_api_key_cache = DualCache()
+    await _cache_key_object(
+        hashed_token=hashed_token,
+        user_api_key_obj=UserAPIKeyAuth(
+            token=hashed_token,
+            api_key=hashed_token,
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            blocked=True,
+        ),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=None,
+    )
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {api_key}"}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await _user_api_key_auth_builder(
+                request=mock_request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={"model": "gpt-4o-mini"},
+            )
+
+    assert "Key is blocked" in str(exc_info.value.message)
+    assert await user_api_key_cache.async_get_cache(key=hashed_token) is None
