@@ -291,6 +291,7 @@ from litellm.proxy.batches_endpoints.endpoints import router as batches_router
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
+from litellm.proxy.chatgpt_endpoints.endpoints import router as chatgpt_router
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     _is_azure_model_router_request,
@@ -2023,11 +2024,11 @@ if docs_url != "/" and root_redirect_url is not None:
         return RedirectResponse(url=root_redirect_url)
 
 
-user_api_base = None
-user_model = None
+user_api_base: str | None = None
+user_model: str | None = None
 user_debug = False
 user_max_tokens = None
-user_request_timeout = None
+user_request_timeout: float | None = None
 user_temperature = None
 user_telemetry = True
 user_config: Final = None
@@ -16517,6 +16518,7 @@ async def get_routes():
 
 app.include_router(router)
 app.include_router(response_router)
+app.include_router(chatgpt_router)
 app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)

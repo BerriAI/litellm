@@ -4,6 +4,7 @@ Constants and helpers for ChatGPT subscription OAuth.
 
 import os
 import platform
+from collections.abc import Mapping
 from typing import Any, Final
 from uuid import uuid4
 
@@ -229,7 +230,7 @@ def get_chatgpt_default_headers(
     access_token: str,
     account_id: str | None,
     session_id: str | None = None,
-) -> dict:
+) -> Mapping[str, str]:
     originator: Final = get_chatgpt_originator()
     user_agent: Final = get_chatgpt_user_agent(originator)
     headers: Final = {
