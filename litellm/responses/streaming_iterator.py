@@ -137,10 +137,10 @@ class BaseResponsesAPIStreamingIterator:
         self.completed_response: Any | None = None
         self._streamed_output_items: dict[  # mutable-ok: SSE accumulator
             int, BaseLiteLLMOpenAIResponseObject
-        ] = {}
+        ] = {}  # mutable-ok: initialized empty; filled incrementally per SSE event
         self._streamed_text_only_items: dict[  # mutable-ok: SSE fallback accumulator
             int, BaseLiteLLMOpenAIResponseObject
-        ] = {}
+        ] = {}  # mutable-ok: initialized empty; filled incrementally per SSE event
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
         self._yielded_first_chunk = False
@@ -309,18 +309,18 @@ class BaseResponsesAPIStreamingIterator:
                         openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                         openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
                     ):
-                        _response_obj = getattr(openai_responses_api_chunk, "response", None)
+                        _response_obj: Final = getattr(openai_responses_api_chunk, "response", None)
                         if (
                             _response_obj is not None
                             and not getattr(_response_obj, "output", None)
                             and (self._streamed_output_items or self._streamed_text_only_items)
                         ):
                             try:
-                                _merged_items = {  # mutable-ok: transient merge for backfill sort; not retained
+                                _merged_items: Final = {  # mutable-ok: transient merge for backfill sort; not retained
                                     **self._streamed_text_only_items,
                                     **self._streamed_output_items,
                                 }
-                                _backfill = [  # mutable-ok: assigned to response obj output field which expects list
+                                _backfill: Final = [  # mutable-ok: assigned to response obj output field which expects list
                                     item.model_dump() if hasattr(item, "model_dump") else item
                                     for _, item in sorted(_merged_items.items())
                                 ]
@@ -569,10 +569,10 @@ class BaseResponsesAPIStreamingIterator:
         Called after async_post_call_streaming_deployment_hook so only the final,
         hook-transformed item is retained (not the raw pre-hook version).
         """
-        _chunk_type = getattr(chunk, "type", None)
+        _chunk_type: Final = getattr(chunk, "type", None)
         if _chunk_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
-            _item = getattr(chunk, "item", None)
-            _output_index = getattr(
+            _item: Final = getattr(chunk, "item", None)
+            _output_index: Final = getattr(
                 chunk,
                 "output_index",
                 max(self._streamed_output_items, default=-1) + 1,
@@ -583,34 +583,34 @@ class BaseResponsesAPIStreamingIterator:
                 )
 
         elif _chunk_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
-            _text = getattr(chunk, "text", None)
-            _output_index = getattr(chunk, "output_index", None)
+            _text: Final = getattr(chunk, "text", None)
+            _output_index: Final = getattr(chunk, "output_index", None)
             if (
                 isinstance(_text, str)
                 and isinstance(_output_index, int)
                 and _output_index not in self._streamed_output_items
             ):
-                _content_index = getattr(chunk, "content_index", 0) or 0
+                _content_index: Final = getattr(chunk, "content_index", 0) or 0
                 if 0 <= _content_index <= _MAX_CONTENT_INDEX:
-                    _item_id = getattr(chunk, "item_id", None) or f"msg_{_output_index}"
-                    _existing = self._streamed_text_only_items.get(_output_index)
-                    _existing_content = list(  # mutable-ok: copy existing content for slot replacement
+                    _item_id: Final = getattr(chunk, "item_id", None) or f"msg_{_output_index}"
+                    _existing: Final = self._streamed_text_only_items.get(_output_index)
+                    _existing_content: Final = list(  # mutable-ok: copy existing content for slot replacement
                         getattr(_existing, "content", None) or []  # mutable-ok: empty fallback for missing content
                     )
-                    _annotations = getattr(chunk, "annotations", None)
-                    _slot = {  # mutable-ok: content dict matches provider schema
+                    _annotations: Final = getattr(chunk, "annotations", None)
+                    _slot: Final = {  # mutable-ok: content dict matches provider schema
                         "type": "output_text",
                         "text": _text,
                         "annotations": _annotations or [],  # mutable-ok: empty fallback for missing annotations
                     }
                     if _content_index < len(_existing_content):
-                        _content = (
+                        _content: Final = (
                             _existing_content[:_content_index]
                             + [_slot]  # mutable-ok: list concat for slot replacement
                             + _existing_content[_content_index + 1 :]
                         )
                     else:
-                        _content = (
+                        _content: Final = (
                             _existing_content
                             + [  # mutable-ok: list concat for gap padding
                                 {  # mutable-ok: placeholder content dict for gap padding
