@@ -979,6 +979,30 @@ def test_config_blocks_do_not_leak_into_inference_config():
     assert data["serviceTier"] == {"type": "priority"}
 
 
+def test_client_metadata_stripped_from_converse_request():
+    """``client_metadata`` sent by codex must not reach Bedrock as a passthrough model field.
+
+    Converse forwards ``additionalModelRequestFields`` verbatim to the model, and Anthropic
+    rejects the request with "client_metadata: Extra inputs are not permitted".
+    """
+    config = AmazonConverseConfig()
+
+    data = config._transform_request_helper(
+        model="anthropic.claude-opus-4-8",
+        system_content_blocks=[],
+        optional_params={
+            "maxTokens": 16,
+            "anthropic_beta": ["computer-use-2025-01-24"],
+            "client_metadata": {"originator": "codex_cli_rs"},
+        },
+        messages=None,
+    )
+
+    fields = data.get("additionalModelRequestFields", {})
+    assert "client_metadata" not in fields
+    assert fields["anthropic_beta"] == ["computer-use-2025-01-24"]
+
+
 def test_parallel_tool_calls_config_kept_for_sonnet_5(monkeypatch):
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
