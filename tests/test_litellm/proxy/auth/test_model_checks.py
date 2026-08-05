@@ -719,6 +719,7 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 
     fake_model = "vertex_ai/gemini-lit4947-regression"
+    captured_reference = litellm.models_by_provider
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
     try:
         litellm.add_known_models(
@@ -727,6 +728,8 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
             }
         )
         assert fake_model in litellm.models_by_provider["vertex_ai"]
+        assert litellm.models_by_provider is captured_reference
+        assert fake_model in captured_reference["vertex_ai"]
         assert fake_model in get_known_models_from_wildcard("vertex_ai/*")
     finally:
         litellm.vertex_language_models.discard(fake_model)

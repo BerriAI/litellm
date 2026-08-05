@@ -950,11 +950,11 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
 
 def add_known_models(model_cost_map: Optional[Dict] = None):
     """Fold `model_cost_map` (defaults to `litellm.model_cost`) into the per-provider model sets,
-    then rebuild `models_by_provider` from those sets so the additions reach wildcard expansion.
+    then refresh `models_by_provider` from those sets so the additions reach wildcard expansion.
+    The refresh updates the dict in place, so references captured before a reload stay live.
     """
-    global models_by_provider
     _populate_provider_model_sets(model_cost_map if model_cost_map is not None else model_cost)
-    models_by_provider = _build_models_by_provider()
+    models_by_provider.update(_build_models_by_provider())
 
 
 _populate_provider_model_sets(model_cost)
