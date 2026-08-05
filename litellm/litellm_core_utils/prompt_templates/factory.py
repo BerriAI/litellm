@@ -3684,7 +3684,7 @@ def _convert_to_bedrock_tool_call_invoke(
                             # cache_control applies to the whole original
                             # tool call; attach after the last split block.
                             if tool.get("cache_control", None) is not None:
-                                _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                                _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                                     {"cache_control": tool["cache_control"]},
                                     block_type="content_block",
                                     model=model,
@@ -3701,7 +3701,7 @@ def _convert_to_bedrock_tool_call_invoke(
 
                 # Check for cache_control and add a separate cachePoint block
                 if tool.get("cache_control", None) is not None:
-                    cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                    cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                         {"cache_control": tool["cache_control"]},
                         block_type="content_block",
                         model=model,
@@ -4360,7 +4360,7 @@ class BedrockConverseMessagesProcessor:
                             elif element["type"] == "document":
                                 _part = BedrockConverseMessagesProcessor._process_document_message(element)
                                 _parts.append(_part)
-                            _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                            _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                                 message_block=cast(OpenAIMessageContentListBlock, element),
                                 block_type="content_block",
                                 model=model,
@@ -4370,7 +4370,7 @@ class BedrockConverseMessagesProcessor:
                     user_content.extend(_parts)
                 elif message_block["content"] and isinstance(message_block["content"], str):
                     _part = BedrockContentBlock(text=messages[msg_i]["content"])
-                    _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                    _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                         message_block, block_type="content_block", model=model
                     )
                     user_content.append(_part)
@@ -4417,7 +4417,7 @@ class BedrockConverseMessagesProcessor:
 
                 # Add a separate cachePoint block if cache_control is present
                 if tool_msg_cache_control is not None:
-                    cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                    cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                         {"cache_control": tool_msg_cache_control},
                         block_type="content_block",
                         model=model,
@@ -4496,7 +4496,7 @@ class BedrockConverseMessagesProcessor:
                                 assistants_part = await BedrockImageProcessor.process_image_async(image_url=image_url)
                                 assistants_parts.append(assistants_part)
                                 # Add cache point block for assistant content elements
-                        _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                        _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                             message_block=cast(OpenAIMessageContentListBlock, element),
                             block_type="content_block",
                             model=model,
@@ -4510,7 +4510,7 @@ class BedrockConverseMessagesProcessor:
                         assistant_content.append(BedrockContentBlock(text=_assistant_content))
                     # If content is empty/whitespace, skip it (don't add a placeholder)
                     # Add cache point block for assistant string content
-                    _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                    _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                         assistant_message_block, block_type="content_block", model=model
                     )
                     if _cache_point_block is not None:
@@ -4733,7 +4733,7 @@ def _bedrock_converse_messages_pt(
                         elif element["type"] == "document":
                             _part = BedrockConverseMessagesProcessor._process_document_message(element)
                             _parts.append(_part)
-                        _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                        _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                             message_block=cast(OpenAIMessageContentListBlock, element),
                             block_type="content_block",
                             model=model,
@@ -4743,7 +4743,7 @@ def _bedrock_converse_messages_pt(
                 user_content.extend(_parts)
             elif message_block["content"] and isinstance(message_block["content"], str):
                 _part = BedrockContentBlock(text=messages[msg_i]["content"])
-                _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                     message_block, block_type="content_block", model=model
                 )
                 user_content.append(_part)
@@ -4792,7 +4792,7 @@ def _bedrock_converse_messages_pt(
 
             # Add a separate cachePoint block if cache_control is present
             if tool_msg_cache_control is not None:
-                cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                     {"cache_control": tool_msg_cache_control},
                     block_type="content_block",
                     model=model,
@@ -4874,7 +4874,7 @@ def _bedrock_converse_messages_pt(
                             assistants_part = BedrockImageProcessor.process_image_sync(image_url=image_url)
                             assistants_parts.append(assistants_part)
                         # Add cache point block for assistant content elements
-                        _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                        _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                             message_block=cast(OpenAIMessageContentListBlock, element),
                             block_type="content_block",
                             model=model,
@@ -4887,7 +4887,7 @@ def _bedrock_converse_messages_pt(
                 if _assistant_content.strip():
                     assistant_content.append(BedrockContentBlock(text=_assistant_content))
                 # Add cache point block for assistant string content
-                _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                     assistant_message_block, block_type="content_block", model=model
                 )
                 if _cache_point_block is not None:
