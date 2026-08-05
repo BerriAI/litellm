@@ -61,6 +61,18 @@ def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", mo
         )
 
         return groq_cost_per_web_search_request(usage=usage, model_info=model_info)
+    elif custom_llm_provider == "openai":
+        from .openai.cost_calculation import (
+            cost_per_web_search_request as openai_cost_per_web_search_request,
+        )
+
+        return openai_cost_per_web_search_request(usage=usage, model_info=model_info)
+    elif custom_llm_provider == "azure":
+        from .azure.cost_calculation import (
+            cost_per_web_search_request as azure_cost_per_web_search_request,
+        )
+
+        return azure_cost_per_web_search_request(usage=usage, model_info=model_info)
     else:
         return None
 

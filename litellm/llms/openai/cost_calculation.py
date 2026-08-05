@@ -6,10 +6,77 @@ Helper util for handling openai-specific cost calculation
 from collections.abc import Mapping
 from typing import Any, Final, Literal
 
+from pydantic import BaseModel, ValidationError
+
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.constants import OPENAI_WEB_SEARCH_COST_PER_CALL
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    cost_for_web_search_requests,
+    generic_cost_per_token,
+)
 from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import get_model_info
+
+_NON_BILLABLE_WEB_SEARCH_ACTIONS: Final = frozenset({"open_page", "find_in_page"})
+_UNBILLED_WEB_SEARCH_STATUSES: Final = frozenset({"failed", "incomplete"})
+
+
+class _WebSearchCallAction(BaseModel):
+    type: str | None = None
+
+
+class _WebSearchCallItem(BaseModel):
+    type: str | None = None
+    status: str | None = None
+    action: _WebSearchCallAction | None = None
+
+
+def _is_billable_web_search_call(output_item: object) -> bool:
+    """
+    Whether a Responses API output item is a web search that carries the per-call tool fee.
+
+    Only ``search`` actions are billable. ``open_page`` and ``find_in_page`` are free
+    navigation inside an already-grounded search, and a search that never completed is
+    not charged.
+
+    https://developers.openai.com/api/docs/guides/tools-web-search
+    https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/web-search
+    """
+    try:
+        item: Final = _WebSearchCallItem.model_validate(output_item, from_attributes=True)
+    except ValidationError:
+        return False
+
+    if item.type != "web_search_call" or item.status in _UNBILLED_WEB_SEARCH_STATUSES:
+        return False
+    return item.action is None or item.action.type not in _NON_BILLABLE_WEB_SEARCH_ACTIONS
+
+
+def get_web_search_requests_from_response(response_object: object) -> int | None:
+    """
+    Count the billable ``web_search_call`` items in a Responses API response.
+
+    OpenAI and Azure OpenAI report no search count in ``usage``, so the response output is
+    the only record of how many searches a single request performed. Returns ``None`` for
+    responses that carry no output list (e.g. chat completions), where the count is unknown.
+    """
+    output: Final = getattr(response_object, "output", None)
+    if not isinstance(output, list):
+        return None
+    return sum(1 for output_item in output if _is_billable_web_search_call(output_item))
+
+
+def cost_per_web_search_request(usage: Usage, model_info: ModelInfo) -> float | None:
+    """
+    Cost of the hosted web search tool, charged per billable search at $10.00 / 1k calls.
+
+    https://developers.openai.com/api/docs/pricing
+    """
+    return cost_for_web_search_requests(
+        usage=usage,
+        model_info=model_info,
+        default_cost_per_request=OPENAI_WEB_SEARCH_COST_PER_CALL,
+    )
 
 
 def cost_router(call_type: CallTypes) -> Literal["cost_per_token", "cost_per_second"]:
