@@ -19,7 +19,7 @@ import random
 import sys
 import time
 import traceback
-from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping, Sequence
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
@@ -29,6 +29,7 @@ from typing import (
     Any,
     Literal,
     Optional,
+    Protocol,
     Union,
     cast,
     get_args,
@@ -39,6 +40,8 @@ from litellm._uuid import uuid
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+
+    from litellm.types.llms.openai import AllMessageValues
 
 import dotenv
 import httpx
@@ -334,6 +337,16 @@ MOCK_RESPONSE_TYPE = Union[str, Exception, dict, ModelResponse, ModelResponseStr
 ####### COMPLETION ENDPOINTS ################
 
 
+class _CompletionRouter(Protocol):
+    def completion(
+        self, model: str, messages: "Sequence[AllMessageValues]", **kwargs: object
+    ) -> ModelResponse | CustomStreamWrapper: ...
+
+    async def acompletion(
+        self, model: str, messages: "Sequence[AllMessageValues]", **kwargs: object
+    ) -> ModelResponse | CustomStreamWrapper: ...
+
+
 class LiteLLM:
     def __init__(
         self,
@@ -350,7 +363,7 @@ class LiteLLM:
 
 
 class Chat:
-    def __init__(self, params, router_obj: Any | None):
+    def __init__(self, params, router_obj: _CompletionRouter | None):
         self.params = params
         if self.params.get("acompletion", False) is True:
             self.params.pop("acompletion")
@@ -360,11 +373,11 @@ class Chat:
 
 
 class Completions:
-    def __init__(self, params, router_obj: Any | None):
+    def __init__(self, params, router_obj: _CompletionRouter | None):
         self.params = params
         self.router_obj = router_obj
 
-    def create(self, messages, model=None, **kwargs):
+    def create(self, messages: "Sequence[AllMessageValues]", model: str | None = None, **kwargs: object):
         for k, v in kwargs.items():
             self.params[k] = v
         model = model or self.params.get("model")
@@ -376,11 +389,11 @@ class Completions:
 
 
 class AsyncCompletions:
-    def __init__(self, params, router_obj: Any | None):
+    def __init__(self, params, router_obj: _CompletionRouter | None):
         self.params = params
         self.router_obj = router_obj
 
-    async def create(self, messages, model=None, **kwargs):
+    async def create(self, messages: "Sequence[AllMessageValues]", model: str | None = None, **kwargs: object):
         for k, v in kwargs.items():
             self.params[k] = v
         model = model or self.params.get("model")
@@ -974,11 +987,11 @@ def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
     web_search_options: OpenAIWebSearchOptions | None = None,
-    tools: list[Any] | None = None,
-    reasoning_effort: Any | None = None,
-    reasoning_summary: Any | None = None,
-) -> tuple[dict, str]:
-    model_info: dict[str, Any] = {}
+    tools: Sequence[object] | None = None,
+    reasoning_effort: object | None = None,
+    reasoning_summary: object | None = None,
+) -> tuple[Mapping[str, object], str]:
+    model_info: dict[str, object] = {}  # mutable-ok: built incrementally across several branches below
 
     # Global flag: route ALL OpenAI chat completions through Responses API.
     # Returns early with minimal model_info; callers only inspect the "mode" key.
@@ -1195,8 +1208,8 @@ def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
 
     if litellm.AzureOpenAIO1Config().is_o_series_model(model=_azure_detection_model):
         ## LOAD CONFIG - if set
-        config = litellm.AzureOpenAIO1Config.get_config()
-        for k, v in config.items():
+        o1_config: Mapping[str, object] = litellm.AzureOpenAIO1Config.get_config()
+        for k, v in o1_config.items():
             if (
                 k not in optional_params
             ):  # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
@@ -1224,8 +1237,8 @@ def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
         )
     else:
         ## LOAD CONFIG - if set
-        config = litellm.AzureOpenAIConfig.get_config()
-        for k, v in config.items():
+        azure_config: Mapping[str, object] = litellm.AzureOpenAIConfig.get_config()
+        for k, v in azure_config.items():
             if (
                 k not in optional_params
             ):  # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
@@ -1318,7 +1331,7 @@ def _complete_azure_text(ctx: _CompletionDispatchContext) -> _CompletionDispatch
         optional_params["extra_headers"] = extra_headers
 
     ## LOAD CONFIG - if set
-    config = litellm.AzureOpenAIConfig.get_config()
+    config: Mapping[str, object] = litellm.AzureOpenAIConfig.get_config()
     for k, v in config.items():
         if (
             k not in optional_params
@@ -1605,7 +1618,7 @@ def _complete_text_completion_openai(
     headers = headers or litellm.headers
 
     ## LOAD CONFIG - if set
-    config = litellm.OpenAITextCompletionConfig.get_config()
+    config: Mapping[str, object] = litellm.OpenAITextCompletionConfig.get_config()
     for k, v in config.items():
         if (
             k not in optional_params
@@ -1889,7 +1902,7 @@ def _complete_groq(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult
     headers = headers or litellm.headers
 
     ## LOAD CONFIG - if set
-    config = litellm.GroqChatConfig.get_config()
+    config: Mapping[str, object] = litellm.GroqChatConfig.get_config()
     for k, v in config.items():
         if (
             k not in optional_params
@@ -1938,7 +1951,7 @@ def _complete_bedrock_mantle(
     api_base = api_base or litellm.api_base or get_secret("BEDROCK_MANTLE_API_BASE")
     api_key = api_key or litellm.api_key or get_secret("BEDROCK_MANTLE_API_KEY")
     headers = headers or litellm.headers
-    config = litellm.BedrockMantleChatConfig.get_config()
+    config: Mapping[str, object] = litellm.BedrockMantleChatConfig.get_config()
     for k, v in config.items():
         if k not in optional_params:
             optional_params[k] = v
@@ -2106,7 +2119,7 @@ def _complete_sap(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
 
     headers = headers or litellm.headers
     ## LOAD CONFIG - if set
-    config = litellm.GenAIHubOrchestrationConfig.get_config()
+    config: Mapping[str, object] = litellm.GenAIHubOrchestrationConfig.get_config()
     for k, v in config.items():
         if (
             k not in optional_params
@@ -2401,7 +2414,7 @@ def _complete_custom_openai(
             optional_params["metadata"] = openai_metadata
 
     ## LOAD CONFIG - if set
-    config = litellm.OpenAIConfig.get_config()
+    config: Mapping[str, object] = litellm.OpenAIConfig.get_config()
     for k, v in config.items():
         if (
             k not in optional_params
@@ -3229,7 +3242,7 @@ def _complete_openrouter(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     headers = openrouter_headers
 
     ## Load Config
-    config = litellm.OpenrouterConfig.get_config()
+    config: Mapping[str, object] = litellm.OpenrouterConfig.get_config()
     for k, v in config.items():
         if k == "extra_body":
             # we use openai 'extra_body' to pass openrouter specific params - transforms, route, models
@@ -3307,7 +3320,7 @@ def _complete_vercel_ai_gateway(
     headers = vercel_headers
 
     ## Load Config
-    config = litellm.VercelAIGatewayConfig.get_config()
+    config: Mapping[str, object] = litellm.VercelAIGatewayConfig.get_config()
     for k, v in config.items():
         if k == "extra_body":
             # we use openai 'extra_body' to pass vercel specific params - providerOptions
@@ -4995,6 +5008,7 @@ def completion(  # type: ignore
     # Inject proxy auth headers if configured
     if litellm.proxy_auth is not None:
         try:
+            # any-ok: importing ProxyAuthHandler would rebind litellm.proxy_auth via package auto-import
             proxy_headers = litellm.proxy_auth.get_auth_headers()
             headers.update(proxy_headers)
         except Exception as e:
@@ -5103,12 +5117,15 @@ def completion(  # type: ignore
         fallbacks = fallbacks or litellm.model_fallbacks
         if fallbacks is not None:
             return completion_with_fallbacks(  # pyright: ignore[reportReturnType]  # fallback runner is untyped; resolves to ModelResponse|CustomStreamWrapper at runtime
+                # any-ok: args is completion()'s locals(); typeshed types locals() as dict[str, Any]
                 **args
             )
         if model_list is not None:
             deployments = [m["litellm_params"] for m in model_list if m["model_name"] == model]
             return litellm.batch_completion_models(  # pyright: ignore[reportReturnType]  # batch path returns a list of responses, outside completion()'s single-response return type
-                deployments=deployments, **args
+                deployments=deployments,
+                # any-ok: args is completion()'s locals(); typeshed types locals() as dict[str, Any]
+                **args,
             )
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
@@ -5868,7 +5885,7 @@ def embedding(
     *,
     aembedding: Literal[True],
     **kwargs,
-) -> Coroutine[Any, Any, EmbeddingResponse]: 
+) -> Coroutine[None, None, EmbeddingResponse]: 
     ...
 
 
@@ -5919,7 +5936,7 @@ def embedding(
     litellm_call_id=None,
     logger_fn=None,
     **kwargs,
-) -> EmbeddingResponse | Coroutine[Any, Any, EmbeddingResponse]:
+) -> EmbeddingResponse | Coroutine[None, None, EmbeddingResponse]:
     """
     Embedding function that calls an API to generate embeddings for the given input.
 
@@ -5962,6 +5979,7 @@ def embedding(
     # Inject proxy auth headers if configured
     if litellm.proxy_auth is not None:
         try:
+            # any-ok: importing ProxyAuthHandler would rebind litellm.proxy_auth via package auto-import
             proxy_headers = litellm.proxy_auth.get_auth_headers()
             headers.update(proxy_headers)
         except Exception as e:
@@ -6039,7 +6057,7 @@ def embedding(
     if mock_response is not None:
         return mock_embedding(model=model, mock_response=mock_response)
     try:
-        response: EmbeddingResponse | Coroutine[Any, Any, EmbeddingResponse] | None = None
+        response: EmbeddingResponse | Coroutine[None, None, EmbeddingResponse] | None = None
 
         if azure is True or custom_llm_provider == "azure":
             # azure configs
@@ -7289,7 +7307,7 @@ async def aadapter_generate_content(
     from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
 
     coro = cast(
-        Coroutine[Any, Any, dict[str, Any] | AsyncIterator[bytes]],
+        Coroutine[None, None, dict[str, Any] | AsyncIterator[bytes]],
         GenerateContentToCompletionHandler.generate_content_handler(**kwargs, _is_async=True),
     )
     return await coro
@@ -7496,7 +7514,7 @@ def transcription(
     max_retries: int | None = None,
     custom_llm_provider=None,
     **kwargs,
-) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
+) -> TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]:
     """
     Calls openai + azure whisper endpoints.
 
@@ -7563,7 +7581,7 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
     )
 
-    response: TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse] | None = None
+    response: TranscriptionResponse | Coroutine[object, object, TranscriptionResponse] | None = None
 
     provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
         model=model,
@@ -7797,7 +7815,7 @@ def speech(
     custom_llm_provider: str | None = None,
     aspeech: bool | None = None,
     **kwargs,
-) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
+) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
     user = kwargs.get("user", None)
     litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
@@ -7856,7 +7874,7 @@ def speech(
         },
         custom_llm_provider=custom_llm_provider,
     )
-    response: HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent] | None = None
+    response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
     if custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers:
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
@@ -8780,17 +8798,18 @@ async def acount_tokens(
 
 
 # Cache for encoding to avoid repeated __getattr__ calls
-_encoding_cache: Any | None = None
+_encoding_cache: tiktoken.Encoding | None = None
 
 
-def _get_encoding():
+def _get_encoding() -> tiktoken.Encoding:
     """Get encoding, loading it lazily if needed."""
     global _encoding_cache
     if _encoding_cache is None:
         import sys
 
         # Access via module to trigger __getattr__ if not cached
-        _encoding_cache = sys.modules[__name__].encoding
+        _encoding_cache = sys.modules[__name__].encoding  # any-ok: __getattr__ module hook; attribute type is dynamic
+    assert _encoding_cache is not None
     return _encoding_cache
 
 
@@ -8802,7 +8821,8 @@ def __getattr__(name: str) -> Any:
         # instead of downloading from the internet
         from litellm._lazy_imports import _get_default_encoding
 
-        _encoding = _get_default_encoding()
+        # any-ok: _get_default_encoding() is declared -> Any in _lazy_imports.py
+        _encoding: tiktoken.Encoding = _get_default_encoding()
         # Cache it in the module's __dict__ for subsequent accesses
         import sys
 

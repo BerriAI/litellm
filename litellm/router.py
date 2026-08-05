@@ -249,7 +249,7 @@ if TYPE_CHECKING:
         ResponsesAPIResponse,
     )
 
-    Span = Union[_Span, Any]
+    Span = _Span
 else:
     Span = Any
     AutoRouter = Any
@@ -306,6 +306,14 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
+
+RoutingStrategySelector = (
+    LeastBusyLoggingHandler
+    | LowestTPMLoggingHandler
+    | LowestTPMLoggingHandler_v2
+    | LowestLatencyLoggingHandler
+    | LowestCostLoggingHandler
+)
 
 
 class RoutingArgs(enum.Enum):
@@ -669,6 +677,9 @@ class Router:
         """
 
         ### ROUTING SETUP ###
+        self._override_selectors: dict[str, RoutingStrategySelector | None] = {}
+        self._override_selectors_lock = threading.Lock()
+        self._group_selectors: dict[str, dict[str, RoutingStrategySelector]] = {}
         if self._normalize_strategy(routing_strategy) == "lar1":
             from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
 
@@ -679,8 +690,6 @@ class Router:
                 routing_strategy_args=routing_strategy_args,
             )
         self._init_routing_groups(self._routing_groups_input)
-        self._override_selectors: dict[str, Any] = {}
-        self._override_selectors_lock = threading.Lock()
         self.access_groups = None
         ## USAGE TRACKING ##
         if isinstance(litellm._async_success_callback, list):
@@ -884,13 +893,13 @@ class Router:
         strategy: RoutingStrategy | str,
         routing_strategy_args: dict,
         register_callbacks: bool = True,
-    ) -> Any | None:
+    ) -> RoutingStrategySelector | None:
         """
         Constructs a strategy selector for a given strategy.
         Returns None for `simple-shuffle` (no selector needed) and unknown
         strategies.
         """
-        selector: Any | None = None
+        selector: RoutingStrategySelector | None = None
         match self._normalize_strategy(strategy):
             case RoutingStrategy.LEAST_BUSY.value:
                 selector = LeastBusyLoggingHandler(router_cache=self.cache)
@@ -927,7 +936,7 @@ class Router:
 
         return selector
 
-    def _unregister_router_selectors(self, selectors: list[Any]) -> None:
+    def _unregister_router_selectors(self, selectors: list[RoutingStrategySelector | None]) -> None:
         """
         Drop router-owned strategy selectors from litellm's global callback
         lists by identity. Used before re-init (`routing_strategy_init` /
@@ -949,7 +958,7 @@ class Router:
 
         self._unregister_router_selectors(
             [getattr(self, attr, None) for attr in self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.values()]
-            + list(getattr(self, "_override_selectors", {}).values())
+            + list(self._override_selectors.values())
         )
         self._override_selectors = {}
 
@@ -985,12 +994,12 @@ class Router:
         attributes set up in `routing_strategy_init`.
         """
         self._unregister_router_selectors(
-            [sel for selectors in getattr(self, "_group_selectors", {}).values() for sel in selectors.values()]
+            [sel for selectors in self._group_selectors.values() for sel in selectors.values()]
         )
 
         self._routing_groups: dict[str, RoutingGroup] = {}
         self._model_to_group: dict[str, str] = {}
-        self._group_selectors: dict[str, dict[str, Any]] = {}
+        self._group_selectors = {}
 
         if not groups_input:
             return
@@ -1068,7 +1077,7 @@ class Router:
             return None
         return strategy
 
-    def _get_override_strategy_selector(self, strategy: str) -> Any | None:
+    def _get_override_strategy_selector(self, strategy: str) -> RoutingStrategySelector | None:
         """
         Returns the selector for a per-request strategy override.
 
@@ -1089,7 +1098,9 @@ class Router:
                 )
             return self._override_selectors[strategy]
 
-    def _get_routing_context(self, model: str, request_kwargs: dict | None = None) -> tuple[str | None, Any | None]:
+    def _get_routing_context(
+        self, model: str, request_kwargs: dict | None = None
+    ) -> tuple[str | None, RoutingStrategySelector | None]:
         """
         Resolves the routing strategy and selector to use for the given model.
 
@@ -1575,9 +1586,11 @@ class Router:
             EncryptedContentAffinityCheck,
         )
 
+        _CallbackT = TypeVar("_CallbackT", bound=CustomLogger | Callable[..., object] | str)
+
         def _move_before_deployment_affinity(
-            callback_list: list[Any],
-            callback_to_move: EncryptedContentAffinityCheck,
+            callback_list: list[_CallbackT],
+            callback_to_move: _CallbackT,
         ) -> None:
             if callback_to_move not in callback_list:
                 return
@@ -1883,7 +1896,7 @@ class Router:
 
         return silent_kwargs
 
-    def _silent_experiment_completion(self, silent_model: str, messages: list[Any], **kwargs):
+    def _silent_experiment_completion(self, silent_model: str, messages: list[AllMessageValues], **kwargs):
         """
         Run a silent experiment in the background (thread).
         """
@@ -1910,7 +1923,7 @@ class Router:
                 async def _run_silent_completion():
                     await self.acompletion(
                         model=silent_model,
-                        messages=cast(list[AllMessageValues], messages),
+                        messages=messages,
                         **silent_kwargs,
                     )
                     # Drain any fire-and-forget tasks (e.g. alerting hooks)
@@ -5632,7 +5645,7 @@ class Router:
 
             def sync_wrapper(
                 custom_llm_provider: str | None = None,
-                client: Any | None = None,
+                client: Any | None = None,  # any-ok: provider SDK client varies by call_type (AsyncOpenAI, etc.)
                 **kwargs,
             ):
                 return self._generic_api_call_with_fallbacks(original_function=original_function, **kwargs)
@@ -5648,7 +5661,7 @@ class Router:
 
             def vector_store_sync_wrapper(
                 custom_llm_provider: str | None = None,
-                client: Any | None = None,
+                client: Any | None = None,  # any-ok: provider SDK client varies by call_type (AsyncOpenAI, etc.)
                 **kwargs,
             ):
                 if custom_llm_provider and "custom_llm_provider" not in kwargs:
@@ -5670,7 +5683,7 @@ class Router:
 
             def vector_store_file_sync_wrapper(
                 custom_llm_provider: str | None = None,
-                client: Any | None = None,
+                client: Any | None = None,  # any-ok: provider SDK client varies by call_type (AsyncOpenAI, etc.)
                 **kwargs,
             ):
                 return original_function(
@@ -5691,7 +5704,7 @@ class Router:
 
             def managed_agents_sync_wrapper(
                 custom_llm_provider: str | None = None,
-                client: Any | None = None,
+                client: Any | None = None,  # any-ok: provider SDK client varies by call_type (AsyncOpenAI, etc.)
                 **kwargs,
             ):
                 if custom_llm_provider and "custom_llm_provider" not in kwargs:
@@ -5705,7 +5718,7 @@ class Router:
         # Handle asynchronous call types
         async def async_wrapper(
             custom_llm_provider: str | None = None,
-            client: Any | None = None,
+            client: Any | None = None,  # any-ok: provider SDK client varies by call_type (AsyncOpenAI, etc.)
             **kwargs,
         ):
             if call_type == "assistants":
@@ -7079,7 +7092,9 @@ class Router:
         except Exception as e:
             raise e
 
-    async def async_deployment_callback_on_failure(self, kwargs, completion_response: Any | None, start_time, end_time):
+    async def async_deployment_callback_on_failure(
+        self, kwargs, completion_response: object | None, start_time, end_time
+    ):
         """
         Update RPM usage for a deployment
         """
@@ -8650,7 +8665,7 @@ class Router:
 
     def get_deployment_credentials_with_provider(
         self, model_id: str, team_id: str | None = None
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any] | None:  # any-ok: pydantic BaseModel.model_dump() is typed to return dict[str, Any]
         """
         Get API credentials and provider info from a model name in model_list.
         Useful for passthrough endpoints (files, batches, etc.) that need credentials.
@@ -10999,7 +11014,7 @@ class Router:
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None,
+        messages: list[dict[str, str]] | None,
     ) -> RoutingContext:
         """
         Build a RoutingContext for `model`, run it through `self.routing_plugins`
@@ -11098,7 +11113,7 @@ class Router:
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None = None,
+        messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
     ) -> PreRoutingHookResponse | None:
