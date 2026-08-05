@@ -7,12 +7,18 @@ import pytest
 
 import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
+from litellm.llms.anthropic.chat.handler import (
+    AnthropicChatCompletion,
+    ModelResponseIterator,
+    make_call,
+)
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.responses.main import OutputCodeInterpreterCall
+from litellm.types.utils import ModelResponse
 
 
 @pytest.mark.asyncio
@@ -2045,3 +2051,71 @@ def test_non_bash_tool_result_skipped():
     assert (
         len(code_results) == 0
     ), f"Expected 0 code_interpreter_results for text_editor result, got {len(code_results)}"
+
+
+def test_streaming_completion_preserves_custom_llm_provider():
+    response = MagicMock()
+    response.status_code = 200
+    response.headers = {}
+    response.iter_lines.return_value = iter(())
+    client = MagicMock(spec=HTTPHandler)
+    client.post.return_value = response
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {
+        "custom_llm_provider": "vertex_ai",
+        "litellm_params": {},
+    }
+
+    result = AnthropicChatCompletion().completion(
+        model="claude-sonnet-4-5@20250929",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://example.com/v1/messages",
+        custom_llm_provider="vertex_ai",
+        custom_prompt_dict={},
+        model_response=ModelResponse(),
+        print_verbose=MagicMock(),
+        encoding=None,
+        api_key="test-key",
+        logging_obj=logging_obj,
+        optional_params={"stream": True, "max_tokens": 16, "is_vertex_request": True},
+        timeout=60.0,
+        litellm_params={},
+        client=client,
+    )
+
+    assert result.custom_llm_provider == "vertex_ai"
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_completion_preserves_custom_llm_provider():
+    response = MagicMock()
+    response.headers = {}
+    response.aiter_lines.return_value = iter(())
+    client = MagicMock(spec=AsyncHTTPHandler)
+    client.post = AsyncMock(return_value=response)
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {
+        "custom_llm_provider": "vertex_ai",
+        "litellm_params": {},
+    }
+
+    completion = AnthropicChatCompletion().completion(
+        model="claude-sonnet-4-5@20250929",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://example.com/v1/messages",
+        custom_llm_provider="vertex_ai",
+        custom_prompt_dict={},
+        model_response=ModelResponse(),
+        print_verbose=MagicMock(),
+        encoding=None,
+        api_key="test-key",
+        logging_obj=logging_obj,
+        optional_params={"stream": True, "max_tokens": 16, "is_vertex_request": True},
+        timeout=60.0,
+        litellm_params={},
+        acompletion=True,
+        client=client,
+    )
+    result = await completion
+
+    assert result.custom_llm_provider == "vertex_ai"
