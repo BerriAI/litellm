@@ -10,6 +10,7 @@ import {
   DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
   DEFAULT_CLASSIFIER_FALLBACK,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
+  effectiveTierLabel,
 } from "./ComplexityRouterConfig";
 
 const { Text } = Typography;
@@ -208,6 +209,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               systemPrompt={value.classifier_llm_config?.system_prompt}
               onChange={handleClassifierSystemPromptChange}
               contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
+              tierLabels={value.tier_labels}
             />
           </div>
           <div>
@@ -327,16 +329,17 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </Text>
         <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, color: "rgba(0, 0, 0, 0.45)" }}>
           <li>
-            <strong>SIMPLE</strong>: Score &lt; 0.15
+            <strong>{effectiveTierLabel("SIMPLE", value.tier_labels)}</strong>: Score &lt; 0.15
           </li>
           <li>
-            <strong>MEDIUM</strong>: Score 0.15 - 0.35
+            <strong>{effectiveTierLabel("MEDIUM", value.tier_labels)}</strong>: Score 0.15 - 0.35
           </li>
           <li>
-            <strong>COMPLEX</strong>: Score 0.35 - 0.60
+            <strong>{effectiveTierLabel("COMPLEX", value.tier_labels)}</strong>: Score 0.35 - 0.60
           </li>
           <li>
-            <strong>REASONING</strong>: Score &gt; 0.60 (or 2+ reasoning markers)
+            <strong>{effectiveTierLabel("REASONING", value.tier_labels)}</strong>: Score &gt; 0.60 (or 2+ reasoning
+            markers)
           </li>
         </ul>
       </Card>

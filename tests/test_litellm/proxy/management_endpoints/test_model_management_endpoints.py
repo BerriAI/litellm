@@ -3783,3 +3783,45 @@ class TestAutoRouterClassifierDefaultPrompt:
         with pytest.raises(ProxyException) as exc_info:
             await get_auto_router_classifier_default_prompt(context_window_size=-1)
         assert "non-negative" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_renamed_tiers_prefill_the_rubric_the_router_actually_sends(self):
+        """A router with tier_labels sends a rubric naming those labels, and the classifier must
+        return them, so prefilling the canonical names would hand the operator a prompt whose tier
+        names their router rejects."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            get_auto_router_classifier_default_prompt,
+        )
+
+        renamed = await get_auto_router_classifier_default_prompt(
+            context_window_size=5, tier_labels='{"SIMPLE": "Cheap", "REASONING": "Deep"}'
+        )
+        assert "- Cheap:" in renamed.system_prompt
+        assert "- Deep:" in renamed.system_prompt
+        assert "- SIMPLE:" not in renamed.system_prompt
+        assert "- MEDIUM:" in renamed.system_prompt
+
+    @pytest.mark.asyncio
+    async def test_malformed_tier_labels_are_rejected_rather_than_silently_ignored(self):
+        """An unparseable or invalid rename must not fall back to the canonical rubric: that would
+        prefill tier names the router does not accept while looking like it worked."""
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            get_auto_router_classifier_default_prompt,
+        )
+
+        for bad in ("not-json", '{"SIMPLE": "  "}', '{"SIMPLE": "MEDIUM"}', '{"SIMPLE": "X", "MEDIUM": "X"}'):
+            with pytest.raises(ProxyException) as exc_info:
+                await get_auto_router_classifier_default_prompt(context_window_size=5, tier_labels=bad)
+            assert "tier_labels" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_omitted_tier_labels_are_byte_identical_to_the_default_rubric(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            get_auto_router_classifier_default_prompt,
+        )
+        from litellm.router_strategy.complexity_router import classification_system_prompt
+
+        for empty in (None, "", "{}"):
+            response = await get_auto_router_classifier_default_prompt(context_window_size=5, tier_labels=empty)
+            assert response.system_prompt == classification_system_prompt(5)

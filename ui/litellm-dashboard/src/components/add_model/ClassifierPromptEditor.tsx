@@ -12,12 +12,14 @@ interface ClassifierPromptEditorProps {
   systemPrompt: string | undefined;
   onChange: (systemPrompt: string | undefined) => void;
   contextWindowSize: number;
+  tierLabels?: Record<string, string>;
 }
 
 const ClassifierPromptEditor: React.FC<ClassifierPromptEditorProps> = ({
   systemPrompt,
   onChange,
   contextWindowSize,
+  tierLabels,
 }) => {
   const { accessToken } = useAuthorized();
   const [isOpen, setIsOpen] = useState(false);
@@ -26,14 +28,14 @@ const ClassifierPromptEditor: React.FC<ClassifierPromptEditorProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const isOverridden = hasCustomPrompt(systemPrompt);
 
-  // Fetched on every open rather than cached, so a context window changed since the last open
-  // cannot prefill the editor with the closing line the router would no longer send.
+  // Fetched on every open rather than cached, so a context window or tier rename changed since the
+  // last open cannot prefill the editor with a rubric the router would no longer send.
   const openEditor = useCallback(async () => {
     if (!accessToken) return;
     setIsOpen(true);
     setIsLoading(true);
     try {
-      const fetched = await getAutoRouterClassifierDefaultPromptCall(accessToken, contextWindowSize);
+      const fetched = await getAutoRouterClassifierDefaultPromptCall(accessToken, contextWindowSize, tierLabels);
       setDefaultPrompt(fetched);
       setDraft(initialDraftText(systemPrompt, fetched));
     } catch {
@@ -42,7 +44,7 @@ const ClassifierPromptEditor: React.FC<ClassifierPromptEditorProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken, contextWindowSize, systemPrompt]);
+  }, [accessToken, contextWindowSize, systemPrompt, tierLabels]);
 
   const handleSave = () => {
     onChange(resolveCustomPrompt({ text: draft, defaultPrompt }));
@@ -86,8 +88,9 @@ const ClassifierPromptEditor: React.FC<ClassifierPromptEditorProps> = ({
               model.
             </p>
             <p className="mt-2">
-              The tier names SIMPLE, MEDIUM, COMPLEX, and REASONING are fixed (even if you change the display names
-              above), so your prompt has to sort requests into those four buckets. It is free to define what they mean.
+              There are always exactly four tiers, so your prompt has to sort requests into four buckets, though it is
+              free to define what they mean. Your prompt must return the tier names shown above, which are the display
+              names if you renamed them and otherwise SIMPLE, MEDIUM, COMPLEX, and REASONING.
             </p>
             <p className="mt-2">
               The heuristic fallback still scores complexity, so if your prompt classifies something else, set the

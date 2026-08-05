@@ -9,7 +9,10 @@ import { isComplexityRouter } from "../add_model/auto_router_strategies";
 import {
   getKeywordTierRulesError,
   getSemanticConfigError,
+  getTierLabelsError,
+  hydrateTierLabels,
   normalizeClassifierLlmConfig,
+  serializeTierLabels,
 } from "../add_model/build_complexity_router_config";
 import { KeywordTierRule } from "../add_model/KeywordTierRules";
 import { DEFAULT_MATCH_THRESHOLD } from "../add_model/SemanticKeywordMatching";
@@ -36,6 +39,7 @@ interface EditAutoRouterModalProps {
 // actually renders a control that can set it.
 const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tiers",
+  "tier_labels",
   "classifier_type",
   "classifier_llm_config",
   "classifier_context_window_size",
@@ -90,10 +94,12 @@ export const buildUpdatedComplexityRouterConfig = (
   const preservedConfig = Object.fromEntries(Object.entries(toRecord(storedConfig)).filter(([key]) => !isManaged(key)));
   const adaptiveEligible = value.adaptive_eligible ?? "all";
   const storedKeywordRules = keywordMatching ? serializeKeywordTierRules(keywordMatching.keywordTierRules) : [];
+  const serializedTierLabels = serializeTierLabels(value.tier_labels);
 
   return {
     ...preservedConfig,
     tiers: value.tiers,
+    ...(serializedTierLabels && { tier_labels: serializedTierLabels }),
     classifier_type: value.classifier_type,
     ...(value.classifier_type === "llm" && value.classifier_llm_config
       ? { classifier_llm_config: normalizeClassifierLlmConfig(value.classifier_llm_config) }
@@ -175,7 +181,9 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
     ? null
     : (Object.values(complexityRouterConfig.tiers).every((models) => models.length === 0)
         ? "Please select at least one model for a complexity tier"
-        : null) ?? getKeywordTierRulesError(keywordTierRules);
+        : null) ??
+      getTierLabelsError(complexityRouterConfig.tier_labels) ??
+      getKeywordTierRulesError(keywordTierRules);
 
   useEffect(() => {
     if (isVisible && modelData) {
@@ -226,6 +234,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             COMPLEX: normalizeTierModels(parsedConfig.tiers?.COMPLEX),
             REASONING: normalizeTierModels(parsedConfig.tiers?.REASONING),
           },
+          tier_labels: hydrateTierLabels(parsedConfig.tier_labels),
           classifier_type: parsedConfig.classifier_type || "heuristic",
           classifier_llm_config: parsedConfig.classifier_llm_config,
           classifier_context_window_size:

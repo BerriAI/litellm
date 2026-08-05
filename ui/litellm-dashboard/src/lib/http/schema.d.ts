@@ -31416,7 +31416,7 @@ export interface components {
             technical_keywords?: string[] | null;
             /**
              * Tier Boundaries
-             * @description Score boundaries between tiers
+             * @description Score boundaries between tiers. These keys (simple_medium, medium_complex, complex_reasoning) name the gaps between the default tier names and are not renameable by tier_labels; they are scorer knobs persisted by name on every routing decision
              */
             tier_boundaries?: {
                 [key: string]: number;
@@ -31427,6 +31427,13 @@ export interface components {
              * @default 0.5
              */
             tier_distance_penalty: number;
+            /**
+             * Tier Labels
+             * @description Display names for the complexity tiers, so a deployment can use its own vocabulary (e.g. Cheap/Standard/Premium/Deep) in the dashboard, spend logs, and the LLM classifier rubric. Purely operator-facing: config keys stay canonical (tiers, keyword_tier_rules[].tier, tier_boundaries), API callers never see these names, and the heuristic scorer never reads them. Unlisted tiers keep their canonical name. Partial maps are allowed.
+             */
+            tier_labels?: {
+                [key: string]: string;
+            };
             /**
              * Tiers
              * @description Mapping of complexity tiers to a model or model pool. A list is randomly picked from when adaptive=False, and used as a soft-floor home pool when adaptive=True
@@ -32209,6 +32216,8 @@ export interface components {
             /** Tier */
             tier?: string;
             tier_boundaries?: components["schemas"]["StandardLoggingRoutingDecisionTierBoundaries"];
+            /** Tier Label */
+            tier_label?: string;
         };
         /**
          * StandardLoggingRoutingDecisionTierBoundaries
@@ -36363,6 +36372,7 @@ export interface operations {
         parameters: {
             query?: {
                 context_window_size?: number;
+                tier_labels?: string | null;
             };
             header?: never;
             path?: never;

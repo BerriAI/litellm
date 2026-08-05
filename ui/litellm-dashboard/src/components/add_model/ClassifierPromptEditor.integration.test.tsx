@@ -19,9 +19,19 @@ beforeEach(() => {
   getDefaultPrompt.mockResolvedValue(DEFAULT_PROMPT);
 });
 
-const openEditor = async (systemPrompt?: string, onChange = vi.fn(), contextWindowSize = 3) => {
+const openEditor = async (
+  systemPrompt?: string,
+  onChange = vi.fn(),
+  contextWindowSize = 3,
+  tierLabels?: Record<string, string>,
+) => {
   renderWithProviders(
-    <ClassifierPromptEditor systemPrompt={systemPrompt} onChange={onChange} contextWindowSize={contextWindowSize} />,
+    <ClassifierPromptEditor
+      systemPrompt={systemPrompt}
+      onChange={onChange}
+      contextWindowSize={contextWindowSize}
+      tierLabels={tierLabels}
+    />,
   );
   await userEvent.click(screen.getByRole("button", { name: /prompt/i }));
   await waitFor(() => expect(screen.getByLabelText("Classifier system prompt")).toBeInTheDocument());
@@ -33,8 +43,16 @@ describe("ClassifierPromptEditor", () => {
     await openEditor(undefined, vi.fn(), 7);
     // Prefilling from the backend rather than a frontend copy is the whole point: a copy would
     // drift the moment the rubric is edited.
-    expect(getDefaultPrompt).toHaveBeenCalledWith("sk-test", 7);
+    expect(getDefaultPrompt).toHaveBeenCalledWith("sk-test", 7, undefined);
     expect(screen.getByLabelText("Classifier system prompt")).toHaveValue(DEFAULT_PROMPT);
+  });
+
+  it("prefills the rubric named by the operator's renamed tiers", async () => {
+    // A renamed router sends a rubric using its own labels, and its classifier must return them,
+    // so prefilling the canonical names would hand back a prompt that router rejects.
+    const tierLabels = { SIMPLE: "Cheap", REASONING: "Deep" };
+    await openEditor(undefined, vi.fn(), 7, tierLabels);
+    expect(getDefaultPrompt).toHaveBeenCalledWith("sk-test", 7, tierLabels);
   });
 
   it("warns that the prompt replaces the injection-defense text", async () => {
