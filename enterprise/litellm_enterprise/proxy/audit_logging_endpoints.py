@@ -146,11 +146,20 @@ async def _enrich_audit_logs(
     return [_enrich_audit_log(log, aliases) for log in audit_logs]
 
 
+_TEAM_ALIAS_CANDIDATE_LIMIT: Final[int] = 100
+_TEAM_ALIAS_CANDIDATE_SQL: Final[str] = (
+    f'SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_alias LIKE $1 LIMIT {_TEAM_ALIAS_CANDIDATE_LIMIT}'
+)
+
+
+def _contains_like_pattern(value: str) -> str:
+    escaped: Final = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 async def _build_object_team_condition(prisma_client: "PrismaClient", object_team: str) -> Dict[str, Any]:
-    team_rows: Final = await prisma_client.db.litellm_teamtable.find_many(
-        where={"team_alias": {"contains": object_team}}
-    )
-    match_values: Final = dict.fromkeys([object_team, *(row.team_id for row in team_rows)])
+    team_rows: Final = await prisma_client.db.query_raw(_TEAM_ALIAS_CANDIDATE_SQL, _contains_like_pattern(object_team))
+    match_values: Final = dict.fromkeys([object_team, *(row["team_id"] for row in team_rows)])
     return {
         "OR": [
             _build_json_field_or_condition("team_alias", object_team),
