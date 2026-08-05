@@ -21,6 +21,7 @@ import traceback
 from collections import defaultdict
 from collections.abc import AsyncGenerator, Callable, Generator, Mapping, Sequence
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, Union, cast
 
 import anyio
@@ -322,6 +323,36 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 
 class RoutingArgs(enum.Enum):
     ttl = 60  # 1min (RPM/TPM expire key)
+
+
+_NO_PROMOTED_FIELDS: Final[Mapping[str, Any]] = MappingProxyType({})
+_NESTED_MODEL_INFO_WARNING: Final = (
+    "model=%s: 'model_info' is nested inside 'litellm_params'. It belongs at the deployment "
+    "level; applying it anyway, but please move it."
+)
+
+
+def _model_info_nested_under_litellm_params(
+    litellm_params: Mapping[str, Any], model_info: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """
+    Fields from a `model_info` block misplaced inside `litellm_params`, which would otherwise
+    be dropped: `model_info` is a declared field on GenericLiteLLMParams, so the misplaced
+    block validates and is then ignored by every cost path.
+
+    See https://github.com/BerriAI/litellm/issues/35691. Deployment-level values win, and a
+    nested `id` never displaces the generated deployment id.
+    """
+    nested: Final = litellm_params.get("model_info")
+    if not isinstance(nested, dict):
+        return _NO_PROMOTED_FIELDS
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in nested.items()
+            if key != "id" and value is not None and model_info.get(key) is None
+        }
+    )
 
 
 class Router:
@@ -3410,9 +3441,7 @@ class Router:
 
         # Await the first task to complete successfully
         while pending_tasks:
-            done, pending_tasks = await asyncio.wait(
-                pending_tasks, return_when=asyncio.FIRST_COMPLETED
-            )
+            done, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
             for completed_task in done:
                 result = await check_response(completed_task)
 
@@ -5240,9 +5269,7 @@ class Router:
                     # Update kwargs with the current model name or any other model-specific adjustments
                     ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
                     if not custom_llm_provider:
-                        _, custom_llm_provider, _, _ = get_llm_provider(
-                            model=model
-                        )
+                        _, custom_llm_provider, _, _ = get_llm_provider(model=model)
                     new_kwargs: Final = safe_deep_copy(kwargs)
                     self._update_kwargs_with_deployment(
                         deployment=cast(dict, model_name),
@@ -6029,9 +6056,7 @@ class Router:
                 raise Exception(
                     "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
                 )
-        return await original_function(
-            custom_llm_provider=custom_llm_provider, client=client, **kwargs
-        )
+        return await original_function(custom_llm_provider=custom_llm_provider, client=client, **kwargs)
 
     #### [END] ASSISTANTS API ####
 
@@ -6364,9 +6389,7 @@ class Router:
                 mask_sensitive_structure(fallback_model_group),
             )
             if len(fallback_failure_exception_str) > 0:
-                original_exception.message += (
-                    f"\nError doing the fallback: {fallback_failure_exception_str}"
-                )
+                original_exception.message += f"\nError doing the fallback: {fallback_failure_exception_str}"
 
         raise original_exception
 
@@ -7490,6 +7513,10 @@ class Router:
         - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
         """
         try:
+            _promoted_model_info: Final = _model_info_nested_under_litellm_params(_litellm_params, _model_info)
+            if _promoted_model_info:
+                verbose_router_logger.warning(_NESTED_MODEL_INFO_WARNING, _model_name)
+                _model_info.update(_promoted_model_info)  # rebind-ok: this dict is populated in place below too
             litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(**_litellm_params)
             deployment = Deployment(
                 **deployment_info,
@@ -8239,6 +8266,14 @@ class Router:
         _deployment_model_id: Final = deployment.model_info.id
         if _deployment_model_id and self.has_model_id(_deployment_model_id):
             return None
+
+        _promoted_model_info: Final = _model_info_nested_under_litellm_params(
+            deployment.litellm_params.model_dump(), deployment.model_info.model_dump()
+        )
+        if _promoted_model_info:
+            verbose_router_logger.warning(_NESTED_MODEL_INFO_WARNING, deployment.model_name)
+            for _key, _value in _promoted_model_info.items():
+                setattr(deployment.model_info, _key, _value)
 
         # add to model list
         _deployment: Final = deployment.to_json(exclude_none=True)
@@ -9124,9 +9159,7 @@ class Router:
                     and model_info["supports_parallel_function_calling"] is True
                 ):
                     model_group_info.supports_parallel_function_calling = True
-                if (
-                    model_info.get("supports_vision", None) is not None and model_info["supports_vision"] is True
-                ):
+                if model_info.get("supports_vision", None) is not None and model_info["supports_vision"] is True:
                     model_group_info.supports_vision = True
                 if (
                     model_info.get("supports_function_calling", None) is not None
@@ -9144,9 +9177,7 @@ class Router:
                 ):
                     model_group_info.supports_url_context = True
 
-                if (
-                    model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True
-                ):
+                if model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True:
                     model_group_info.supports_reasoning = True
                 if (
                     model_info.get("supported_openai_params", None) is not None
@@ -10876,9 +10907,7 @@ class Router:
                         args=(e, traceback_exception),
                     ).start()  # log response
                     # Handle any exceptions that might occur during streaming
-                    asyncio.create_task(
-                        logging_obj.async_failure_handler(e, traceback_exception)
-                    )
+                    asyncio.create_task(logging_obj.async_failure_handler(e, traceback_exception))
             raise e
 
     async def async_get_available_deployment_for_pass_through(
@@ -11003,9 +11032,7 @@ class Router:
                         target=logging_obj.failure_handler,
                         args=(e, traceback_exception),
                     ).start()
-                    asyncio.create_task(
-                        logging_obj.async_failure_handler(e, traceback_exception)
-                    )
+                    asyncio.create_task(logging_obj.async_failure_handler(e, traceback_exception))
             raise e
 
     async def _run_routing_plugins(
