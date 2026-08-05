@@ -9,16 +9,17 @@ Usage:
 """
 
 import asyncio
+from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm.integrations.mock_client_factory import (
     MockClientConfig,
-    create_mock_client_factory,
     MockResponse,
+    create_mock_client_factory,
 )
 
 # Use factory for POST handler
-_config = MockClientConfig(
+_config: Final = MockClientConfig(
     name="GCS",
     env_var="GCS_MOCK",
     default_latency_ms=150,
@@ -38,18 +39,18 @@ _mocks_initialized = False
 
 # Default mock latency in seconds (simulates network round-trip)
 # Typical GCS API calls take 100-300ms for uploads, 50-150ms for GET/DELETE
-_MOCK_LATENCY_SECONDS = float(__import__("os").getenv("GCS_MOCK_LATENCY_MS", "150")) / 1000.0
+_MOCK_LATENCY_SECONDS: Final = float(__import__("os").getenv("GCS_MOCK_LATENCY_MS", "150")) / 1000.0
 
 
 async def _mock_async_handler_get(self, url, params=None, headers=None, follow_redirects=None):
     """Monkey-patched AsyncHTTPHandler.get that intercepts GCS calls."""
     # Only mock GCS API calls
     if isinstance(url, str) and "storage.googleapis.com" in url:
-        verbose_logger.info(f"[GCS MOCK] GET to {url}")
+        verbose_logger.info("[GCS MOCK] GET to %s", url)
         await asyncio.sleep(_MOCK_LATENCY_SECONDS)
         # Return a minimal but valid StandardLoggingPayload JSON string as bytes
         # This matches what GCS returns when downloading with ?alt=media
-        mock_payload = {
+        mock_payload: Final = {
             "id": "mock-request-id",
             "trace_id": "mock-trace-id",
             "call_type": "completion",
@@ -117,7 +118,7 @@ async def _mock_async_handler_delete(
     """Monkey-patched AsyncHTTPHandler.delete that intercepts GCS calls."""
     # Only mock GCS API calls
     if isinstance(url, str) and "storage.googleapis.com" in url:
-        verbose_logger.info(f"[GCS MOCK] DELETE to {url}")
+        verbose_logger.info("[GCS MOCK] DELETE to %s", url)
         await asyncio.sleep(_MOCK_LATENCY_SECONDS)
         # DELETE returns 204 No Content with empty body (not JSON)
         return MockResponse(

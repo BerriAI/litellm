@@ -10,7 +10,7 @@ the JSON-serialized payloads. ``_llm_call`` just applies both tables.
 """
 
 import json
-from typing import Callable
+from collections.abc import Callable
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (

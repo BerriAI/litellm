@@ -5886,3 +5886,124 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
                         exporter="console", attributes=attributes
                     )
                 )
+
+
+class TestOTELServiceTierAttributes(unittest.TestCase):
+    """The tier a request asked for and the tier the provider served must land on
+    the litellm_request span, so tier usage is segmentable in traces."""
+
+    REQUEST_KEY = "gen_ai.openai.request.service_tier"
+    RESPONSE_KEY = "gen_ai.openai.response.service_tier"
+
+    def _span_attributes(self, standard_logging_object, response_obj):
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        kwargs = {
+            "model": "gpt-5-mini",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": standard_logging_object.get("model_parameters") or {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": standard_logging_object,
+        }
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+        return {call[0][0]: call[0][1] for call in mock_span.set_attribute.call_args_list}
+
+    def test_served_tier_from_response_and_requested_tier_are_stamped(self):
+        response_obj = {
+            "id": "chatcmpl-1",
+            "model": "gpt-5-mini",
+            "service_tier": "scale",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+        attributes = self._span_attributes(
+            {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "model_parameters": {"service_tier": "auto"},
+                "response": response_obj,
+            },
+            response_obj,
+        )
+        self.assertEqual(attributes[self.RESPONSE_KEY], "scale")
+        self.assertEqual(attributes[self.REQUEST_KEY], "auto")
+
+    def test_served_tier_read_from_usage_object(self):
+        """Anthropic reports the served tier on the usage object, not the top level."""
+        response_obj = {
+            "id": "chatcmpl-2",
+            "model": "claude-sonnet-4-5",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+        attributes = self._span_attributes(
+            {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {"usage_object": {"service_tier": "priority"}},
+                "model_parameters": {},
+                "response": response_obj,
+            },
+            response_obj,
+        )
+        self.assertEqual(attributes[self.RESPONSE_KEY], "priority")
+        self.assertNotIn(self.REQUEST_KEY, attributes)
+
+    def test_no_tier_anywhere_stamps_nothing(self):
+        response_obj = {
+            "id": "chatcmpl-3",
+            "model": "gpt-5-mini",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+        attributes = self._span_attributes(
+            {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "model_parameters": {},
+                "response": response_obj,
+            },
+            response_obj,
+        )
+        self.assertNotIn(self.RESPONSE_KEY, attributes)
+        self.assertNotIn(self.REQUEST_KEY, attributes)
+
+    def test_unknown_requested_tier_is_not_stamped(self):
+        """The requested tier is caller-controlled, so an unrecognized value is
+        dropped rather than written verbatim onto the span."""
+        response_obj = {
+            "id": "chatcmpl-4",
+            "model": "gpt-5-mini",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+        attributes = self._span_attributes(
+            {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "model_parameters": {"service_tier": "Z" * 5000},
+                "response": response_obj,
+            },
+            response_obj,
+        )
+        self.assertNotIn(self.REQUEST_KEY, attributes)
+
+    def test_served_tier_is_stamped_even_when_unrecognized(self):
+        """The served tier comes from the provider, not the caller, so a tier a
+        provider adds later is still stamped."""
+        response_obj = {
+            "id": "chatcmpl-5",
+            "model": "gpt-5-mini",
+            "service_tier": "tier-added-by-provider-later",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+        attributes = self._span_attributes(
+            {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "model_parameters": {},
+                "response": response_obj,
+            },
+            response_obj,
+        )
+        self.assertEqual(attributes[self.RESPONSE_KEY], "tier-added-by-provider-later")

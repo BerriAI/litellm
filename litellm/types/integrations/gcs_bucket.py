@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import Any, Dict, Final, Optional, TYPE_CHECKING
 
 from typing_extensions import TypedDict
 
@@ -10,9 +10,9 @@ else:
     VertexBase = Any
 
 
-GCS_DEFAULT_BATCH_SIZE = 2048
-GCS_DEFAULT_FLUSH_INTERVAL_SECONDS = 20
-GCS_DEFAULT_USE_BATCHED_LOGGING = True
+GCS_DEFAULT_BATCH_SIZE: Final = 2048
+GCS_DEFAULT_FLUSH_INTERVAL_SECONDS: Final = 20
+GCS_DEFAULT_USE_BATCHED_LOGGING: Final = True
 
 
 class GCSLoggingConfig(TypedDict):

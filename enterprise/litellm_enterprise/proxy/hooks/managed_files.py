@@ -215,7 +215,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
 
         if result:
-            return LiteLLM_ManagedFileTable(**result)
+            return LiteLLM_ManagedFileTable.model_validate(result)
 
         ## CHECK DB
         db_object = await self.prisma_client.db.litellm_managedfiletable.find_first(
@@ -223,7 +223,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
 
         if db_object:
-            return LiteLLM_ManagedFileTable(**db_object.model_dump())
+            return LiteLLM_ManagedFileTable.model_validate(db_object.model_dump())
         return None
 
     async def delete_unified_file_id(
@@ -349,7 +349,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     if isinstance(batch.file_object, str)
                     else batch.file_object
                 )
-                batch_obj = LiteLLMBatch(**batch_data)
+                batch_obj = LiteLLMBatch.model_validate(batch_data)
                 batch_obj.id = batch.unified_object_id
                 batch_objects.append(batch_obj)
 
@@ -383,7 +383,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             }
         )
         return [
-            OpenAIFileObject(**file_object.file_object)
+            OpenAIFileObject.model_validate(file_object.file_object)
             for file_object in file_ids
             if file_object.file_object is not None
         ]

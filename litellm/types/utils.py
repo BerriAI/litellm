@@ -1,18 +1,20 @@
 import json
 import time
 from enum import Enum
+from types import MappingProxyType
 from typing import (
-    TYPE_CHECKING,
     Any,
     Dict,
+    Final,
     FrozenSet,
+    get_args,
     List,
     Literal,
     Mapping,
     Optional,
     Sequence,
+    TYPE_CHECKING,
     Union,
-    get_args,
 )
 
 from openai._models import BaseModel as OpenAIObject
@@ -117,7 +119,7 @@ class LiteLLMCommonStrings(Enum):
     llm_provider_not_provided = "Unmapped LLM provider for this endpoint. You passed model={model}, custom_llm_provider={custom_llm_provider}. Check supported provider and route: https://docs.litellm.ai/docs/providers"
 
 
-SupportedCacheControls = ["ttl", "s-maxage", "no-cache", "no-store"]
+SupportedCacheControls: Final = ["ttl", "s-maxage", "no-cache", "no-store"]
 
 
 class CostPerToken(TypedDict, total=False):
@@ -563,7 +565,7 @@ CallTypesLiteral = Literal[
 ]
 
 # Mapping of API routes to their corresponding call types
-API_ROUTE_TO_CALL_TYPES = {
+API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # Chat Completions
     "/chat/completions": [CallTypes.acompletion, CallTypes.completion],
     "/v1/chat/completions": [CallTypes.acompletion, CallTypes.completion],
@@ -866,12 +868,15 @@ API_ROUTE_TO_CALL_TYPES = {
         CallTypes.delete_container,
     ],
     # Responses API
-    "/responses": [CallTypes.aresponses, CallTypes.responses],
-    "/v1/responses": [CallTypes.aresponses, CallTypes.responses],
-    "/responses/{response_id}": [CallTypes.aresponses, CallTypes.responses],
-    "/v1/responses/{response_id}": [CallTypes.aresponses, CallTypes.responses],
-    "/responses/{response_id}/input_items": [CallTypes.alist_input_items],
-    "/v1/responses/{response_id}/input_items": [CallTypes.alist_input_items],
+    "/responses": (CallTypes.aresponses, CallTypes.responses),
+    "/v1/responses": (CallTypes.aresponses, CallTypes.responses),
+    "/openai/v1/responses": (CallTypes.aresponses, CallTypes.responses),
+    "/responses/{response_id}": (CallTypes.aresponses, CallTypes.responses),
+    "/v1/responses/{response_id}": (CallTypes.aresponses, CallTypes.responses),
+    "/openai/v1/responses/{response_id}": (CallTypes.aresponses, CallTypes.responses),
+    "/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
+    "/v1/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
+    "/openai/v1/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
     # Realtime API
     "/realtime": [CallTypes.arealtime],
     "/v1/realtime": [CallTypes.arealtime],
@@ -1040,7 +1045,7 @@ class Function(OpenAIObject):
         name = name
 
         # Build a dictionary with the structure your BaseModel expects
-        data = {"arguments": arguments, "name": name}
+        data: Final = {"arguments": arguments, "name": name}
 
         super(Function, self).__init__(**data)
 
@@ -1084,6 +1089,43 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
         setattr(self, key, value)
 
 
+class _CustomToolCallAccess(OpenAIObject):
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
+
+class ChatCompletionCustomToolCallPayload(_CustomToolCallAccess):
+    name: str
+    input: str
+
+
+class ChatCompletionDeltaCustomToolCallPayload(_CustomToolCallAccess):
+    name: str | None = None
+    input: str | None = None
+
+
+class ChatCompletionMessageCustomToolCall(_CustomToolCallAccess):
+    id: str
+    type: Literal["custom"] = "custom"
+    custom: ChatCompletionCustomToolCallPayload
+
+
+class ChatCompletionDeltaCustomToolCall(_CustomToolCallAccess):
+    id: str | None = None
+    type: str | None = None
+    custom: ChatCompletionDeltaCustomToolCallPayload
+    index: int
+
+
 class ChatCompletionMessageToolCall(OpenAIObject):
     def __init__(
         self,
@@ -1123,6 +1165,20 @@ class ChatCompletionMessageToolCall(OpenAIObject):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+def is_custom_tool_call_dict(tool_call: Mapping[str, Any]) -> bool:
+    return tool_call.get("type") == "custom" or tool_call.get("custom") is not None
+
+
+def chat_completion_tool_call_from_dict(
+    tool_call: Mapping[str, Any],
+) -> "ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall":
+    if is_custom_tool_call_dict(tool_call):
+        return ChatCompletionMessageCustomToolCall(
+            **MappingProxyType({k: v for k, v in tool_call.items() if not (k in ("function", "type") and v is None)})
+        )
+    return ChatCompletionMessageToolCall(**tool_call)
 
 
 from openai.types.chat.chat_completion_audio import ChatCompletionAudio
@@ -1177,7 +1233,9 @@ def add_provider_specific_fields(object: BaseModel, provider_specific_fields: Op
 class Message(SafeAttributeModel, OpenAIObject):
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
-    tool_calls: Optional[List[ChatCompletionMessageToolCall]]
+    tool_calls: Optional[
+        List[Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]]
+    ]  # mutable-ok: public pydantic response field; only the union member is new
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
     images: Optional[List[ImageURLListItem]] = None
@@ -1202,13 +1260,13 @@ class Message(SafeAttributeModel, OpenAIObject):
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
-        init_values: Dict[str, Any] = {
+        init_values: Final[Dict[str, Any]] = {
             "content": content,
             "role": role or "assistant",  # handle null input
             "function_call": (FunctionCall(**function_call) if function_call is not None else None),
             "tool_calls": (
                 [
-                    (ChatCompletionMessageToolCall(**tool_call) if isinstance(tool_call, dict) else tool_call)
+                    (chat_completion_tool_call_from_dict(tool_call) if isinstance(tool_call, dict) else tool_call)
                     for tool_call in tool_calls
                 ]
                 if tool_calls is not None and len(tool_calls) > 0
@@ -1301,7 +1359,9 @@ class Delta(SafeAttributeModel, OpenAIObject):
         content: Optional[str]
         role: Optional[str]
         function_call: Optional[FunctionCall]
-        tool_calls: Optional[List[ChatCompletionDeltaToolCall]]
+        tool_calls: Optional[
+            List[Union[ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall]]
+        ]  # mutable-ok: public pydantic response field; only the union member is new
         audio: Optional[ChatCompletionAudioResponse]
         images: Optional[List[ImageURLListItem]]
         annotations: Optional[List[ChatCompletionAnnotation]]
@@ -1338,18 +1398,29 @@ class Delta(SafeAttributeModel, OpenAIObject):
         if function_call is not None and isinstance(function_call, dict):
             function_call = FunctionCall(**function_call)
 
-        if tool_calls is not None and isinstance(tool_calls, list):
-            coerced_tool_calls: List[ChatCompletionDeltaToolCall] = []
+        if tool_calls is not None and isinstance(tool_calls, (list, tuple)):
+            coerced_tool_calls: List[
+                Union[ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall]
+            ] = []  # mutable-ok: public Delta.tool_calls contract is a list
             current_index = 0
             for tool_call in tool_calls:
                 if isinstance(tool_call, dict):
                     if tool_call.get("index", None) is None:
                         tool_call["index"] = current_index
                         current_index += 1
-                    if tool_call.get("type", None) is None:
-                        tool_call["type"] = "function"
-                    coerced_tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
-                elif isinstance(tool_call, ChatCompletionDeltaToolCall):
+                    if is_custom_tool_call_dict(tool_call):
+                        coerced_tool_calls.append(
+                            ChatCompletionDeltaCustomToolCall(
+                                **MappingProxyType(
+                                    {k: v for k, v in tool_call.items() if not (k == "function" and v is None)}
+                                )
+                            )
+                        )
+                    else:
+                        if tool_call.get("type", None) is None:
+                            tool_call["type"] = "function"
+                        coerced_tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
+                elif isinstance(tool_call, (ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall)):
                     coerced_tool_calls.append(tool_call)
             tool_calls = coerced_tool_calls
 
@@ -1362,7 +1433,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
         extra = self.__pydantic_extra__
         if extra is None:  # pragma: no cover - extra='allow' guarantees a dict
             extra = self.__pydantic_extra__ = {}
-        fields_set = self.__pydantic_fields_set__
+        fields_set: Final = self.__pydantic_fields_set__
         fields_set.update(
             (
                 "content",
@@ -1439,7 +1510,7 @@ class Choices(SafeAttributeModel, OpenAIObject):
         **params,
     ):
         if finish_reason is not None:
-            mapped = map_finish_reason(finish_reason)
+            mapped: Final = map_finish_reason(finish_reason)
             params["finish_reason"] = mapped
             if finish_reason != mapped:
                 provider_specific_fields = dict(provider_specific_fields) if provider_specific_fields else {}
@@ -1459,7 +1530,7 @@ class Choices(SafeAttributeModel, OpenAIObject):
                 params["message"] = Message(**message)
             elif isinstance(message, BaseModel):
                 # Normalize provider/OpenAI SDK message models into LiteLLM's Message type.
-                dump = message.model_dump() if hasattr(message, "model_dump") else message.dict()
+                dump: Final = message.model_dump() if hasattr(message, "model_dump") else message.dict()
                 params["message"] = Message(**dump)
         if logprobs is not None:
             if isinstance(logprobs, dict):
@@ -1587,6 +1658,7 @@ class PromptTokensDetailsWrapper(
 class ServerToolUse(BaseModel):
     web_search_requests: Optional[int] = None
     tool_search_requests: Optional[int] = None
+    browser_open_requests: Optional[int] = None
 
     def __getitem__(self, key: str) -> Optional[int]:
         if key not in self.__class__.model_fields:
@@ -1796,7 +1868,7 @@ class StreamingChoices(OpenAIObject):
 
 class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
     def __init__(self, **kwargs):
-        new_choices = []
+        new_choices: Final = []
         for choice in kwargs["choices"]:
             new_choice = StreamingChoices(**choice).model_dump()
             new_choices.append(new_choice)
@@ -1849,7 +1921,7 @@ class ModelResponseStream(ModelResponseBase):
         **kwargs,
     ):
         if choices is not None and isinstance(choices, list):
-            new_choices = []
+            new_choices: Final = []
             for choice in choices:
                 _new_choice = None
                 if isinstance(choice, StreamingChoices):
@@ -1878,7 +1950,7 @@ class ModelResponseStream(ModelResponseBase):
                 usage_to_set = Usage(**kwargs["usage"])
                 kwargs["usage"] = usage_to_set
             elif isinstance(kwargs["usage"], BaseModel):
-                dump = (
+                dump: Final = (
                     kwargs["usage"].model_dump() if hasattr(kwargs["usage"], "model_dump") else kwargs["usage"].dict()
                 )
                 usage_to_set = Usage(**dump)
@@ -1936,7 +2008,7 @@ class ModelResponse(ModelResponseBase):
     ) -> None:
         object = "chat.completion"
         if choices is not None and isinstance(choices, list):
-            new_choices = []
+            new_choices: Final = []
             for choice in choices:
                 if isinstance(choice, Choices):
                     _new_choice = choice  # type: ignore
@@ -1976,7 +2048,7 @@ class ModelResponse(ModelResponseBase):
         if _response_headers:
             self._response_headers = _response_headers
 
-        init_values = {
+        init_values: Final = {
             "id": id,
             "choices": choices,
             "created": created,
@@ -2058,7 +2130,7 @@ class EmbeddingResponse(OpenAIObject):
         _response_headers=None,
         **params,
     ):
-        object = "list"
+        object: Final = "list"
         if response_ms:
             _response_ms = response_ms
         else:
@@ -2203,7 +2275,7 @@ class TextCompletionResponse(OpenAIObject):
         else:
             object = "text_completion"
             if choices is not None and isinstance(choices, list):
-                new_choices = []
+                new_choices: Final = []
                 for choice in choices:
                     _new_choice = None
                     if isinstance(choice, TextChoices):
@@ -2380,14 +2452,14 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         else:
             created = int(time.time())
 
-        _data: List[OpenAIImage] = []
+        _data: Final[List[OpenAIImage]] = []
         for d in data:
             if isinstance(d, dict):
                 _data.append(ImageObject(**d))
             elif isinstance(d, BaseModel):
                 _data.append(ImageObject(**d.model_dump()))
 
-        _usage = usage or ImageUsage(
+        _usage: Final = usage or ImageUsage(
             input_tokens=0,
             input_tokens_details=ImageUsageInputTokensDetails(
                 image_tokens=0,
@@ -2715,7 +2787,7 @@ InternalCallOrigin = Literal["autorouter_classifier"]
 """Which internal litellm feature originated a billed sub-call, so a spend log row
 records that it is not traffic the caller sent."""
 
-AUTOROUTER_CLASSIFIER_CALL_ORIGIN: InternalCallOrigin = "autorouter_classifier"
+AUTOROUTER_CLASSIFIER_CALL_ORIGIN: Final[InternalCallOrigin] = "autorouter_classifier"
 
 
 class StandardLoggingRoutingDecision(TypedDict, total=False):
@@ -2734,6 +2806,9 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_model: str
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
+    conversation_continuing: bool
+    savings_baseline_model: str
+    savings_baseline_deployment_id: str
 
 
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
@@ -2741,7 +2816,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
 # so a redacted row stays explainable. `test_every_routing_decision_field_is_classified`
 # fails if a field is added to the record without being placed in one set or the other.
 PROMPT_QUOTING_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset({"signals", "matched_keyword", "escalation_keyword"})
-DERIVED_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset(
+DERIVED_ROUTING_DECISION_FIELDS: Final[FrozenSet[str]] = frozenset(
     {
         "router_model_name",
         "router_type",
@@ -2753,6 +2828,9 @@ DERIVED_ROUTING_DECISION_FIELDS: FrozenSet[str] = frozenset(
         "classifier_model",
         "escalated",
         "tier_boundaries",
+        "conversation_continuing",
+        "savings_baseline_model",
+        "savings_baseline_deployment_id",
     }
 )
 
@@ -2989,9 +3067,18 @@ class CachingDetails(TypedDict):
 
 class CostBreakdown(TypedDict, total=False):
     """
-    Detailed cost breakdown for a request
+    Detailed cost breakdown for a request.
+
+    ``service_tier`` and ``data_residency`` record the pricing basis the cost was
+    computed on, not what the caller asked for. A consumer that has to price a
+    counterfactual against this request (what another model would have charged for
+    it) needs the same basis to compare like with like, and re-deriving it from the
+    request is not possible after the fact: the tier the biller used comes from
+    ``optional_params``, which no log record carries.
     """
 
+    service_tier: Optional[str]
+    data_residency: Optional[str]
     input_cost: float  # Cost of raw (non-cached) input tokens only
     cache_read_cost: float  # Cost of cache-read tokens (discounted rate)
     cache_creation_cost: float  # Cost of cache-write tokens (premium rate)
@@ -3098,7 +3185,7 @@ class StandardPassThroughResponseObject(TypedDict):
     response: Union[str, dict]
 
 
-OPENAI_RESPONSE_HEADERS = [
+OPENAI_RESPONSE_HEADERS: Final = [
     "x-ratelimit-remaining-requests",
     "x-ratelimit-remaining-tokens",
     "x-ratelimit-limit-requests",
@@ -3253,7 +3340,7 @@ class CustomPricingLiteLLMParams(BaseModel):
         return {k: v for k, v in model_info.items() if k not in cls.model_fields}
 
 
-SHARED_BACKEND_MODEL_INFO_FIELDS: FrozenSet[str] = frozenset(
+SHARED_BACKEND_MODEL_INFO_FIELDS: Final[FrozenSet[str]] = frozenset(
     ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__
 ) - frozenset(CustomPricingLiteLLMParams.model_fields)
 
@@ -3275,7 +3362,7 @@ def shared_backend_model_info(model_info: Dict[str, Any]) -> Dict[str, Any]:
 # any unrecognized top-level key into extra_body and leaks them to the provider.
 # This is what lets the loop carry state across rerun calls without a provider
 # scrubber.
-agentic_loop_internal_litellm_params = [
+agentic_loop_internal_litellm_params: Final = [
     "_agentic_loop_depth",
     "_agentic_loop_fingerprints",
     "_agentic_loop_api_surface",
@@ -3286,8 +3373,15 @@ agentic_loop_internal_litellm_params = [
     "_code_interpreter_interception_converted_stream",
 ]
 
+# Proxy-owned callback credentials, stamped from admin-configured team/key callback
+# settings. Listed in all_litellm_params for the same reason as the agentic-loop
+# fields above: an unrecognized top-level key is swept into extra_body and sent to
+# the provider.
+TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
+
 all_litellm_params = (
     agentic_loop_internal_litellm_params
+    + [TRUSTED_CALLBACK_VARS_FIELD]
     + [
         "metadata",
         "litellm_metadata",
@@ -3604,7 +3698,7 @@ class LlmProviders(str, Enum):
 
 
 # Create a set of all provider values for quick lookup
-LlmProvidersSet = {provider.value for provider in LlmProviders}
+LlmProvidersSet: Final = {provider.value for provider in LlmProviders}
 
 # File and Batch API providers that are OpenAI-compatible
 OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
@@ -3614,7 +3708,7 @@ OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
 
 ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "vertex_ai"]
 
-LIST_BATCHES_SUPPORTED_PROVIDERS: frozenset[str] = frozenset(get_args(ListBatchesSupportedProvider))
+LIST_BATCHES_SUPPORTED_PROVIDERS: Final[frozenset[str]] = frozenset(get_args(ListBatchesSupportedProvider))
 
 
 class SearchProviders(str, Enum):
@@ -3643,7 +3737,7 @@ class SearchProviders(str, Enum):
 
 
 # Create a set of all search provider values for quick lookup
-SearchProvidersSet = {provider.value for provider in SearchProviders}
+SearchProvidersSet: Final = {provider.value for provider in SearchProviders}
 
 
 class SandboxProviders(str, Enum):
