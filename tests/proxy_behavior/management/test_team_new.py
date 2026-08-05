@@ -72,13 +72,9 @@ async def test_team_new_authz_matrix(
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json=body,
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value} org={org_target}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value} org={org_target}: {resp.status_code} {resp.text}"
 
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     if expected_status == 200:
         assert row is not None
         assert row.organization_id == org_id
@@ -94,9 +90,7 @@ async def test_team_new_rejects_negative_budget(proxy_client, prisma, scratch, w
         json={"team_id": scratch.prefix, "max_budget": -1},
     )
     assert resp.status_code == 400, resp.text
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is None
 
 
@@ -118,12 +112,10 @@ async def test_team_new_rejects_duplicate_team_id(proxy_client, prisma, scratch,
     assert second.status_code == 400, second.text
 
 
-async def test_team_new_unknown_organization_is_500(
-    proxy_client, prisma, scratch, world
-):
-    """SURFACED, NOT ENDORSED: a /team/new with an organization_id that does
-    not exist currently fails 500 (the role-resolution layer raises before
-    the handler's own 400 'Organization not found' check is reached)."""
+async def test_team_new_unknown_organization_is_400(proxy_client, prisma, scratch, world):
+    """A /team/new with an organization_id that does not exist fails 400:
+    OrganizationNotFoundError is routed into the handler's own
+    'Organization not found' guard instead of escaping as a 500."""
     resp = await proxy_client.post(
         "/team/new",
         headers={"Authorization": f"Bearer {world.keys[Actor.PROXY_ADMIN].cleartext}"},
@@ -132,8 +124,7 @@ async def test_team_new_unknown_organization_is_500(
             "organization_id": scratch.tag("no-such-org"),
         },
     )
-    assert resp.status_code == 500, resp.text
-    row = await prisma.db.litellm_teamtable.find_unique(
-        where={"team_id": scratch.prefix}
-    )
+    assert resp.status_code == 400, resp.text
+    assert "Organization not found" in resp.text
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is None

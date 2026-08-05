@@ -4,10 +4,11 @@ use std::time::Duration;
 use litellm_ai_gateway::io::audio_transcription::{
     AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
 };
-use litellm_ai_gateway::io::messages::{MessagesRequest, messages as run_messages};
 use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use litellm_core::error::CoreError;
+use litellm_core::messages::messages as run_messages;
+use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
@@ -33,6 +34,15 @@ fn json_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
     let encoded =
         serde_json::to_string(&value).map_err(|err| PyValueError::new_err(err.to_string()))?;
     Ok(json.call_method1("loads", (encoded,))?.unbind())
+}
+
+fn messages_response_to_py(
+    py: Python<'_>,
+    response: AnthropicMessagesResponse,
+) -> PyResult<Py<PyAny>> {
+    let value =
+        serde_json::to_value(response).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    json_to_py(py, value)
 }
 
 fn core_error_to_pyerr(err: CoreError) -> PyErr {
@@ -382,7 +392,7 @@ fn messages(
     });
 
     match result {
-        Ok(value) => json_to_py(py, value),
+        Ok(response) => messages_response_to_py(py, response),
         Err(err) => Err(core_error_to_pyerr(err)),
     }
 }
@@ -404,7 +414,7 @@ fn amessages(
         marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let value = run_messages(MessagesRequest {
+        let response = run_messages(MessagesRequest {
             model: &model,
             body,
             api_key: api_key.as_deref(),
@@ -416,7 +426,7 @@ fn amessages(
         .await
         .map_err(core_error_to_pyerr)?;
 
-        Python::attach(|py| json_to_py(py, value))
+        Python::attach(|py| messages_response_to_py(py, response))
     })
 }
 
