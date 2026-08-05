@@ -1774,8 +1774,8 @@ async def update_useful_links(
 @router.get(
     "/auto_router/classifier/default_prompt",
     description="Get the built-in system prompt used by an auto-router's LLM classifier",
-    tags=["model management"],
-    dependencies=[Depends(user_api_key_auth)],
+    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
 )
 async def get_auto_router_classifier_default_prompt(
     context_window_size: int = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,

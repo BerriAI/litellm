@@ -565,7 +565,7 @@ CallTypesLiteral = Literal[
 ]
 
 # Mapping of API routes to their corresponding call types
-API_ROUTE_TO_CALL_TYPES: Final = {
+API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # Chat Completions
     "/chat/completions": [CallTypes.acompletion, CallTypes.completion],
     "/v1/chat/completions": [CallTypes.acompletion, CallTypes.completion],
@@ -868,12 +868,15 @@ API_ROUTE_TO_CALL_TYPES: Final = {
         CallTypes.delete_container,
     ],
     # Responses API
-    "/responses": [CallTypes.aresponses, CallTypes.responses],
-    "/v1/responses": [CallTypes.aresponses, CallTypes.responses],
-    "/responses/{response_id}": [CallTypes.aresponses, CallTypes.responses],
-    "/v1/responses/{response_id}": [CallTypes.aresponses, CallTypes.responses],
-    "/responses/{response_id}/input_items": [CallTypes.alist_input_items],
-    "/v1/responses/{response_id}/input_items": [CallTypes.alist_input_items],
+    "/responses": (CallTypes.aresponses, CallTypes.responses),
+    "/v1/responses": (CallTypes.aresponses, CallTypes.responses),
+    "/openai/v1/responses": (CallTypes.aresponses, CallTypes.responses),
+    "/responses/{response_id}": (CallTypes.aresponses, CallTypes.responses),
+    "/v1/responses/{response_id}": (CallTypes.aresponses, CallTypes.responses),
+    "/openai/v1/responses/{response_id}": (CallTypes.aresponses, CallTypes.responses),
+    "/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
+    "/v1/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
+    "/openai/v1/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
     # Realtime API
     "/realtime": [CallTypes.arealtime],
     "/v1/realtime": [CallTypes.arealtime],
