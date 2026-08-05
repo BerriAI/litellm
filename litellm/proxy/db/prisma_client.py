@@ -220,7 +220,7 @@ def _parse_jwt_expiration_claim(token: str) -> datetime | None:
             return None
         return datetime.utcfromtimestamp(int(exp))
     except (OSError, OverflowError, TypeError, ValueError) as e:
-        verbose_proxy_logger.debug(f"Failed to parse JWT token expiration: {e}")
+        verbose_proxy_logger.debug("Failed to parse JWT token expiration: %s", e)
         return None
 
 
