@@ -12876,7 +12876,8 @@ export interface paths {
          *     dispatching directly to model gateways), so budgets and spend stay coherent in litellm as the
          *     single metering system.
          *
-         *     Attribution (user/team/org) is derived from the given virtual key. Records accept an optional
+         *     Attribution (user/team/org) is derived from the given virtual key, submitted either raw
+         *     (api_key) or pre-hashed (api_key_hash) to keep raw keys out of request bodies. Records accept an optional
          *     idempotency_key, stored as the spend-log request_id: the reservation insert, counter updates and
          *     dedup are checked atomically at the database primary key, so overlapping retries are safe. The
          *     reservation row is always written (even when disable_spend_logs is set), because it is both the
@@ -24439,7 +24440,12 @@ export interface components {
              * Api Key
              * @description Raw virtual key (sk-...) to attribute usage to. Never logged.
              */
-            api_key: string;
+            api_key?: string | null;
+            /**
+             * Api Key Hash
+             * @description SHA-256 hash of the virtual key. Use instead of api_key to avoid submitting raw keys.
+             */
+            api_key_hash?: string | null;
             /** Completion Tokens */
             completion_tokens: number;
             /**

@@ -256,3 +256,20 @@ def test_failed_booking_is_retry_safe_error_not_permanent_duplicate():
     assert "safe to retry" in (result.error or "")
     assert result.spend is None
     assert deps.spend_calls == []
+
+
+def test_key_hash_resolves_without_raw_key_in_body():
+    deps = RecordingDeps()
+    record = make_record(cost=0.01, idempotency_key="k-11")
+    record = ExternalUsageRecord(**{**record.model_dump(), "api_key": None, "api_key_hash": hash_token(RAW_KEY)})
+    result = run(process_external_usage_record(record, deps.as_deps()))
+    assert result.status == "recorded"
+    assert deps.looked_up_hashed == hash_token(RAW_KEY)
+    assert deps.reserve_calls[0]["hashed_token"] == hash_token(RAW_KEY)
+
+
+def test_exactly_one_key_identifier_required():
+    with pytest.raises(ValidationError):
+        make_record(api_key=None)
+    with pytest.raises(ValidationError):
+        make_record(api_key_hash=hash_token(RAW_KEY))

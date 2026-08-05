@@ -30,7 +30,14 @@ MAX_RECORDS_PER_REQUEST: Final = 1000
 
 
 class ExternalUsageRecord(BaseModel):
-    api_key: str = Field(min_length=1, description="Raw virtual key (sk-...) to attribute usage to. Never logged.")
+    api_key: str | None = Field(
+        default=None, min_length=1, description="Raw virtual key (sk-...) to attribute usage to. Never logged."
+    )
+    api_key_hash: str | None = Field(
+        default=None,
+        min_length=1,
+        description="SHA-256 hash of the virtual key. Use instead of api_key to avoid submitting raw keys.",
+    )
     model: str = Field(min_length=1)
     prompt_tokens: int = Field(ge=0)
     completion_tokens: int = Field(ge=0)
@@ -49,6 +56,12 @@ class ExternalUsageRecord(BaseModel):
     def end_time_not_before_start_time(self) -> "ExternalUsageRecord":
         if self.end_time is not None and self.end_time < self.start_time:
             raise ValueError("end_time must not be before start_time")
+        return self
+
+    @model_validator(mode="after")
+    def exactly_one_key_identifier(self) -> "ExternalUsageRecord":
+        if (self.api_key is None) == (self.api_key_hash is None):
+            raise ValueError("exactly one of api_key or api_key_hash is required")
         return self
 
 
@@ -153,7 +166,7 @@ async def process_external_usage_record(
     record: ExternalUsageRecord, deps: UsageIngestionDeps
 ) -> UsageIngestRecordResult:
     request_id: Final = record.idempotency_key or deps.generate_request_id()
-    hashed_token: Final = hash_token(record.api_key)
+    hashed_token: Final = record.api_key_hash if record.api_key_hash is not None else hash_token(record.api_key or "")
 
     key: Final = await deps.lookup_key(hashed_token)
     if key is None:
@@ -316,7 +329,8 @@ async def ingest_external_usage(
     dispatching directly to model gateways), so budgets and spend stay coherent in litellm as the
     single metering system.
 
-    Attribution (user/team/org) is derived from the given virtual key. Records accept an optional
+    Attribution (user/team/org) is derived from the given virtual key, submitted either raw
+    (api_key) or pre-hashed (api_key_hash) to keep raw keys out of request bodies. Records accept an optional
     idempotency_key, stored as the spend-log request_id: the reservation insert, counter updates and
     dedup are checked atomically at the database primary key, so overlapping retries are safe. The
     reservation row is always written (even when disable_spend_logs is set), because it is both the
