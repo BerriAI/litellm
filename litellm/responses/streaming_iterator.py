@@ -108,6 +108,35 @@ def _status_code_for_error_fields(error_type: str | None, error_code: str | None
     )
 
 
+# Strong references to fire-and-forget background tasks. The event loop only
+# holds a weak reference to tasks, so an un-referenced task "may get garbage
+# collected at any time, even before it's done" (asyncio docs). Tasks are added
+# here on creation and discarded on completion to keep them alive in between.
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _track_background_task(task: asyncio.Task[Any], *, task_name: str) -> None:
+    """Keep a strong reference to a fire-and-forget *task* until it completes.
+
+    Prevents the success-logging / spend-log tasks scheduled via
+    ``asyncio.create_task`` from being garbage-collected mid-execution (which
+    would silently drop the spend-log row). On completion the task is removed
+    from the tracking set and any failure is surfaced via
+    ``_log_background_task_failure``.
+
+    Args:
+        task: The task to keep alive.
+        task_name: Human-readable name used when logging a failure.
+    """
+    _BACKGROUND_TASKS.add(task)
+
+    def _on_done(completed: asyncio.Task[Any]) -> None:
+        _BACKGROUND_TASKS.discard(completed)
+        _log_background_task_failure(completed, task_name=task_name)
+
+    task.add_done_callback(_on_done)
+
+
 class BaseResponsesAPIStreamingIterator:
     """
     Base class for streaming iterators that process responses from the Responses API.
@@ -351,7 +380,7 @@ class BaseResponsesAPIStreamingIterator:
 
         end_time: Final = datetime.now()
         if is_async:
-            asyncio.create_task(
+            log_task = asyncio.create_task(
                 self.logging_obj.dispatch_success_handlers(
                     logging_response,
                     start_time=self.start_time,
@@ -360,6 +389,7 @@ class BaseResponsesAPIStreamingIterator:
                     prefer_async_handlers=True,
                 )
             )
+            _track_background_task(log_task, task_name="Responses stream success logging")
         else:
             run_async_function(
                 async_function=self.logging_obj.async_success_handler,
@@ -1379,7 +1409,10 @@ class ResponsesWebSocketStreaming:
         if self.input_messages:
             self.logging_obj.model_call_details["messages"] = self.input_messages
         if self.messages:
-            asyncio.create_task(self.logging_obj.dispatch_success_handlers(self.messages, prefer_async_handlers=True))
+            ws_log_task = asyncio.create_task(
+                self.logging_obj.dispatch_success_handlers(self.messages, prefer_async_handlers=True)
+            )
+            _track_background_task(ws_log_task, task_name="Responses WebSocket success logging")
 
     async def backend_to_client(self) -> None:
         """Forward events from backend WebSocket to the client."""
