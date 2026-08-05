@@ -5,7 +5,7 @@ This module provides routing logic to determine which OCR configuration to use
 based on the model name.
 """
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 from litellm._logging import verbose_logger
 
@@ -20,7 +20,7 @@ def is_azure_document_intelligence_model(model: str) -> bool:
     model name (`azure_ai/doc-intelligence/<model>`) selects Document Intelligence
     over Mistral OCR. This is the single source of truth for that routing decision.
     """
-    lowered = model.lower()
+    lowered: Final = model.lower()
     return "doc-intelligence" in lowered or "documentintelligence" in lowered
 
 

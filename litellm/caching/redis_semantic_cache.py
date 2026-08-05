@@ -13,7 +13,7 @@ import ast
 import asyncio
 import json
 import os
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -95,7 +95,7 @@ class RedisSemanticCache(BaseCache):
                 password = password or os.environ["REDIS_PASSWORD"]
             except KeyError as e:
                 # Raise a more informative exception if any of the required keys are missing
-                missing_var = e.args[0]
+                missing_var: Final = e.args[0]
                 raise ValueError(
                     f"Missing required Redis configuration: {missing_var}. Provide {missing_var} or redis_url."
                 ) from e
@@ -130,7 +130,7 @@ class RedisSemanticCache(BaseCache):
         from redisvl.utils.vectorize import CustomTextVectorizer  # type: ignore[import-not-found, import-untyped]
 
         try:
-            cache_vectorizer = CustomTextVectorizer(self._get_embedding)
+            cache_vectorizer: Final = CustomTextVectorizer(self._get_embedding)
             return self._init_semantic_cache(
                 semantic_cache_cls=SemanticCache,
                 index_name=self._index_name,
@@ -156,7 +156,7 @@ class RedisSemanticCache(BaseCache):
         cache_vectorizer: Any,
     ) -> Any:
         def _is_schema_mismatch(exc: ValueError) -> bool:
-            error_message = str(exc).lower()
+            error_message: Final = str(exc).lower()
             return any(phrase in error_message for phrase in ("schema does not match", "index schema"))
 
         try:
@@ -172,7 +172,7 @@ class RedisSemanticCache(BaseCache):
             if not _is_schema_mismatch(exc):
                 raise
 
-            isolated_index_name = f"{index_name}_isolated"
+            isolated_index_name: Final = f"{index_name}_isolated"
             print_verbose(
                 "Redis semantic-cache existing index schema is not isolated; "
                 f"using isolated index - {isolated_index_name}"
@@ -239,16 +239,16 @@ class RedisSemanticCache(BaseCache):
         """
         Extract a semantic-cache prompt from chat or Responses API request kwargs.
         """
-        messages = kwargs.get("messages")
+        messages: Final = kwargs.get("messages")
         if messages:
             return get_str_from_messages(messages)
 
         if "input" not in kwargs:
             return None
 
-        prompt_parts: list[str] = []
+        prompt_parts: Final[list[str]] = []
         cls._collect_responses_input_text(kwargs.get("input"), prompt_parts)
-        prompt = "\n".join(prompt_parts).strip()
+        prompt: Final = "\n".join(prompt_parts).strip()
         return prompt or None
 
     @classmethod
@@ -258,7 +258,7 @@ class RedisSemanticCache(BaseCache):
             return
 
         if isinstance(value, str):
-            stripped_value = value.strip()
+            stripped_value: Final = value.strip()
             if stripped_value:
                 prompt_parts.append(stripped_value)
             return
@@ -298,10 +298,10 @@ class RedisSemanticCache(BaseCache):
 
     @staticmethod
     def _coerce_response_input_value(value: Any) -> Any:
-        model_dump = getattr(value, "model_dump", None)
+        model_dump: Final = getattr(value, "model_dump", None)
         if callable(model_dump):
             return model_dump()
-        dict_method = getattr(value, "dict", None)
+        dict_method: Final = getattr(value, "dict", None)
         if callable(dict_method):
             return dict_method()
         return value
@@ -318,7 +318,7 @@ class RedisSemanticCache(BaseCache):
             llm_model_list = None
             llm_router = None
 
-        router = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
+        router: Final = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
         if router is not None:
             embedding_response = cast(
                 EmbeddingResponse,
@@ -383,22 +383,22 @@ class RedisSemanticCache(BaseCache):
 
         value_str: str | None = None
         try:
-            prompt = self._get_prompt_from_kwargs(**kwargs)
+            prompt: Final = self._get_prompt_from_kwargs(**kwargs)
             if prompt is None:
                 print_verbose("No prompt provided for semantic caching")
                 return
 
             value_str = str(value)
 
-            prompt_embedding = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
+            prompt_embedding: Final = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
 
-            store_kwargs: dict[str, Any] = {
+            store_kwargs: Final[dict[str, Any]] = {
                 "vector": prompt_embedding,
                 "filters": self._get_cache_filters(key),
             }
 
             # Get TTL and store in Redis semantic cache
-            ttl = self._get_ttl(**kwargs)
+            ttl: Final = self._get_ttl(**kwargs)
             if ttl is not None:
                 store_kwargs["ttl"] = int(ttl)
             self.llmcache.store(prompt, value_str, **store_kwargs)
@@ -419,7 +419,7 @@ class RedisSemanticCache(BaseCache):
         print_verbose(f"Redis semantic-cache get_cache, kwargs: {kwargs}")
 
         try:
-            prompt = self._get_prompt_from_kwargs(**kwargs)
+            prompt: Final = self._get_prompt_from_kwargs(**kwargs)
             if prompt is None:
                 print_verbose("No prompt provided for semantic cache lookup")
                 kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
@@ -427,13 +427,13 @@ class RedisSemanticCache(BaseCache):
 
             # Check the cache for semantically similar prompts in this exact
             # LiteLLM cache-key scope.
-            prompt_embedding = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
-            check_kwargs: dict[str, Any] = {
+            prompt_embedding: Final = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
+            check_kwargs: Final[dict[str, Any]] = {
                 "prompt": prompt,
                 "vector": prompt_embedding,
                 "filter_expression": self._get_cache_key_filter_expression(key),
             }
-            results = self.llmcache.check(**check_kwargs)
+            results: Final = self.llmcache.check(**check_kwargs)
 
             # Return None if no similar prompts found
             if not results:
@@ -441,20 +441,20 @@ class RedisSemanticCache(BaseCache):
                 return None
 
             # Process the best matching result
-            cache_hit = results[0]
+            cache_hit: Final = results[0]
             if not self._cache_hit_matches_key(cache_hit=cache_hit, key=key):
                 print_verbose("Redis semantic-cache hit did not match cache key scope")
                 kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
-            vector_distance = float(cache_hit["vector_distance"])
+            vector_distance: Final = float(cache_hit["vector_distance"])
 
             # Convert vector distance back to similarity score
             # For cosine distance: 0 = most similar, 2 = least similar
             # While similarity: 1 = most similar, 0 = least similar
-            similarity = 1 - vector_distance
+            similarity: Final = 1 - vector_distance
 
-            cached_prompt = cache_hit["prompt"]
-            cached_response = cache_hit["response"]
+            cached_prompt: Final = cache_hit["prompt"]
+            cached_response: Final = cache_hit["response"]
 
             # update kwargs["metadata"] with similarity, don't rewrite the original metadata
             kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
@@ -488,7 +488,7 @@ class RedisSemanticCache(BaseCache):
             llm_model_list = None
             llm_router = None
 
-        router = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
+        router: Final = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
         try:
             if router is not None:
                 embedding_response = await router.aembedding(
@@ -521,23 +521,23 @@ class RedisSemanticCache(BaseCache):
         print_verbose(f"Async Redis semantic-cache set_cache, kwargs: {kwargs}")
 
         try:
-            prompt = self._get_prompt_from_kwargs(**kwargs)
+            prompt: Final = self._get_prompt_from_kwargs(**kwargs)
             if prompt is None:
                 print_verbose("No prompt provided for semantic caching")
                 return
 
-            value_str = str(value)
+            value_str: Final = str(value)
 
             # Generate embedding for the value (response) to cache
-            prompt_embedding = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
+            prompt_embedding: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 
-            store_kwargs: dict[str, Any] = {
+            store_kwargs: Final[dict[str, Any]] = {
                 "vector": prompt_embedding,
                 "filters": self._get_cache_filters(key),
             }
 
             # Get TTL and store in Redis semantic cache
-            ttl = self._get_ttl(**kwargs)
+            ttl: Final = self._get_ttl(**kwargs)
             if ttl is not None:
                 store_kwargs["ttl"] = ttl
             await self.llmcache.astore(
@@ -562,43 +562,43 @@ class RedisSemanticCache(BaseCache):
         print_verbose(f"Async Redis semantic-cache get_cache, kwargs: {kwargs}")
 
         try:
-            prompt = self._get_prompt_from_kwargs(**kwargs)
+            prompt: Final = self._get_prompt_from_kwargs(**kwargs)
             if prompt is None:
                 print_verbose("No prompt provided for semantic cache lookup")
                 kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
 
             # Generate embedding for the prompt
-            prompt_embedding = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
+            prompt_embedding: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 
             # Check the cache for semantically similar prompts in this exact
             # LiteLLM cache-key scope.
-            check_kwargs: dict[str, Any] = {
+            check_kwargs: Final[dict[str, Any]] = {
                 "prompt": prompt,
                 "vector": prompt_embedding,
                 "filter_expression": self._get_cache_key_filter_expression(key),
             }
-            results = await self.llmcache.acheck(**check_kwargs)
+            results: Final = await self.llmcache.acheck(**check_kwargs)
 
             # handle results / cache hit
             if not results:
                 kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
 
-            cache_hit = results[0]
+            cache_hit: Final = results[0]
             if not self._cache_hit_matches_key(cache_hit=cache_hit, key=key):
                 print_verbose("Redis semantic-cache hit did not match cache key scope")
                 kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
-            vector_distance = float(cache_hit["vector_distance"])
+            vector_distance: Final = float(cache_hit["vector_distance"])
 
             # Convert vector distance back to similarity
             # For cosine distance: 0 = most similar, 2 = least similar
             # While similarity: 1 = most similar, 0 = least similar
-            similarity = 1 - vector_distance
+            similarity: Final = 1 - vector_distance
 
-            cached_prompt = cache_hit["prompt"]
-            cached_response = cache_hit["response"]
+            cached_prompt: Final = cache_hit["prompt"]
+            cached_response: Final = cache_hit["response"]
 
             # update kwargs["metadata"] with similarity, don't rewrite the original metadata
             kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
@@ -622,7 +622,7 @@ class RedisSemanticCache(BaseCache):
         Returns:
             Dict[str, Any]: Information about the Redis index
         """
-        aindex = await self.llmcache._get_async_index()
+        aindex: Final = await self.llmcache._get_async_index()
         return await aindex.info()
 
     async def async_set_cache_pipeline(self, cache_list: list[tuple[str, Any]], **kwargs) -> None:
@@ -634,7 +634,7 @@ class RedisSemanticCache(BaseCache):
             **kwargs: Additional arguments
         """
         try:
-            tasks = []
+            tasks: Final = []
             for val in cache_list:
                 tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
             await asyncio.gather(*tasks)

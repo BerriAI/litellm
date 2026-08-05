@@ -10,6 +10,7 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-tit
 """
 
 import types
+from typing import Final
 
 from litellm.types.llms.bedrock import (
     AmazonTitanV2EmbeddingRequest,
@@ -30,7 +31,7 @@ class AmazonTitanV2Config:
     dimensions: int | None = None
 
     def __init__(self, normalize: bool | None = None, dimensions: int | None = None) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -78,7 +79,7 @@ class AmazonTitanV2Config:
     def _transform_response(self, response_list: list[dict], model: str) -> EmbeddingResponse:
         total_prompt_tokens = 0
 
-        transformed_responses: list[Embedding] = []
+        transformed_responses: Final[list[Embedding]] = []
         for index, response in enumerate(response_list):
             _parsed_response = AmazonTitanV2EmbeddingResponse(**response)  # type: ignore
 
@@ -108,7 +109,7 @@ class AmazonTitanV2Config:
             )
             total_prompt_tokens += _parsed_response["inputTextTokenCount"]
 
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=total_prompt_tokens,
             completion_tokens=0,
             total_tokens=total_prompt_tokens,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Final
 
 import httpx
 
@@ -59,7 +60,7 @@ class CompletionTimeout:
             resolved = CompletionTimeout._fallback_when_no_explicit_timeout(global_timeout)
 
         if isinstance(resolved, httpx.Timeout) and not supports_httpx_timeout(custom_llm_provider):
-            read_timeout = resolved.read
+            read_timeout: Final = resolved.read
             resolved = (
                 float(read_timeout) if read_timeout is not None else COMPLETION_HTTP_FALLBACK_SECONDS
             )  # default 10 min timeout

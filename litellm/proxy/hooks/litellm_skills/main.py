@@ -26,7 +26,7 @@ Usage:
 
 import base64
 import json
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -88,18 +88,18 @@ class SkillsInjectionHook(CustomLogger):
         if call_type not in ["completion", "acompletion", "anthropic_messages"]:
             return data
 
-        container = data.get("container")
+        container: Final = data.get("container")
         if not container or not isinstance(container, dict):
             return data
 
-        skills = container.get("skills")
+        skills: Final = container.get("skills")
         if not skills or not isinstance(skills, list):
             return data
 
         verbose_proxy_logger.debug("SkillsInjectionHook: Processing %s skills", len(skills))
 
-        litellm_skills: list[LiteLLM_SkillsTable] = []
-        anthropic_skills: list[dict[str, Any]] = []
+        litellm_skills: Final[list[LiteLLM_SkillsTable]] = []
+        anthropic_skills: Final[list[dict[str, Any]]] = []
 
         # Separate skills by prefix
         for skill in skills:
@@ -123,7 +123,7 @@ class SkillsInjectionHook(CustomLogger):
 
         # Check if using messages API spec (anthropic_messages call type)
         # Messages API always uses Anthropic-style tool format
-        use_anthropic_format = call_type == "anthropic_messages"
+        use_anthropic_format: Final = call_type == "anthropic_messages"
 
         if len(litellm_skills) > 0:
             data = self._process_for_messages_api(
@@ -152,10 +152,10 @@ class SkillsInjectionHook(CustomLogger):
             get_litellm_code_execution_tool_anthropic,
         )
 
-        tools = data.get("tools", [])
-        skill_contents: list[str] = []
-        all_skill_files: dict[str, dict[str, bytes]] = {}
-        all_module_paths: list[str] = []
+        tools: Final = data.get("tools", [])
+        skill_contents: Final[list[str]] = []
+        all_skill_files: Final[dict[str, dict[str, bytes]]] = {}
+        all_module_paths: Final[list[str]] = []
 
         for skill in litellm_skills:
             # Convert skill to Anthropic-style tool
@@ -186,7 +186,7 @@ class SkillsInjectionHook(CustomLogger):
 
         # Add litellm_code_execution tool if we have skill files
         if all_skill_files:
-            code_exec_tool = get_litellm_code_execution_tool_anthropic()
+            code_exec_tool: Final = get_litellm_code_execution_tool_anthropic()
             data["tools"] = data.get("tools", []) + [code_exec_tool]
 
             # Store skill files in litellm_metadata for automatic code execution
@@ -219,10 +219,10 @@ class SkillsInjectionHook(CustomLogger):
         - Adds execute_code tool for code execution
         - Stores skill files in metadata for sandbox execution
         """
-        tools = data.get("tools", [])
-        skill_contents: list[str] = []
-        all_skill_files: dict[str, dict[str, bytes]] = {}
-        all_module_paths: list[str] = []
+        tools: Final = data.get("tools", [])
+        skill_contents: Final[list[str]] = []
+        all_skill_files: Final[dict[str, dict[str, bytes]]] = {}
+        all_module_paths: Final[list[str]] = []
 
         for skill in litellm_skills:
             # Convert skill to OpenAI-style tool
@@ -345,18 +345,18 @@ class SkillsInjectionHook(CustomLogger):
         )
 
         # Check if code execution is enabled for this request
-        litellm_metadata = request_data.get("litellm_metadata") or {}
-        metadata = request_data.get("metadata") or {}
+        litellm_metadata: Final = request_data.get("litellm_metadata") or {}
+        metadata: Final = request_data.get("metadata") or {}
 
-        code_exec_enabled = litellm_metadata.get("_litellm_code_execution_enabled") or metadata.get(
+        code_exec_enabled: Final = litellm_metadata.get("_litellm_code_execution_enabled") or metadata.get(
             "_litellm_code_execution_enabled"
         )
         if not code_exec_enabled:
             return None
 
         # Get skill files
-        skill_files_by_id = litellm_metadata.get("_skill_files") or metadata.get("_skill_files", {})
-        all_skill_files: dict[str, bytes] = {}
+        skill_files_by_id: Final = litellm_metadata.get("_skill_files") or metadata.get("_skill_files", {})
+        all_skill_files: Final[dict[str, bytes]] = {}
         for files_dict in skill_files_by_id.values():
             all_skill_files.update(files_dict)
 
@@ -365,7 +365,7 @@ class SkillsInjectionHook(CustomLogger):
             return None
 
         # Check for tool calls - handle both Anthropic and OpenAI formats
-        tool_calls = self._extract_tool_calls(response)
+        tool_calls: Final = self._extract_tool_calls(response)
         if not tool_calls:
             return None
 
@@ -392,7 +392,7 @@ class SkillsInjectionHook(CustomLogger):
 
     def _extract_tool_calls(self, response: Any) -> list[dict[str, Any]]:
         """Extract tool calls from response, handling both formats."""
-        tool_calls = []
+        tool_calls: Final = []
 
         # Get content - handle both dict and object responses
         content = None
@@ -423,7 +423,7 @@ class SkillsInjectionHook(CustomLogger):
 
         # OpenAI format: response has choices[0].message.tool_calls
         if not tool_calls and hasattr(response, "choices") and response.choices:  # type: ignore[union-attr]
-            msg = response.choices[0].message  # type: ignore[union-attr]
+            msg: Final = response.choices[0].message  # type: ignore[union-attr]
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 for tc in msg.tool_calls:
                     tool_calls.append(
@@ -460,13 +460,13 @@ class SkillsInjectionHook(CustomLogger):
             verbose_proxy_logger.error("SkillsInjectionHook: Response is None, cannot execute code loop")
             return None
 
-        model = data.get("model", "")
-        messages = list(data.get("messages", []))
-        tools = data.get("tools", [])
-        max_tokens = data.get("max_tokens", 4096)
+        model: Final = data.get("model", "")
+        messages: Final = list(data.get("messages", []))
+        tools: Final = data.get("tools", [])
+        max_tokens: Final = data.get("max_tokens", 4096)
 
-        executor = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
-        generated_files: list[dict[str, Any]] = []
+        executor: Final = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
+        generated_files: Final[list[dict[str, Any]]] = []
         current_response = response
 
         for iteration in range(self.max_iterations):
@@ -568,7 +568,7 @@ class SkillsInjectionHook(CustomLogger):
         try:
             verbose_proxy_logger.debug("SkillsInjectionHook: Executing code (%s chars)", len(code))
 
-            exec_result = executor.execute(code=code, skill_files=skill_files)
+            exec_result: Final = executor.execute(code=code, skill_files=skill_files)
 
             result = exec_result.get("output", "") or ""
 
@@ -603,7 +603,7 @@ class SkillsInjectionHook(CustomLogger):
         """Execute a skill tool by generating and running code based on skill content."""
         # Generate code based on available skill modules
         # Look for Python modules in the skill
-        python_modules = [p for p in skill_files if p.endswith(".py") and not p.endswith("__init__.py")]
+        python_modules: Final = [p for p in skill_files if p.endswith(".py") and not p.endswith("__init__.py")]
 
         # Try to find the main builder/creator module
         main_module = None
@@ -618,7 +618,7 @@ class SkillsInjectionHook(CustomLogger):
 
         if main_module:
             # Convert path to import: "core/gif_builder.py" -> "core.gif_builder"
-            import_path = main_module.replace("/", ".").replace(".py", "")
+            import_path: Final = main_module.replace("/", ".").replace(".py", "")
 
             # Generate code that imports and uses the module
             code = f"""
@@ -684,13 +684,13 @@ print('No executable skill module found')
             SkillsSandboxExecutor,
         )
 
-        model = data.get("model", "")
-        messages = list(data.get("messages", []))
-        tools = data.get("tools", [])
+        model: Final = data.get("model", "")
+        messages: Final = list(data.get("messages", []))
+        tools: Final = data.get("tools", [])
 
         # Keys to exclude when passing through to acompletion
         # These are either handled explicitly or are internal LiteLLM fields
-        _EXCLUDED_ACOMPLETION_KEYS = frozenset(
+        _EXCLUDED_ACOMPLETION_KEYS: Final = frozenset(
             {
                 "messages",
                 "model",
@@ -701,10 +701,10 @@ print('No executable skill module found')
             }
         )
 
-        kwargs = {k: v for k, v in data.items() if k not in _EXCLUDED_ACOMPLETION_KEYS}
+        kwargs: Final = {k: v for k, v in data.items() if k not in _EXCLUDED_ACOMPLETION_KEYS}
 
-        executor = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
-        generated_files: list[dict[str, Any]] = []
+        executor: Final = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
+        generated_files: Final[list[dict[str, Any]]] = []
         current_response: Any = response
 
         for iteration in range(self.max_iterations):
@@ -786,12 +786,12 @@ print('No executable skill module found')
     ) -> str:
         """Execute a litellm_code_execution tool call and return result string."""
         try:
-            args = json.loads(tool_call.function.arguments)
-            code = args.get("code", "")
+            args: Final = json.loads(tool_call.function.arguments)
+            code: Final = args.get("code", "")
 
             verbose_proxy_logger.debug("SkillsInjectionHook: Executing code (%s chars)", len(code))
 
-            exec_result = executor.execute(
+            exec_result: Final = executor.execute(
                 code=code,
                 skill_files=skill_files,
             )
@@ -865,7 +865,7 @@ print('No executable skill module found')
 
 
 # Global instance for registration
-skills_injection_hook = SkillsInjectionHook()
+skills_injection_hook: Final = SkillsInjectionHook()
 
 import litellm
 

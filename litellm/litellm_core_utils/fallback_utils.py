@@ -1,3 +1,5 @@
+from typing import Final
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -29,17 +31,17 @@ async def async_completion_with_fallbacks(**kwargs):
         Exception: If all models fail and no response is generated
     """
     # Extract and prepare parameters
-    nested_kwargs = kwargs.pop("kwargs", {})
-    original_model = kwargs["model"]
+    nested_kwargs: Final = kwargs.pop("kwargs", {})
+    original_model: Final = kwargs["model"]
     model = original_model
-    fallbacks = [original_model] + nested_kwargs.pop("fallbacks", [])
+    fallbacks: Final = [original_model] + nested_kwargs.pop("fallbacks", [])
     kwargs.pop("acompletion", None)  # Remove to prevent keyword conflicts
-    litellm_call_id = str(uuid.uuid4())
-    base_kwargs = {**kwargs, **nested_kwargs, "litellm_call_id": litellm_call_id}
+    litellm_call_id: Final = str(uuid.uuid4())
+    base_kwargs: Final = {**kwargs, **nested_kwargs, "litellm_call_id": litellm_call_id}
 
     # fields to remove
     base_kwargs.pop("model", None)  # Remove model as it will be set per fallback
-    litellm_logging_obj = base_kwargs.pop("litellm_logging_obj", None)
+    litellm_logging_obj: Final = base_kwargs.pop("litellm_logging_obj", None)
 
     # Try each fallback model
     most_recent_exception_str: str | None = None

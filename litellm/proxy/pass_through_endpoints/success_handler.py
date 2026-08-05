@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 from urllib.parse import urlparse
 
 import httpx
@@ -32,7 +32,7 @@ from .llm_provider_handlers.vertex_passthrough_logging_handler import (
 )
 from .upstream_usage_headers import has_upstream_reported_usage
 
-cohere_passthrough_logging_handler = CoherePassthroughLoggingHandler()
+cohere_passthrough_logging_handler: Final = CoherePassthroughLoggingHandler()
 
 
 def _safe_response_text(httpx_response: httpx.Response) -> str:
@@ -133,7 +133,7 @@ class PassThroughEndpointLogging:
         custom_llm_provider: str | None = None,
         **kwargs,
     ):
-        return_dict = {
+        return_dict: Final = {
             "standard_logging_response_object": None,
             "kwargs": kwargs,
         }
@@ -169,7 +169,7 @@ class PassThroughEndpointLogging:
             standard_logging_response_object = vertex_passthrough_logging_handler_result["result"]
             kwargs = vertex_passthrough_logging_handler_result["kwargs"]
         elif self.is_anthropic_route(url_route):
-            anthropic_passthrough_logging_handler_result = (
+            anthropic_passthrough_logging_handler_result: Final = (
                 AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
                     httpx_response=httpx_response,
                     response_body=response_body or {},
@@ -241,12 +241,12 @@ class PassThroughEndpointLogging:
                 VertexAILivePassthroughLoggingHandler,
             )
 
-            vertex_ai_live_handler = VertexAILivePassthroughLoggingHandler()
+            vertex_ai_live_handler: Final = VertexAILivePassthroughLoggingHandler()
 
             # For WebSocket responses, response_body should be a list of messages
-            websocket_messages: list[dict[str, Any]] = response_body if isinstance(response_body, list) else []
+            websocket_messages: Final[list[dict[str, Any]]] = response_body if isinstance(response_body, list) else []
 
-            vertex_ai_live_handler_result = vertex_ai_live_handler.vertex_ai_live_passthrough_handler(
+            vertex_ai_live_handler_result: Final = vertex_ai_live_handler.vertex_ai_live_passthrough_handler(
                 websocket_messages=websocket_messages,
                 logging_obj=logging_obj,
                 url_route=url_route,
@@ -299,7 +299,7 @@ class PassThroughEndpointLogging:
             # Don't log langfuse pass-through requests
             return
         else:
-            normalized_llm_passthrough_logging_payload = self.normalize_llm_passthrough_logging_payload(
+            normalized_llm_passthrough_logging_payload: Final = self.normalize_llm_passthrough_logging_payload(
                 httpx_response=httpx_response,
                 response_body=response_body,
                 request_body=request_body,
@@ -355,13 +355,13 @@ class PassThroughEndpointLogging:
                 return True
 
     def is_assemblyai_route(self, url_route: str):
-        parsed_url = urlparse(url_route)
+        parsed_url: Final = urlparse(url_route)
         if parsed_url.hostname == "api.assemblyai.com" or "/transcript" in parsed_url.path:
             return True
         return False
 
     def is_langfuse_route(self, url_route: str):
-        parsed_url = urlparse(url_route)
+        parsed_url: Final = urlparse(url_route)
         for route in self.TRACKED_LANGFUSE_ROUTES:
             if route in parsed_url.path:
                 return True
@@ -380,7 +380,7 @@ class PassThroughEndpointLogging:
         """Check if the URL route is a Cursor Cloud Agents API route."""
         if custom_llm_provider == "cursor":
             return True
-        parsed_url = urlparse(url_route)
+        parsed_url: Final = urlparse(url_route)
         if parsed_url.hostname and "api.cursor.com" in parsed_url.hostname:
             return True
         for route in self.TRACKED_CURSOR_ROUTES:
