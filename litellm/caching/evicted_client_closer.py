@@ -34,6 +34,7 @@ alive anything the collector would have reclaimed first.
 """
 
 import asyncio
+import contextlib
 import inspect
 import threading
 import time
@@ -146,10 +147,8 @@ def _has_connection_in_flight(client: object) -> bool:
 
 
 async def _close_quietly(closing: Awaitable[object]) -> None:
-    try:
+    with contextlib.suppress(Exception):
         await closing
-    except Exception:  # noqa: BLE001 - a discarded client's close must never surface to callers
-        pass
 
 
 class EvictedClientCloser:
