@@ -263,10 +263,25 @@ class ComplexityRouterConfig(BaseModel):
         ),
     )
 
+    tier_labels: dict[ComplexityTier, str] = Field(
+        default_factory=dict,
+        description=(
+            "Display names for the complexity tiers, so a deployment can use its own vocabulary "
+            "(e.g. Cheap/Standard/Premium/Deep) in the dashboard, spend logs, and the LLM classifier "
+            "rubric. Purely operator-facing: config keys stay canonical (tiers, keyword_tier_rules[].tier, "
+            "tier_boundaries), API callers never see these names, and the heuristic scorer never reads them. "
+            "Unlisted tiers keep their canonical name. Partial maps are allowed."
+        ),
+    )
+
     # Tier boundaries (normalized scores)
     tier_boundaries: dict[str, float] = Field(
         default_factory=lambda: DEFAULT_TIER_BOUNDARIES.copy(),
-        description="Score boundaries between tiers",
+        description=(
+            "Score boundaries between tiers. These keys (simple_medium, medium_complex, complex_reasoning) "
+            "name the gaps between the default tier names and are not renameable by tier_labels; they are "
+            "scorer knobs persisted by name on every routing decision"
+        ),
     )
 
     # Token count thresholds
@@ -446,6 +461,15 @@ class ComplexityRouterConfig(BaseModel):
         description="RoutingPlugin instances that narrow the classified tier's candidate models before selection",
     )
 
+    reminder_markers: tuple[str, str] | None = Field(
+        default=None,
+        description=(
+            "Override the (open, close) marker pair used to recognize and strip harness-injected "
+            "reminder blocks before classification. Defaults to Claude Code's convention, "
+            "('<system-reminder>', '</system-reminder>'), when unset. Matching is case-insensitive."
+        ),
+    )
+
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)  # Allow additional fields
 
     @field_validator("tiers", mode="before")
@@ -500,6 +524,38 @@ class ComplexityRouterConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_tier_labels(self) -> "ComplexityRouterConfig":
+        if not self.tier_labels:
+            return self
+        blank: Final = tuple(sorted(tier.value for tier, label in self.tier_labels.items() if not label.strip()))
+        if blank:
+            raise ValueError(f"tier_labels values must be non-empty; blank labels for tiers: {', '.join(blank)}")
+        shadowed: Final = tuple(
+            sorted(
+                f"{tier.value} -> {label.strip()}"
+                for tier, label in self.tier_labels.items()
+                if label.strip().upper() in ComplexityTier.__members__ and label.strip().upper() != tier.value
+            )
+        )
+        if shadowed:
+            raise ValueError(
+                "tier_labels values must not reuse another tier's canonical name, which would make logs "
+                f"and the classifier rubric ambiguous: {', '.join(shadowed)}"
+            )
+        labeled: Final = self.labeled_tiers()
+        folded_labels: Final = tuple(label.casefold() for _, label in labeled)
+        duplicated: Final = tuple(
+            " and ".join(tier.value for tier, label in labeled if label.casefold() == folded)
+            for position, folded in enumerate(folded_labels)
+            if folded_labels.count(folded) > 1 and folded_labels.index(folded) == position
+        )
+        if duplicated:
+            raise ValueError(
+                f"tier_labels values must be unique across tiers; shared labels for: {'; '.join(duplicated)}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_plugins_adaptive_combo(self) -> "ComplexityRouterConfig":
         if self.plugins and self.adaptive:
             raise ValueError(
@@ -507,6 +563,35 @@ class ComplexityRouterConfig(BaseModel):
                 "consume plugin-narrowed candidate pools. Disable adaptive or remove plugins."
             )
         return self
+
+    @model_validator(mode="after")
+    def _normalize_reminder_markers(self) -> "ComplexityRouterConfig":
+        if self.reminder_markers is None:
+            return self
+        open_marker, close_marker = (marker.strip().lower() for marker in self.reminder_markers)
+        if not open_marker or not close_marker:
+            raise ValueError("reminder_markers entries must not be blank")
+        if open_marker == close_marker:
+            raise ValueError("reminder_markers open and close must be different strings")
+        self.reminder_markers = (open_marker, close_marker)
+        return self
+
+    def tier_label(self, tier: ComplexityTier) -> str:
+        """Operator-facing display name for a tier, falling back to its canonical name."""
+        return self.tier_labels.get(tier, "").strip() or tier.value
+
+    def labeled_tiers(self) -> tuple[tuple[ComplexityTier, str], ...]:
+        """Every tier paired with its display name, in ascending severity order."""
+        return tuple((tier, self.tier_label(tier)) for tier in TIER_SEVERITY_ORDER)
+
+    def tier_for_label(self, label: str) -> ComplexityTier | None:
+        """Resolve a display name back to its tier, case-insensitively, then canonical names."""
+        folded: Final = label.strip().casefold()
+        labeled: Final = self.labeled_tiers()
+        return next(
+            (tier for tier, tier_label in labeled if tier_label.casefold() == folded),
+            next((tier for tier in TIER_SEVERITY_ORDER if tier.value.casefold() == folded), None),
+        )
 
 
 # Combined default config

@@ -126,8 +126,8 @@ class RedisSemanticCache(BaseCache):
         # CustomTextVectorizer probes its embedding dimension at construction by
         # embedding "dimension test", so the first cache request issues one extra
         # billable embedding on top of the request's own.
-        from redisvl.extensions.llmcache import SemanticCache  # type: ignore[import-not-found, import-untyped]
-        from redisvl.utils.vectorize import CustomTextVectorizer  # type: ignore[import-not-found, import-untyped]
+        from redisvl.extensions.llmcache import SemanticCache
+        from redisvl.utils.vectorize import CustomTextVectorizer
 
         try:
             cache_vectorizer: Final = CustomTextVectorizer(self._get_embedding)
@@ -207,7 +207,7 @@ class RedisSemanticCache(BaseCache):
         return {self.CACHE_KEY_FIELD_NAME: str(key)}
 
     def _get_cache_key_filter_expression(self, key: str) -> Any:
-        from redisvl.query.filter import Tag  # type: ignore[import-not-found, import-untyped]
+        from redisvl.query.filter import Tag
 
         return Tag(self.CACHE_KEY_FIELD_NAME) == str(key)
 

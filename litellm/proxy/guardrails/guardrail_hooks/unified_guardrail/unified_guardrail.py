@@ -232,10 +232,10 @@ class UnifiedLLMGuardrails(CustomLogger):
         call_type: CallTypesLiteral | None = None
         if user_api_key_dict.request_route is not None:
             call_types: Final = get_call_types_for_route(user_api_key_dict.request_route)
-            if call_types is not None and len(call_types) > 0:  # type: ignore
-                call_type = call_types[0]  # type: ignore
+            if call_types is not None and len(call_types) > 0:
+                call_type = call_types[0]
         if call_type is None:
-            call_type = _infer_call_type(call_type=None, completion_response=response)  # type: ignore
+            call_type = _infer_call_type(call_type=None, completion_response=response)
 
         # Fallback: resolve call_type from logging_obj for pass-through endpoints
         if call_type is None:
@@ -250,19 +250,32 @@ class UnifiedLLMGuardrails(CustomLogger):
                 call_type = logging_call_type
 
         if call_type is None:
+            verbose_proxy_logger.warning(
+                "Guardrail '%s' selected for route '%s' but its call type could not be resolved; "
+                "skipping post-call scanning. Add the route to API_ROUTE_TO_CALL_TYPES.",
+                guardrail_to_apply.guardrail_name,
+                user_api_key_dict.request_route,
+            )
             return response
 
         if endpoint_guardrail_translation_mappings is None:
             endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
 
         if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
+            verbose_proxy_logger.warning(
+                "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; "
+                "skipping post-call scanning.",
+                guardrail_to_apply.guardrail_name,
+                user_api_key_dict.request_route,
+                call_type,
+            )
             return response
 
         endpoint_translation: Final = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
 
         try:
             response = await endpoint_translation.process_output_response(
-                response=response,  # type: ignore
+                response=response,
                 guardrail_to_apply=guardrail_to_apply,
                 litellm_logging_obj=data.get("litellm_logging_obj"),
                 user_api_key_dict=user_api_key_dict,
@@ -945,7 +958,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                     call_type = call_types[0].value
 
             if call_type is None:
-                call_type = _infer_call_type(call_type=None, completion_response=item)  # type: ignore
+                call_type = _infer_call_type(call_type=None, completion_response=item)
 
             # If call type not supported, just pass through all chunks
             if call_type is None or CallTypes(call_type) not in endpoint_guardrail_translation_mappings:

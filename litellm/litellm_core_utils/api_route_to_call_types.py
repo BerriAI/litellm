@@ -8,6 +8,7 @@ Route patterns may contain placeholders like {agent_id}, {model}, {batch_id}; th
 match a single path segment when resolving call types for a concrete path.
 """
 
+from collections.abc import Sequence
 from typing import Final
 
 from litellm.types.utils import API_ROUTE_TO_CALL_TYPES, CallTypes
@@ -30,9 +31,9 @@ def _route_matches_pattern(route: str, pattern: str) -> bool:
     return True
 
 
-def get_call_types_for_route(route: str) -> list[CallTypes] | None:
+def get_call_types_for_route(route: str) -> Sequence[CallTypes] | None:
     """
-    Get the list of CallTypes for a given API route.
+    Get the CallTypes for a given API route.
 
     Supports both exact keys and dynamic patterns (e.g. /a2a/my-agent/message/send
     matches /a2a/{agent_id}/message/send).
@@ -41,7 +42,7 @@ def get_call_types_for_route(route: str) -> list[CallTypes] | None:
         route: API route path (e.g., "/chat/completions" or "/a2a/my-pydantic-agent/message/send")
 
     Returns:
-        List of CallTypes for that route, or None if route not found
+        CallTypes for that route, or None if route not found
     """
     exact: Final = API_ROUTE_TO_CALL_TYPES.get(route, None)
     if exact is not None:

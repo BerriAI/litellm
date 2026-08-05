@@ -1,6 +1,6 @@
 {
   "reportAny": {
-    "limit": 29813
+    "limit": 29806
   },
   "reportArgumentType": {
     "limit": 2645
@@ -18,28 +18,28 @@
     "limit": 40
   },
   "reportDeprecated": {
-    "limit": 325
+    "limit": 215
   },
   "reportDuplicateImport": {
-    "limit": 24
+    "limit": 19
   },
   "reportExplicitAny": {
-    "limit": 9473
+    "limit": 9469
   },
   "reportFunctionMemberAccess": {
-    "limit": 11
+    "limit": 7
   },
   "reportGeneralTypeIssues": {
     "limit": 157
   },
   "reportIncompatibleMethodOverride": {
-    "limit": 77
+    "limit": 56
   },
   "reportIncompatibleVariableOverride": {
-    "limit": 12
+    "limit": 8
   },
   "reportInconsistentOverload": {
-    "limit": 18
+    "limit": 12
   },
   "reportIndexIssue": {
     "limit": 35
@@ -48,7 +48,7 @@
     "limit": 35
   },
   "reportInvalidTypeVarUse": {
-    "limit": 5
+    "limit": 2
   },
   "reportMatchNotExhaustive": {
     "limit": 0
@@ -60,7 +60,7 @@
     "limit": 15849
   },
   "reportMissingTypeStubs": {
-    "limit": 41
+    "limit": 40
   },
   "reportOperatorIssue": {
     "limit": 0
@@ -84,7 +84,7 @@
     "limit": 56
   },
   "reportPrivateUsage": {
-    "limit": 2436
+    "limit": 1825
   },
   "reportRedeclaration": {
     "limit": 8
@@ -99,19 +99,19 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 45269
+    "limit": 45262
   },
   "reportUnknownLambdaType": {
     "limit": 113
   },
   "reportUnknownMemberType": {
-    "limit": 40452
+    "limit": 40447
   },
   "reportUnknownParameterType": {
     "limit": 20309
   },
   "reportUnknownVariableType": {
-    "limit": 31978
+    "limit": 31880
   },
   "reportUnnecessaryCast": {
     "limit": 124
@@ -126,7 +126,7 @@
     "limit": 866
   },
   "reportUntypedBaseClass": {
-    "limit": 165
+    "limit": 72
   },
   "reportUntypedFunctionDecorator": {
     "limit": 33
@@ -138,9 +138,9 @@
     "limit": 139
   },
   "reportUnusedImport": {
-    "limit": 588
+    "limit": 556
   },
   "reportUnusedVariable": {
-    "limit": 147
+    "limit": 146
   }
 }

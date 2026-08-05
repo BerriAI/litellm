@@ -26,7 +26,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
     ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("OPENAI_LIKE_API_BASE")  # type: ignore
+        api_base = api_base or get_secret_str("OPENAI_LIKE_API_BASE")
         dynamic_api_key = api_key or get_secret_str("OPENAI_LIKE_API_KEY") or ""  # vllm does not require an api key
         return api_base, dynamic_api_key
 

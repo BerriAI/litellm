@@ -79,6 +79,8 @@ from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
 
 if TYPE_CHECKING:
+    from mcp.server.session import ServerSession as _McpServerSession
+
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
 
 # Short-lived in-memory cache for BYOK credentials.
@@ -144,24 +146,24 @@ try:
 
     # Robust auth lookup keyed by session_object.
     _session_obj_auth_storage: "weakref.WeakKeyDictionary[Any, MCPAuthenticatedUser]" = weakref.WeakKeyDictionary()
-
-    active_mcp_session_var: Final[contextvars.ContextVar[_McpServerSession | None]] = contextvars.ContextVar(
-        "active_mcp_session", default=None
-    )
 except ImportError as e:
     verbose_logger.debug("MCP module not found: %s", e)
     MCP_AVAILABLE = False
     # When MCP is not available, we set these to None at module level
     # All code using these types is inside `if MCP_AVAILABLE:` blocks
     # so they will never be accessed at runtime
-    BlobResourceContents = None  # type: ignore
-    GetPromptResult = None  # type: ignore
-    ReadResourceContents = None  # type: ignore
-    ReadResourceResult = None  # type: ignore
-    Resource = None  # type: ignore
-    ResourceTemplate = None  # type: ignore
-    Server = None  # type: ignore
-    TextResourceContents = None  # type: ignore
+    BlobResourceContents = None
+    GetPromptResult = None
+    ReadResourceContents = None
+    ReadResourceResult = None
+    Resource = None
+    ResourceTemplate = None
+    Server = None
+    TextResourceContents = None
+
+active_mcp_session_var: Final[contextvars.ContextVar["_McpServerSession | None"]] = contextvars.ContextVar(
+    "active_mcp_session", default=None
+)
 
 
 # Global variables to track initialization
@@ -400,7 +402,7 @@ if MCP_AVAILABLE:
     try:
         from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     except ImportError:
-        StreamableHTTPSessionManager = None  # type: ignore
+        StreamableHTTPSessionManager = None
     from mcp.types import (
         CallToolResult,
         EmbeddedResource,
@@ -514,9 +516,7 @@ if MCP_AVAILABLE:
         name=LITELLM_MCP_SERVER_NAME,
         version=LITELLM_MCP_SERVER_VERSION,
     )
-    server.create_initialization_options = types.MethodType(  # type: ignore[method-assign]
-        _gateway_create_initialization_options, server
-    )
+    server.create_initialization_options = types.MethodType(_gateway_create_initialization_options, server)
     sse: Final[SseServerTransport] = SseServerTransport("/mcp/sse/messages")
 
     # Create session managers
@@ -1613,7 +1613,7 @@ if MCP_AVAILABLE:
         ``mcp_server_auth_headers``). Either form skips the pre-emptive 401.
         """
         if oauth2_headers:
-            for k in oauth2_headers.keys():
+            for k in oauth2_headers:
                 if k.lower() == "authorization":
                     return True
         return _client_has_per_server_auth_header(server, mcp_server_auth_headers)
@@ -2810,7 +2810,7 @@ if MCP_AVAILABLE:
                 arguments=arguments or {},
                 server_name=server_name or mcp_server.name,
                 user_api_key_auth=user_api_key_auth,
-                proxy_logging_obj=proxy_logging_obj,  # type: ignore[arg-type]
+                proxy_logging_obj=proxy_logging_obj,
                 server=mcp_server,
                 raw_headers=raw_headers,
             )

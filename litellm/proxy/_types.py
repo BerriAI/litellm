@@ -3,7 +3,7 @@ import json
 import os
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Union
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from pydantic import (
@@ -67,7 +67,7 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -386,12 +386,16 @@ class LiteLLMRoutes(enum.Enum):
         # responses API
         "/responses",
         "/v1/responses",
+        "/openai/v1/responses",
         "/responses/{response_id}",
         "/v1/responses/{response_id}",
+        "/openai/v1/responses/{response_id}",
         "/responses/{response_id}/input_items",
         "/v1/responses/{response_id}/input_items",
+        "/openai/v1/responses/{response_id}/input_items",
         "/responses/{response_id}/cancel",
         "/v1/responses/{response_id}/cancel",
+        "/openai/v1/responses/{response_id}/cancel",
         # vector stores
         "/vector_stores",
         "/v1/vector_stores",
@@ -643,6 +647,10 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/logs/v2",
         "/spend/logs/ui",
         "/spend/logs/session/ui",
+        "/key/spend/report",
+        "/user/spend/report",
+        "/team/spend/report",
+        "/organization/spend/report",
         # Reads end users out of spend logs, scoped to the caller's own rows and
         # permitted teams exactly like /spend/logs/ui — it belongs to the same
         # access tier, not to customer management.
@@ -1136,7 +1144,7 @@ class GenerateKeyRequest(KeyRequestBase):
 
 
 class GenerateKeyResponse(KeyRequestBase):
-    key: str  # type: ignore
+    key: str
     key_name: str | None = None
     key_type: str | None = None
     expires: datetime | None = None
@@ -2861,7 +2869,7 @@ class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):
-    organization_id: str  # type: ignore
+    organization_id: str
     created_at: datetime
     updated_at: datetime
 
@@ -4002,7 +4010,7 @@ class JWTKeyItem(TypedDict, total=False):
     kid: str
 
 
-JWKKeyValue = Union[list[JWTKeyItem], JWTKeyItem]
+JWKKeyValue = list[JWTKeyItem] | JWTKeyItem
 
 
 class JWKUrlResponse(TypedDict, total=False):
@@ -4045,15 +4053,15 @@ class UserManagementEndpointParamDocStringEnums(str, enum.Enum):
     duration_doc_str = """Optional[str] - Duration for the key auto-created on `/user/new`. Default is None."""
 
 
-PassThroughEndpointLoggingResultValues = Union[
-    ModelResponse,
-    TextCompletionResponse,
-    ImageResponse,
-    EmbeddingResponse,
-    VideoObject,
-    StandardPassThroughResponseObject,
-    ResponsesAPIResponse,
-]
+PassThroughEndpointLoggingResultValues = (
+    ModelResponse
+    | TextCompletionResponse
+    | ImageResponse
+    | EmbeddingResponse
+    | VideoObject
+    | StandardPassThroughResponseObject
+    | ResponsesAPIResponse
+)
 
 
 class PassThroughEndpointLoggingTypedDict(TypedDict):
@@ -4154,7 +4162,7 @@ class ClientSideFallbackModel(TypedDict, total=False):
     messages: list[AllMessageValues]
 
 
-ALL_FALLBACK_MODEL_VALUES = Union[str, ClientSideFallbackModel]
+ALL_FALLBACK_MODEL_VALUES = str | ClientSideFallbackModel
 
 
 RBAC_ROLES = Literal[

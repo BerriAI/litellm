@@ -232,15 +232,15 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         }
 
         # Add optional top_k parameter if provided (already mapped from top_n in map_cohere_rerank_params)
-        if "top_k" in optional_rerank_params and optional_rerank_params.get("top_k") is not None:  # type: ignore
-            request_data["top_k"] = optional_rerank_params.get("top_k")  # type: ignore
+        if "top_k" in optional_rerank_params and optional_rerank_params.get("top_k") is not None:
+            request_data["top_k"] = optional_rerank_params.get("top_k")
 
         # Add Nvidia-specific truncate parameter if provided
         # This is passed through from non_default_params, not in base OptionalRerankParams
-        if "truncate" in optional_rerank_params and optional_rerank_params.get("truncate") is not None:  # type: ignore
-            truncate_value: Final = optional_rerank_params.get("truncate")  # type: ignore
+        if "truncate" in optional_rerank_params and optional_rerank_params.get("truncate") is not None:
+            truncate_value: Final = optional_rerank_params.get("truncate")
             if truncate_value in ["NONE", "END"]:
-                request_data["truncate"] = truncate_value  # type: ignore
+                request_data["truncate"] = truncate_value
 
         return dict(request_data)
 
@@ -307,7 +307,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             # Include document if it was in the original request
             index: int = ranking["index"]
             if index < len(original_passages):
-                result_item["document"] = {"text": original_passages[index]["text"]}  # type: ignore
+                result_item["document"] = {"text": original_passages[index]["text"]}
 
             results.append(result_item)
 

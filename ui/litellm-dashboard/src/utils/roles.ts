@@ -65,3 +65,15 @@ export const formatUserRole = (userRole: string): string => {
       return "Unknown Role";
   }
 };
+
+const viewOnlyRawRoles = ["proxy_admin_viewer", "internal_user_viewer", "internal_viewer"];
+
+export const effectiveSessionRole = (rawUserRole?: string): string => {
+  if (rawUserRole?.toLowerCase() === "proxy_admin_viewer") {
+    return "Admin";
+  }
+  return formatUserRole(rawUserRole ?? "");
+};
+
+export const isViewOnlySessionRole = (rawUserRole?: string): boolean =>
+  viewOnlyRawRoles.includes(rawUserRole?.toLowerCase() ?? "");

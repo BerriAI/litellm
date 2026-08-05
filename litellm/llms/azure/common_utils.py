@@ -427,90 +427,95 @@ class BaseAzureLLM(BaseOpenAILLM):
             f"|azure_password={hashlib.sha256(_azure_password.encode()).hexdigest() if isinstance(_azure_password, str) else None}"
             f"|azure_scope={_lp.get('azure_scope')}"
         )
-        if client is None:
-            cached_client: Final = self.get_cached_openai_client(
-                client_initialization_params=client_initialization_params,
-                client_type="azure",
-            )
-            if cached_client:
-                if isinstance(cached_client, (AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI)):
-                    return cached_client
-
-            azure_client_params: Final = self.initialize_azure_sdk_client(
-                litellm_params=litellm_params or {},
-                api_key=api_key,
-                api_base=api_base,
-                model_name=model,
-                api_version=api_version,
-                is_async=_is_async,
-            )
-
-            # For Azure v1 API, use standard OpenAI client instead of AzureOpenAI
-            # See: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#api-specs
-            if self._is_azure_v1_api_version(api_version):
-                # Extract only params that OpenAI client accepts
-                # Always use /openai/v1/ regardless of whether user passed "v1", "latest", or "preview"
-                # The OpenAI client accepts a callable for `api_key` and re-invokes it
-                # on every request (via `_refresh_api_key`), so passing
-                # `azure_ad_token_provider` directly preserves Azure AD token refresh
-                # behavior that the regular AzureOpenAI client provides.
-                v1_api_key: str | Callable[[], Any] | None = (
-                    azure_client_params.get("api_key")
-                    or azure_client_params.get("azure_ad_token_provider")
-                    or azure_client_params.get("azure_ad_token")
-                )
-                if _is_async is True and callable(v1_api_key):
-                    # AsyncOpenAI expects an async provider; wrap the sync provider
-                    # returned by azure-identity. Offload to a thread so a token
-                    # refresh (blocking HTTP call to AAD on cache miss) does not
-                    # stall the event loop.
-                    _sync_provider: Final = v1_api_key
-
-                    async def _async_v1_api_key() -> str:
-                        return await asyncio.to_thread(_sync_provider)
-
-                    v1_api_key = _async_v1_api_key
-
-                v1_params: Final[dict[str, Any]] = {
-                    "api_key": v1_api_key,
-                    "base_url": f"{api_base}/openai/v1/",
-                }
-                if "timeout" in azure_client_params:
-                    v1_params["timeout"] = azure_client_params["timeout"]
-                if "max_retries" in azure_client_params:
-                    v1_params["max_retries"] = azure_client_params["max_retries"]
-                if "http_client" in azure_client_params:
-                    v1_params["http_client"] = azure_client_params["http_client"]
-
-                verbose_logger.debug("Using Azure v1 API with base_url: %s", v1_params["base_url"])
-
-                if _is_async is True:
-                    openai_client = AsyncOpenAI(**v1_params)  # type: ignore
-                else:
-                    openai_client = OpenAI(**v1_params)  # type: ignore
-            else:
-                # Traditional Azure API uses AzureOpenAI client
-                if _is_async is True:
-                    openai_client = AsyncAzureOpenAI(**azure_client_params)
-                else:
-                    openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
-        else:
-            openai_client = client
+        if client is not None:
             if (
                 api_version is not None
-                and isinstance(openai_client, (AzureOpenAI, AsyncAzureOpenAI))
-                and isinstance(openai_client._custom_query, dict)
+                and isinstance(client, (AzureOpenAI, AsyncAzureOpenAI))
+                and isinstance(client._custom_query, dict)
             ):
                 # set api_version to version passed by user
-                openai_client._custom_query.setdefault("api-version", api_version)
+                client._custom_query.setdefault("api-version", api_version)
+            self.set_cached_openai_client(
+                openai_client=client,
+                client_initialization_params=client_initialization_params,
+                client_type="azure",
+                litellm_owned_client=False,
+            )
+            return client
+
+        cached_client: Final = self.get_cached_openai_client(
+            client_initialization_params=client_initialization_params,
+            client_type="azure",
+        )
+        if cached_client:
+            if isinstance(cached_client, (AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI)):
+                return cached_client
+
+        azure_client_params: Final = self.initialize_azure_sdk_client(
+            litellm_params=litellm_params or {},
+            api_key=api_key,
+            api_base=api_base,
+            model_name=model,
+            api_version=api_version,
+            is_async=_is_async,
+        )
+
+        # For Azure v1 API, use standard OpenAI client instead of AzureOpenAI
+        # See: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#api-specs
+        if self._is_azure_v1_api_version(api_version):
+            # Extract only params that OpenAI client accepts
+            # Always use /openai/v1/ regardless of whether user passed "v1", "latest", or "preview"
+            # The OpenAI client accepts a callable for `api_key` and re-invokes it
+            # on every request (via `_refresh_api_key`), so passing
+            # `azure_ad_token_provider` directly preserves Azure AD token refresh
+            # behavior that the regular AzureOpenAI client provides.
+            v1_api_key: str | Callable[[], Any] | None = (
+                azure_client_params.get("api_key")
+                or azure_client_params.get("azure_ad_token_provider")
+                or azure_client_params.get("azure_ad_token")
+            )
+            if _is_async is True and callable(v1_api_key):
+                # AsyncOpenAI expects an async provider; wrap the sync provider
+                # returned by azure-identity. Offload to a thread so a token
+                # refresh (blocking HTTP call to AAD on cache miss) does not
+                # stall the event loop.
+                _sync_provider: Final = v1_api_key
+
+                async def _async_v1_api_key() -> str:
+                    return await asyncio.to_thread(_sync_provider)
+
+                v1_api_key = _async_v1_api_key
+
+            v1_params: Final[dict[str, Any]] = {
+                "api_key": v1_api_key,
+                "base_url": f"{api_base}/openai/v1/",
+            }
+            if "timeout" in azure_client_params:
+                v1_params["timeout"] = azure_client_params["timeout"]
+            if "max_retries" in azure_client_params:
+                v1_params["max_retries"] = azure_client_params["max_retries"]
+            if "http_client" in azure_client_params:
+                v1_params["http_client"] = azure_client_params["http_client"]
+
+            verbose_logger.debug("Using Azure v1 API with base_url: %s", v1_params["base_url"])
+
+            if _is_async is True:
+                openai_client = AsyncOpenAI(**v1_params)
+            else:
+                openai_client = OpenAI(**v1_params)
+        else:
+            # Traditional Azure API uses AzureOpenAI client
+            if _is_async is True:
+                openai_client = AsyncAzureOpenAI(**azure_client_params)
+            else:
+                openai_client = AzureOpenAI(**azure_client_params)
 
         # save client in-memory cache
         self.set_cached_openai_client(
             openai_client=openai_client,
             client_initialization_params=client_initialization_params,
             client_type="azure",
-            litellm_owned_client=client is None
-            and self.owns_wrapped_http_client(azure_client_params.get("http_client")),
+            litellm_owned_client=self.owns_wrapped_http_client(azure_client_params.get("http_client")),
         )
         return openai_client
 
@@ -661,9 +666,9 @@ class BaseAzureLLM(BaseOpenAILLM):
                 azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
 
             if acompletion is True:
-                client = AsyncAzureOpenAI(**azure_client_params)  # type: ignore
+                client = AsyncAzureOpenAI(**azure_client_params)
             else:
-                client = AzureOpenAI(**azure_client_params)  # type: ignore
+                client = AzureOpenAI(**azure_client_params)
         return client
 
     @staticmethod

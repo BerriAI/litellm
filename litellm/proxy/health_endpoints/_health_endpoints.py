@@ -7,7 +7,7 @@ import time
 import traceback
 from collections.abc import Iterable
 from datetime import datetime, timedelta
-from typing import Any, Final, Literal, TypedDict, Union, cast
+from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -110,7 +110,7 @@ def get_callback_identifier(callback):
 
 
 router: Final = APIRouter()
-services = Union[
+services = (
     Literal[
         "slack_budget_alerts",
         "langfuse",
@@ -127,9 +127,9 @@ services = Union[
         "galileo",
         "newrelic",
         "sqs",
-    ],
-    str,
-]
+    ]
+    | str
+)
 
 
 @router.get(
@@ -1435,8 +1435,8 @@ async def _get_health_readiness_details(
                 try:
                     index_info = await litellm.cache.cache._index_info()
                 except Exception as e:
-                    index_info = "index does not exist - error: " + str(e)  # type: ignore[assignment]
-                cache_type = {"type": cache_type, "index_info": index_info}  # type: ignore[assignment]
+                    index_info = "index does not exist - error: " + str(e)
+                cache_type = {"type": cache_type, "index_info": index_info}
 
         # check log level
         log_level_name: Final = logging.getLevelName(verbose_logger.getEffectiveLevel())

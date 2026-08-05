@@ -225,7 +225,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._final_tool_events_queued = True
 
         try:
-            message: Final = litellm_complete_object.choices[0].message  # type: ignore
+            message: Final = litellm_complete_object.choices[0].message
             tool_calls = getattr(message, "tool_calls", None)
         except Exception:
             tool_calls = None
@@ -535,17 +535,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             item_id=self._cached_item_id,
             output_index=0,
             content_index=0,
-            text=getattr(litellm_complete_object.choices[0].message, "content", "")  # type: ignore
-            or "",
+            text=getattr(litellm_complete_object.choices[0].message, "content", "") or "",
         )
 
     def create_output_content_part_done_event(self, litellm_complete_object: ModelResponse) -> ContentPartDoneEvent:
         if self._cached_item_id is None:
             self._cached_item_id = f"msg_{uuid.uuid4()}"
 
-        text: Final = getattr(litellm_complete_object.choices[0].message, "content", "") or ""  # type: ignore
-        reasoning_content = getattr(litellm_complete_object.choices[0].message, "reasoning_content", "") or ""  # type: ignore
-        annotations: Final = getattr(litellm_complete_object.choices[0].message, "annotations", None)  # type: ignore
+        text: Final = getattr(litellm_complete_object.choices[0].message, "content", "") or ""
+        reasoning_content = getattr(litellm_complete_object.choices[0].message, "reasoning_content", "") or ""
+        annotations: Final = getattr(litellm_complete_object.choices[0].message, "annotations", None)
 
         part: PART_UNION_TYPES | None = None
         if reasoning_content:
@@ -563,7 +562,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             part = ContentPartDonePartOutputText(
                 type="output_text",
                 text=text,
-                annotations=response_annotations,  # type: ignore
+                annotations=response_annotations,
                 logprobs=None,
             )
 
@@ -579,8 +578,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if self._cached_item_id is None:
             self._cached_item_id = f"msg_{uuid.uuid4()}"
 
-        text: Final = self.litellm_model_response.choices[0].message.content or ""  # type: ignore
-        annotations = getattr(self.litellm_model_response.choices[0].message, "annotations", None)  # type: ignore
+        text: Final = self.litellm_model_response.choices[0].message.content or ""
+        annotations = getattr(self.litellm_model_response.choices[0].message, "annotations", None)
 
         response_annotations: Final = (
             LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
