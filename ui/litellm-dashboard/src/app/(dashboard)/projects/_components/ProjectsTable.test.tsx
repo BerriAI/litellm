@@ -133,7 +133,7 @@ describe("ProjectsTable pagination URL state", () => {
     expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 2");
   });
 
-  it("should return to the first page when the page size changes", async () => {
+  it("should return to the first page and write ?page_size= in one history entry when the page size changes", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
     renderTable({ searchParams: "?page=2", onUrlUpdate });
@@ -143,7 +143,25 @@ describe("ProjectsTable pagination URL state", () => {
 
     await waitFor(() => expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-14 of 14"));
     expect(firstDataRow().getByText("Project 01")).toBeInTheDocument();
+    expect(onUrlUpdate).toHaveBeenCalledTimes(1);
     const lastUpdate = onUrlUpdate.mock.calls.at(-1)?.[0];
     expect(lastUpdate.searchParams.get("page")).toBeNull();
+    expect(lastUpdate.searchParams.get("page_size")).toBe("25");
+  });
+
+  it("should apply both params from a ?page=2&page_size=25 deep link so the restored view matches", () => {
+    const manyProjects = Array.from({ length: 44 }, (_, index) => makeProject(index + 1));
+    renderTable({ projects: manyProjects, searchParams: "?page=2&page_size=25" });
+
+    expect(firstDataRow().getByText("Project 26")).toBeInTheDocument();
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 26-44 of 44");
+  });
+
+  it("should fall back to the default page size for a ?page_size= value outside the offered options", () => {
+    renderTable({ searchParams: "?page_size=7" });
+
+    expect(dataRowCount()).toBe(10);
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 2");
   });
 });

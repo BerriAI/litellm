@@ -2,7 +2,7 @@
 
 import { SortingState } from "@tanstack/react-table";
 import { FolderKanban } from "lucide-react";
-import { parseAsInteger, useQueryState } from "nuqs";
+import { parseAsInteger, useQueryStates } from "nuqs";
 import { useMemo, useState } from "react";
 
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
@@ -47,8 +47,11 @@ export function ProjectsTable({
   isTeamsLoading,
 }: ProjectsTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
-  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
-  const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(1).withOptions({ history: "push" }));
+  const [{ page, page_size }, setPagination] = useQueryStates(
+    { page: parseAsInteger.withDefault(1), page_size: parseAsInteger.withDefault(DEFAULT_PAGE_SIZE) },
+    { history: "push" },
+  );
+  const pageSize = PAGE_SIZE_OPTIONS.includes(page_size) ? page_size : DEFAULT_PAGE_SIZE;
 
   const columns = useMemo(() => {
     const deps = { onProjectClick, teamAliasMap, isTeamsLoading };
@@ -74,11 +77,8 @@ export function ProjectsTable({
           page={pageIndex}
           pageSize={pageSize}
           rowCount={projects.length}
-          onPageChange={(nextPageIndex) => void setPage(nextPageIndex + 1)}
-          onPageSizeChange={(nextPageSize) => {
-            setPageSize(nextPageSize);
-            void setPage(1);
-          }}
+          onPageChange={(nextPageIndex) => void setPagination({ page: nextPageIndex + 1 })}
+          onPageSizeChange={(nextPageSize) => void setPagination({ page_size: nextPageSize, page: null })}
           pageSizeOptions={PAGE_SIZE_OPTIONS}
           isLoading={isLoading}
         />
