@@ -35,7 +35,7 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, Json, JsonValue
+from pydantic import BaseModel, Json, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, assert_never
 
 from litellm._uuid import uuid
@@ -61,7 +61,6 @@ from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     UI_TEAM_ID,
     CallbackDelete,
@@ -671,7 +670,7 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
-from fastapi.routing import APIRouter
+from fastapi.routing import APIRoute, APIRouter
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
@@ -738,10 +737,11 @@ def _redact_worker_config_for_logging(worker_config: str | dict[str, JsonValue] 
         return None
     if isinstance(worker_config, dict):
         return _redact_secret_values_in_obj(worker_config)
-    parsed: Final = safe_json_loads(worker_config, default=None)
-    if isinstance(parsed, dict):
-        return safe_dumps(_redact_secret_values_in_obj(parsed))
-    return worker_config
+    try:
+        parsed: Final = TypeAdapter(dict[str, JsonValue]).validate_json(worker_config)
+    except ValidationError:
+        return worker_config
+    return safe_dumps(_redact_secret_values_in_obj(parsed))
 
 
 if global_max_parallel_request_retries_env is None:
@@ -862,21 +862,16 @@ async def _initialize_shared_aiohttp_session():
             _build_aiohttp_keepalive_socket_factory,
         )
 
-        connector_kwargs: Final[dict[str, Any]] = {
-            "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
-            "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
-        }
-        if AIOHTTP_NEEDS_CLEANUP_CLOSED:
-            connector_kwargs["enable_cleanup_closed"] = True
-        if AIOHTTP_CONNECTOR_LIMIT > 0:
-            connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
-        if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
-            connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
         socket_factory: Final = _build_aiohttp_keepalive_socket_factory()
-        if socket_factory is not None:
-            connector_kwargs["socket_factory"] = socket_factory
 
-        connector: Final = TCPConnector(**connector_kwargs)
+        connector: Final = TCPConnector(
+            keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
+            ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
+            enable_cleanup_closed=AIOHTTP_NEEDS_CLEANUP_CLOSED,
+            limit=AIOHTTP_CONNECTOR_LIMIT if AIOHTTP_CONNECTOR_LIMIT > 0 else 100,
+            limit_per_host=max(0, AIOHTTP_CONNECTOR_LIMIT_PER_HOST),
+            socket_factory=socket_factory,
+        )
         session: Final = ClientSession(connector=connector)
 
         verbose_proxy_logger.info(
@@ -1180,7 +1175,7 @@ async def proxy_startup_event(app: FastAPI):
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
 
-def _generate_stable_operation_id(route: Any) -> str:
+def _generate_stable_operation_id(route: APIRoute) -> str:
     operation_id = re.sub(r"\W", "_", f"{route.name}{route.path_format}")
     route_methods: Final = sorted(route.methods or [])
     if len(route_methods) == 1:
@@ -5739,7 +5734,11 @@ class ProxyConfig:
         )
 
     @staticmethod
-    def _parse_router_settings_value(value: Any) -> dict | None:
+    def _parse_router_settings_value(
+        value: object,
+    ) -> (
+        dict | None
+    ):  # mutable-ok: callers' dict-typed return chain (_get_hierarchical_router_settings) expects a real dict
         """
         Parse a router_settings value that may be a dict or a JSON/YAML string.
 
@@ -10007,7 +10006,7 @@ async def vertex_ai_live_passthrough_endpoint(
         None,
         description="Override the Vertex AI region (for example, 'us-central1').",
     ),
-    user_api_key_dict=Depends(user_api_key_auth_websocket),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
 ):
     """
     Vertex AI Live API WebSocket Pass-through Endpoint
@@ -10055,7 +10054,7 @@ async def realtime_websocket_endpoint(
         None,
         description="Comma-separated list of guardrail names to apply to this request.",
     ),
-    user_api_key_dict=Depends(user_api_key_auth_websocket),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
 ):
     requested_protocols: Final = [
         p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()
@@ -11833,7 +11832,7 @@ async def _apply_search_filter_to_models(
     return filtered_router_models + db_models, search_total_count
 
 
-def _normalize_datetime_for_sorting(dt: Any) -> datetime | None:
+def _normalize_datetime_for_sorting(dt: object) -> datetime | None:
     """
     Normalize a datetime value to a timezone-aware UTC datetime for sorting.
 
