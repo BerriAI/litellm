@@ -2798,6 +2798,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     routed_model: str
     cause: RoutingDecisionCause
     tier: str
+    tier_label: str
     request_type: str
     score: float
     signals: Sequence[str]
@@ -2823,6 +2824,7 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[FrozenSet[str]] = frozenset(
         "routed_model",
         "cause",
         "tier",
+        "tier_label",
         "request_type",
         "score",
         "classifier_model",

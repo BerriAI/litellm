@@ -25,6 +25,7 @@ import {
   getKeywordTierRulesError,
   getMissingTiersError,
   getSemanticConfigError,
+  getTierLabelsError,
 } from "./build_complexity_router_config";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
@@ -227,11 +228,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   // prefills once (handlePresetChange), and everything after that is edited exactly like Custom.
   const submitBlockedReason =
     getMissingTiersError(complexityRouterConfig.tiers) ??
+    getTierLabelsError(complexityRouterConfig.tier_labels) ??
     getKeywordTierRulesError(keywordTierRules) ??
     getReferencedModelsError(referencedModelsParams, availableModelSet);
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
     tiers: complexityRouterConfig.tiers,
+    tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
     classifierContextWindowSize: complexityRouterConfig.classifier_context_window_size,
@@ -252,12 +255,19 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const submitRecommendedRouter = (name: string) => {
-    const { tiers, classifierType, classifierLlmConfig } = complexityRouterConfigParams;
+    const { tiers, tierLabels, classifierType, classifierLlmConfig } = complexityRouterConfigParams;
 
     const missingTiersError = getMissingTiersError(tiers);
     if (missingTiersError) {
       setShowValidationErrors(true);
       NotificationManager.fromBackend(missingTiersError);
+      return;
+    }
+
+    const tierLabelsError = getTierLabelsError(tierLabels);
+    if (tierLabelsError) {
+      setShowValidationErrors(true);
+      NotificationManager.fromBackend(tierLabelsError);
       return;
     }
 
