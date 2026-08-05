@@ -18,6 +18,7 @@ import {
   parseSkillSource,
   isValidSubPath,
   buildMarketplaceSettingsSnippet,
+  sourceToFormFields,
 } from "./helpers";
 import { MarketplacePluginEntry, PluginSource } from "./types";
 
@@ -33,6 +34,22 @@ describe("buildMarketplaceSettingsSnippet", () => {
         },
       },
     });
+  });
+});
+
+describe("sourceToFormFields", () => {
+  it("round-trips every source shape back through parseSkillSource", () => {
+    const sources: PluginSource[] = [
+      { source: "github", repo: "org/repo" },
+      { source: "url", url: "https://gitlab.com/group/repo" },
+      { source: "git-subdir", url: "https://gitlab.com/group/repo", path: "plugins/x" },
+      { source: "git-subdir", url: "https://github.com/org/repo", path: "plugins/x" },
+    ];
+
+    for (const source of sources) {
+      const { skillUrl, subPath } = sourceToFormFields(source);
+      expect(parseSkillSource(skillUrl, subPath)?.parsed).toEqual(source);
+    }
   });
 });
 

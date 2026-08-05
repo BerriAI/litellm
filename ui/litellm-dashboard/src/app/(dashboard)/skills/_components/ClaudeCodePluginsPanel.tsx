@@ -25,6 +25,7 @@ interface ClaudeCodePluginsPanelProps {
 const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessToken, userRole }) => {
   const [pluginsList, setPluginsList] = useState<Plugin[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
+  const [pluginToEdit, setPluginToEdit] = useState<Plugin | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isDeleting, setIsDeleting] = useState(false);
   const [pluginToDelete, setPluginToDelete] = useState<{
@@ -105,6 +106,7 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
           <PluginTable
             pluginsList={pluginsList}
             isLoading={isLoading}
+            onEditClick={setPluginToEdit}
             onDeleteClick={handleDeleteClick}
             isAdmin={isAdmin}
             onPluginClick={(id) => {
@@ -121,6 +123,17 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
         accessToken={accessToken}
         onSuccess={fetchPlugins}
       />
+
+      {pluginToEdit && (
+        <AddPluginForm
+          key={pluginToEdit.name}
+          visible
+          skill={pluginToEdit}
+          onClose={() => setPluginToEdit(null)}
+          accessToken={accessToken}
+          onSuccess={fetchPlugins}
+        />
+      )}
 
       {pluginToDelete && (
         <AlertDialog

@@ -176,6 +176,22 @@ export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourceP
   return parseRawGitSource(url, subPath);
 };
 
+export interface SkillSourceFields {
+  skillUrl: string;
+  subPath: string;
+}
+
+/**
+ * Inverse of parseSkillSource: turn a registered source back into the repository URL and
+ * subfolder the register form collects, so an existing skill can be loaded for editing.
+ */
+export const sourceToFormFields = (source: PluginSource): SkillSourceFields => {
+  if (source.source === "github" && source.repo) {
+    return { skillUrl: `https://github.com/${source.repo}`, subPath: "" };
+  }
+  return { skillUrl: source.url ?? "", subPath: source.path ?? "" };
+};
+
 /**
  * Build the `~/.claude/settings.json` snippet that registers the proxy as a marketplace.
  * Claude Code expects `extraKnownMarketplaces.<name>.source` to be a source object, not a
