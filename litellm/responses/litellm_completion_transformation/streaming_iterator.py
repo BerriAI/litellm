@@ -2,6 +2,8 @@ import time
 import uuid
 from typing import Any, Final, cast
 
+from openai.types.responses import ResponseOutputMessage, ResponseOutputText, ResponseReasoningItem
+
 import litellm
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.custom_tools import (
@@ -39,6 +41,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
+from litellm.types.responses.main import GenericResponseOutputItem, OutputText
 from litellm.types.utils import Delta as ChatCompletionDelta
 from litellm.types.utils import (
     ModelResponse,
@@ -671,8 +674,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self, litellm_complete_object: ModelResponse
     ) -> BaseLiteLLMOpenAIResponseObject | None:
         if not self.sent_content_part_added_event and self._cached_reasoning_item_id is not None:
-            # A reasoning-only or reasoning-to-tool stream did not open a message
-            # content part, so emitting message terminal events would leave them unmatched.
             self.sent_output_text_done_event = True
             self.sent_output_content_part_done_event = True
             self.sent_output_item_done_event = True
@@ -773,8 +774,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._pending_response_events.append(event)
             return
 
-        # Tool-only chunks do not create a message item. A combined text/tool
-        # chunk opens the message here and queues its tool events during transform.
         if (
             hasattr(delta, "tool_calls")
             and delta.tool_calls
@@ -823,8 +822,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if not self._reasoning_active or self._reasoning_done_emitted:
             return
 
-        # Incrementally accumulate reasoning content instead of calling
-        # stream_chunk_builder on every chunk (O(n²)).
         delta = chunk.choices[0].delta if chunk.choices else None
         if delta and hasattr(delta, "reasoning_content") and delta.reasoning_content:
             self._accumulated_reasoning_content_parts.append(delta.reasoning_content)
@@ -1081,38 +1078,45 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return chat_completion_delta.content or ""
 
     def _reconcile_streamed_output_items(self, responses_api_response: ResponsesAPIResponse) -> None:
-        reconciled_output = responses_api_response.output[:0]
-        reconciled_message = False
-        for item in responses_api_response.output:
-            mutable_item = cast(  # cast-ok: response output is a heterogeneous union of mutable Pydantic item models
-                Any, item
+        empty_message_indexes: Final = tuple(
+            index
+            for index, item in enumerate(responses_api_response.output)
+            if (
+                isinstance(item, ResponseOutputMessage)
+                or isinstance(item, GenericResponseOutputItem)
+                and item.type == "message"
             )
-            item_type = getattr(mutable_item, "type", None)
-            if item_type == "reasoning" and self._cached_reasoning_item_id is not None:
-                mutable_item.id = self._cached_reasoning_item_id
-            elif item_type == "message":
-                message_content = cast(  # cast-ok: message content is a heterogeneous Pydantic item list
-                    list[Any],  # cast-ok: message content is a heterogeneous Pydantic item list
-                    getattr(mutable_item, "content", None)
-                    or [],  # mutable-ok: temporary heterogeneous content fallback
-                )
-                has_message_content = any(
-                    getattr(part, "type", None) != "output_text"
-                    or bool(getattr(part, "text", ""))
-                    or bool(getattr(part, "annotations", None))
-                    for part in message_content
-                )
+            and self._cached_reasoning_item_id is not None
+            and not self.sent_content_part_added_event
+            and not any(
+                not isinstance(part, (ResponseOutputText, OutputText)) or bool(part.text) or bool(part.annotations)
+                for part in item.content
+            )
+        )
+        for index in reversed(empty_message_indexes):
+            del responses_api_response.output[index]
+
+        if self._cached_reasoning_item_id is not None:
+            for item in responses_api_response.output:
                 if (
-                    self._cached_reasoning_item_id is not None
-                    and not self.sent_content_part_added_event
-                    and not has_message_content
+                    isinstance(item, ResponseReasoningItem)
+                    or isinstance(item, GenericResponseOutputItem)
+                    and item.type == "reasoning"
                 ):
-                    continue
-                if self.sent_content_part_added_event and not reconciled_message and self._cached_item_id is not None:
-                    mutable_item.id = self._cached_item_id
-                    reconciled_message = True
-            reconciled_output.append(mutable_item)
-        responses_api_response.output = reconciled_output
+                    item.id = self._cached_reasoning_item_id
+
+        streamed_message: Final = next(
+            (
+                item
+                for item in responses_api_response.output
+                if isinstance(item, ResponseOutputMessage)
+                or isinstance(item, GenericResponseOutputItem)
+                and item.type == "message"
+            ),
+            None,
+        )
+        if self.sent_content_part_added_event and streamed_message is not None and self._cached_item_id is not None:
+            streamed_message.id = self._cached_item_id
 
     def _emit_response_completed_event(self, litellm_model_response: ModelResponse) -> ResponseCompletedEvent | None:
         if litellm_model_response:

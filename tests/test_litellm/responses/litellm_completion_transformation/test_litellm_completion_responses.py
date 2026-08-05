@@ -3035,33 +3035,63 @@ def test_tool_output_matches_completed_response(sync_mode, stream_prefix):
 
 
 def test_reconcile_preserves_nonempty_unstreamed_message():
-    from types import SimpleNamespace
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText, ResponseReasoningItem
 
     from litellm.responses.litellm_completion_transformation.streaming_iterator import (
         LiteLLMCompletionStreamingIterator,
     )
+    from litellm.types.llms.openai import ResponsesAPIResponse
 
     iterator = LiteLLMCompletionStreamingIterator.__new__(LiteLLMCompletionStreamingIterator)
     iterator._cached_reasoning_item_id = "rs_streamed"
     iterator._cached_item_id = None
     iterator.sent_content_part_added_event = False
-    reasoning_item = SimpleNamespace(type="reasoning", id="rs_final")
-    empty_message = SimpleNamespace(
+    reasoning_item = ResponseReasoningItem(id="rs_final", summary=[], type="reasoning")
+    empty_message = ResponseOutputMessage(
         type="message",
         id="msg_empty",
-        content=[SimpleNamespace(type="output_text", text="", annotations=[])],
+        content=[ResponseOutputText(type="output_text", text="", annotations=[])],
+        role="assistant",
+        status="completed",
     )
-    nonempty_message = SimpleNamespace(
+    nonempty_message = ResponseOutputMessage(
         type="message",
         id="msg_answer",
-        content=[SimpleNamespace(type="output_text", text="answer", annotations=[])],
+        content=[ResponseOutputText(type="output_text", text="answer", annotations=[])],
+        role="assistant",
+        status="completed",
     )
-    response = SimpleNamespace(output=[reasoning_item, empty_message, nonempty_message])
+    response = ResponsesAPIResponse.model_construct(output=[reasoning_item, empty_message, nonempty_message])
 
     iterator._reconcile_streamed_output_items(response)
 
     assert response.output == [reasoning_item, nonempty_message]
     assert reasoning_item.id == "rs_streamed"
+
+
+def test_reconcile_removes_empty_generic_message():
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+    iterator = LiteLLMCompletionStreamingIterator.__new__(LiteLLMCompletionStreamingIterator)
+    iterator._cached_reasoning_item_id = "rs_streamed"
+    iterator._cached_item_id = None
+    iterator.sent_content_part_added_event = False
+    empty_message = GenericResponseOutputItem(
+        type="message",
+        id="msg_empty",
+        status="completed",
+        role="assistant",
+        content=[OutputText(type="output_text", text="", annotations=[])],
+    )
+    response = ResponsesAPIResponse.model_construct(output=[empty_message])
+
+    iterator._reconcile_streamed_output_items(response)
+
+    assert response.output == []
 
 
 @pytest.mark.parametrize("sync_mode", [False, True])
