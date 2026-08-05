@@ -15,6 +15,12 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # actions: read lets scripts/type_check_gate.py download the base-counts
+    # artifact published by publish-basedpyright-base-counts.yml instead of
+    # re-running basedpyright over the merge-base tree.
+    permissions:
+      contents: read
+      actions: read
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -104,6 +110,7 @@ jobs:
       - name: Check basedpyright budget (delta vs base)
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           uv run --no-sync python scripts/type_check_gate.py --base "$BASE_SHA"
 
