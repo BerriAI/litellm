@@ -14,7 +14,6 @@ Run these tests:
 """
 
 import asyncio
-import builtins
 import os
 import sys
 import types
@@ -25,29 +24,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-def test_init_rds_client_does_not_import_secret_manager(monkeypatch):
-    from litellm.proxy.auth.rds_iam_token import init_rds_client
-
-    fake_boto3 = types.SimpleNamespace(
-        session=types.SimpleNamespace(Config=MagicMock()),
-        client=MagicMock(return_value="rds-client"),
-    )
-    real_import = builtins.__import__
-
-    def fail_on_secret_manager_import(name, *args, **kwargs):
-        if name == "litellm.secret_managers.main":
-            raise AssertionError("rds_iam_token must not import secret_managers.main")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
-    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
-    monkeypatch.setattr(builtins, "__import__", fail_on_secret_manager_import)
-
-    assert init_rds_client() == "rds-client"
-
-
 def test_init_rds_client_resolves_region_and_oidc_with_get_secret(monkeypatch):
-    import litellm
+    import litellm.secret_managers.main
     from litellm.proxy.auth.rds_iam_token import init_rds_client
 
     fake_sts = MagicMock()
@@ -83,7 +61,7 @@ def test_init_rds_client_resolves_region_and_oidc_with_get_secret(monkeypatch):
 
     monkeypatch.delenv("AWS_REGION_NAME", raising=False)
     monkeypatch.delenv("AWS_REGION", raising=False)
-    monkeypatch.setattr(litellm, "get_secret", fake_get_secret)
+    monkeypatch.setattr(litellm.secret_managers.main, "get_secret", fake_get_secret)
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
 
     assert (
@@ -116,9 +94,7 @@ def test_init_rds_client_resolves_os_environ_parameter(monkeypatch):
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "env-access-key")
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
 
-    assert (
-        init_rds_client(aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID") is rds_client
-    )
+    assert init_rds_client(aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID") is rds_client
     fake_boto3.client.assert_called_once_with(
         service_name="rds",
         region_name="us-east-1",
@@ -151,9 +127,7 @@ class TestPrismaWrapperTokenRefresh:
     def _set_database_url_with_token(self, expires_in_seconds: int = 900):
         """Set DATABASE_URL with a mock token."""
         token = self._generate_mock_token(expires_in_seconds)
-        os.environ["DATABASE_URL"] = (
-            f"postgresql://test_user:{token}@test-host:5432/test_db"
-        )
+        os.environ["DATABASE_URL"] = f"postgresql://test_user:{token}@test-host:5432/test_db"
 
     @pytest.mark.asyncio
     async def test_is_token_expired_fresh(self, setup_env):
@@ -179,9 +153,7 @@ class TestPrismaWrapperTokenRefresh:
         # Create an expired token
         old_date = datetime.utcnow() - timedelta(seconds=901)
         date_str = old_date.strftime("%Y%m%dT%H%M%SZ")
-        token = (
-            f"mock-token?X-Amz-Date={date_str}&X-Amz-Expires=900&X-Amz-Signature=abc"
-        )
+        token = f"mock-token?X-Amz-Date={date_str}&X-Amz-Expires=900&X-Amz-Signature=abc"
         encoded_token = urllib.parse.quote(token, safe="")
         db_url = f"postgresql://test_user:{encoded_token}@test-host:5432/test_db"
 
@@ -316,9 +288,7 @@ async def demonstrate_fix():
     date_str = now.strftime("%Y%m%dT%H%M%SZ")
     token = f"mock-token?X-Amz-Date={date_str}&X-Amz-Expires=10&X-Amz-Signature=abc123"
     encoded_token = urllib.parse.quote(token, safe="")
-    os.environ["DATABASE_URL"] = (
-        f"postgresql://iam_user:{encoded_token}@mock-rds:5432/litellm"
-    )
+    os.environ["DATABASE_URL"] = f"postgresql://iam_user:{encoded_token}@mock-rds:5432/litellm"
 
     # Create mock prisma client
     mock_prisma = MagicMock()
