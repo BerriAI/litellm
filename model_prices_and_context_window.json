@@ -46422,7 +46422,7 @@
         "max_input_tokens": 1048576,
         "input_cost_per_token": 1.12e-07,
         "output_cost_per_token": 2.24e-07,
-        "cache_read_input_token_cost": 2.24e-09,
+        "cache_read_input_token_cost": 1.44e-08,
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_reasoning": true,
@@ -46716,7 +46716,6 @@
         "cache_read_input_token_cost": 4.8e-08,
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
         "supported_endpoints": [
