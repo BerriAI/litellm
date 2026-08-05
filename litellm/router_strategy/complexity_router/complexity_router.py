@@ -593,6 +593,11 @@ class ComplexityRouter(CustomLogger):
         self._savings_baseline: Baseline | None = None
         self._savings_baseline_derived = False
 
+        self._rubric_entries_cache: tuple[tuple[str, str], ...] = self._rubric_entries()
+        self._response_model_cache: type[BaseModel] = _tier_classification_model(
+            tuple(name for name, _ in self._rubric_entries_cache)
+        )
+
         verbose_router_logger.debug("ComplexityRouter initialized for %s with tiers: %s", model_name, self.config.tiers)
 
     def _hardest_tier_models(self) -> tuple[str, ...]:
@@ -1046,8 +1051,8 @@ class ComplexityRouter(CustomLogger):
         metadata: Final = _classifier_call_metadata(request_metadata)
         turn_off_message_logging: Final = _effective_turn_off_message_logging(request_kwargs)
 
-        tier_entries: Final = self._rubric_entries()
-        response_model: Final = _tier_classification_model(tuple(name for name, _ in tier_entries))
+        tier_entries: Final = self._rubric_entries_cache
+        response_model: Final = self._response_model_cache
         messages_for_call: Final = [
             {
                 "role": "system",
