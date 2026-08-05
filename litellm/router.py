@@ -249,7 +249,7 @@ if TYPE_CHECKING:
         ResponsesAPIResponse,
     )
 
-    Span = Union[_Span, Any]
+    Span = _Span
 else:
     Span = Any
     AutoRouter = Any
@@ -462,6 +462,13 @@ class Router:
         router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
         ```
         """
+
+        self._override_selectors: dict[
+            str, Any
+        ] = {}  # mutable-ok: populated on demand and mutated by the selector-registration helpers below
+        self._group_selectors: dict[
+            str, dict[str, Any]
+        ] = {}  # mutable-ok: populated on demand and mutated by the selector-registration helpers below
 
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
@@ -679,7 +686,7 @@ class Router:
                 routing_strategy_args=routing_strategy_args,
             )
         self._init_routing_groups(self._routing_groups_input)
-        self._override_selectors: dict[str, Any] = {}
+        self._override_selectors = {}
         self._override_selectors_lock = threading.Lock()
         self.access_groups = None
         ## USAGE TRACKING ##
@@ -949,7 +956,7 @@ class Router:
 
         self._unregister_router_selectors(
             [getattr(self, attr, None) for attr in self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.values()]
-            + list(getattr(self, "_override_selectors", {}).values())
+            + list(self._override_selectors.values())
         )
         self._override_selectors = {}
 
@@ -985,12 +992,12 @@ class Router:
         attributes set up in `routing_strategy_init`.
         """
         self._unregister_router_selectors(
-            [sel for selectors in getattr(self, "_group_selectors", {}).values() for sel in selectors.values()]
+            [sel for selectors in self._group_selectors.values() for sel in selectors.values()]
         )
 
         self._routing_groups: dict[str, RoutingGroup] = {}
         self._model_to_group: dict[str, str] = {}
-        self._group_selectors: dict[str, dict[str, Any]] = {}
+        self._group_selectors = {}
 
         if not groups_input:
             return
@@ -1910,7 +1917,7 @@ class Router:
                 async def _run_silent_completion():
                     await self.acompletion(
                         model=silent_model,
-                        messages=cast(list[AllMessageValues], messages),
+                        messages=messages,
                         **silent_kwargs,
                     )
                     # Drain any fire-and-forget tasks (e.g. alerting hooks)
@@ -2753,7 +2760,7 @@ class Router:
             # Trigger the silent request
             await self.acompletion(
                 model=silent_model,
-                messages=cast(list[AllMessageValues], messages),
+                messages=messages,
                 **silent_kwargs,
             )
         except Exception as e:
@@ -3276,7 +3283,11 @@ class Router:
                         )
                     )
             responses = await asyncio.gather(*_tasks)
-            final_responses: list[list[Any]] = [[] for _ in range(len(messages))]
+            final_responses: list[
+                list[ModelResponse | CustomStreamWrapper | Exception]
+            ] = [  # mutable-ok: populated incrementally by the thread pool loop below
+                [] for _ in range(len(messages))
+            ]
             for response in responses:
                 if isinstance(response, tuple):
                     final_responses[response[1]].append(response[0])
@@ -4583,7 +4594,7 @@ class Router:
         # fallback to the original reference for any non-picklable value.
         # The original_generic_function is preserved so the per-attempt
         # helper knows which underlying API to call on fallback.
-        fallback_kwargs: dict[str, Any] = kwargs.copy()
+        fallback_kwargs = kwargs.copy()
         if isinstance(fallback_kwargs.get("litellm_metadata"), dict):
             fallback_kwargs["litellm_metadata"] = safe_deep_copy(fallback_kwargs["litellm_metadata"])
         if isinstance(fallback_kwargs.get("metadata"), dict):
@@ -7079,7 +7090,7 @@ class Router:
         except Exception as e:
             raise e
 
-    async def async_deployment_callback_on_failure(self, kwargs, completion_response: Any | None, start_time, end_time):
+    async def async_deployment_callback_on_failure(self, kwargs, completion_response, start_time, end_time):
         """
         Update RPM usage for a deployment
         """
@@ -10999,7 +11010,7 @@ class Router:
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None,
+        messages: list[dict[str, str]] | None,  # mutable-ok: parameter mirrors the caller's message-dict payload
     ) -> RoutingContext:
         """
         Build a RoutingContext for `model`, run it through `self.routing_plugins`
@@ -11098,7 +11109,7 @@ class Router:
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None = None,
+        messages: list[dict[str, str]] | None = None,  # mutable-ok: parameter mirrors the caller's message-dict payload
         input: str | list | None = None,
         specific_deployment: bool | None = False,
     ) -> PreRoutingHookResponse | None:
@@ -11181,7 +11192,7 @@ class Router:
 
     @staticmethod
     def _redact_prompt_text_if_needed(
-        request_kwargs: Mapping[str, Any],
+        request_kwargs: Mapping[str, object],
         routing_decision: StandardLoggingRoutingDecision,
     ) -> StandardLoggingRoutingDecision:
         """Drop verbatim prompt text from the record when message logging is redacted.

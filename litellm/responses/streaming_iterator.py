@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -34,6 +34,40 @@ from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
 
+if TYPE_CHECKING:
+    from fastapi import WebSocket
+
+    from litellm.types.llms.openai import (
+        ContentPartDoneEvent,
+        ContentPartDonePartOutputText,
+        ContentPartDonePartReasoningText,
+        ContentPartDonePartRefusal,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamingResponse,
+    )
+
+
+@runtime_checkable
+class _ModelDumpable(Protocol):
+    def model_dump(
+        self, *, exclude_none: bool = ...
+    ) -> dict[
+        str, object
+    ]: ...  # mutable-ok: Protocol mirrors Pydantic's model_dump(), which returns a plain mutable dict
+
+
+@runtime_checkable
+class _ModelDumpJsonable(Protocol):
+    def model_dump_json(self, *, exclude_none: bool = ...) -> str: ...
+
+
+class _BackendWebSocketLike(Protocol):
+    async def recv(self, decode: bool = ...) -> str | bytes: ...
+
+    async def send(self, message: str) -> None: ...
+
+    async def close(self) -> None: ...
+
 
 @lru_cache(maxsize=1)
 def _get_openai_response_types():
@@ -42,7 +76,7 @@ def _get_openai_response_types():
     return openai_types
 
 
-def _log_background_task_failure(task: asyncio.Task[Any], *, task_name: str) -> None:
+def _log_background_task_failure(task: asyncio.Task[object], *, task_name: str) -> None:
     if task.cancelled():
         return
     exception = task.exception()
@@ -131,7 +165,7 @@ class BaseResponsesAPIStreamingIterator:
         self.logging_obj = logging_obj
         self.finished = False
         self.responses_api_provider_config = responses_api_provider_config
-        self.completed_response: Any | None = None
+        self.completed_response: ResponsesAPIStreamingResponse | None = None
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
         self._yielded_first_chunk = False
@@ -176,7 +210,7 @@ class BaseResponsesAPIStreamingIterator:
                 llm_provider=self.custom_llm_provider or "",
             )
 
-    def _process_chunk(self, chunk) -> Any | None:
+    def _process_chunk(self, chunk: str | None) -> ResponsesAPIStreamingResponse | None:
         """Process a single chunk of data from the stream"""
         if not chunk:
             return None
@@ -196,7 +230,7 @@ class BaseResponsesAPIStreamingIterator:
 
         try:
             # Parse the JSON chunk
-            parsed_chunk = json.loads(chunk)
+            parsed_chunk: object = json.loads(chunk)
 
             # Format as ResponsesAPIStreamingResponse
             if isinstance(parsed_chunk, dict):
@@ -401,7 +435,7 @@ class BaseResponsesAPIStreamingIterator:
         )
         self._handle_failure(exception)
 
-    def _record_failed_response_usage(self, response_obj: Any | None) -> None:
+    def _record_failed_response_usage(self, response_obj: ResponsesAPIResponse | None) -> None:
         if response_obj is None or self.logging_obj is None:
             return
         usage_obj = getattr(response_obj, "usage", None)
@@ -451,7 +485,7 @@ class BaseResponsesAPIStreamingIterator:
             is_pre_first_chunk=not self._yielded_first_chunk,
         )
 
-    def _get_completed_response_object(self) -> Any | None:
+    def _get_completed_response_object(self) -> ResponsesAPIResponse | None:
         openai_types = _get_openai_response_types()
         completed_response = self.completed_response
         if isinstance(completed_response, openai_types.ResponsesAPIResponse):
@@ -577,7 +611,7 @@ class BaseResponsesAPIStreamingIterator:
         if self.completed_response is None:
             return
 
-        request_payload: dict[str, Any] = {}
+        request_payload: dict[str, object] = {}  # mutable-ok: populated incrementally from the request payload below
         if isinstance(self.request_data, dict):
             request_payload.update(self.request_data)
         try:
@@ -707,7 +741,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> Any:
+    async def __anext__(self) -> ResponsesAPIStreamingResponse:
         try:
             self._check_max_streaming_duration()
             while True:
@@ -880,7 +914,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _set_events_from_response(
         self,
-        transformed: Any,
+        transformed: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
     ) -> None:
         self._events = _build_synthetic_response_events(
@@ -894,7 +928,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> Any:
+    async def __anext__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopAsyncIteration
         evt = self._events[self._idx]
@@ -908,7 +942,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __iter__(self):
         return self
 
-    def __next__(self) -> Any:
+    def __next__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopIteration
         evt = self._events[self._idx]
@@ -923,7 +957,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __init__(
         self,
-        response: Any,
+        response: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict[str, Any] | None = None,
         call_type: str | None = None,
@@ -941,13 +975,15 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         )
         self._completed_response_cache_hit = True
         self._persist_completed_response_before_logging = False
-        self._events: list[Any] = []
+        self._events: list[
+            ResponsesAPIStreamingResponse
+        ] = []  # mutable-ok: accumulates one event per stream update over the object's lifetime
         self._idx = 0
         self._set_events_from_response(transformed=response, logging_obj=logging_obj)
 
     def _set_events_from_response(
         self,
-        transformed: Any,
+        transformed: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
     ) -> None:
         self._events = _build_synthetic_response_events(
@@ -961,7 +997,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> Any:
+    async def __anext__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopAsyncIteration
         evt = self._events[self._idx]
@@ -975,7 +1011,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __iter__(self):
         return self
 
-    def __next__(self) -> Any:
+    def __next__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopIteration
         evt = self._events[self._idx]
@@ -987,8 +1023,10 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         return evt
 
 
-def _dump_response_object(obj: Any) -> dict[str, Any]:
-    if hasattr(obj, "model_dump"):
+def _dump_response_object(
+    obj: object,
+) -> dict[str, Any]:  # mutable-ok: returns a plain mutable dict to match model_dump()'s contract
+    if isinstance(obj, _ModelDumpable):
         return obj.model_dump()
     if isinstance(obj, dict):
         return obj
@@ -1000,8 +1038,8 @@ def _build_response_status_event(
         "response.created",
         "response.in_progress",
     ],
-    transformed: Any,
-) -> Any:
+    transformed: ResponsesAPIResponse,
+) -> ResponsesAPIStreamingResponse:
     openai_types = _get_openai_response_types()
     in_progress_response = transformed.model_copy(
         deep=True,
@@ -1018,10 +1056,10 @@ def _build_content_part_done_event(
     output_index: int,
     content_index: int,
     part_payload: dict[str, Any],
-) -> Any | None:
+) -> ContentPartDoneEvent | None:
     openai_types = _get_openai_response_types()
     part_type = part_payload.get("type")
-    part: Any
+    part: ContentPartDonePartOutputText | ContentPartDonePartRefusal | ContentPartDonePartReasoningText
     if part_type == "output_text":
         annotations = [
             openai_types.BaseLiteLLMOpenAIResponseObject(**annotation)
@@ -1057,7 +1095,7 @@ def _build_content_part_done_event(
 
 def _add_text_like_part_events(
     *,
-    events: list[Any],
+    events: list[ResponsesAPIStreamingResponse],  # mutable-ok: parameter mirrors the caller's mutable event list
     item_id: str,
     output_index: int,
     content_index: int,
@@ -1123,13 +1161,15 @@ def _add_text_like_part_events(
 
 def _build_synthetic_response_events(
     *,
-    transformed: Any,
+    transformed: ResponsesAPIResponse,
     logging_obj: LiteLLMLoggingObj,
     chunk_size: int,
-) -> list[Any]:
+) -> list[
+    ResponsesAPIStreamingResponse
+]:  # mutable-ok: returns a plain mutable event list to match the caller's accumulator
     openai_types = _get_openai_response_types()
     if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-        usage_obj: Any | None = getattr(transformed, "usage", None)
+        usage_obj = transformed.usage
         if usage_obj is not None:
             try:
                 cost: float | None = logging_obj._response_cost_calculator(result=transformed)
@@ -1138,13 +1178,15 @@ def _build_synthetic_response_events(
             except Exception:
                 pass
 
-    events: list[Any] = [
+    events: list[
+        ResponsesAPIStreamingResponse
+    ] = [  # mutable-ok: built once as a mutable event list for the caller to extend
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, transformed),
     ]
 
     sequence_number = 0
-    for output_index, output_item in enumerate(getattr(transformed, "output", []) or []):
+    for output_index, output_item in enumerate(transformed.output or []):
         output_item_payload = _dump_response_object(output_item)
         item_id = str(output_item_payload.get("id") or transformed.id)
         item_type = output_item_payload.get("type")
@@ -1292,8 +1334,8 @@ class ResponsesWebSocketStreaming:
 
     def __init__(
         self,
-        websocket: Any,
-        backend_ws: Any,
+        websocket: WebSocket,
+        backend_ws: _BackendWebSocketLike,
         logging_obj: LiteLLMLoggingObj,
         user_api_key_dict: Any | None = None,
         request_data: dict | None = None,
@@ -1319,12 +1361,16 @@ class ResponsesWebSocketStreaming:
     def _should_store_event(self, event_obj: dict) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
 
-    def _store_event(self, event: Any) -> None:
+    def _store_event(
+        self, event: str | bytes | dict[str, object]
+    ) -> None:  # mutable-ok: parameter mirrors the caller's event payload, which may be a mutable dict
         if isinstance(event, bytes):
             event = event.decode("utf-8")
         if isinstance(event, str):
             try:
-                event_obj = json.loads(event)
+                event_obj: dict[str, object] = json.loads(
+                    event
+                )  # mutable-ok: parsed once via json.loads(), which returns a plain mutable dict
             except (json.JSONDecodeError, TypeError):
                 return
         else:
@@ -1333,15 +1379,17 @@ class ResponsesWebSocketStreaming:
         if self._should_store_event(event_obj):
             self.messages.append(event_obj)
 
-    def _collect_input_from_client_event(self, message: Any) -> None:
+    def _collect_input_from_client_event(
+        self, message: str | dict[str, object]
+    ) -> None:  # mutable-ok: parameter mirrors the caller's message payload, which may be a mutable dict
         """Extract user input content from response.create for logging."""
         try:
             if isinstance(message, str):
-                msg_obj = json.loads(message)
-            elif isinstance(message, dict):
-                msg_obj = message
+                msg_obj: dict[str, object] = json.loads(
+                    message
+                )  # mutable-ok: parsed once via json.loads(), which returns a plain mutable dict
             else:
-                return
+                msg_obj = message
 
             if msg_obj.get("type") != "response.create":
                 return
@@ -1368,7 +1416,9 @@ class ResponsesWebSocketStreaming:
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
-    def _store_input(self, message: Any) -> None:
+    def _store_input(
+        self, message: str | dict[str, object]
+    ) -> None:  # mutable-ok: parameter mirrors the caller's message payload, which may be a mutable dict
         self._collect_input_from_client_event(message)
         if self.logging_obj:
             self.logging_obj.pre_call(input=message, api_key="")
@@ -1407,7 +1457,10 @@ class ResponsesWebSocketStreaming:
                 # masked response.completed.
                 if self.output_guardrail_callbacks:
                     try:
-                        _evt_type = json.loads(response_str).get("type")
+                        _evt_parsed: dict[str, object] = json.loads(
+                            response_str
+                        )  # mutable-ok: parsed once via json.loads(), which returns a plain mutable dict
+                        _evt_type = _evt_parsed.get("type")
                     except (json.JSONDecodeError, TypeError):
                         _evt_type = None
                     if _evt_type in self._DELTA_EVENT_TYPES or _evt_type in self._OUTPUT_DONE_EVENT_TYPES:
@@ -1793,7 +1846,7 @@ class ManagedResponsesWebSocketHandler:
 
     def __init__(
         self,
-        websocket: Any,
+        websocket: WebSocket,
         model: str,
         logging_obj: LiteLLMLoggingObj,
         user_api_key_dict: Any | None = None,
@@ -1832,12 +1885,12 @@ class ManagedResponsesWebSocketHandler:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _serialize_chunk(chunk: Any) -> str | None:
+    def _serialize_chunk(chunk: object) -> str | None:
         """Serialize a streaming chunk to a JSON string for WebSocket transmission."""
         try:
-            if hasattr(chunk, "model_dump_json"):
+            if isinstance(chunk, _ModelDumpJsonable):
                 return chunk.model_dump_json(exclude_none=True)
-            if hasattr(chunk, "model_dump"):
+            if isinstance(chunk, _ModelDumpable):
                 return json.dumps(chunk.model_dump(exclude_none=True), default=str)
             if isinstance(chunk, dict):
                 return json.dumps(chunk, default=str)
@@ -1925,7 +1978,9 @@ class ManagedResponsesWebSocketHandler:
         return messages
 
     @staticmethod
-    def _input_to_messages(input_val: Any) -> list[dict[str, Any]]:
+    def _input_to_messages(
+        input_val: object,
+    ) -> list[dict[str, Any]]:  # mutable-ok: returns a plain mutable list to match callers that append further messages
         """
         Normalise the ``input`` field of a ``response.create`` event to a list
         of Responses API message dicts.

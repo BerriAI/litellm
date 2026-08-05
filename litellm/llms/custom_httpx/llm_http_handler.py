@@ -19,6 +19,8 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx  # type: ignore
 from openai.types.file_deleted import FileDeleted
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 import litellm.litellm_core_utils
@@ -87,7 +89,11 @@ from litellm.types.containers.main import (
     ContainerObject,
     DeleteContainerResult,
 )
-from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig
+from litellm.types.files import (
+    StreamingMediaUploadConfig,
+    TwoStepFileUploadConfig,
+    TwoStepFileUploadRequest,
+)
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
@@ -210,6 +216,45 @@ def _google_genai_streaming_hidden_params(
 @lru_cache(maxsize=None)
 def _responses_api_optional_request_param_names() -> frozenset[str]:
     return frozenset(get_type_hints(ResponsesAPIOptionalRequestParams).keys())
+
+
+_TWO_STEP_FILE_UPLOAD_REQUEST_ADAPTER = TypeAdapter(TwoStepFileUploadRequest)
+
+
+class _PresignedBatchRequest(TypedDict):
+    method: str
+    url: str
+    headers: dict[str, str]  # mutable-ok: TypedDict field mirrors the outgoing HTTP request's header dict
+    data: str | bytes | dict[str, Any] | None  # mutable-ok: TypedDict field mirrors the outgoing HTTP request body dict
+
+
+_PRESIGNED_BATCH_REQUEST_ADAPTER = TypeAdapter(_PresignedBatchRequest)
+
+
+def _send_presigned_batch_request(
+    client: HTTPHandler,
+    request: _PresignedBatchRequest,
+    timeout: float | httpx.Timeout | None,
+) -> httpx.Response | None:
+    method = request["method"].lower()
+    if method == "get":
+        return getattr(client, method)(url=request["url"], headers=request["headers"], timeout=timeout)
+    return getattr(client, method)(
+        url=request["url"], headers=request["headers"], data=request["data"], timeout=timeout
+    )
+
+
+async def _asend_presigned_batch_request(
+    client: AsyncHTTPHandler,
+    request: _PresignedBatchRequest,
+    timeout: float | httpx.Timeout | None,
+) -> httpx.Response | None:
+    method = request["method"].lower()
+    if method == "get":
+        return await getattr(client, method)(url=request["url"], headers=request["headers"], timeout=timeout)
+    return await getattr(client, method)(
+        url=request["url"], headers=request["headers"], data=request["data"], timeout=timeout
+    )
 
 
 def _custom_logger_callbacks(logging_obj: LiteLLMLoggingObj) -> list["CustomLogger"]:
@@ -2007,7 +2052,7 @@ class BaseLLMHTTPHandler:
         # Also check for extra_headers in kwargs (from config or direct calls)
         extra_headers_from_kwargs = kwargs.get("extra_headers", None)
         # Merge all header sources: forwarded < extra_headers < provider_specific
-        merged_headers = {}
+        merged_headers: dict[str, str] = {}  # mutable-ok: merged in place from multiple header sources below
         if forwarded_headers:
             merged_headers.update(forwarded_headers)
         if extra_headers_from_kwargs:
@@ -2370,14 +2415,16 @@ class BaseLLMHTTPHandler:
         model: str,
         input: str | ResponseInputParam,
         custom_llm_provider: str,
-        response_api_optional_request_params: dict[str, Any],
+        response_api_optional_request_params: dict[
+            str, object
+        ],  # mutable-ok: parameter mirrors the caller's optional-params dict payload
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
     ) -> tuple[
         str,
         str | ResponseInputParam,
         str,
-        dict[str, Any],
+        dict[str, object],
         GenericLiteLLMParams,
     ]:
         if not _has_pre_call_deployment_hook(logging_obj):
@@ -2444,7 +2491,9 @@ class BaseLLMHTTPHandler:
         model: str,
         input: str | ResponseInputParam,
         responses_api_provider_config: BaseResponsesAPIConfig,
-        response_api_optional_request_params: dict[str, Any],
+        response_api_optional_request_params: dict[
+            str, object
+        ],  # mutable-ok: parameter mirrors the caller's optional-params dict payload
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -2509,8 +2558,9 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
+        request_extra_headers = response_api_optional_request_params.get("extra_headers")
         headers = responses_api_provider_config.validate_environment(
-            headers=response_api_optional_request_params.get("extra_headers", {}) or {},
+            headers=request_extra_headers if isinstance(request_extra_headers, dict) else {},
             model=model,
             litellm_params=litellm_params,
         )
@@ -2519,7 +2569,7 @@ class BaseLLMHTTPHandler:
             headers.update(extra_headers)
 
         # Check if streaming is requested
-        stream = response_api_optional_request_params.get("stream", False)
+        stream = bool(response_api_optional_request_params.get("stream", False))
 
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -2572,8 +2622,6 @@ class BaseLLMHTTPHandler:
             stream=stream,
             fake_stream=fake_stream,
         )
-        body_kwargs: dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
-
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -2587,13 +2635,18 @@ class BaseLLMHTTPHandler:
 
         try:
             if is_stream_request:
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    timeout=timeout or float(response_api_optional_request_params.get("timeout", 0)),
-                    stream=stream,
-                    **body_kwargs,
+                request_timeout = response_api_optional_request_params.get("timeout", 0)
+                stream_timeout_value = timeout or float(
+                    request_timeout if isinstance(request_timeout, (int, float)) else 0
                 )
+                if signed_body is not None:
+                    response = sync_httpx_client.post(
+                        url=api_base, headers=headers, timeout=stream_timeout_value, stream=stream, data=signed_body
+                    )
+                else:
+                    response = sync_httpx_client.post(
+                        url=api_base, headers=headers, timeout=stream_timeout_value, stream=stream, json=data
+                    )
                 if fake_stream is True:
                     return MockResponsesAPIStreamingIterator(
                         response=response,
@@ -2617,12 +2670,18 @@ class BaseLLMHTTPHandler:
                     call_type=CallTypes.responses.value,
                 )
             else:
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    timeout=timeout or float(response_api_optional_request_params.get("timeout", 0)),
-                    **body_kwargs,
+                request_timeout = response_api_optional_request_params.get("timeout", 0)
+                non_stream_timeout_value = timeout or float(
+                    request_timeout if isinstance(request_timeout, (int, float)) else 0
                 )
+                if signed_body is not None:
+                    response = sync_httpx_client.post(
+                        url=api_base, headers=headers, timeout=non_stream_timeout_value, data=signed_body
+                    )
+                else:
+                    response = sync_httpx_client.post(
+                        url=api_base, headers=headers, timeout=non_stream_timeout_value, json=data
+                    )
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -2687,8 +2746,9 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
+        request_extra_headers = response_api_optional_request_params.get("extra_headers")
         headers = responses_api_provider_config.validate_environment(
-            headers=response_api_optional_request_params.get("extra_headers", {}) or {},
+            headers=request_extra_headers if isinstance(request_extra_headers, dict) else {},
             model=model,
             litellm_params=litellm_params,
         )
@@ -2697,7 +2757,7 @@ class BaseLLMHTTPHandler:
             headers.update(extra_headers)
 
         # Check if streaming is requested
-        stream = response_api_optional_request_params.get("stream", False)
+        stream = bool(response_api_optional_request_params.get("stream", False))
 
         api_base = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -2747,7 +2807,6 @@ class BaseLLMHTTPHandler:
             stream=stream,
             fake_stream=fake_stream,
         )
-        body_kwargs: dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
 
         ## LOGGING
         logging_obj.pre_call(
@@ -2762,13 +2821,18 @@ class BaseLLMHTTPHandler:
 
         try:
             if is_stream_request:
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    timeout=timeout or float(response_api_optional_request_params.get("timeout", 0)),
-                    stream=stream,
-                    **body_kwargs,
+                request_timeout = response_api_optional_request_params.get("timeout", 0)
+                stream_timeout_value = timeout or float(
+                    request_timeout if isinstance(request_timeout, (int, float)) else 0
                 )
+                if signed_body is not None:
+                    response = await async_httpx_client.post(
+                        url=api_base, headers=headers, timeout=stream_timeout_value, stream=stream, data=signed_body
+                    )
+                else:
+                    response = await async_httpx_client.post(
+                        url=api_base, headers=headers, timeout=stream_timeout_value, stream=stream, json=data
+                    )
 
                 if fake_stream is True:
                     return MockResponsesAPIStreamingIterator(
@@ -2794,12 +2858,18 @@ class BaseLLMHTTPHandler:
                     call_type=CallTypes.responses.value,
                 )
             else:
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    timeout=timeout or float(response_api_optional_request_params.get("timeout", 0)),
-                    **body_kwargs,
+                request_timeout = response_api_optional_request_params.get("timeout", 0)
+                non_stream_timeout_value = timeout or float(
+                    request_timeout if isinstance(request_timeout, (int, float)) else 0
                 )
+                if signed_body is not None:
+                    response = await async_httpx_client.post(
+                        url=api_base, headers=headers, timeout=non_stream_timeout_value, data=signed_body
+                    )
+                else:
+                    response = await async_httpx_client.post(
+                        url=api_base, headers=headers, timeout=non_stream_timeout_value, json=data
+                    )
 
         except Exception as e:
             raise self._handle_error(
@@ -3355,16 +3425,19 @@ class BaseLLMHTTPHandler:
         """
         if upload_url_location == "headers":
             # Google Cloud Storage style - URL in X-Goog-Upload-URL header
-            upload_url = response.headers.get("X-Goog-Upload-URL")
-            return upload_url, None
+            upload_url_header = response.headers.get("X-Goog-Upload-URL")
+            return (upload_url_header if isinstance(upload_url_header, str) else None), None
         else:
             # Response body style (e.g., Manus, S3 presigned URLs)
             try:
                 response_data = response.json()
-                upload_url = response_data.get(upload_url_key)
-                return upload_url, response_data if upload_url else None
             except Exception:
                 return None, None
+            if not isinstance(response_data, dict):
+                return None, None
+            upload_url_raw = response_data.get(upload_url_key)
+            upload_url = upload_url_raw if isinstance(upload_url_raw, str) else None
+            return upload_url, response_data if upload_url else None
 
     def create_file(
         self,
@@ -3480,7 +3553,7 @@ class BaseLLMHTTPHandler:
         ):
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
             # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
-            presigned_request = cast(dict[str, Any], transformed_request)
+            presigned_request = _TWO_STEP_FILE_UPLOAD_REQUEST_ADAPTER.validate_python(transformed_request)
             upload_response = getattr(sync_httpx_client, presigned_request["method"].lower())(
                 url=presigned_request["url"],
                 headers=presigned_request["headers"],
@@ -3526,7 +3599,7 @@ class BaseLLMHTTPHandler:
         elif isinstance(transformed_request, dict) and "file" in transformed_request:
             # Handle multipart form-data uploads (e.g., Anthropic Files API)
             # The dict contains tuples suitable for httpx's `files` parameter
-            file_request = cast(dict[str, Any], transformed_request)
+            file_request = transformed_request
             upload_response = sync_httpx_client.post(
                 url=api_base,
                 headers=headers,
@@ -3642,7 +3715,7 @@ class BaseLLMHTTPHandler:
         ):
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
             # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
-            presigned_request = cast(dict[str, Any], transformed_request)
+            presigned_request = _TWO_STEP_FILE_UPLOAD_REQUEST_ADAPTER.validate_python(transformed_request)
             upload_response = await getattr(async_httpx_client, presigned_request["method"].lower())(
                 url=presigned_request["url"],
                 headers=presigned_request["headers"],
@@ -3734,13 +3807,12 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         headers = {**base_headers, "Content-Type": content_type}
-        kwargs: dict[str, Any] = {
-            "headers": headers,
-            "content": self._iter_in_blocks(body_stream.iter_bytes(), self._MEDIA_UPLOAD_BLOCK_SIZE),
-        }
-        if timeout is not None:
-            kwargs["timeout"] = timeout
-        resp = client.client.post(url, **kwargs)
+        resp = client.client.post(
+            url,
+            headers=headers,
+            content=self._iter_in_blocks(body_stream.iter_bytes(), self._MEDIA_UPLOAD_BLOCK_SIZE),
+            timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT,
+        )
         self._check_media_upload_response(resp)
         return resp
 
@@ -3771,10 +3843,12 @@ class BaseLLMHTTPHandler:
                     break
                 yield cast(bytes, block)
 
-        kwargs: dict[str, Any] = {"headers": headers, "content": _abody()}
-        if timeout is not None:
-            kwargs["timeout"] = timeout
-        resp = await client.client.post(url, **kwargs)
+        resp = await client.client.post(
+            url,
+            headers=headers,
+            content=_abody(),
+            timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT,
+        )
         await resp.aread()
         self._check_media_upload_response(resp)
         return resp
@@ -3849,10 +3923,10 @@ class BaseLLMHTTPHandler:
         try:
             if isinstance(transformed_request, dict) and "method" in transformed_request:
                 # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
-                batch_response = getattr(sync_httpx_client, transformed_request["method"].lower())(
-                    url=transformed_request["url"],
-                    headers=transformed_request["headers"],
-                    data=transformed_request["data"],
+                presigned_batch_request = _PRESIGNED_BATCH_REQUEST_ADAPTER.validate_python(transformed_request)
+                batch_response = _send_presigned_batch_request(
+                    client=sync_httpx_client,
+                    request=presigned_batch_request,
                     timeout=timeout,
                 )
             elif isinstance(transformed_request, dict):
@@ -3937,17 +4011,19 @@ class BaseLLMHTTPHandler:
         try:
             if isinstance(transformed_request, dict) and "method" in transformed_request:
                 # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
-                method = transformed_request["method"].lower()
-                request_kwargs = {
-                    "url": transformed_request["url"],
-                    "headers": transformed_request["headers"],
-                }
-
-                # Only add data for non-GET requests
-                if method != "get" and transformed_request.get("data") is not None:
-                    request_kwargs["data"] = transformed_request["data"]
-
-                batch_response = getattr(sync_httpx_client, method)(**request_kwargs)
+                presigned_batch_request = _PRESIGNED_BATCH_REQUEST_ADAPTER.validate_python(transformed_request)
+                retrieve_method = presigned_batch_request["method"].lower()
+                if retrieve_method == "get":
+                    batch_response = getattr(sync_httpx_client, retrieve_method)(
+                        url=presigned_batch_request["url"],
+                        headers=presigned_batch_request["headers"],
+                    )
+                else:
+                    batch_response = getattr(sync_httpx_client, retrieve_method)(
+                        url=presigned_batch_request["url"],
+                        headers=presigned_batch_request["headers"],
+                        data=presigned_batch_request["data"],
+                    )
             elif isinstance(transformed_request, dict) and api_base:
                 # For other providers that use JSON requests
                 batch_response = sync_httpx_client.get(
@@ -4014,10 +4090,10 @@ class BaseLLMHTTPHandler:
         try:
             if isinstance(transformed_request, dict) and "method" in transformed_request:
                 # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
-                batch_response = await getattr(async_httpx_client, transformed_request["method"].lower())(
-                    url=transformed_request["url"],
-                    headers=transformed_request["headers"],
-                    data=transformed_request["data"],
+                presigned_batch_request = _PRESIGNED_BATCH_REQUEST_ADAPTER.validate_python(transformed_request)
+                batch_response = await _asend_presigned_batch_request(
+                    client=async_httpx_client,
+                    request=presigned_batch_request,
                     timeout=timeout,
                 )
             elif isinstance(transformed_request, dict):
@@ -4094,17 +4170,19 @@ class BaseLLMHTTPHandler:
         try:
             if isinstance(transformed_request, dict) and "method" in transformed_request:
                 # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
-                method = transformed_request["method"].lower()
-                request_kwargs = {
-                    "url": transformed_request["url"],
-                    "headers": transformed_request["headers"],
-                }
-
-                # Only add data for non-GET requests
-                if method != "get" and transformed_request.get("data") is not None:
-                    request_kwargs["data"] = transformed_request["data"]
-
-                batch_response = await getattr(async_httpx_client, method)(**request_kwargs)
+                presigned_batch_request = _PRESIGNED_BATCH_REQUEST_ADAPTER.validate_python(transformed_request)
+                retrieve_method = presigned_batch_request["method"].lower()
+                if retrieve_method == "get":
+                    batch_response = await getattr(async_httpx_client, retrieve_method)(
+                        url=presigned_batch_request["url"],
+                        headers=presigned_batch_request["headers"],
+                    )
+                else:
+                    batch_response = await getattr(async_httpx_client, retrieve_method)(
+                        url=presigned_batch_request["url"],
+                        headers=presigned_batch_request["headers"],
+                        data=presigned_batch_request["data"],
+                    )
             elif isinstance(transformed_request, dict) and api_base:
                 # For other providers that use JSON requests
                 batch_response = await async_httpx_client.get(
@@ -4361,7 +4439,6 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             model=model,
         )
-        body_kwargs: dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
 
         ## LOGGING
         logging_obj.pre_call(
@@ -4375,7 +4452,10 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.post(url=url, headers=headers, timeout=timeout, **body_kwargs)
+            if signed_body is not None:
+                response = sync_httpx_client.post(url=url, headers=headers, timeout=timeout, data=signed_body)
+            else:
+                response = sync_httpx_client.post(url=url, headers=headers, timeout=timeout, json=data)
 
         except Exception as e:
             raise self._handle_error(
@@ -4453,7 +4533,6 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             model=model,
         )
-        body_kwargs: dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
 
         ## LOGGING
         logging_obj.pre_call(
@@ -4467,7 +4546,10 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = await async_httpx_client.post(url=url, headers=headers, timeout=timeout, **body_kwargs)
+            if signed_body is not None:
+                response = await async_httpx_client.post(url=url, headers=headers, timeout=timeout, data=signed_body)
+            else:
+                response = await async_httpx_client.post(url=url, headers=headers, timeout=timeout, json=data)
 
         except Exception as e:
             raise self._handle_error(
@@ -9453,7 +9535,9 @@ class BaseLLMHTTPHandler:
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
             )
-        all_optional_params: dict[str, Any] = dict(litellm_params)
+        all_optional_params: dict[str, object] = dict(
+            litellm_params
+        )  # mutable-ok: built once via dict() from litellm_params, matching that dict-based contract
         all_optional_params.update(vector_store_search_optional_params or {})
         headers, signed_json_body = vector_store_provider_config.sign_request(
             headers=headers,
@@ -9549,7 +9633,9 @@ class BaseLLMHTTPHandler:
             extra_body=extra_body,
         )
 
-        all_optional_params: dict[str, Any] = dict(litellm_params)
+        all_optional_params: dict[str, object] = dict(
+            litellm_params
+        )  # mutable-ok: built once via dict() from litellm_params, matching that dict-based contract
         all_optional_params.update(vector_store_search_optional_params or {})
 
         headers, signed_json_body = vector_store_provider_config.sign_request(
@@ -9869,7 +9955,7 @@ class BaseLLMHTTPHandler:
 
         url = api_base
 
-        params: dict[str, Any] = {}
+        params: dict[str, str | int] = {}  # mutable-ok: populated incrementally as query params below
         if after is not None:
             params["after"] = after
         if before is not None:
@@ -9947,7 +10033,7 @@ class BaseLLMHTTPHandler:
 
         url = api_base
 
-        params: dict[str, Any] = {}
+        params: dict[str, str | int] = {}  # mutable-ok: populated incrementally as query params below
         if after is not None:
             params["after"] = after
         if before is not None:
@@ -10010,13 +10096,16 @@ class BaseLLMHTTPHandler:
         encoded_vector_store_id = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url = f"{api_base}/{encoded_vector_store_id}"
 
-        request_body: dict[str, Any] = dict(vector_store_update_optional_params)
+        request_body: dict[str, object] = dict(
+            vector_store_update_optional_params
+        )  # mutable-ok: built once via dict() from the optional-params payload
 
         # Clean metadata to only include string values (OpenAI requirement)
-        if "metadata" in request_body and request_body["metadata"] is not None:
+        metadata_value = request_body.get("metadata")
+        if isinstance(metadata_value, dict):
             from litellm.utils import add_openai_metadata
 
-            request_body["metadata"] = add_openai_metadata(request_body["metadata"])
+            request_body["metadata"] = add_openai_metadata(metadata_value)
 
         if extra_body:
             request_body.update(extra_body)
@@ -10088,13 +10177,16 @@ class BaseLLMHTTPHandler:
         encoded_vector_store_id = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url = f"{api_base}/{encoded_vector_store_id}"
 
-        request_body: dict[str, Any] = dict(vector_store_update_optional_params)
+        request_body: dict[str, object] = dict(
+            vector_store_update_optional_params
+        )  # mutable-ok: built once via dict() from the optional-params payload
 
         # Clean metadata to only include string values (OpenAI requirement)
-        if "metadata" in request_body and request_body["metadata"] is not None:
+        metadata_value = request_body.get("metadata")
+        if isinstance(metadata_value, dict):
             from litellm.utils import add_openai_metadata
 
-            request_body["metadata"] = add_openai_metadata(request_body["metadata"])
+            request_body["metadata"] = add_openai_metadata(metadata_value)
 
         if extra_body:
             request_body.update(extra_body)

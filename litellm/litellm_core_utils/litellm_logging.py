@@ -175,7 +175,9 @@ from .initialize_dynamic_callback_params import (
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 if TYPE_CHECKING:
+    from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.router import Router
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
@@ -346,8 +348,12 @@ class Logging(LiteLLMLoggingBaseClass):
         self.litellm_call_id = litellm_call_id
         self.litellm_trace_id: str = litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
         self.function_id = function_id
-        self.streaming_chunks: list[Any] = []  # for generating complete stream response
-        self.sync_streaming_chunks: list[Any] = []  # for generating complete stream response
+        self.streaming_chunks: list[
+            ModelResponse
+        ] = []  # mutable-ok: accumulates one chunk per stream event over the object's lifetime
+        self.sync_streaming_chunks: list[
+            ModelResponse
+        ] = []  # mutable-ok: accumulates one chunk per stream event over the object's lifetime
         self.log_raw_request_response = log_raw_request_response
 
         # Initialize dynamic callbacks
@@ -392,7 +398,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.caching_details: CachingDetails | None = None
 
         # Passthrough endpoint guardrails config for field targeting
-        self.passthrough_guardrails_config: dict[str, Any] | None = None
+        self.passthrough_guardrails_config: dict[str, object] | None = (
+            None  # mutable-ok: assigned once from a caller-supplied dict payload
+        )
 
         self.model_call_details: dict[str, Any] = {
             "litellm_trace_id": self.litellm_trace_id,
@@ -1138,20 +1146,15 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["additional_args"] = additional_args
             self.model_call_details["log_event_type"] = "post_api_call"
 
-            if self.litellm_request_debug:
-                attr = "warning"
-            else:
-                attr = "debug"
+            callattr = verbose_logger.warning if self.litellm_request_debug else verbose_logger.debug
 
             if json_logs:
-                callattr = getattr(verbose_logger, attr)
                 callattr(
                     "RAW RESPONSE:\n{}\n\n".format(
                         self.model_call_details.get("original_response", self.model_call_details)
                     ),
                 )
             else:
-                callattr = getattr(verbose_logger, attr)
                 callattr(
                     "RAW RESPONSE:\n{}\n\n".format(
                         self.model_call_details.get("original_response", self.model_call_details)
@@ -1905,8 +1908,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _is_recognized_call_type_for_logging(
         self,
-        logging_result: Any,
-    ):
+        logging_result: object,
+    ) -> bool:
         """
         Returns True if the call type is recognized for logging (eg. ModelResponse, ModelResponseStream, etc.)
         """
@@ -3035,7 +3038,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return trace_id
 
-    def _get_callback_object(self, service_name: Literal["langfuse"]) -> Any | None:
+    def _get_callback_object(self, service_name: Literal["langfuse"]) -> LangFuseLogger | None:
         """
         Return dynamic callback object.
 
@@ -3548,7 +3551,7 @@ def set_callbacks(callback_list, function_id=None):
 def _init_custom_logger_compatible_class(
     logging_integration: _custom_logger_compatible_callbacks_literal,
     internal_usage_cache: DualCache | None,
-    llm_router: Any | None,  # expect litellm.Router, but typing errors due to circular import
+    llm_router: "Router | None",
     custom_logger_init_args: dict | None = {},
 ) -> CustomLogger | None:
     """
@@ -3936,7 +3939,7 @@ def _init_custom_logger_compatible_class(
 
             dynamic_rate_limiter_obj = _PROXY_DynamicRateLimitHandler(internal_usage_cache=internal_usage_cache)
 
-            if llm_router is not None and isinstance(llm_router, litellm.Router):
+            if llm_router is not None:
                 dynamic_rate_limiter_obj.update_variables(llm_router=llm_router)
             _in_memory_loggers.append(dynamic_rate_limiter_obj)
             return dynamic_rate_limiter_obj  # type: ignore
@@ -3954,7 +3957,7 @@ def _init_custom_logger_compatible_class(
 
             dynamic_rate_limiter_obj_v3 = _PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=internal_usage_cache)
 
-            if llm_router is not None and isinstance(llm_router, litellm.Router):
+            if llm_router is not None:
                 dynamic_rate_limiter_obj_v3.update_variables(llm_router=llm_router)
             _in_memory_loggers.append(dynamic_rate_limiter_obj_v3)
             return dynamic_rate_limiter_obj_v3  # type: ignore
@@ -4160,7 +4163,9 @@ def _init_custom_logger_compatible_class(
     return None
 
 
-def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Any | None:
+def _maybe_construct_otel_v2(
+    callback_name: str, _in_memory_loggers: list
+) -> "OpenTelemetryV2 | None":  # mutable-ok: list is only read here; caller owns the mutable in-memory logger registry
     """If ``LITELLM_OTEL_V2`` is on, build (or reuse) a single ``OpenTelemetryV2``
     instance configured via the preset for ``callback_name``.
 

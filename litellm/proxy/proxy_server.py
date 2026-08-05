@@ -23,6 +23,7 @@ from typing import (
     Any,
     Literal,
     Optional,
+    TypeAlias,
     TypedDict,
     Union,
     cast,
@@ -34,7 +35,8 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, Json, JsonValue
+from pydantic import BaseModel, Json, JsonValue, TypeAdapter
+from pydantic_core import ErrorDetails
 from typing_extensions import NotRequired, assert_never
 
 from litellm._uuid import uuid
@@ -130,9 +132,11 @@ if TYPE_CHECKING:
     from litellm.integrations.opentelemetry import OpenTelemetry
 
     Span = Union[_Span, Any]
+    _OtelSpanType: TypeAlias = _Span
 else:
     Span = Any
     OpenTelemetry = Any
+    _OtelSpanType = Any
 
 REALTIME_REQUEST_SCOPE_TEMPLATE: dict[str, Any] = {
     "type": "http",
@@ -653,7 +657,7 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
-from fastapi.routing import APIRouter
+from fastapi.routing import APIRoute, APIRouter
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
@@ -720,7 +724,7 @@ def _redact_worker_config_for_logging(worker_config: str | dict[str, JsonValue] 
         return None
     if isinstance(worker_config, dict):
         return _redact_secret_values_in_obj(worker_config)
-    parsed = safe_json_loads(worker_config, default=None)
+    parsed = TypeAdapter(JsonValue | None).validate_python(safe_json_loads(worker_config, default=None))
     if isinstance(parsed, dict):
         return safe_dumps(_redact_secret_values_in_obj(parsed))
     return worker_config
@@ -844,21 +848,14 @@ async def _initialize_shared_aiohttp_session():
             _build_aiohttp_keepalive_socket_factory,
         )
 
-        connector_kwargs: dict[str, Any] = {
-            "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
-            "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
-        }
-        if AIOHTTP_NEEDS_CLEANUP_CLOSED:
-            connector_kwargs["enable_cleanup_closed"] = True
-        if AIOHTTP_CONNECTOR_LIMIT > 0:
-            connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
-        if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
-            connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
-        socket_factory = _build_aiohttp_keepalive_socket_factory()
-        if socket_factory is not None:
-            connector_kwargs["socket_factory"] = socket_factory
-
-        connector = TCPConnector(**connector_kwargs)
+        connector = TCPConnector(
+            keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
+            ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
+            enable_cleanup_closed=AIOHTTP_NEEDS_CLEANUP_CLOSED,
+            limit=AIOHTTP_CONNECTOR_LIMIT if AIOHTTP_CONNECTOR_LIMIT > 0 else 100,
+            limit_per_host=max(0, AIOHTTP_CONNECTOR_LIMIT_PER_HOST),
+            socket_factory=_build_aiohttp_keepalive_socket_factory(),
+        )
         session = ClientSession(connector=connector)
 
         verbose_proxy_logger.info(
@@ -911,7 +908,9 @@ async def proxy_startup_event(app: FastAPI):
                     )
                 _module_path, _func_name = _hook_spec.rsplit(":", 1)
                 _module = importlib.import_module(_module_path)
-                _hook_fn = getattr(_module, _func_name)
+                _hook_fn: object = getattr(_module, _func_name)
+                if not callable(_hook_fn):
+                    raise TypeError(f"Hook '{_hook_spec}' is not callable")
                 if inspect.iscoroutinefunction(_hook_fn):
                     await _hook_fn()
                 else:
@@ -959,9 +958,9 @@ async def proxy_startup_event(app: FastAPI):
             await initialize(**worker_config)
         else:
             # if not, assume it's a json string
-            worker_config = json.loads(worker_config)
-            if isinstance(worker_config, dict):
-                await initialize(**worker_config)
+            parsed_worker_config = TypeAdapter(JsonValue).validate_python(json.loads(worker_config))
+            if isinstance(parsed_worker_config, dict):
+                await initialize(**parsed_worker_config)
 
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
@@ -1162,7 +1161,7 @@ async def proxy_startup_event(app: FastAPI):
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
 
-def _generate_stable_operation_id(route: Any) -> str:
+def _generate_stable_operation_id(route: APIRoute) -> str:
     operation_id = re.sub(r"\W", "_", f"{route.name}{route.path_format}")
     route_methods = sorted(route.methods or [])
     if len(route_methods) == 1:
@@ -1199,22 +1198,26 @@ def _strip_operation_id_method_suffix(operation_id: str) -> str:
 
 
 def ensure_unique_openapi_operation_ids(
-    openapi_schema: dict[str, Any],
+    openapi_schema: dict[str, JsonValue],  # mutable-ok: parameter mirrors the caller's OpenAPI schema dict payload
     reserved_operation_ids: set[str] | None = None,
-) -> dict[str, Any]:
-    operation_entries = []
+) -> dict[str, JsonValue]:  # mutable-ok: mirrors the OpenAPI schema dict payload this function returns
+    operation_entries: list[
+        tuple[str, dict[str, JsonValue], str]
+    ] = []  # mutable-ok: accumulates operation entries in the loop below
     operation_id_counts: dict[str, int] = {}
-    for path_item in openapi_schema.get("paths", {}).values():
-        if not isinstance(path_item, dict):
-            continue
-        for method, operation in path_item.items():
-            if method not in _OPENAPI_HTTP_METHODS or not isinstance(operation, dict):
+    paths = openapi_schema.get("paths", {})
+    if isinstance(paths, dict):
+        for path_item in paths.values():
+            if not isinstance(path_item, dict):
                 continue
-            operation_id = operation.get("operationId")
-            if not isinstance(operation_id, str):
-                continue
-            operation_entries.append((method, operation, operation_id))
-            operation_id_counts[operation_id] = operation_id_counts.get(operation_id, 0) + 1
+            for method, operation in path_item.items():
+                if method not in _OPENAPI_HTTP_METHODS or not isinstance(operation, dict):
+                    continue
+                operation_id = operation.get("operationId")
+                if not isinstance(operation_id, str):
+                    continue
+                operation_entries.append((method, operation, operation_id))
+                operation_id_counts[operation_id] = operation_id_counts.get(operation_id, 0) + 1
 
     used_operation_ids = set(reserved_operation_ids or set())
     seen_operation_ids: set[str] = set()
@@ -1421,7 +1424,7 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 
 def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Exception | None = None) -> None:
-    parent_otel_span = getattr(request.state, "parent_otel_span", None)
+    parent_otel_span: _OtelSpanType | None = getattr(request.state, "parent_otel_span", None)
     if parent_otel_span is None:
         return
     if open_telemetry_logger is None:
@@ -1468,13 +1471,16 @@ async def management_problem_exception_handler(request: Request, exc: Management
 async def otel_request_validation_exception_handler(request: Request, exc: RequestValidationError):
     if request.url.path.startswith(MANAGEMENT_V1_PREFIX):
         _close_dangling_otel_server_span(request, 400, exc=exc)
+        validation_errors: list[ErrorDetails] = list(
+            exc.errors()
+        )  # mutable-ok: collects validation errors in the loop below
         return problem_response(
             ProblemDetail(
                 type=f"{PROBLEM_TYPE_BASE}invalid-query-parameter",
                 title="Invalid query parameter",
                 status=400,
                 detail="; ".join(
-                    f"{'.'.join(str(part) for part in error['loc'][1:])}: {error['msg']}" for error in exc.errors()
+                    f"{'.'.join(str(part) for part in error['loc'][1:])}: {error['msg']}" for error in validation_errors
                 )
                 or "The request query parameters are invalid.",
             )
@@ -2033,7 +2039,9 @@ use_queue = False
 health_check_interval = None
 health_check_concurrency = None
 health_check_details = None
-health_check_results: dict[str, int | list[dict[str, Any]]] = {}
+health_check_results: dict[
+    str, int | list[dict[str, object]]
+] = {}  # mutable-ok: populated incrementally per model in the health check loop below
 background_health_check_loop_active = False
 background_health_check_cycle_seq = 0
 queue: list = []
@@ -2340,7 +2348,7 @@ async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) 
     redis_clean_miss = False
     if spend_counter_cache.redis_cache is not None:
         try:
-            val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
+            val: str | float | int | None = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
             if val is not None:
                 return float(val), True
             redis_clean_miss = True
@@ -2706,7 +2714,7 @@ async def _get_source_cache_base_spend(
 ) -> float:
     source_cache_keys = [source_cache_key] if isinstance(source_cache_key, str) else source_cache_key
     for cache_key in source_cache_keys:
-        source = await user_api_key_cache.async_get_cache(key=cache_key)
+        source = TypeAdapter(object).validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
         if source is None:
             continue
         if isinstance(source, dict):
@@ -2745,7 +2753,7 @@ async def _ensure_window_spend_counter_initialized(
 async def _is_spend_counter_cache_warm(counter_key: str) -> bool:
     if spend_counter_cache.redis_cache is not None:
         try:
-            current_value = await spend_counter_cache.redis_cache.async_get_cache(
+            current_value: str | float | int | None = await spend_counter_cache.redis_cache.async_get_cache(
                 key=counter_key,
             )
             if current_value is None:
@@ -2817,7 +2825,7 @@ async def update_cache(
     Put any alerting logic in here.
     """
 
-    values_to_update_in_cache: list[tuple[Any, Any]] = []
+    values_to_update_in_cache: list[tuple[str, object]] = []  # mutable-ok: accumulates cache updates in the loop below
 
     ### UPDATE KEY SPEND ###
     async def _update_key_cache(token: str, response_cost: float):
@@ -2883,7 +2891,7 @@ async def update_cache(
                 # Fetch the existing cost for the given user
                 if _id is None:
                     continue
-                cached_user = await user_api_key_cache.async_get_cache(key=_id)
+                cached_user = TypeAdapter(object).validate_python(await user_api_key_cache.async_get_cache(key=_id))
                 if cached_user is None:
                     # do nothing if there is no cache value
                     return
@@ -2906,7 +2914,10 @@ async def update_cache(
                     )
                 )
             ## UPDATE GLOBAL PROXY ##
-            global_proxy_spend = await user_api_key_cache.async_get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY)
+            global_proxy_spend = TypeAdapter(float | int | None).validate_python(
+                await user_api_key_cache.async_get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY),
+                strict=True,
+            )
             if global_proxy_spend is None:
                 # do nothing if not in cache
                 return
@@ -2932,7 +2943,7 @@ async def update_cache(
         _id = f"end_user_id:{end_user_id}"
         try:
             # Fetch the existing cost for the given user
-            cached_end_user = await user_api_key_cache.async_get_cache(key=_id)
+            cached_end_user = TypeAdapter(object).validate_python(await user_api_key_cache.async_get_cache(key=_id))
             if cached_end_user is None:
                 # if user does not exist in LiteLLM_UserTable, create a new user
                 # do nothing if end-user not in api key cache
@@ -2973,7 +2984,7 @@ async def update_cache(
 
         _id = f"team_id:{team_id}"
         try:
-            cached_team = await user_api_key_cache.async_get_cache(key=_id)
+            cached_team = TypeAdapter(object).validate_python(await user_api_key_cache.async_get_cache(key=_id))
             if cached_team is None:
                 # do nothing if team not in api key cache
                 return
@@ -3023,7 +3034,9 @@ async def update_cache(
 
                 cache_key = f"tag:{tag_name}"
                 # Fetch the existing tag object from cache
-                cached_tag = await user_api_key_cache.async_get_cache(key=cache_key)
+                cached_tag = TypeAdapter(object).validate_python(
+                    await user_api_key_cache.async_get_cache(key=cache_key)
+                )
                 if cached_tag is None:
                     # do nothing if tag not in api key cache
                     continue
@@ -3527,11 +3540,13 @@ _DB_OVERLAY_REMOTE_MODULE_LIST_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _is_remote_module_url(value: Any) -> bool:
+def _is_remote_module_url(value: object) -> bool:
     return isinstance(value, str) and (value.startswith("s3://") or value.startswith("gcs://"))
 
 
-def _scrub_guardrail_inner(inner: dict[str, Any]) -> None:
+def _scrub_guardrail_inner(
+    inner: dict[str, JsonValue],
+) -> None:  # mutable-ok: parameter mirrors the caller's guardrail config dict payload
     """Strip remote-URL entries from a guardrail's ``callbacks`` list
     and ``guardrail`` (v2 module-path) field. Mutates in place."""
     cbs = inner.get("callbacks")
@@ -3551,7 +3566,7 @@ def _scrub_guardrail_inner(inner: dict[str, Any]) -> None:
         inner["guardrail"] = None
 
 
-def _scrub_db_overlay_remote_module_loads(section: str, db_value: Any) -> Any:
+def _scrub_db_overlay_remote_module_loads(section: str, db_value: JsonValue) -> JsonValue:
     """Strip ``s3://`` / ``gcs://`` entries from the DB-overlay value for
     fields whose contents reach ``get_instance_fn``. The same scheme is
     allowed from a YAML config (the documented operator flow) but a
@@ -3699,7 +3714,7 @@ def _build_redis_usage_cache(redis_params: Mapping[str, object]) -> RedisCache:
     if startup_nodes is None:
         env_cluster_nodes = get_secret_str("REDIS_CLUSTER_NODES")
         if env_cluster_nodes is not None:
-            startup_nodes = json.loads(env_cluster_nodes)
+            startup_nodes = TypeAdapter(object).validate_python(json.loads(env_cluster_nodes))
     non_node_params = {key: value for key, value in redis_params.items() if key != "startup_nodes"}
     if startup_nodes:
         return RedisClusterCache(startup_nodes=startup_nodes, **non_node_params)
@@ -15236,7 +15251,7 @@ def _general_settings_ui_litellm_default(
     return False if spec["type"] == "Boolean" else None
 
 
-def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> GeneralSettingsUILiteLLMValue:
+def _validate_general_settings_ui_litellm_value(field_name: str, value: JsonValue) -> GeneralSettingsUILiteLLMValue:
     spec = _GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]
     field_type = spec["type"]
     if value is None or value == "":
@@ -15276,7 +15291,7 @@ def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> 
 
 
 async def _persist_general_settings_ui_litellm_field(
-    field_name: str, value: Any, user_api_key_dict: UserAPIKeyAuth
+    field_name: str, value: JsonValue, user_api_key_dict: UserAPIKeyAuth
 ) -> dict:
     validated = _validate_general_settings_ui_litellm_value(field_name, value)
     config = await proxy_config.get_config()

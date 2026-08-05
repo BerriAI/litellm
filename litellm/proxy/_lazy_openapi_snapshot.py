@@ -118,9 +118,11 @@ def generate_snapshot() -> dict[str, dict]:
                                 break
                     op["tags"] = [feat.name]
         full = ensure_unique_openapi_operation_ids(full, used_operation_ids)
+        components = full.get("components", {})
+        schemas = components.get("schemas", {}) if isinstance(components, dict) else {}
         fragments[feat.name] = {
             "paths": paths,
-            "components": {"schemas": full.get("components", {}).get("schemas", {})},
+            "components": {"schemas": schemas},
         }
     return fragments
 

@@ -29,6 +29,7 @@ from typing import (
     Any,
     Literal,
     Optional,
+    TypedDict,
     Union,
     cast,
     get_args,
@@ -39,6 +40,8 @@ from litellm._uuid import uuid
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+
+    from litellm.router import Router
 
 import dotenv
 import httpx
@@ -350,7 +353,7 @@ class LiteLLM:
 
 
 class Chat:
-    def __init__(self, params, router_obj: Any | None):
+    def __init__(self, params, router_obj: "Router | None"):
         self.params = params
         if self.params.get("acompletion", False) is True:
             self.params.pop("acompletion")
@@ -360,7 +363,7 @@ class Chat:
 
 
 class Completions:
-    def __init__(self, params, router_obj: Any | None):
+    def __init__(self, params, router_obj: "Router | None"):
         self.params = params
         self.router_obj = router_obj
 
@@ -376,7 +379,7 @@ class Completions:
 
 
 class AsyncCompletions:
-    def __init__(self, params, router_obj: Any | None):
+    def __init__(self, params, router_obj: "Router | None"):
         self.params = params
         self.router_obj = router_obj
 
@@ -1137,13 +1140,18 @@ def _register_custom_pricing_for_request(
     )
 
 
+_CompletionClient = Union[
+    openai.OpenAI, openai.AsyncOpenAI, openai.AzureOpenAI, openai.AsyncAzureOpenAI, HTTPHandler, AsyncHTTPHandler
+]
+
+
 def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     _azure_detection_model = ctx._azure_detection_model
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
     api_version = ctx.api_version
-    client = ctx.client
+    client: _CompletionClient | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     extra_headers = ctx.extra_headers
     headers = ctx.headers
@@ -1193,6 +1201,9 @@ def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
     if max_retries is not None:
         optional_params["max_retries"] = max_retries
 
+    config: dict[
+        str, object
+    ]  # mutable-ok: declared ahead of a branch that assigns it from get_config()'s dict contract
     if litellm.AzureOpenAIO1Config().is_o_series_model(model=_azure_detection_model):
         ## LOAD CONFIG - if set
         config = litellm.AzureOpenAIO1Config.get_config()
@@ -1275,7 +1286,7 @@ def _complete_azure_text(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     api_base = ctx.api_base
     api_key = ctx.api_key
     api_version = ctx.api_version
-    client = ctx.client
+    client: _CompletionClient | None = ctx.client
     extra_headers = ctx.extra_headers
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -1318,7 +1329,9 @@ def _complete_azure_text(ctx: _CompletionDispatchContext) -> _CompletionDispatch
         optional_params["extra_headers"] = extra_headers
 
     ## LOAD CONFIG - if set
-    config = litellm.AzureOpenAIConfig.get_config()
+    config: dict[str, object] = (
+        litellm.AzureOpenAIConfig.get_config()
+    )  # mutable-ok: matches get_config()'s plain dict return contract
     for k, v in config.items():
         if (
             k not in optional_params
@@ -1367,7 +1380,7 @@ def _complete_deepseek(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -1418,7 +1431,7 @@ def _complete_azure_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     extra_headers = ctx.extra_headers
     headers = ctx.headers
@@ -1574,7 +1587,7 @@ def _complete_text_completion_openai(
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: _CompletionClient | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -1605,7 +1618,9 @@ def _complete_text_completion_openai(
     headers = headers or litellm.headers
 
     ## LOAD CONFIG - if set
-    config = litellm.OpenAITextCompletionConfig.get_config()
+    config: dict[str, object] = (
+        litellm.OpenAITextCompletionConfig.get_config()
+    )  # mutable-ok: matches get_config()'s plain dict return contract
     for k, v in config.items():
         if (
             k not in optional_params
@@ -1656,7 +1671,7 @@ def _complete_fireworks_ai(
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -1707,7 +1722,7 @@ def _complete_heroku(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -1757,7 +1772,7 @@ def _complete_ragflow(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -1807,7 +1822,7 @@ def _complete_xai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -1858,7 +1873,7 @@ def _complete_groq(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -1889,7 +1904,9 @@ def _complete_groq(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult
     headers = headers or litellm.headers
 
     ## LOAD CONFIG - if set
-    config = litellm.GroqChatConfig.get_config()
+    config: dict[str, object] = (
+        litellm.GroqChatConfig.get_config()
+    )  # mutable-ok: matches get_config()'s plain dict return contract
     for k, v in config.items():
         if (
             k not in optional_params
@@ -1922,7 +1939,7 @@ def _complete_bedrock_mantle(
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -1938,7 +1955,9 @@ def _complete_bedrock_mantle(
     api_base = api_base or litellm.api_base or get_secret("BEDROCK_MANTLE_API_BASE")
     api_key = api_key or litellm.api_key or get_secret("BEDROCK_MANTLE_API_KEY")
     headers = headers or litellm.headers
-    config = litellm.BedrockMantleChatConfig.get_config()
+    config: dict[str, object] = (
+        litellm.BedrockMantleChatConfig.get_config()
+    )  # mutable-ok: matches get_config()'s plain dict return contract
     for k, v in config.items():
         if k not in optional_params:
             optional_params[k] = v
@@ -1966,7 +1985,7 @@ def _complete_a2a(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -2029,7 +2048,7 @@ def _complete_gigachat(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -2091,7 +2110,7 @@ def _complete_sap(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -2106,7 +2125,9 @@ def _complete_sap(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
 
     headers = headers or litellm.headers
     ## LOAD CONFIG - if set
-    config = litellm.GenAIHubOrchestrationConfig.get_config()
+    config: dict[str, object] = (
+        litellm.GenAIHubOrchestrationConfig.get_config()
+    )  # mutable-ok: matches get_config()'s plain dict return contract
     for k, v in config.items():
         if (
             k not in optional_params
@@ -2139,7 +2160,7 @@ def _complete_aiohttp_openai(
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | ClientSession | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     extra_headers = ctx.extra_headers
     headers = ctx.headers
@@ -2194,7 +2215,7 @@ def _complete_cometapi(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -2243,7 +2264,7 @@ def _complete_minimax(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -2289,7 +2310,7 @@ def _complete_hosted_vllm(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -2335,7 +2356,7 @@ def _complete_custom_openai(
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     custom_prompt_dict = ctx.custom_prompt_dict
     extra_headers = ctx.extra_headers
@@ -2401,7 +2422,9 @@ def _complete_custom_openai(
             optional_params["metadata"] = openai_metadata
 
     ## LOAD CONFIG - if set
-    config = litellm.OpenAIConfig.get_config()
+    config: dict[str, object] = (
+        litellm.OpenAIConfig.get_config()
+    )  # mutable-ok: matches get_config()'s plain dict return contract
     for k, v in config.items():
         if (
             k not in optional_params
@@ -2479,7 +2502,7 @@ def _complete_mistral(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -2630,7 +2653,7 @@ def _complete_anthropic(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: _CompletionClient | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     custom_prompt_dict = ctx.custom_prompt_dict
     headers = ctx.headers
@@ -2929,7 +2952,7 @@ def _complete_huggingface(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -2972,7 +2995,7 @@ def _complete_oci(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -3007,7 +3030,7 @@ def _complete_compactifai(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -3083,7 +3106,7 @@ def _complete_databricks(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     headers = ctx.headers
     litellm_params = ctx.litellm_params
     logging = ctx.logging
@@ -3155,7 +3178,7 @@ def _complete_datarobot(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -3192,7 +3215,7 @@ def _complete_openrouter(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     headers = ctx.headers
     litellm_params = ctx.litellm_params
     logging = ctx.logging
@@ -3229,7 +3252,9 @@ def _complete_openrouter(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     headers = openrouter_headers
 
     ## Load Config
-    config = litellm.OpenrouterConfig.get_config()
+    config: dict[str, object] = (
+        litellm.OpenrouterConfig.get_config()
+    )  # mutable-ok: matches get_config()'s plain dict return contract
     for k, v in config.items():
         if k == "extra_body":
             # we use openai 'extra_body' to pass openrouter specific params - transforms, route, models
@@ -3271,7 +3296,7 @@ def _complete_vercel_ai_gateway(
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     headers = ctx.headers
     litellm_params = ctx.litellm_params
     logging = ctx.logging
@@ -3307,7 +3332,9 @@ def _complete_vercel_ai_gateway(
     headers = vercel_headers
 
     ## Load Config
-    config = litellm.VercelAIGatewayConfig.get_config()
+    config: dict[str, object] = (
+        litellm.VercelAIGatewayConfig.get_config()
+    )  # mutable-ok: matches get_config()'s plain dict return contract
     for k, v in config.items():
         if k == "extra_body":
             # we use openai 'extra_body' to pass vercel specific params - providerOptions
@@ -3349,7 +3376,7 @@ def _complete_vertex_ai_beta(
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -3414,7 +3441,7 @@ def _complete_vertex_ai_beta(
 def _complete_vertex_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion = ctx.acompletion
     api_base = ctx.api_base
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     custom_prompt_dict = ctx.custom_prompt_dict
     headers = ctx.headers
@@ -3711,7 +3738,7 @@ def _complete_text_completion_inception(
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: _CompletionClient | None = ctx.client
     headers = ctx.headers
     litellm_params = ctx.litellm_params
     logger_fn = ctx.logger_fn
@@ -3775,7 +3802,7 @@ def _complete_sagemaker_chat(
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -3838,7 +3865,7 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_prompt_dict = ctx.custom_prompt_dict
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -3962,7 +3989,7 @@ def _complete_watsonx(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_prompt_dict = ctx.custom_prompt_dict
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -4001,7 +4028,7 @@ def _complete_watsonx_text(
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     headers = ctx.headers
     litellm_params = ctx.litellm_params
     logging = ctx.logging
@@ -4113,7 +4140,7 @@ def _complete_ollama(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     headers = ctx.headers
     litellm_params = ctx.litellm_params
     logging = ctx.logging
@@ -4153,7 +4180,7 @@ def _complete_ollama_chat(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     headers = ctx.headers
     litellm_params = ctx.litellm_params
     logging = ctx.logging
@@ -4268,7 +4295,7 @@ def _complete_cloudflare(ctx: _CompletionDispatchContext) -> _CompletionDispatch
 
 def _complete_petals(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     api_base = ctx.api_base
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     litellm_params = ctx.litellm_params
     logger_fn = ctx.logger_fn
     logging = ctx.logging
@@ -4310,7 +4337,7 @@ def _complete_snowflake(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: _CompletionClient | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -4398,7 +4425,7 @@ def _complete_gdc(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -4437,7 +4464,7 @@ def _complete_bytez(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -4477,7 +4504,7 @@ def _complete_lemonade(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -4517,7 +4544,7 @@ def _complete_ovhcloud(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -4697,7 +4724,7 @@ def _complete_langgraph(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -4746,7 +4773,7 @@ def _complete_langflow(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     acompletion = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
+    client: HTTPHandler | AsyncHTTPHandler | None = ctx.client
     custom_llm_provider = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params = ctx.litellm_params
@@ -4904,7 +4931,7 @@ def completion(  # type: ignore
     thinking = validate_and_fix_thinking_param(thinking=thinking)
 
     ######### unpacking kwargs #####################
-    args = locals()
+    args: dict[str, object] = locals()  # mutable-ok: locals() itself returns a plain mutable dict
 
     # Set by the responses->completion fallback so completion() does not bridge
     # back to the Responses API: that round-trip mutually recurses forever for a
@@ -7144,7 +7171,9 @@ def text_completion(
             tokenizer = tiktoken.encoding_for_model("text-davinci-003")
             ## if it's a 2d list - each element in the list is a text_completion() request
             if len(prompt) > 0 and isinstance(prompt[0], list):
-                responses = [None for x in prompt]  # init responses
+                responses: list[TextChoices | None] = [
+                    None for x in prompt
+                ]  # mutable-ok: entries are overwritten in place by the thread pool loop below
 
                 def process_prompt(i, individual_prompt):
                     decoded_prompt = tokenizer.decode(individual_prompt)
@@ -7161,7 +7190,7 @@ def text_completion(
                     text_completion_response["object"] = "text_completion"
                     text_completion_response["created"] = response.get("created", None)
                     text_completion_response["model"] = response.get("model", None)
-                    return response["choices"][0]
+                    return response.choices[0]
 
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     completed_futures = [
@@ -8442,7 +8471,7 @@ def stream_chunk_builder(
             if isinstance(delta_obj, dict):
                 delta = delta_obj
             elif hasattr(delta_obj, "model_dump"):
-                delta = cast(dict[str, Any], delta_obj.model_dump())
+                delta = cast(dict[str, object], delta_obj.model_dump())
             else:
                 delta = {}
 
@@ -8618,7 +8647,9 @@ def stream_chunk_builder(
         ]
 
         if len(provider_specific_chunks) > 0:
-            combined_provider_fields: dict[str, Any] = {}
+            combined_provider_fields: dict[
+                str, object
+            ] = {}  # mutable-ok: populated incrementally from provider field lookups below
             for chunk in provider_specific_chunks:
                 fields = chunk["choices"][0]["delta"]["provider_specific_fields"]
                 if isinstance(fields, dict):

@@ -70,7 +70,7 @@ def _next_sync_or_exhausted(it: Any) -> Any:
         return _SYNC_ITER_EXHAUSTED
 
 
-def is_async_iterable(obj: Any) -> bool:
+def is_async_iterable(obj: object) -> bool:
     """
     Check if an object is an async iterable (can be used with 'async for').
 
@@ -124,9 +124,8 @@ class CustomStreamWrapper:
         self.sent_last_chunk = False
         self._stream_created_time: float = time.time()
 
-        litellm_params: GenericLiteLLMParams = GenericLiteLLMParams.model_validate(
-            dict(**self.logging_obj.model_call_details.get("litellm_params", {}))
-        )
+        _init_litellm_params = self.logging_obj.model_call_details.get("litellm_params", {})
+        litellm_params: GenericLiteLLMParams = GenericLiteLLMParams.model_validate(dict(**_init_litellm_params))
         self.merge_reasoning_content_in_choices: bool = litellm_params.merge_reasoning_content_in_choices or False
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
@@ -151,7 +150,7 @@ class CustomStreamWrapper:
 
         _api_base = get_api_base(
             model=model or "",
-            optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
+            optional_params=_init_litellm_params,
         )
 
         self._hidden_params = {
@@ -346,9 +345,9 @@ class CustomStreamWrapper:
         try:
             if not isinstance(chunk, str):
                 chunk = chunk.decode("utf-8")  # DO NOT REMOVE this: This is required for HF inference API + Streaming
-            text = ""
+            text: str = ""
             is_finished = False
-            finish_reason = ""
+            finish_reason: str = ""
             print_verbose(f"chunk: {chunk}")
             if chunk.startswith("data:"):
                 data_json = json.loads(chunk[5:])
@@ -383,7 +382,7 @@ class CustomStreamWrapper:
         chunk = chunk.decode("utf-8")
         data_json = json.loads(chunk)
         try:
-            text = data_json["completions"][0]["data"]["text"]
+            text: str = data_json["completions"][0]["data"]["text"]
             is_finished = True
             finish_reason = "stop"
             return {
@@ -398,7 +397,7 @@ class CustomStreamWrapper:
         chunk = chunk.decode("utf-8")
         data_json = json.loads(chunk)
         try:
-            text = data_json["answer"]
+            text: str = data_json["answer"]
             is_finished = True
             finish_reason = "stop"
             return {
@@ -410,9 +409,9 @@ class CustomStreamWrapper:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
     def handle_nlp_cloud_chunk(self, chunk):
-        text = ""
+        text: str = ""
         is_finished = False
-        finish_reason = ""
+        finish_reason: str = ""
         try:
             if self.model and "dolphin" in self.model:
                 chunk = self.process_chunk(chunk=chunk)
@@ -436,7 +435,7 @@ class CustomStreamWrapper:
         chunk = chunk.decode("utf-8")
         data_json = json.loads(chunk)
         try:
-            text = data_json["completions"][0]["completion"]
+            text: str = data_json["completions"][0]["completion"]
             is_finished = True
             finish_reason = "stop"
             return {
@@ -449,8 +448,8 @@ class CustomStreamWrapper:
 
     def handle_azure_chunk(self, chunk):
         is_finished = False
-        finish_reason = ""
-        text = ""
+        finish_reason: str = ""
+        text: str = ""
         print_verbose(f"chunk: {chunk}")
         if "data: [DONE]" in chunk:
             text = ""
@@ -548,9 +547,9 @@ class CustomStreamWrapper:
 
     def handle_azure_text_completion_chunk(self, chunk):
         try:
-            text = ""
+            text: str = ""
             is_finished = False
-            finish_reason = None
+            finish_reason: str | None = None
             choices = getattr(chunk, "choices", [])
             if len(choices) > 0:
                 text = choices[0].text
@@ -568,9 +567,9 @@ class CustomStreamWrapper:
 
     def handle_openai_text_completion_chunk(self, chunk):
         try:
-            text = ""
+            text: str = ""
             is_finished = False
-            finish_reason = None
+            finish_reason: str | None = None
             usage = None
             choices = getattr(chunk, "choices", [])
             if len(choices) > 0:
@@ -589,7 +588,7 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_baseten_chunk(self, chunk):
+    def handle_baseten_chunk(self, chunk) -> str:
         try:
             chunk = chunk.decode("utf-8")
             if len(chunk) > 0:

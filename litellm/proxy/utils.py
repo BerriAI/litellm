@@ -21,6 +21,7 @@ from typing import (
     ClassVar,
     Literal,
     Optional,
+    TypedDict,
     Union,
     cast,
     overload,
@@ -160,6 +161,7 @@ from litellm.repositories.verification_token_repository import (
 )
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
+from litellm.types.llms.base import HiddenParams
 from litellm.types.mcp import (
     MCPDuringCallResponseObject,
     MCPPreCallRequestObject,
@@ -345,7 +347,7 @@ def _accepts_litellm_call_info(cb: CustomLogger) -> bool:
     return _CALLBACK_ACCEPTS_CALL_INFO[key]
 
 
-def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: Any) -> None:
+def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: CustomLogger) -> None:
     """
     If `exc` is an HTTPException with a dict `detail`, mutate it in place to
     add `guardrail_name` and `guardrail_mode` taken from the callback instance.
@@ -377,6 +379,15 @@ def _exception_changes_request_flow(exc: BaseException) -> bool:
     return isinstance(exc, (SensitiveDataRouteException, ModifyResponseException))
 
 
+class _MCPPreCallHookResult(TypedDict):
+    should_proceed: bool
+    modified_arguments: (
+        dict[str, object] | None
+    )  # mutable-ok: parameter mirrors the caller's request-arguments dict payload
+    error_message: str | None
+    hidden_params: HiddenParams
+
+
 @dataclass(frozen=True)
 class _CallbackCapabilities:
     """Cached per-hook capability flags derived from ``litellm.callbacks``.
@@ -394,11 +405,11 @@ class _CallbackCapabilities:
     # Tuple[(resolved_callback, "override" | "apply_guardrail"), ...]
     # Ordered the same as ``litellm.callbacks``; used to build the streaming
     # iterator chain without re-scanning per request.
-    iterator_overrides: tuple[tuple[Any, str], ...] = field(default_factory=tuple)
+    iterator_overrides: tuple[tuple[CustomLogger, str], ...] = field(default_factory=tuple)
     # Resolved CustomLogger callbacks in original order. Pre-resolving once
     # avoids the per-request ``get_custom_logger_compatible_class`` walk for
     # every string entry in ``litellm.callbacks``.
-    resolved_callbacks: tuple[Any, ...] = field(default_factory=tuple)
+    resolved_callbacks: tuple[CustomLogger, ...] = field(default_factory=tuple)
 
 
 class ProxyLogging:
@@ -676,12 +687,10 @@ class ProxyLogging:
 
         return synthetic_data
 
-    def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> Any | None:
+    def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> MCPPreCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP response format.
         """
-        from litellm.types.mcp import MCPPreCallResponseObject
-
         # If result is an exception, it means the guardrail blocked the request
         if isinstance(llm_result, Exception):
             return MCPPreCallResponseObject(
@@ -802,7 +811,7 @@ class ProxyLogging:
             verbose_proxy_logger.error("Error in manual argument parsing: %s", e)
             return None
 
-    def _convert_llm_result_to_mcp_during_response(self, llm_result, request_obj) -> Any | None:
+    def _convert_llm_result_to_mcp_during_response(self, llm_result, request_obj) -> MCPDuringCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP during call response format.
         """
@@ -848,7 +857,7 @@ class ProxyLogging:
         self,
         response: MCPPreCallResponseObject,
         original_request: MCPPreCallRequestObject,
-    ) -> dict[str, Any]:
+    ) -> _MCPPreCallHookResult:
         """
         Parse the response from the pre_mcp_tool_call_hook
 
@@ -856,7 +865,7 @@ class ProxyLogging:
         2. Apply any argument modifications
         3. Handle validation errors
         """
-        result = {
+        result: _MCPPreCallHookResult = {
             "should_proceed": response.should_proceed,
             "modified_arguments": response.modified_arguments or original_request.arguments,
             "error_message": response.error_message,
@@ -868,9 +877,6 @@ class ProxyLogging:
         """
         Helper function to create MCPPreCallRequestObject from kwargs for standard pre_call_hook.
         """
-        from litellm.types.llms.base import HiddenParams
-        from litellm.types.mcp import MCPPreCallRequestObject
-
         user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(kwargs.get("user_api_key_auth"))
 
         return MCPPreCallRequestObject(
@@ -1031,7 +1037,7 @@ class ProxyLogging:
         selected_guardrail = llm_router.get_available_guardrail(guardrail_name=guardrail_name)
 
         callback = selected_guardrail.get("callback")
-        if callback is None:
+        if not isinstance(callback, CustomGuardrail):
             raise ValueError(f"No callback found for guardrail: {guardrail_name}")
 
         return await self._execute_guardrail_hook(
@@ -1142,8 +1148,8 @@ class ProxyLogging:
         self,
         data: dict,
         litellm_logging_obj: Any,
-        prompt_id: Any,
-        prompt_version: Any,
+        prompt_id: str,
+        prompt_version: int | None,
         call_type: CallTypesLiteral,
     ) -> None:
         """Process prompt template if applicable."""
@@ -1438,9 +1444,7 @@ class ProxyLogging:
                         data = result
 
                     elif (
-                        _callback is not None
-                        and isinstance(_callback, CustomLogger)
-                        and "async_pre_call_hook" in vars(_callback.__class__)
+                        "async_pre_call_hook" in vars(_callback.__class__)
                         and _callback.__class__.async_pre_call_hook != CustomLogger.async_pre_call_hook
                     ):
                         if call_type == "call_mcp_tool" and user_api_key_dict is None:
@@ -1614,7 +1618,7 @@ class ProxyLogging:
                 break
 
     @staticmethod
-    async def _run_guardrail_with_metrics(callback: Any, coro: Awaitable[Any], hook_type: str) -> Any:
+    async def _run_guardrail_with_metrics(callback: CustomGuardrail, coro: Awaitable[Any], hook_type: str) -> Any:
         """
         Await `coro`, recording its latency and status to the
         `litellm_guardrail_latency_seconds` metric under `hook_type`, and
@@ -1646,7 +1650,7 @@ class ProxyLogging:
 
     @staticmethod
     async def _wrap_streaming_iterator_with_enrichment(
-        callback: Any, gen: AsyncGenerator[Any, None]
+        callback: CustomLogger, gen: AsyncGenerator[Any, None]
     ) -> AsyncGenerator[Any, None]:
         """
         Yield from `gen`; if iteration raises an HTTPException with dict detail,
@@ -1691,12 +1695,14 @@ class ProxyLogging:
         has_streaming_chunk_override = False
         has_guardrail = False
         has_pre_call_override = False
-        iterator_overrides: list[tuple[Any, str]] = []  # (callback, kind)
-        resolved_callbacks: list[Any] = []
+        iterator_overrides: list[
+            tuple[CustomLogger, str]
+        ] = []  # mutable-ok: accumulates (callback, kind) overrides in the loop below
+        resolved_callbacks: list[CustomLogger] = []  # mutable-ok: accumulates resolved callbacks in the loop below
 
         for callback in callbacks:
             if isinstance(callback, str):
-                resolved: Any = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                resolved = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
                     cast(_custom_logger_compatible_callbacks_literal, callback)
                 )
             else:
@@ -2096,7 +2102,7 @@ class ProxyLogging:
             """
             litellm_debug_info = getattr(original_exception, "litellm_debug_info", None)
             exception_str = str(original_exception)
-            if litellm_debug_info is not None:
+            if isinstance(litellm_debug_info, str):
                 exception_str += litellm_debug_info
 
             asyncio.create_task(
@@ -2765,7 +2771,7 @@ class ProxyLogging:
                     ),
                 )
             else:
-                # kind == "apply_guardrail": route through unified_guardrail
+                assert isinstance(resolved_callback, CustomGuardrail)
                 current_response = self._wrap_streaming_iterator_with_enrichment(
                     resolved_callback,
                     unified_guardrail.async_post_call_streaming_iterator_hook(
@@ -6557,7 +6563,7 @@ def model_dump_with_preserved_fields(
     model_dump(exclude_none=True) strips them.
 
     Args:
-        obj: The Pydantic BaseModel instance to serialize
+        obj: The ModelResponse / ModelResponseStream instance to serialize
         preserve_fields: Deprecated, kept for backward compatibility.
         exclude_unset: Whether to exclude fields that were not explicitly set
 
