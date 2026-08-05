@@ -1,17 +1,6 @@
 from enum import Enum
 from os import PathLike
-from typing import (
-    IO,
-    Any,
-    Dict,
-    Iterable,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Tuple,
-    Union,
-)
+from typing import Any, Dict, Final, IO, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 
 import httpx
 from openai import Omit
@@ -55,7 +44,7 @@ from openai.types.responses.response import (
 
 # Handle OpenAI SDK version compatibility for Text type
 try:
-    from openai.types.responses.response_create_params import Text as ResponseText  # type: ignore[attr-defined] # fmt: skip # isort: skip
+    from openai.types.responses.response_create_params import Text as ResponseText  # fmt: skip # isort: skip
 except (ImportError, AttributeError):
     # Fall back to the concrete config type available in all SDK versions
     from openai.types.responses.response_text_config_param import (
@@ -145,7 +134,7 @@ class NotGiven:
         return "NOT_GIVEN"
 
 
-NOT_GIVEN = NotGiven()
+NOT_GIVEN: Final = NotGiven()
 
 
 class ToolResourcesCodeInterpreter(TypedDict, total=False):
@@ -354,7 +343,7 @@ class OpenAIFileObject(BaseModel):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
         except Exception:
@@ -431,7 +420,7 @@ class CreateBatchRequest(TypedDict, total=False):
     """
 
     completion_window: Literal["24h"]
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"]
+    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses"]
     input_file_id: str
     metadata: Optional[Dict[str, str]]
     output_expires_after: FileExpiresAfter
@@ -840,7 +829,7 @@ ValidAssistantMessageContentTypesLiteral = Literal[
     "image_url",
 ]
 
-ValidAssistantMessageContentTypes = [
+ValidAssistantMessageContentTypes: Final = [
     "text",
     "thinking",
     "redacted_thinking",
@@ -863,7 +852,7 @@ ValidChatCompletionMessageContentTypesLiteral = Literal[
     "redacted_thinking",
 ]
 
-ValidChatCompletionMessageContentTypes = [
+ValidChatCompletionMessageContentTypes: Final = [
     "text",
     "image_url",
     "input_audio",
@@ -1318,7 +1307,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
 
         Issue: https://github.com/BerriAI/litellm/issues/16824
         """
-        serialized = handler(value)
+        serialized: Final = handler(value)
         if not isinstance(serialized, list):
             return serialized
         return [
@@ -1339,7 +1328,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
 
         This matches the OpenAI SDK's Response.output_text behavior.
         """
-        texts: List[str] = []
+        texts: Final[List[str]] = []
         for output_item in self.output:
             # Handle both dict and object access patterns
             if isinstance(output_item, dict):
@@ -1404,6 +1393,10 @@ class ResponsesAPIStreamEvents(str, Enum):
     # Function call events
     FUNCTION_CALL_ARGUMENTS_DELTA = "response.function_call_arguments.delta"
     FUNCTION_CALL_ARGUMENTS_DONE = "response.function_call_arguments.done"
+
+    # Custom tool call events (grammar/freeform tools, e.g. Cursor agent tools)
+    CUSTOM_TOOL_CALL_INPUT_DELTA = "response.custom_tool_call_input.delta"
+    CUSTOM_TOOL_CALL_INPUT_DONE = "response.custom_tool_call_input.done"
 
     # File search events
     FILE_SEARCH_CALL_IN_PROGRESS = "response.file_search_call.in_progress"
@@ -2341,7 +2334,7 @@ class OpenAIVideoObject(BaseModel):
     def __getitem__(self, key):
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)
         except Exception:

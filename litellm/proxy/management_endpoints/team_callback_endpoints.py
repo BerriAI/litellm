@@ -9,7 +9,7 @@ import copy
 import json
 import traceback
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Final
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
@@ -44,10 +44,10 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.repositories.team_repository import TeamRepository
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
-_CALLBACK_VARS_REDACTED = "***REDACTED***"
+_CALLBACK_VARS_REDACTED: Final = "***REDACTED***"
 
 
 def _redact_callback_secrets(metadata: Any) -> Any:
@@ -64,13 +64,13 @@ def _redact_callback_secrets(metadata: Any) -> Any:
     """
     if not isinstance(metadata, dict):
         return metadata
-    redacted = copy.deepcopy(metadata)
-    logging_entries = redacted.get("logging")
+    redacted: Final = copy.deepcopy(metadata)
+    logging_entries: Final = redacted.get("logging")
     if isinstance(logging_entries, list):
         for entry in logging_entries:
             if isinstance(entry, dict) and isinstance(entry.get("callback_vars"), dict):
                 entry["callback_vars"] = {k: _CALLBACK_VARS_REDACTED for k in entry["callback_vars"]}
-    callback_settings = redacted.get("callback_settings")
+    callback_settings: Final = redacted.get("callback_settings")
     if isinstance(callback_settings, dict) and isinstance(callback_settings.get("callback_vars"), dict):
         callback_settings["callback_vars"] = {k: _CALLBACK_VARS_REDACTED for k in callback_settings["callback_vars"]}
     return redacted
@@ -124,8 +124,8 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
     if not isinstance(team_metadata, dict):
         return TeamCallbackMetadata()
 
-    decrypted = decrypt_callback_vars(team_metadata)
-    logging_entries = decrypted.get("logging")
+    decrypted: Final = decrypt_callback_vars(team_metadata)
+    logging_entries: Final = decrypted.get("logging")
 
     if logging_entries is not None:
         resolved = TeamCallbackMetadata()
@@ -137,7 +137,7 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
                 continue
             resolved = convert_key_logging_metadata_to_callback(data=callback, team_callback_settings_obj=resolved)
     else:
-        callback_settings = decrypted.get("callback_settings")
+        callback_settings: Final = decrypted.get("callback_settings")
         resolved = (
             TeamCallbackMetadata(**callback_settings) if isinstance(callback_settings, dict) else TeamCallbackMetadata()
         )
@@ -156,7 +156,7 @@ def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
     """
     if task.cancelled():
         return
-    exc = task.exception()
+    exc: Final = task.exception()
     if exc is not None:
         verbose_proxy_logger.warning("Failed to write team-callback audit log: %s", exc)
 
@@ -188,10 +188,10 @@ async def _emit_team_callback_audit_log(
     )
     from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-    redacted_before = _redact_callback_secrets(before_metadata)
-    redacted_after = _redact_callback_secrets(after_metadata)
+    redacted_before: Final = _redact_callback_secrets(before_metadata)
+    redacted_after: Final = _redact_callback_secrets(after_metadata)
 
-    task = asyncio.create_task(
+    task: Final = asyncio.create_task(
         create_audit_log_for_update(
             request_data=LiteLLM_AuditLogs(
                 id=str(uuid.uuid4()),
@@ -313,16 +313,16 @@ async def add_team_callbacks(
                     param="callback_name",
                 )
 
-        before_metadata = copy.deepcopy(team_metadata)
+        before_metadata: Final = copy.deepcopy(team_metadata)
         team_callback_settings.append(data.model_dump())
 
         team_metadata["logging"] = team_callback_settings
         team_metadata = encrypt_callback_vars(team_metadata)
-        team_metadata_json = json.dumps(team_metadata)  # update team_metadata
+        team_metadata_json: Final = json.dumps(team_metadata)  # update team_metadata
 
-        new_team_row = await TeamRepository(prisma_client).table.update(
+        new_team_row: Final = await TeamRepository(prisma_client).table.update(
             where={"team_id": team_id},
-            data={"metadata": team_metadata_json},  # type: ignore
+            data={"metadata": team_metadata_json},
             # `object_permission` is included so `_refresh_cached_team` doesn't
             # write a cached team with the relation nulled out — see
             # team_model_add for the full rationale.
@@ -354,7 +354,7 @@ async def add_team_callbacks(
     except ProxyException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.add_team_callbacks(): Exception occured - {e}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.add_team_callbacks(): Exception occured - %s", e)
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
@@ -423,9 +423,9 @@ async def disable_team_logging(
 
         # Update team metadata to disable logging
         team_metadata = _existing_team.metadata
-        before_metadata = copy.deepcopy(team_metadata)
-        team_callback_settings = team_metadata.get("callback_settings", {})
-        team_callback_settings_obj = TeamCallbackMetadata(**team_callback_settings)
+        before_metadata: Final = copy.deepcopy(team_metadata)
+        team_callback_settings: Final = team_metadata.get("callback_settings", {})
+        team_callback_settings_obj: Final = TeamCallbackMetadata(**team_callback_settings)
 
         # Reset callbacks
         team_callback_settings_obj.success_callback = []
@@ -437,12 +437,12 @@ async def disable_team_logging(
         # and Admin UI register callbacks, without ever reading callback_settings.
         team_metadata["logging"] = []  # mutable-ok: the disabled state is persisted as an empty JSON array
         team_metadata = encrypt_callback_vars(team_metadata)
-        team_metadata_json = json.dumps(team_metadata)
+        team_metadata_json: Final = json.dumps(team_metadata)
 
         # Update team in database
-        updated_team = await TeamRepository(prisma_client).table.update(
+        updated_team: Final = await TeamRepository(prisma_client).table.update(
             where={"team_id": team_id},
-            data={"metadata": team_metadata_json},  # type: ignore
+            data={"metadata": team_metadata_json},
             # `object_permission` is included so `_refresh_cached_team` doesn't
             # write a cached team with the relation nulled out — see
             # team_model_add for the full rationale.
@@ -492,7 +492,7 @@ async def disable_team_logging(
     except ProxyException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.disable_team_logging(): Exception occurred - {e}")
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.disable_team_logging(): Exception occurred - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         raise ProxyException(
             message="Internal Server Error, " + str(e),
@@ -565,7 +565,7 @@ async def get_team_callbacks(
             user_api_key_dict=user_api_key_dict,
         )
 
-        team_callback_settings_obj = _resolve_team_callbacks(_existing_team.metadata)
+        team_callback_settings_obj: Final = _resolve_team_callbacks(_existing_team.metadata)
 
         return {
             "status": "success",
@@ -585,7 +585,7 @@ async def get_team_callbacks(
     except ProxyException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.get_team_callbacks(): Exception occurred - {e}")
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.get_team_callbacks(): Exception occurred - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(

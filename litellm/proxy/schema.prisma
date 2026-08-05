@@ -601,6 +601,8 @@ model LiteLLM_TagTable {
 model LiteLLM_Config {
   param_name String @id
   param_value Json?
+  last_run_at DateTime?
+  reload_revision BigInt @default(0)
 }
 
 // View spend, model, api_key per request
@@ -748,6 +750,7 @@ model LiteLLM_DailyUserSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -782,6 +785,7 @@ model LiteLLM_DailyOrganizationSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -816,6 +820,7 @@ model LiteLLM_DailyEndUserSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -849,6 +854,7 @@ model LiteLLM_DailyAgentSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -882,6 +888,7 @@ model LiteLLM_DailyTeamSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -917,6 +924,7 @@ model LiteLLM_DailyTagSpend {
   compression_saved_tokens    BigInt      @default(0)
   compression_savings_spend    Float       @default(0.0)
   prompt_caching_savings_spend Float       @default(0.0)
+  autorouter_savings_spend     Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)

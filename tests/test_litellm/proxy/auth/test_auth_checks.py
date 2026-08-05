@@ -58,6 +58,12 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.utils import get_utc_datetime
 
 
+def _rendered_log_message(call):
+    message = str(call.args[0])
+    values = call.args[1:]
+    return message % values if values else message
+
+
 @pytest.fixture(autouse=True)
 def set_salt_key(monkeypatch):
     """Automatically set LITELLM_SALT_KEY for all tests"""
@@ -1168,7 +1174,7 @@ def test_log_budget_lookup_failure_dry_run():
         err = Exception("column 'policies' does not exist in prisma schema")
         _log_budget_lookup_failure("user", err)
         mock_logger.error.assert_called_once()
-        call_msg = mock_logger.error.call_args[0][0]
+        call_msg = _rendered_log_message(mock_logger.error.call_args)
         assert "user" in call_msg
         assert "cache will not be populated" in call_msg
         assert "policies" in call_msg or "prisma" in call_msg

@@ -1,7 +1,7 @@
 """Type definitions for Opik payload building."""
 
 from dataclasses import dataclass
-from typing import Any, Literal, Union
+from typing import Any, Final, Literal, Union
 
 
 @dataclass
@@ -43,4 +43,4 @@ class SpanPayload:
 
 
 PayloadItem = Union[TracePayload, SpanPayload]
-TraceSpanPayloadTuple = tuple[TracePayload | None, SpanPayload]
+TraceSpanPayloadTuple: Final = tuple[TracePayload | None, SpanPayload]

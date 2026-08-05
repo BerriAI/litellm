@@ -310,6 +310,26 @@ describe("ComplexityRouterConfig", () => {
     expect(newRules[0]).toMatchObject({ keywords: [], tier: "COMPLEX" });
   });
 
+  // The dropdown is closed, so antd has nothing for Enter to select and the word would only land
+  // on blur. Submitting used to provide that blur; it no longer can while the row reads as empty.
+  it("commits a typed keyword on Enter, with the dropdown closed", async () => {
+    const user = userEvent.setup();
+    const onKeywordTierRulesChange = vi.fn();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        keywordTierRules={[{ id: "rule-1", keywords: [], tier: "COMPLEX" }]}
+        onKeywordTierRulesChange={onKeywordTierRulesChange}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+
+    const field = screen.getByText("Keywords 1").closest("div") as HTMLElement;
+    await user.type(within(field).getByRole("combobox"), "invoice{enter}");
+
+    expect(onKeywordTierRulesChange).toHaveBeenCalledWith([{ id: "rule-1", keywords: ["invoice"], tier: "COMPLEX" }]);
+  });
+
   it("should render an existing keyword tier rule and remove it when the delete button is clicked", async () => {
     const user = userEvent.setup();
     const onKeywordTierRulesChange = vi.fn();
@@ -405,7 +425,8 @@ describe("ComplexityRouterConfig", () => {
         showValidationErrors={true}
       />,
     );
-    expect(screen.getAllByText("This tier is required")).toHaveLength(1);
+    expect(screen.getByText("The Reasoning tier is required")).toBeInTheDocument();
+    expect(screen.getAllByText(/tier is required/)).toHaveLength(1);
   });
 
   it("renders the escalation keywords section with current keywords when the handler is provided", () => {
@@ -424,5 +445,73 @@ describe("ComplexityRouterConfig", () => {
   it("hides the escalation keywords section when no handler is provided", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     expect(screen.queryByText("Advanced: Escalation Keywords")).not.toBeInTheDocument();
+  });
+});
+
+describe("ComplexityRouterConfig tier labels", () => {
+  const renamedValue: ComplexityRouterConfigValue = {
+    ...defaultValue,
+    tier_labels: { SIMPLE: "Cheap", MEDIUM: "Standard", COMPLEX: "Premium", REASONING: "Deep" },
+  };
+
+  it("shows the operator's names in the tier headers instead of the defaults", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={renamedValue} />);
+    expect(screen.getByText("Cheap Tier")).toBeInTheDocument();
+    expect(screen.getByText("Deep Tier")).toBeInTheDocument();
+    expect(screen.queryByText("Simple Tier")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reasoning Tier")).not.toBeInTheDocument();
+  });
+
+  it("keeps the rung ordinal and canonical name visible under a rename", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={renamedValue} />);
+    expect(screen.getByText(/Tier 1 of 4/)).toHaveTextContent("Tier 1 of 4 · SIMPLE");
+    expect(screen.getByText(/Tier 4 of 4/)).toHaveTextContent("Tier 4 of 4 · REASONING");
+  });
+
+  it("names the renamed tier in the required-field error", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...renamedValue, tiers: { ...defaultValue.tiers, REASONING: [] } }}
+        showValidationErrors={true}
+      />,
+    );
+    expect(screen.getByText("The Deep tier is required")).toBeInTheDocument();
+  });
+
+  it("reports a typed label back to the caller under its canonical tier key", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    fireEvent.change(screen.getByLabelText("Display name for the Simple tier"), { target: { value: "Cheap" } });
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ tier_labels: { SIMPLE: "Cheap" } }));
+  });
+
+  it("shows a stored label in its input so an edit round-trips", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={renamedValue} />);
+    expect(screen.getByLabelText("Display name for the Reasoning tier")).toHaveValue("Deep");
+  });
+
+  it("leaves the label inputs empty when nothing was renamed", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    expect(screen.getByLabelText("Display name for the Simple tier")).toHaveValue("");
+  });
+
+  it("uses the operator's names in the classification score table", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={renamedValue} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByText("Cheap")).toBeInTheDocument();
+    expect(screen.getByText("Deep")).toBeInTheDocument();
+  });
+
+  it("uses the operator's names in the keyword rule tier picker", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={renamedValue}
+        keywordTierRules={[{ id: "r1", keywords: ["invoice"], tier: "REASONING" }]}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+    expect(screen.getByTitle("Deep")).toBeInTheDocument();
   });
 });

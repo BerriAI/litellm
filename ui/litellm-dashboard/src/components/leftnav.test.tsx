@@ -1,5 +1,5 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
 
@@ -198,6 +198,47 @@ describe("Sidebar (leftnav)", () => {
       mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
       expect(screen.getByText("Logs")).toBeInTheDocument();
+    });
+  });
+
+  describe("capability-gated Tools children", () => {
+    const internalAuth = {
+      userId: "internal-user-id",
+      accessToken: "test-access-token",
+      userRole: "internal",
+      token: "test-token",
+      userEmail: "internal@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    };
+
+    afterEach(() => {
+      mockUseAuthorized.mockReset();
+    });
+
+    it("should hide Tool Policies from internal users while keeping other Tools children", async () => {
+      mockUseAuthorized.mockReturnValue(internalAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Tools"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Search Tools")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Tool Policies")).not.toBeInTheDocument();
+    });
+
+    it("should show Tool Policies to admins", async () => {
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Tools"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Tool Policies")).toBeInTheDocument();
+      });
     });
   });
 

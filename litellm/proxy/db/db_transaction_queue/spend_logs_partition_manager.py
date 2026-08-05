@@ -15,6 +15,7 @@ keeps the batched-DELETE path, so existing deployments are untouched.
 
 import re
 from datetime import date, datetime, timedelta, timezone
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -22,13 +23,13 @@ from litellm.constants import (
     SPEND_LOG_PARTITION_PRECREATE_AHEAD,
 )
 
-SPEND_LOGS_TABLE = "LiteLLM_SpendLogs"
+SPEND_LOGS_TABLE: Final = "LiteLLM_SpendLogs"
 
 PartitionInterval = str  # "day" | "week" | "month"
 
-VALID_PARTITION_INTERVALS = {"day", "week", "month"}
+VALID_PARTITION_INTERVALS: Final = {"day", "week", "month"}
 
-_BOUND_UPPER_RE = re.compile(r"TO \('([^']+)'\)")
+_BOUND_UPPER_RE: Final = re.compile(r"TO \('([^']+)'\)")
 
 
 def period_start(day: date, interval: PartitionInterval) -> date:
@@ -63,7 +64,7 @@ def upcoming_partitions(today: date, interval: PartitionInterval, ahead: int) ->
     Specs (name, lower_inclusive, upper_exclusive) for the current period plus
     the next `ahead` periods, so writes always have a partition to land in.
     """
-    specs: list[tuple[str, date, date]] = []
+    specs: Final[list[tuple[str, date, date]]] = []
     start = period_start(today, interval)
     for _ in range(ahead + 1):
         upper = next_period_start(start, interval)
@@ -81,7 +82,7 @@ def parse_partition_upper_bound(bound_expr: str) -> datetime | None:
     """
     if "DEFAULT" in bound_expr.upper():
         return None
-    match = _BOUND_UPPER_RE.search(bound_expr)
+    match: Final = _BOUND_UPPER_RE.search(bound_expr)
     if match is None:
         return None
     try:
@@ -117,7 +118,7 @@ class SpendLogsPartitionManager:
 
     async def is_partitioned(self, prisma_client) -> bool:
         try:
-            rows = await prisma_client.db.query_raw(
+            rows: Final = await prisma_client.db.query_raw(
                 """
                 SELECT EXISTS (
                     SELECT 1
@@ -145,7 +146,7 @@ class SpendLogsPartitionManager:
         now present. CREATE TABLE IF NOT EXISTS is a no-op for partitions that
         already exist, so this list is "ensured present", not "newly created".
         """
-        ensured: list[str] = []
+        ensured: Final[list[str]] = []
         for name, lower, upper in upcoming_partitions(
             datetime.now(timezone.utc).date(), self.interval, self.precreate_ahead
         ):
@@ -161,7 +162,7 @@ class SpendLogsPartitionManager:
         return ensured
 
     async def _list_partitions(self, prisma_client) -> list[tuple[str, datetime | None]]:
-        rows = await prisma_client.db.query_raw(
+        rows: Final = await prisma_client.db.query_raw(
             """
             SELECT c.relname AS name,
                    pg_get_expr(c.relpartbound, c.oid) AS bound
@@ -178,10 +179,10 @@ class SpendLogsPartitionManager:
 
     async def drop_partitions_older_than(self, prisma_client, cutoff: datetime) -> list[str]:
         """DROP every partition whose whole range is older than `cutoff`."""
-        cutoff_naive = cutoff.astimezone(timezone.utc).replace(tzinfo=None)
-        partitions = await self._list_partitions(prisma_client)
-        to_drop = select_partitions_to_drop(partitions, cutoff_naive)
-        dropped: list[str] = []
+        cutoff_naive: Final = cutoff.astimezone(timezone.utc).replace(tzinfo=None)
+        partitions: Final = await self._list_partitions(prisma_client)
+        to_drop: Final = select_partitions_to_drop(partitions, cutoff_naive)
+        dropped: Final[list[str]] = []
         for name in to_drop:
             try:
                 await prisma_client.db.execute_raw(f'DROP TABLE IF EXISTS "{name}"')
