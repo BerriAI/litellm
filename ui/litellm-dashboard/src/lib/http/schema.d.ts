@@ -6956,6 +6956,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/key/spend/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Key Spend Report
+         * @description Get spend for the calling api_key over a date range, with a per-model breakdown.
+         *
+         *     Same row shape as `/global/spend/report?api_key=...`, but callable by any key:
+         *     non-admin callers are always scoped to their own api_key, while proxy admins
+         *     may pass `?api_key=` to view any key.
+         */
+        get: operations["get_key_spend_report_key_spend_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/key/unblock": {
         parameters: {
             query?: never;
@@ -9211,6 +9235,31 @@ export interface paths {
          *     ```
          */
         post: operations["new_organization_organization_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organization/spend/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Organization Spend Report
+         * @description Get spend for an organization over a date range, grouped by api_key with a per-model and per-team breakdown.
+         *
+         *     Covers spend logged against the organization directly and against any of its
+         *     teams. Callable by proxy admins (any organization) and org admins (their own
+         *     organizations). Defaults to the calling key's organization_id when
+         *     `?organization_id=` is omitted.
+         */
+        get: operations["get_organization_spend_report_organization_spend_report_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -13967,6 +14016,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/spend/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Spend Report
+         * @description Get spend for the calling key's team over a date range, grouped by api_key with a per-model breakdown.
+         *
+         *     Callable by any key that belongs to a team: non-admin callers are always
+         *     scoped to their key's team_id, while proxy admins may pass `?team_id=` to
+         *     view any team.
+         */
+        get: operations["get_team_spend_report_team_spend_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/unblock": {
         parameters: {
             query?: never;
@@ -15008,6 +15081,30 @@ export interface paths {
          *     ```
          */
         post: operations["new_user_user_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user/spend/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get User Spend Report
+         * @description Get spend for the calling user over a date range, grouped by api_key with a per-model breakdown.
+         *
+         *     Same row shape as `/global/spend/report?internal_user_id=...`, but callable by
+         *     any key with a user: non-admin callers are always scoped to their own user_id,
+         *     while proxy admins may pass `?internal_user_id=` to view any user.
+         */
+        get: operations["get_user_spend_report_user_spend_report_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -43525,6 +43622,44 @@ export interface operations {
             };
         };
     };
+    get_key_spend_report_key_spend_report_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend (YYYY-MM-DD) */
+                start_date?: string | null;
+                /** @description Time till which to view spend (YYYY-MM-DD) */
+                end_date?: string | null;
+                /** @description View spend for a specific api_key. Proxy admin only; other callers are scoped to their own key. */
+                api_key?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     unblock_key_key_unblock_post: {
         parameters: {
             query?: never;
@@ -46518,6 +46653,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NewOrganizationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_organization_spend_report_organization_spend_report_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend (YYYY-MM-DD) */
+                start_date?: string | null;
+                /** @description Time till which to view spend (YYYY-MM-DD) */
+                end_date?: string | null;
+                /** @description View spend for a specific organization_id. Proxy admins may pass any organization; org admins are scoped to organizations they administer. */
+                organization_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -51588,6 +51761,44 @@ export interface operations {
             };
         };
     };
+    get_team_spend_report_team_spend_report_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend (YYYY-MM-DD) */
+                start_date?: string | null;
+                /** @description Time till which to view spend (YYYY-MM-DD) */
+                end_date?: string | null;
+                /** @description View spend for a specific team_id. Proxy admin only; other callers are scoped to their key's team. */
+                team_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     unblock_team_team_unblock_post: {
         parameters: {
             query?: never;
@@ -52851,6 +53062,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NewUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_spend_report_user_spend_report_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend (YYYY-MM-DD) */
+                start_date?: string | null;
+                /** @description Time till which to view spend (YYYY-MM-DD) */
+                end_date?: string | null;
+                /** @description View spend for a specific internal_user_id. Proxy admin only; other callers are scoped to their own user_id. */
+                internal_user_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
