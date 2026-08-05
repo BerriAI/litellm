@@ -38,7 +38,7 @@ toolset routes exist via `dynamic_mcp_route` / `toolset_mcp_route`.
 
 | Feature | Code | Registry cell(s) | E2E today |
 | --- | --- | --- | --- |
-| list_tools | `server.py` handle_list_tools; REST `/tools/list` | `mcp.list_tools.{api_key,bearer,oauth,none}.succeeds` | api_key often skipped LIT-5052; oauth skipif Linear session |
+| list_tools | `server.py` handle_list_tools; REST `/tools/list` | `mcp.list_tools.{api_key,bearer,oauth,none}.succeeds` | api_key often skipped LIT-5052; oauth bridge e2e TBD on a non-Linear real OAuth MCP |
 | call_tool | `server.py` mcp_server_tool_call; REST `/tools/call` | `mcp.call_tool.{api_key,bearer,oauth,none}.succeeds` | same |
 | list_tools denied without key scope | permission path | `mcp.list_tools.api_key.denied_without_permission` | yes |
 | call_tool denied without permission | rest/manager | `mcp.call_tool.api_key.denied_without_permission` | skipped LIT-5052 |
@@ -82,7 +82,7 @@ toolset routes exist via `dynamic_mcp_route` / `toolset_mcp_route`.
 | --- | --- | --- | --- |
 | `none` | No upstream auth | generic succeeds | partial |
 | static (`api_key`, `bearer_token`, `basic`, `authorization`, `token`) | Inject static headers | `upstream_static_auth` | missing dedicated |
-| `oauth2` + `authorization_code` | Per-user vault | oauth cells | Linear e2e; UI flaky (#15) |
+| `oauth2` + `authorization_code` | Per-user vault | oauth cells | e2e TBD on a real OAuth MCP; UI flaky (#15) |
 | `oauth2` + `client_credentials` | M2M | `upstream_oauth2_client_credentials` | missing |
 | `delegate_auth_to_upstream` | Client PKCE with upstream | `delegate_auth_upstream` | missing |
 | `oauth_passthrough` | Proxy metadata + 401 challenges | `oauth_passthrough` | unit |
@@ -164,7 +164,7 @@ All three share `LiteLLM_Proxy_MCP_Handler` for `litellm_proxy` / `litellm_proxy
 
 | Surface | Entry | Registry | E2E |
 | --- | --- | --- | --- |
-| **Chat completions** `/v1/chat/completions` | `acompletion_with_mcp` via `main.py` | `mcp.chat_completion.{api_key,oauth}.auto_executes_tools` | oauth Linear (skipif); api_key missing |
+| **Chat completions** `/v1/chat/completions` | `acompletion_with_mcp` via `main.py` | `mcp.chat_completion.{api_key,oauth}.auto_executes_tools` | e2e TBD on a shared real MCP for api_key and oauth |
 | **Responses** `/v1/responses` | `aresponses_api_with_mcp` | `mcp.responses.api_key.auto_executes_tools` | missing |
 | **Messages** `/v1/messages` | `anthropic_messages_with_mcp` via experimental pass-through handler | `mcp.messages.{api_key,oauth}.auto_executes_tools` | **was missing from map; no e2e** |
 | Semantic tool filter on chat tools | `semantic_tool_filter` + hook | `mcp.chat_completion.api_key.semantic_filter_narrows` | missing |
@@ -296,6 +296,6 @@ Collector after registry expansion: **MCPs ~2/N live** until tests land; denomin
 
 ## Related docs
 
-- E2E MCP suite: `tests/e2e/CLAUDE.md` (real Datadog; Linear for OAuth)  
+- E2E MCP suite: `tests/e2e/CLAUDE.md` (real Datadog for api_key; separate real OAuth MCP for vault/oauth bridges)  
 - Registry: `tests/e2e/coverage_registry/mcp.yaml`  
 - MCP internal note: `litellm/proxy/_experimental/mcp_server/CLAUDE.md`  

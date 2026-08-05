@@ -3,7 +3,7 @@
 Registers a gateway-managed OAuth (authorization_code) MCP server, seeds the
 per-user upstream token by driving the interactive authorize dance with the
 official mcp SDK's OAuthClientProvider (the browser leg is a headless Chromium
-primed with a human's saved Linear session), then exercises the server through
+primed with a human's saved browser session for the OAuth MCP under test), then exercises the server through
 /chat/completions, where the gateway lists and executes its tools with the
 stored per-user token.
 
@@ -71,13 +71,12 @@ class InMemoryTokenStorage:
 
 async def _browser_follow_authorize(start_url: str, storage_state_path: str) -> tuple[str, str | None]:
     """Play the browser's role for a real upstream whose authorize endpoint
-    serves an interactive consent page (Linear). A headless Chromium primed
-    with a human's saved Linear session opens the gateway authorize URL and
-    clicks through Linear's consent screens (the mcp.linear.app Approve form,
-    then the linear.app workspace-selection page), riding the rest of the chain
-    (Linear -> gateway callback -> host redirect_uri). The final hop is
-    intercepted and short-circuited, since nothing listens there, and its
-    code/state are read off the query string."""
+    serves an interactive consent page. A headless Chromium primed with a saved
+    browser session opens the gateway authorize URL, advances common consent
+    controls (Approve / Authorize / Allow), and rides the chain through the
+    gateway callback to the host redirect_uri. The final hop is intercepted and
+    short-circuited, since nothing listens there, and its code/state are read off
+    the query string."""
     from playwright.async_api import async_playwright
 
     captured: dict[str, str] = {}  # mutable-ok: hand-off from the request listener

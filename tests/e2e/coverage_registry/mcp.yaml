@@ -437,8 +437,8 @@
   operation: chat_completion
   auth_family: oauth
   assertions: [auto_executes_tools]
-  source: "test_mcp_chat_completion_oauth_e2e.py"
-  rationale: "Gateway-managed OAuth: chat completion lists and executes tools with vaulted user token"
+  source: "responses/mcp/chat_completions_handler.py:acompletion_with_mcp"
+  rationale: "Gateway-managed OAuth: chat completion lists and executes tools with vaulted user token (e2e TBD on a real OAuth MCP)"
 - id: mcp.chat_completion.api_key.semantic_filter_narrows
   module: mcp
   tier: P1
