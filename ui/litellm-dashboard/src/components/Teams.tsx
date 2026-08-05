@@ -12,7 +12,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Button as UIButton } from "@/components/ui/button";
 import { teamsTableKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { useTeamDetailRouting } from "@/app/(dashboard)/teams/detailNavigation";
+import { parseAsString, useQueryState } from "nuqs";
 import { TeamsTable } from "./TeamsPage/TeamsTable";
 import AccessGroupSelector from "./common_components/AccessGroupSelector";
 import MetadataKeyValueFields, { metadataPairsToObject } from "./common_components/MetadataKeyValueFields";
@@ -140,7 +140,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [editModalVisible, setEditModalVisible] = useState(false);
 
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
-  const { teamId: selectedTeamId, openTeam, close: closeTeamDetail } = useTeamDetailRouting();
+  const [selectedTeamId, setSelectedTeamId] = useQueryState("team", parseAsString.withOptions({ history: "push" }));
   const [editTeam, setEditTeam] = useState<boolean>(false);
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
@@ -473,12 +473,12 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             userID={userID}
             onSelectTeam={(team) => {
               setSelectedTeam(team);
-              openTeam(team.team_id);
+              void setSelectedTeamId(team.team_id);
               setEditTeam(false);
             }}
             onEditTeam={(team) => {
               setSelectedTeam(team);
-              openTeam(team.team_id);
+              void setSelectedTeamId(team.team_id);
               setEditTeam(true);
             }}
             onDeleteTeam={handleDelete}
@@ -538,7 +538,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           }}
           onClose={() => {
             setSelectedTeam(null);
-            closeTeamDetail();
+            void setSelectedTeamId(null);
             setEditTeam(false);
           }}
           accessToken={accessToken}
