@@ -85,3 +85,35 @@ class TestBytePlusEmbeddingConfig:
         assert res.model == "skylark-embedding-vision-250615"
         assert len(res.data) == 1
         assert res.data[0]["embedding"] == [-0.123, -0.355, 0.255]
+
+    def test_litellm_embedding_dispatch_byteplus(self, monkeypatch):
+        import litellm
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        mock_json = {
+            "created": 1743575029,
+            "data": {
+                "embedding": [0.1, 0.2, 0.3],
+                "object": "embedding",
+            },
+            "id": "req-123",
+            "model": "skylark-embedding-vision-250615",
+            "object": "list",
+            "usage": {"prompt_tokens": 10, "total_tokens": 10},
+        }
+        mock_resp = httpx.Response(status_code=200, json=mock_json)
+
+        def mock_post(*args, **kwargs):
+            return mock_resp
+
+        monkeypatch.setattr(HTTPHandler, "post", mock_post)
+        monkeypatch.setattr(httpx.Client, "post", mock_post)
+
+        res = litellm.embedding(
+            model="byteplus/skylark-embedding-vision-250615",
+            input="test text",
+            api_key="mock-key",
+        )
+        assert res.model == "skylark-embedding-vision-250615"
+        assert res.data[0]["embedding"] == [0.1, 0.2, 0.3]
+

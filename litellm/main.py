@@ -5569,6 +5569,7 @@ def completion(
             or custom_llm_provider == "baseten"
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "volcengine"
+            or custom_llm_provider == "byteplus"
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
@@ -6818,6 +6819,36 @@ def embedding(
                 litellm_params={},
                 model_response=EmbeddingResponse(),
                 api_key=volcengine_key,
+                client=client,
+                aembedding=aembedding,
+                headers=headers,
+            )
+        elif custom_llm_provider == "byteplus":
+            byteplus_key = (
+                api_key
+                or litellm.api_key
+                or get_secret_str("BYTEPLUS_API_KEY")
+                or get_secret_str("ARK_API_KEY")
+            )
+            if byteplus_key is None:
+                raise ValueError(
+                    "Missing API key for BytePlus. Set BYTEPLUS_API_KEY or ARK_API_KEY environment variable or pass api_key parameter."
+                )
+            if extra_headers is not None and isinstance(extra_headers, dict):
+                headers = extra_headers
+            else:
+                headers = {}
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                timeout=timeout,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging,
+                api_base=api_base,
+                optional_params=optional_params,
+                litellm_params={},
+                model_response=EmbeddingResponse(),
+                api_key=byteplus_key,
                 client=client,
                 aembedding=aembedding,
                 headers=headers,
