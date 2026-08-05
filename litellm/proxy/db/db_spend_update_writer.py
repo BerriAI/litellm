@@ -1230,7 +1230,7 @@ class DBSpendUpdateWriter:
         if team_member_list_transactions is not None and len(team_member_list_transactions.keys()) > 0:
             # Track which team memberships will be updated for cache invalidation
             team_memberships_to_invalidate: Final[list[tuple[str, str]]] = []
-            for key in team_member_list_transactions.keys():
+            for key in team_member_list_transactions:
                 # key is "team_id::<value>::user_id::<value>"
                 team_id = key.split("::")[1]
                 user_id = key.split("::")[3]

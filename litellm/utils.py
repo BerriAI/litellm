@@ -766,16 +766,8 @@ def function_setup(
 
         if (
             len(litellm.input_callback) > 0 or len(litellm.success_callback) > 0 or len(litellm.failure_callback) > 0
-        ) and len(
-            callback_list
-        ) == 0:
-            callback_list = list(
-                set(
-                    litellm.input_callback
-                    + litellm.success_callback
-                    + litellm.failure_callback
-                )
-            )
+        ) and len(callback_list) == 0:
+            callback_list = list(set(litellm.input_callback + litellm.success_callback + litellm.failure_callback))
             get_set_callbacks: Final = getattr(sys.modules[__name__], "get_set_callbacks")
             get_set_callbacks()(callback_list=callback_list, function_id=function_id)
         ## ASYNC CALLBACKS - safety net for callbacks added via direct append
@@ -3093,7 +3085,7 @@ def get_optional_params_embeddings(
         if supported_params is None:
             return
         unsupported_params: Final = {}
-        for k in non_default_params.keys():
+        for k in non_default_params:
             if k not in supported_params:
                 unsupported_params[k] = non_default_params[k]
         if unsupported_params:
@@ -3148,7 +3140,7 @@ def get_optional_params_embeddings(
         if (
             model is not None
             and "text-embedding-3" not in model
-            and "dimensions" in non_default_params.keys()
+            and "dimensions" in non_default_params
             and "dimensions" not in (allowed_openai_params or [])
         ):
             # Honor drop_params (per-call) and litellm.drop_params (global) the same
@@ -3839,7 +3831,7 @@ def get_optional_params(
         verbose_logger.debug("\nLiteLLM: Params passed to completion() %s", passed_params)
         verbose_logger.debug("\nLiteLLM: Non-Default params passed to completion() %s", non_default_params)
         unsupported_params: Final = {}
-        for k in non_default_params.keys():
+        for k in non_default_params:
             if k not in supported_params:
                 if k == "user" or k == "stream_options" or k == "stream":
                     continue
@@ -4255,7 +4247,7 @@ def get_optional_params(
             drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
         )
         # WatsonX-text param check
-        for param in passed_params.keys():
+        for param in passed_params:
             if litellm.IBMWatsonXAIConfig().is_watsonx_text_param(param):
                 raise ValueError(
                     f"LiteLLM now defaults to Watsonx's `/text/chat` endpoint. Please use the `watsonx_text` provider instead, to call the `/text/generation` endpoint. Param: {param}"

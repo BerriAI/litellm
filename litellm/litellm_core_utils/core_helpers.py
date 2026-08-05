@@ -2,7 +2,7 @@
 ## Helper utilities
 import copy
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, Final, Literal, Union
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
     from litellm.types.utils import ModelResponseStream
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 

@@ -7,7 +7,7 @@ import time
 import traceback
 from collections.abc import Iterable
 from datetime import datetime, timedelta
-from typing import Any, Final, Literal, TypedDict, Union, cast
+from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -110,7 +110,7 @@ def get_callback_identifier(callback):
 
 
 router: Final = APIRouter()
-services = Union[
+services = (
     Literal[
         "slack_budget_alerts",
         "langfuse",
@@ -127,9 +127,9 @@ services = Union[
         "galileo",
         "newrelic",
         "sqs",
-    ],
-    str,
-]
+    ]
+    | str
+)
 
 
 @router.get(
