@@ -11,7 +11,12 @@ from pydantic import ValidationError
 
 sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     preview_auto_router_routing,
 )
@@ -142,6 +147,104 @@ async def test_llm_classifier_call_is_billed_to_the_calling_key(monkeypatch: pyt
     assert len(calls) == 1
     assert calls[0]["metadata"]["user_api_key"] == ADMIN.api_key
     assert calls[0]["metadata"]["user_api_key_user_id"] == ADMIN.user_id
+
+
+@pytest.mark.parametrize(
+    "config_overrides",
+    [
+        {"classifier_type": "llm", "classifier_llm_config": {"model": "classifier-model"}},
+        {
+            "semantic_keyword_matching": True,
+            "embedding_model": "classifier-model",
+            "keyword_tier_rules": [{"keywords": ["2+2"], "tier": "COMPLEX"}],
+        },
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_key_that_cannot_call_the_classifier_model_is_rejected_before_it_is_called(
+    monkeypatch: pytest.MonkeyPatch, config_overrides: dict
+):
+    import litellm.proxy.proxy_server as proxy_server
+
+    router = _router()
+    calls: list[dict] = []
+
+    async def fail_if_called(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError("the classifier must not be called by a key that cannot call it")
+
+    monkeypatch.setattr(router, "acompletion", fail_if_called)
+    monkeypatch.setattr(router, "aembedding", fail_if_called)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await preview_auto_router_routing(
+            data=_request("what is 2+2", **config_overrides),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-restricted",
+                user_id="admin",
+                models=["cheap-model"],
+            ),
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_key_over_its_budget_cannot_run_a_classifier_config(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    router = _router()
+    calls: list[dict] = []
+
+    async def fail_if_called(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError("an exhausted key must not reach the classifier")
+
+    monkeypatch.setattr(router, "acompletion", fail_if_called)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await preview_auto_router_routing(
+            data=_request(
+                "what is 2+2",
+                classifier_type="llm",
+                classifier_llm_config={"model": "classifier-model"},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-broke",
+                user_id="admin",
+                max_budget=1.0,
+                spend=2.0,
+            ),
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_heuristic_config_does_not_need_a_budget(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+
+    response = await preview_auto_router_routing(
+        data=_request("what is 2+2"),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-broke",
+            user_id="admin",
+            max_budget=1.0,
+            spend=2.0,
+            models=["cheap-model"],
+        ),
+    )
+
+    assert response.routed_model == "cheap-model"
 
 
 @pytest.mark.asyncio

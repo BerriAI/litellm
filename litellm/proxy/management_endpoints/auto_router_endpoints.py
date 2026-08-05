@@ -7,11 +7,18 @@ POST /auto_router/test_routing - Route one prompt through an unsaved complexity-
 from typing import TYPE_CHECKING, Annotated, Final
 
 from litellm._logging import verbose_proxy_logger
+from litellm.exceptions import BudgetExceededError
 from litellm.proxy._types import (
     CommonProxyErrors,
     LiteLLM_TeamTable,
     LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
     UserAPIKeyAuth,
+)
+from litellm.proxy.auth.auth_checks import (
+    _virtual_key_max_budget_check,
+    can_key_call_resolved_model,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
@@ -20,10 +27,13 @@ from litellm.router_strategy.complexity_router import ComplexityRouter
 from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
+    RequestComplexityRouterConfig,
 )
 
 if TYPE_CHECKING:
     from fastapi import APIRouter, Depends, HTTPException, status
+
+    from litellm.router import Router
 else:
     try:
         from fastapi import APIRouter, Depends, HTTPException, status
@@ -84,6 +94,64 @@ async def _authorize_routing_test(user_api_key_dict: UserAPIKeyAuth, team_id: st
     )
 
 
+def _models_this_test_can_call(config: RequestComplexityRouterConfig) -> tuple[str, ...]:
+    """The models the routing test itself would send a request to, and so spend on.
+
+    Excludes every tier's models: the prompt is never sent to the model it routed to.
+    """
+    return tuple(
+        model
+        for model in (
+            config.classifier_llm_config.model
+            if config.classifier_type == "llm" and config.classifier_llm_config is not None
+            else None,
+            config.embedding_model if config.semantic_keyword_matching else None,
+        )
+        if model is not None
+    )
+
+
+async def _authorize_models_this_test_can_call(
+    config: RequestComplexityRouterConfig,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: "Router",
+) -> None:
+    """Hold a classifier or embedding call to the caller's model access and key budget.
+
+    Those calls go through the router rather than through /v1/chat/completions, so the model
+    checks a real request gets in user_api_key_auth would otherwise be skipped, letting a
+    caller spend on a model their key cannot call, and this route is not an LLM API route, so
+    the key's own budget is not checked either. Test Connection gets both for free by routing
+    its calls through the proxy. Team and member budgets are already enforced on every route.
+    """
+    models: Final = _models_this_test_can_call(config)
+    if not models:
+        return
+
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    for model in models:
+        await can_key_call_resolved_model(
+            model=model,
+            llm_model_list=llm_router.model_list,
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+        )
+
+    try:
+        await _virtual_key_max_budget_check(
+            valid_token=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except BudgetExceededError as e:
+        raise ProxyException(
+            message=e.message,
+            type=ProxyErrorTypes.budget_exceeded,
+            param=None,
+            code=status.HTTP_400_BAD_REQUEST,
+        ) from e
+
+
 @router.post(
     "/auto_router/test_routing",
     tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
@@ -127,6 +195,12 @@ async def preview_auto_router_routing(
                 "error": CommonProxyErrors.no_llm_router.value
             },
         )
+
+    await _authorize_models_this_test_can_call(
+        config=data.complexity_router_config,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+    )
 
     complexity_router: Final = ComplexityRouter(
         model_name=data.router_name,
