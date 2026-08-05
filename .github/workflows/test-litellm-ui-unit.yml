@@ -55,9 +55,8 @@ jobs:
             git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA"
             changed_files=()
             while IFS= read -r f; do
-              [ -f "$f" ] || continue
               changed_files+=("$f")
-            done < <(git diff --name-only --diff-filter=ACMR --relative "$merge_base" "$HEAD_SHA" -- .)
+            done < <(git diff --name-only --relative "$merge_base" "$HEAD_SHA" -- .)
             if [ ${#changed_files[@]} -eq 0 ]; then
               echo "No UI files changed in this PR; skipping unit tests."
               exit 0
