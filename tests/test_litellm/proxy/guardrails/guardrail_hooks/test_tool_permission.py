@@ -752,6 +752,26 @@ class TestToolPermissionGuardrail:
         assert isinstance(choice.message.content, str)
         assert "Permission denied" in choice.message.content
 
+    def test_modify_response_resets_finish_reason_when_every_tool_call_is_denied(self):
+        tool_call = ChatCompletionMessageToolCall(function={"name": "Read", "arguments": "{}"}, id="call_123")
+        response = ModelResponse(
+            choices=[Choices(finish_reason="tool_calls", message={"tool_calls": [tool_call], "content": ""})]
+        )
+        denied_tools = [
+            (
+                tool_call,
+                PermissionError(tool_name="Read", rule_id="deny_read", message="Tool 'Read' denied by rule 'deny_read'"),
+            )
+        ]
+
+        self.guardrail._modify_response_with_permission_errors(response, denied_tools)
+
+        choice = response.choices[0]
+        assert isinstance(choice, Choices)
+        assert choice.finish_reason == "stop", (
+            "keeping finish_reason tool_calls with no surviving tool calls leaves the client waiting on a tool"
+        )
+
     def test_modify_response_with_permission_errors_filters_legacy_function_call(self):
         response = ModelResponse(
             choices=[
@@ -1190,3 +1210,48 @@ class TestToolPermissionGuardrailAnthropicMessages:
         body = b"".join(c if isinstance(c, bytes) else str(c).encode() for c in out).decode()
         assert '"type": "tool_use"' not in body, "denied tool_use must not survive into the rewritten stream"
         assert "Permission denied" in body
+        assert '"stop_reason": "end_turn"' in body, (
+            "dropping every tool_use must end the turn, or the client waits for a tool result that never comes"
+        )
+        assert '"stop_reason": "tool_use"' not in body
+
+    def _resplit(self, chunks, size=7):
+        joined = b"".join(chunks)
+        return [joined[i : i + size] for i in range(0, len(joined), size)]
+
+    @pytest.mark.asyncio
+    async def test_denied_tool_use_is_caught_when_sse_events_are_split_across_chunk_boundaries(self):
+        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException) as exc_info:
+                await self._drain(self.blocking, self._resplit(self._sse_chunks("Read")))
+
+        assert "deny_read" in str(exc_info.value), (
+            "a stream split mid-event must still assemble and hit the rule, not fail as unparseable"
+        )
+
+    @pytest.mark.asyncio
+    async def test_allowed_stream_split_across_chunk_boundaries_is_passed_through_verbatim(self):
+        chunks = self._resplit(self._sse_chunks("Bash"))
+
+        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
+            out = await self._drain(self.blocking, chunks)
+
+        assert out == chunks
+
+    @pytest.mark.asyncio
+    async def test_non_anthropic_sse_stream_fails_closed(self):
+        gemini_chunks = [
+            b'data: {"candidates": [{"content": {"parts": [{"functionCall": '
+            b'{"name": "run_shell", "args": {"command": "ls"}}}], "role": "model"}}]}\n\n',
+            b'data: {"candidates": [{"content": {"parts": [{"text": "done"}]}, "finishReason": "STOP"}]}\n\n',
+        ]
+
+        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException):
+                await self._drain(self.blocking, gemini_chunks)
+
+    @pytest.mark.asyncio
+    async def test_unparseable_sse_stream_fails_closed(self):
+        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException):
+                await self._drain(self.blocking, [b"data: not-json\n\n", b"event: weird\n\n"])

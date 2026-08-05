@@ -734,6 +734,13 @@ class ToolPermissionGuardrail(CustomGuardrail):
                     else:
                         choice.message.content = "\n".join(error_messages)
 
+                if (
+                    not choice.message.tool_calls
+                    and getattr(choice.message, "function_call", None) is None
+                    and choice.finish_reason in ("tool_calls", "function_call")
+                ):
+                    choice.finish_reason = "stop"
+
     @log_guardrail_information
     async def async_pre_call_hook(
         self,
@@ -878,6 +885,14 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         anthropic_response: Final = self._assemble_anthropic_stream(all_chunks)
         if anthropic_response is None:
+            if self._is_raw_sse_stream(all_chunks):
+                raise GuardrailRaisedException(
+                    guardrail_name=self.guardrail_name,
+                    message=(
+                        "Streamed response could not be verified for tool permissions "
+                        "(not a parseable Anthropic SSE stream), blocking it"
+                    ),
+                )
             for chunk in all_chunks:
                 yield chunk
             return
@@ -911,17 +926,41 @@ class ToolPermissionGuardrail(CustomGuardrail):
         return denied_tools
 
     @staticmethod
+    def _joined_sse_stream(all_chunks: Sequence[Any]) -> str | None:
+        raw: Final = b"".join(
+            chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
+            for chunk in all_chunks
+            if isinstance(chunk, (str, bytes))
+        )
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+
+    @staticmethod
+    def _has_anthropic_message_start(sse_stream: str) -> bool:
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+            AnthropicPassthroughLoggingHandler,
+        )
+
+        return any(
+            (event_data := AnthropicPassthroughLoggingHandler._extract_sse_data(event)) is not None  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses; a private import beats forking SSE parsing
+            and event_data.get("type") == "message_start"
+            for event in AnthropicPassthroughLoggingHandler._split_sse_chunk_into_events(sse_stream)  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses
+        )
+
+    @staticmethod
     def _assemble_anthropic_stream(all_chunks: Sequence[Any]) -> ModelResponse | None:
         from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
             AnthropicPassthroughLoggingHandler,
         )
 
-        sse_chunks: Final = tuple(chunk for chunk in all_chunks if isinstance(chunk, (str, bytes)))
-        if not sse_chunks:
+        sse_stream: Final = ToolPermissionGuardrail._joined_sse_stream(all_chunks)
+        if sse_stream is None or not ToolPermissionGuardrail._has_anthropic_message_start(sse_stream):
             return None
         try:
             assembled = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(  # pyright: ignore[reportPrivateUsage]  # the only SSE-to-ModelResponse assembler; reimplementing it here would fork the parser
-                all_chunks=sse_chunks,
+                all_chunks=(sse_stream,),
                 litellm_logging_obj=None,  # pyright: ignore[reportArgumentType]  # only forwarded to stream_chunk_builder, which accepts None
                 model="",
             )
