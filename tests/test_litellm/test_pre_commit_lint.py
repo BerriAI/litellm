@@ -192,6 +192,30 @@ def test_interrupt_kills_background_jobs_and_removes_logs(tmp_path: Path) -> Non
             os.killpg(proc.pid, signal.SIGTERM)
 
 
+def test_interrupt_spares_the_invoking_process(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    hang_dir = tmp_path / "hang"
+    hang_dir.mkdir()
+    marker = tmp_path / "invoker_survived"
+    proc = subprocess.Popen(
+        ["bash", "-c", 'trap : INT; "$1"; echo "$?" > "$2"', "bash", str(SCRIPT), str(marker)],
+        cwd=repo,
+        env=_env(repo, bin_dir, {"STUB_HANG_DIR": str(hang_dir)}),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        assert _wait_until((hang_dir / "make.started").exists, 10)
+        os.killpg(proc.pid, signal.SIGINT)
+        assert proc.wait(timeout=10) == 0
+        assert _wait_until(marker.exists, 5)
+        assert marker.read_text().strip() == "130"
+    finally:
+        with suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGTERM)
+
+
 @pytest.mark.parametrize(
     ("fail", "message"),
     [
