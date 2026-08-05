@@ -1464,23 +1464,27 @@ class TestCheckBatchCostSpendAttribution:
 
     async def _capture_spend_event(self, instance, created_by, team_id):
         """Run one poll cycle and return the kwargs the async success callbacks receive."""
+        import asyncio
         from unittest.mock import patch
 
         import litellm
         from litellm.integrations.custom_logger import CustomLogger
         from litellm.types.utils import Usage
 
-        captured: list[dict] = []
-
         class _CaptureLogger(CustomLogger):
+            def __init__(self, event: "asyncio.Future[dict]"):
+                super().__init__()
+                self._event = event
+
             async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-                captured.append(kwargs)
+                self._event.set_result(kwargs)
 
         self._stage_completed_job(instance, created_by=created_by, team_id=team_id)
 
         file_content = MagicMock()
         file_content.content = b'{"id":"req-1"}'
-        capture_logger = _CaptureLogger()
+        spend_event: "asyncio.Future[dict]" = asyncio.get_running_loop().create_future()
+        capture_logger = _CaptureLogger(spend_event)
         litellm.logging_callback_manager.add_litellm_async_success_callback(capture_logger)
         try:
             with (
@@ -1516,8 +1520,8 @@ class TestCheckBatchCostSpendAttribution:
         finally:
             litellm.logging_callback_manager.remove_callback_from_all_lists(capture_logger)
 
-        assert len(captured) == 1, "completed batch must emit exactly one async success event"
-        return captured[0]
+        assert spend_event.done(), "completed batch must emit an async success event"
+        return spend_event.result()
 
     @staticmethod
     def _is_tracked_by_proxy_db_logger(kwargs: dict) -> bool:
