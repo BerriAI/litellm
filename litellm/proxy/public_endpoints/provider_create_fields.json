@@ -1597,6 +1597,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "NEURALWATT",
+    "provider_display_name": "Neuralwatt",
+    "litellm_provider": "neuralwatt",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "neuralwatt/glm-5.2"
+  },
+  {
     "provider": "LANGFUSE",
     "provider_display_name": "Langfuse",
     "litellm_provider": "langfuse",
