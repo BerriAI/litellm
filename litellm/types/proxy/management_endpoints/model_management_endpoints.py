@@ -19,6 +19,16 @@ class UpdateUsefulLinksRequest(BaseModel):
     useful_links: dict[str, str | dict[str, Any]]
 
 
+class AutoRouterClassifierDefaultPromptResponse(BaseModel):
+    """The built-in system prompt an auto-router's LLM classifier uses when none is configured.
+
+    Served so the dashboard's prompt editor prefills the rubric the proxy actually sends, rather than
+    a copy in the frontend that drifts the moment the rubric is edited.
+    """
+
+    system_prompt: str
+
+
 class NewModelGroupRequest(BaseModel):
     access_group: str  # The access group name (e.g., "production-models")
     model_names: list[str] | None = None  # Existing model groups to include - tags ALL deployments for each name
