@@ -529,3 +529,41 @@ if __name__ == "__main__":
     print("\n" + "=" * 50)
     print("✓ All tests passed!")
     print("=" * 50)
+
+
+class TestCoralBricks:
+    def test_coralbricks_json_config_exists(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        coralbricks = JSONProviderRegistry.get("coralbricks")
+        assert coralbricks is not None
+        assert coralbricks.base_url == "https://inference.coralbricks.ai/v1"
+        assert coralbricks.api_key_env == "CORALBRICKS_API_KEY"
+        assert coralbricks.api_base_env == "CORALBRICKS_API_BASE"
+        assert coralbricks.param_mappings.get("max_completion_tokens") == "max_tokens"
+
+    def test_coralbricks_provider_resolution(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="coralbricks/glm-5.2-fp4",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert model == "glm-5.2-fp4"
+        assert provider == "coralbricks"
+        assert api_key is None
+        assert api_base == "https://inference.coralbricks.ai/v1"
+
+    def test_coralbricks_dynamic_config(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("coralbricks")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://inference.coralbricks.ai/v1"

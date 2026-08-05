@@ -123,6 +123,14 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "coralbricks": {
+    "base_url": "https://inference.coralbricks.ai/v1",
+    "api_key_env": "CORALBRICKS_API_KEY",
+    "api_base_env": "CORALBRICKS_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
   "neosantara": {
     "base_url": "https://api.neosantara.xyz/v1",
     "api_key_env": "NEOSANTARA_API_KEY",
