@@ -1055,6 +1055,54 @@ class TestTranslateResponse:
         assert "cache_write_tokens" not in result["usage"]
         assert "cached_tokens" not in result["usage"]
 
+    def test_should_populate_cache_creation_input_tokens(self):
+        """cache_creation_input_tokens extra on usage is mapped to AnthropicUsage."""
+        response = _make_mock_response(output=[_make_output_message(["OK"])])
+        response.usage.cache_creation_input_tokens = 1900
+        response.usage.cache_read_input_tokens = 0
+        response.usage.input_tokens_details = None
+
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_creation_input_tokens"] == 1900
+        assert "cache_read_input_tokens" not in result["usage"]
+
+    def test_should_populate_cache_read_input_tokens(self):
+        """cache_read_input_tokens extra on usage is mapped when present."""
+        response = _make_mock_response(output=[_make_output_message(["OK"])])
+        response.usage.cache_creation_input_tokens = 0
+        response.usage.cache_read_input_tokens = 1900
+        response.usage.input_tokens_details = None
+
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_read_input_tokens"] == 1900
+        assert "cache_creation_input_tokens" not in result["usage"]
+
+    def test_should_fall_back_to_input_tokens_details_cached_tokens(self):
+        """
+        When cache_read_input_tokens is 0, fall back to
+        input_tokens_details.cached_tokens (OpenAI-style field).
+        """
+        response = _make_mock_response(output=[_make_output_message(["OK"])])
+        response.usage.cache_creation_input_tokens = 0
+        response.usage.cache_read_input_tokens = 0
+        details = MagicMock()
+        details.cached_tokens = 1900
+        response.usage.input_tokens_details = details
+
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_read_input_tokens"] == 1900
+
+    def test_should_not_add_cache_keys_when_no_cache_activity(self):
+        """No cache keys on AnthropicUsage when there's no cache activity."""
+        response = _make_mock_response(output=[_make_output_message(["OK"])])
+        response.usage.cache_creation_input_tokens = 0
+        response.usage.cache_read_input_tokens = 0
+        response.usage.input_tokens_details = None
+
+        result: Any = _ADAPTER.translate_response(response)
+        assert "cache_creation_input_tokens" not in result["usage"]
+        assert "cache_read_input_tokens" not in result["usage"]
+
     def test_model_and_id_preserved(self):
         """Model and response ID from the Responses API are forwarded."""
         response = _make_mock_response(

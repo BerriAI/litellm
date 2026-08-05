@@ -16,6 +16,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolMessage,
 )
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     ChatCompletionMessageToolCall,
     Choices,
     CompletionTokensDetailsWrapper,
@@ -1015,6 +1016,27 @@ class TestContentTypeTransformation:
         assert len(result) == 2
         assert result[0]["text"] == "valid text"
         assert result[1]["text"] == "another valid"
+
+    def test_cache_control_preserved_on_content_block(self):
+        """
+        Test that a `cache_control` field on an input content block survives
+        the Responses API -> Chat Completion content conversion, so the
+        downstream Anthropic adapter can seed its prompt cache.
+        """
+        content = [
+            {
+                "type": "input_text",
+                "text": "<long contract text>",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"type": "input_text", "text": "no cache control here"},
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert len(result) == 2
+        assert result[0]["cache_control"] == {"type": "ephemeral"}
+        assert "cache_control" not in result[1]
 
 
 class TestToolTransformation:
@@ -2062,6 +2084,113 @@ class TestUsageTransformation:
 
         assert response_usage.output_tokens_details is not None
         assert response_usage.output_tokens_details.reasoning_tokens == 0
+
+    def test_transform_usage_preserves_anthropic_cache_creation_fields(self):
+        """
+        Test that Anthropic cache creation fields (cache_creation_input_tokens,
+        cache_read_input_tokens, cache_creation.ephemeral_5m/1h_input_tokens) survive
+        the Usage -> ResponseAPIUsage conversion as extras, so the inference proxy
+        can bill cache creation on /v1/responses.
+        """
+        usage = Usage(
+            prompt_tokens=1936,
+            completion_tokens=246,
+            total_tokens=2182,
+            cache_creation_input_tokens=1900,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=0,
+                cache_creation_token_details=CacheCreationTokenDetails(
+                    ephemeral_5m_input_tokens=1900,
+                    ephemeral_1h_input_tokens=0,
+                ),
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="anthropic-claude-4.6-sonnet",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Key terms are...", role="assistant"),
+                )
+            ],
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        assert getattr(response_usage, "cache_creation_input_tokens", None) == 1900
+        assert getattr(response_usage, "cache_creation", None) == {
+            "ephemeral_5m_input_tokens": 1900,
+            "ephemeral_1h_input_tokens": 0,
+        }
+
+    def test_transform_usage_preserves_anthropic_cache_read_tokens(self):
+        """A cache-hit turn should surface cache_read_input_tokens as an extra."""
+        usage = Usage(
+            prompt_tokens=1936,
+            completion_tokens=246,
+            total_tokens=2182,
+            cache_read_input_tokens=1900,
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="anthropic-claude-4.6-sonnet",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Key terms are...", role="assistant"),
+                )
+            ],
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        assert getattr(response_usage, "cache_read_input_tokens", None) == 1900
+
+    def test_transform_usage_no_cache_fields_when_absent(self):
+        """No cache extras should be set when the model didn't report any caching."""
+        usage = Usage(
+            prompt_tokens=9,
+            completion_tokens=27,
+            total_tokens=36,
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gpt-4o",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        assert not hasattr(response_usage, "cache_creation_input_tokens")
+        assert not hasattr(response_usage, "cache_read_input_tokens")
+        assert not hasattr(response_usage, "cache_creation")
 
 
 class TestStreamingIDConsistency:
