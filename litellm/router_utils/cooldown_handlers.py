@@ -8,7 +8,7 @@ Router cooldown handlers
 
 import asyncio
 import math
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     LitellmRouter = Any
     Span = Any

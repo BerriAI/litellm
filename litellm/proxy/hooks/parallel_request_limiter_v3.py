@@ -12,7 +12,7 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, cast
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.types.caching import RedisPipelineIncrementOperation
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
     InternalUsageCache = _InternalUsageCache
 else:
     Span = Any

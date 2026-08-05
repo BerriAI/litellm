@@ -31,7 +31,7 @@ Events:
 
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 
     from litellm.integrations.opentelemetry import OpenTelemetryConfig
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 

@@ -8,7 +8,8 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, Union, cast
+from types import UnionType
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, Union, cast, get_args, get_origin
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -1556,13 +1557,9 @@ def _get_field_type_from_annotation(field_annotation: Any) -> str:
     Convert a Python type annotation to a UI-friendly type string
     """
     # Handle Union types (like Optional[T])
-    if (
-        hasattr(field_annotation, "__origin__")
-        and field_annotation.__origin__ is Union
-        and hasattr(field_annotation, "__args__")
-    ):
+    if get_origin(field_annotation) is Union or get_origin(field_annotation) is UnionType:
         # For Optional[T], get the non-None type
-        args: Final = field_annotation.__args__
+        args: Final = get_args(field_annotation)
         non_none_args: Final = [arg for arg in args if arg is not type(None)]
         if non_none_args:
             field_annotation = non_none_args[0]
@@ -1689,13 +1686,9 @@ def _should_skip_optional_params(field_name: str, field_annotation: Any) -> bool
 
 def _unwrap_optional_type(field_annotation: Any) -> Any:
     """Unwrap Optional types to get the actual type."""
-    if (
-        hasattr(field_annotation, "__origin__")
-        and field_annotation.__origin__ is Union
-        and hasattr(field_annotation, "__args__")
-    ):
+    if get_origin(field_annotation) is Union or get_origin(field_annotation) is UnionType:
         # For Optional[BaseModel], get the non-None type
-        args: Final = field_annotation.__args__
+        args: Final = get_args(field_annotation)
         non_none_args: Final = [arg for arg in args if arg is not type(None)]
         if non_none_args:
             return non_none_args[0]
