@@ -6189,9 +6189,11 @@ async def test_resolve_logging_exporters_short_circuits_without_destinations(mon
 
 
 @pytest.mark.asyncio
-async def test_resolve_logging_exporters_runs_lookup_when_a_destination_exists(monkeypatch):
+async def test_resolve_logging_exporters_resolves_a_global_destination_without_an_org_lookup(monkeypatch):
     """The short-circuit must not skip resolution when a destination exists: a global
-    destination is still resolved for a team-scoped key, and the org lookup runs."""
+    destination is still resolved for a team-scoped key. No destination is org-scoped
+    here, so the org fallback (a team load, and on a cache miss a Prisma read on the
+    auth path) cannot change the outcome and must not run."""
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.proxy import litellm_pre_call_utils as pcu
 
@@ -6220,8 +6222,44 @@ async def test_resolve_logging_exporters_runs_lookup_when_a_destination_exists(m
     key = UserAPIKeyAuth(api_key="k", team_id="t1")
     destinations, backends = await pcu._resolve_logging_exporters(key)
 
-    assert lookups["org"] == 1  # a destination exists, so the resolver runs the lookup
+    assert lookups["org"] == 0  # nothing is org-scoped, so the lookup is skipped
     assert "generic" in backends  # global access grants the team key
+
+
+@pytest.mark.asyncio
+async def test_resolve_logging_exporters_runs_the_org_lookup_for_an_org_scoped_destination(monkeypatch):
+    """An org-scoped destination is invisible without the caller's org, so the fallback
+    still runs; a team key carrying no org_id resolves it through its team."""
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.proxy import litellm_pre_call_utils as pcu
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="d-org",
+                credential_values={"otel_endpoint": "https://collector/v1/traces"},
+                credential_info={"credential_type": "logging", "description": "generic", "access": {"orgs": ["o1"]}},
+            )
+        ],
+    )
+    lookups = {"org": 0}
+
+    async def _spy_effective_org_id(user_api_key_dict):
+        lookups["org"] += 1
+        return "o1"
+
+    monkeypatch.setattr(pcu, "_effective_org_id", _spy_effective_org_id)
+
+    key = UserAPIKeyAuth(api_key="k", team_id="t1")
+    destinations, backends = await pcu._resolve_logging_exporters(key)
+
+    assert lookups["org"] == 1  # an org-scoped destination needs the caller's org
+    assert "generic" in backends  # and the org grant then selects it
 
 
 @pytest.mark.asyncio

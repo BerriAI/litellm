@@ -121,7 +121,6 @@ _ENABLE_TEAM_STALE_ALIAS_BYPASS: bool | None = None
 
 if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
-    from litellm.models.credentials import CredentialItem
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
     from litellm.types.proxy.policy_engine import PolicyMatchContext
     from litellm.types.utils import OtelDestinationParams
@@ -716,6 +715,10 @@ async def _resolve_logging_exporters(
     ``access.global``). Each survivor is built via ``destination_for_credential`` and deduped on
     (endpoint, headers, resource attributes). Returns ([], []) when nothing is selected
     (default-deny).
+
+    The caller's org is resolved only when some destination is org-scoped: the fallback
+    loads the team, which on a cache miss is a Prisma read on the authentication path,
+    and it cannot change the outcome when no ``access`` names an org.
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.proxy.management_endpoints.logging_exporter_access import (
@@ -731,26 +734,26 @@ async def _resolve_logging_exporters(
     if not is_otel_v2_enabled():
         return (), ()
 
-    if not any(
-        (info := parse_credential_info(credential.credential_info)) is not None and info.credential_type == "logging"
+    logging_credentials = tuple(
+        (credential, info)
         for credential in litellm.credential_list
-    ):
+        if (info := parse_credential_info(credential.credential_info)) is not None and info.credential_type == "logging"
+    )
+    if not logging_credentials:
         return (), ()
 
     team_id = user_api_key_dict.team_id
-    org_id = await _effective_org_id(user_api_key_dict)
+    org_id = (
+        await _effective_org_id(user_api_key_dict)
+        if any(info.access is not None and info.access.orgs for _, info in logging_credentials)
+        else None
+    )
     team_ids, org_ids = identity_scope(team_id, org_id)
-
-    def _selected(credential: "CredentialItem") -> bool:
-        info = parse_credential_info(credential.credential_info)
-        if info is None or info.credential_type != "logging":
-            return False
-        return access_grants(info.access, team_ids, org_ids)
 
     built = tuple(
         result
-        for credential in litellm.credential_list
-        if _selected(credential)
+        for credential, info in logging_credentials
+        if access_grants(info.access, team_ids, org_ids)
         if (result := destination_for_credential(credential)) is not None
     )
     deduped = {
