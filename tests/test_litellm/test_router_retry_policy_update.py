@@ -66,6 +66,12 @@ def test_update_router_config_accepts_retry_policy_payload():
     assert dumped["retry_policy"]["TimeoutErrorRetries"] == 3
 
 
+def test_update_router_config_preserves_disabled_pre_call_checks():
+    config = UpdateRouterConfig(enable_pre_call_checks=False)
+
+    assert config.model_dump(exclude_none=True)["enable_pre_call_checks"] is False
+
+
 def test_update_router_config_rejects_malformed_retry_policy():
     """The field is typed as RetryPolicy, so /config/update validates the
     payload at the boundary and rejects non-numeric counts with a 422 instead
