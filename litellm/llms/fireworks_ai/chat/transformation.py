@@ -67,7 +67,6 @@ def _json_schema_response_format(schema: object) -> Mapping[str, object]:
 
 _NIM_VLLM_STRIP_PARAMS: Final = frozenset(
     {
-        "min_tokens",
         "stop_token_ids",
         "include_stop_str_in_output",
         "skip_special_tokens",
@@ -82,6 +81,8 @@ _NIM_VLLM_STRIP_PARAMS: Final = frozenset(
         "detokenize",
         "allowed_token_ids",
         "bad_words",
+        "include_reasoning",
+        "nvext",
     }
 )
 
@@ -414,8 +415,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 model,
             )
             return ()
-        effort: Final = "medium" if chat_template_kwargs["enable_thinking"] else "none"
-        return (("reasoning_effort", effort),)
+        if chat_template_kwargs["enable_thinking"]:
+            return ()
+        return (("reasoning_effort", "none"),)
 
     @staticmethod
     def _translate_guided_params(extra_body: Mapping[str, object]) -> tuple[tuple[str, object], ...]:
