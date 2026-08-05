@@ -80,14 +80,22 @@ EXPECT_RUST = os.environ.get("E2E_EXPECT_RUST", "").strip().lower() in ("1", "tr
 # Deliberately modest concurrency. The suite shares its proxy with every other
 # suite in the run, and 750 users at spawn rate 50 saturated the request path hard
 # enough to distort latency-sensitive neighbours (and to spend real provider money
-# fast). The SLO is scaled with the user count to keep the same per-user throughput
-# expectation (~0.47 RPS/user), so this still catches a request-path regression
-# rather than becoming a formality. Raise all four via env for a real load run.
+# fast).
 LOAD_USERS = int(os.environ.get("E2E_LOAD_USERS", "200"))
 LOAD_SPAWN_RATE = float(os.environ.get("E2E_LOAD_SPAWN_RATE", "20"))
 LOAD_DURATION_SECONDS = float(os.environ.get("E2E_LOAD_DURATION_SECONDS", "60"))
-LOAD_MIN_RPS = float(os.environ.get("E2E_LOAD_MIN_RPS", "90"))
 LOAD_MAX_FAILURE_RATIO = float(os.environ.get("E2E_LOAD_MAX_FAILURE_RATIO", "0.01"))
+
+# The throughput floor is derived per replica instead of being an absolute fleet
+# number, so the verdict does not depend on how many replicas happen to be warm.
+# One closed-loop user only ever occupies one replica at a time, so a short serial
+# pass measures a single replica's request path: its throughput is 1/latency, and
+# the concurrent phase then has to reach at least that much no matter how large
+# the fleet is. An absolute floor instead asserted replicas x per-replica rate,
+# which reactive autoscaling decides rather than the request path.
+LOAD_BASELINE_SECONDS = float(os.environ.get("E2E_LOAD_BASELINE_SECONDS", "15"))
+LOAD_MAX_SERIAL_LATENCY_SECONDS = float(os.environ.get("E2E_LOAD_MAX_SERIAL_LATENCY_SECONDS", "0.5"))
+LOAD_MIN_CONCURRENCY_EFFICIENCY = float(os.environ.get("E2E_LOAD_MIN_CONCURRENCY_EFFICIENCY", "0.8"))
 
 WEEKLY_ANOMALY_OPT_IN_ENV = "E2E_WEEKLY_ANOMALY"
 ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))

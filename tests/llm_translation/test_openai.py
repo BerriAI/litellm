@@ -613,13 +613,13 @@ async def test_openai_via_gemini_streaming_bridge():
     assert len(printed_chunks) > 0
 
 
-def test_openai_deepresearch_model_bridge():
+def test_openai_responses_only_model_bridge():
     """
-    Test that the deepresearch model bridge works correctly
+    Test that the responses-only model bridge works correctly
     """
     litellm._turn_on_debug()
     response = litellm.completion(
-        model="o3-deep-research-2025-06-26",
+        model="gpt-5.5-pro",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
         tools=[
             {"type": "web_search_preview"},

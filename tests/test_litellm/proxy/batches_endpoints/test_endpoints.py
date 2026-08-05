@@ -51,7 +51,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.llms.openai import BatchJobStatus
-from litellm.types.utils import LiteLLMBatch
+from litellm.types.utils import CredentialItem, LiteLLMBatch
 
 from fastapi import Response
 
@@ -2091,3 +2091,154 @@ async def test_retrieve__unified_no_router_500(retrieve_harness):
     assert exc.value.code == "500"
     retrieve_harness.router_aretrieve.assert_not_called()
     retrieve_harness.litellm_aretrieve.assert_not_called()
+
+
+# =========================================================================== #
+# SCENARIO 3 + configured deployments: a provider-only call (custom-llm-provider
+# header, no model anywhere) must resolve the gateway/team deployment's named
+# credential for that provider and attach it to the provider call kwargs,
+# instead of silently falling through to the host environment's default
+# credentials (regression: vertex batch jobs landing in the hosting env's GCP
+# project because litellm_credential_name never reached the call).
+# =========================================================================== #
+
+VERTEX_NAMED_CREDENTIAL = CredentialItem(
+    credential_name="vertex-named-cred",
+    credential_info={},
+    credential_values={
+        "vertex_project": "customer-project",
+        "vertex_location": "us-central1",
+        "vertex_credentials": "/creds/customer-sa.json",
+    },
+)
+
+
+def vertex_named_credential_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "litellm_credential_name": "vertex-named-cred",
+                },
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_create__provider_only_resolves_named_vertex_credentials(harness):
+    """Provider-only create must attach the configured named credential, and must
+    NOT turn the call into a model-routed one (no model kwarg injected)."""
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    harness.provider_from_headers.return_value = "vertex_ai"
+
+    with patch.object(litellm, "credential_list", [VERTEX_NAMED_CREDENTIAL]):
+        with patch.object(proxy_server, "llm_router", vertex_named_credential_router()):
+            await call_create(harness)
+
+    assert harness.acreate_kwargs() == {
+        "custom_llm_provider": "vertex_ai",
+        "input_file_id": "file-plain",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "metadata": None,
+        "vertex_project": "customer-project",
+        "vertex_location": "us-central1",
+        "vertex_credentials": "/creds/customer-sa.json",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create__provider_only_ignores_other_provider_deployments(harness):
+    """A provider-only vertex call must not pick up credentials from deployments
+    of a different provider; with no vertex deployment the payload is exactly the
+    pre-fix env-var fallback."""
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    harness.provider_from_headers.return_value = "vertex_ai"
+    openai_only_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-global-openai"},
+            }
+        ]
+    )
+
+    with patch.object(proxy_server, "llm_router", openai_only_router):
+        await call_create(harness)
+
+    assert harness.acreate_kwargs() == {
+        "custom_llm_provider": "vertex_ai",
+        "input_file_id": "file-plain",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "metadata": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_retrieve__provider_only_resolves_named_vertex_credentials(retrieve_harness):
+    retrieve_harness.provider_from_headers.return_value = "vertex_ai"
+
+    with patch.object(litellm, "credential_list", [VERTEX_NAMED_CREDENTIAL]):
+        with patch.object(proxy_server, "llm_router", vertex_named_credential_router()):
+            await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    assert retrieve_harness.aretrieve_kwargs() == {
+        "custom_llm_provider": "vertex_ai",
+        "batch_id": "batch-raw-xyz",
+        "vertex_project": "customer-project",
+        "vertex_location": "us-central1",
+        "vertex_credentials": "/creds/customer-sa.json",
+    }
+
+
+@pytest.mark.asyncio
+async def test_list__provider_only_resolves_named_vertex_credentials(list_harness):
+    list_harness.provider_from_headers.return_value = "vertex_ai"
+
+    with patch.object(litellm, "credential_list", [VERTEX_NAMED_CREDENTIAL]):
+        with patch.object(proxy_server, "llm_router", vertex_named_credential_router()):
+            await call_list(list_harness)
+
+    assert list_harness.alist_kwargs() == {
+        "custom_llm_provider": "vertex_ai",
+        "after": None,
+        "limit": None,
+        "vertex_project": "customer-project",
+        "vertex_location": "us-central1",
+        "vertex_credentials": "/creds/customer-sa.json",
+    }
+
+
+@pytest.mark.asyncio
+async def test_cancel__provider_only_resolves_named_vertex_credentials(cancel_harness):
+    cancel_harness.provider_from_headers.return_value = "vertex_ai"
+
+    with patch.object(litellm, "credential_list", [VERTEX_NAMED_CREDENTIAL]):
+        with patch.object(proxy_server, "llm_router", vertex_named_credential_router()):
+            await call_cancel(cancel_harness, "batch-raw-xyz")
+
+    assert cancel_harness.acancel_kwargs() == {
+        "custom_llm_provider": "vertex_ai",
+        "batch_id": "batch-raw-xyz",
+        "vertex_project": "customer-project",
+        "vertex_location": "us-central1",
+        "vertex_credentials": "/creds/customer-sa.json",
+    }

@@ -72,6 +72,95 @@ def test_initialize_guardrail_run_in_parallel_preserves_constructor_default(conf
         registry_module.guardrail_initializer_registry.pop("parallel_default_test", None)
 
 
+def _register_noop_initializer(guardrail_type: str):
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def _initializer(litellm_params, guardrail):
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=False,
+        )
+
+    registry_module.guardrail_initializer_registry[guardrail_type] = _initializer
+    return registry_module
+
+
+def _config_guardrail(name: str, guardrail_type: str, guardrail_id=None) -> dict:
+    guardrail = {
+        "guardrail_name": name,
+        "litellm_params": {"guardrail": guardrail_type, "mode": "pre_call"},
+    }
+    if guardrail_id is not None:
+        guardrail["guardrail_id"] = guardrail_id
+    return guardrail
+
+
+def test_config_guardrail_id_is_stable_across_boots():
+    """
+    Config guardrails used to get a fresh uuid4 per process, so ids from a
+    previous boot (or another replica) 404'd on /guardrails/{id}/info even
+    though the guardrail was alive.
+    """
+    registry_module = _register_noop_initializer("stable_id_test")
+    try:
+        first_boot = InMemoryGuardrailHandler().initialize_guardrail(
+            guardrail=_config_guardrail("tooling", "stable_id_test")
+        )
+        second_boot = InMemoryGuardrailHandler().initialize_guardrail(
+            guardrail=_config_guardrail("tooling", "stable_id_test")
+        )
+
+        assert first_boot["guardrail_id"] == second_boot["guardrail_id"]
+    finally:
+        registry_module.guardrail_initializer_registry.pop("stable_id_test", None)
+
+
+def test_explicit_config_guardrail_id_wins_over_derived_id():
+    registry_module = _register_noop_initializer("explicit_id_test")
+    try:
+        result = InMemoryGuardrailHandler().initialize_guardrail(
+            guardrail=_config_guardrail(
+                "tooling", "explicit_id_test", guardrail_id="my-explicit-id"
+            )
+        )
+
+        assert result["guardrail_id"] == "my-explicit-id"
+    finally:
+        registry_module.guardrail_initializer_registry.pop("explicit_id_test", None)
+
+
+def test_duplicate_config_guardrail_names_get_distinct_stable_ids():
+    """
+    Duplicate guardrail_name entries are legitimate (load balancing across
+    deployments); each occurrence must keep its own id, stable across boots.
+    """
+    registry_module = _register_noop_initializer("dup_name_test")
+    try:
+        handler = InMemoryGuardrailHandler()
+        first = handler.initialize_guardrail(
+            guardrail=_config_guardrail("dup", "dup_name_test")
+        )
+        second = handler.initialize_guardrail(
+            guardrail=_config_guardrail("dup", "dup_name_test")
+        )
+
+        rebooted_handler = InMemoryGuardrailHandler()
+        rebooted_first = rebooted_handler.initialize_guardrail(
+            guardrail=_config_guardrail("dup", "dup_name_test")
+        )
+        rebooted_second = rebooted_handler.initialize_guardrail(
+            guardrail=_config_guardrail("dup", "dup_name_test")
+        )
+
+        assert first["guardrail_id"] != second["guardrail_id"]
+        assert first["guardrail_id"] == rebooted_first["guardrail_id"]
+        assert second["guardrail_id"] == rebooted_second["guardrail_id"]
+        assert len(handler.IN_MEMORY_GUARDRAILS) == 2
+    finally:
+        registry_module.guardrail_initializer_registry.pop("dup_name_test", None)
+
+
 def test_update_in_memory_guardrail():
     handler = InMemoryGuardrailHandler()
     handler.guardrail_id_to_custom_guardrail["123"] = CustomGuardrail(

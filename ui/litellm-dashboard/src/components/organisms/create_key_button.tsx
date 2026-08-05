@@ -1385,8 +1385,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     }
                   >
                     <PassThroughRoutesSelector
-                      onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
-                      value={form.getFieldValue("allowed_passthrough_routes")}
                       accessToken={accessToken}
                       placeholder={
                         !premiumUser

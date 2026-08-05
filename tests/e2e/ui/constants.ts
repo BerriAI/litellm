@@ -1,15 +1,28 @@
+import * as path from "path";
+
 export const UI_BASE_URL = (
   process.env.E2E_UI_BASE_URL ||
   process.env.LITELLM_PROXY_URL ||
   "http://localhost:4000"
 ).replace(/\/+$/, "");
 
+// Directory every artifact this suite writes must land in: storage states,
+// failure screenshots, playwright output. A local `./run_e2e.sh` run has a
+// writable cwd, so it keeps the historical behavior of writing beside the
+// suite. In the packaged e2e image the suite ships on a read-only filesystem
+// (/app/e2e/ui), so bare relative paths raise EROFS/ENOENT and the run dies in
+// globalSetup before a single test executes. Point E2E_UI_ARTIFACT_DIR at a
+// writable path (the image runner already exports TMPDIR) to relocate them.
+export const ARTIFACT_DIR = process.env.E2E_UI_ARTIFACT_DIR || ".";
+
+const storagePath = (name: string): string => path.join(ARTIFACT_DIR, name);
+
 // Storage state paths for each role
-export const ADMIN_STORAGE_PATH = "admin.storageState.json";
-export const ADMIN_VIEWER_STORAGE_PATH = "adminViewer.storageState.json";
-export const INTERNAL_USER_STORAGE_PATH = "internalUser.storageState.json";
-export const INTERNAL_VIEWER_STORAGE_PATH = "internalViewer.storageState.json";
-export const TEAM_ADMIN_STORAGE_PATH = "teamAdmin.storageState.json";
+export const ADMIN_STORAGE_PATH = storagePath("admin.storageState.json");
+export const ADMIN_VIEWER_STORAGE_PATH = storagePath("adminViewer.storageState.json");
+export const INTERNAL_USER_STORAGE_PATH = storagePath("internalUser.storageState.json");
+export const INTERNAL_VIEWER_STORAGE_PATH = storagePath("internalViewer.storageState.json");
+export const TEAM_ADMIN_STORAGE_PATH = storagePath("teamAdmin.storageState.json");
 
 // Seeded user identities (match seed.sql)
 export const E2E_PROXY_ADMIN_USER_ID = "e2e-proxy-admin";

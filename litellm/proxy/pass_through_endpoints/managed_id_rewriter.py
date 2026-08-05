@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Final
 from urllib.parse import quote, unquote
 
 from fastapi import HTTPException
@@ -55,13 +55,13 @@ from .managed_id_codec import ManagedIdPayload, decode, is_managed, new_managed_
 # Field map
 # ---------------------------------------------------------------------------
 
-_FieldSpec = Tuple[str, str]  # (field_name, expected_raw_id_prefix)
-_MapKey = Tuple[str, str, str]  # (provider, HTTP_METHOD, canonical_path)
+_FieldSpec = tuple[str, str]  # (field_name, expected_raw_id_prefix)
+_MapKey = tuple[str, str, str]  # (provider, HTTP_METHOD, canonical_path)
 
 # ``canonical_path`` uses ``/v1/...`` form without any ``/openai/`` prefix.
 # Both ``/openai/...`` and ``/openai_passthrough/...`` are normalised by
 # ``_canonical_path()`` before the lookup so only one set of entries is needed.
-BUILTIN_OUTPUT_ID_FIELD_MAP: Dict[_MapKey, List[_FieldSpec]] = {
+BUILTIN_OUTPUT_ID_FIELD_MAP: Final[dict[_MapKey, list[_FieldSpec]]] = {
     # ------------------------------------------------------------------ files
     ("openai", "POST", "/v1/files"): [
         ("id", "file-"),
@@ -146,14 +146,14 @@ BUILTIN_OUTPUT_ID_FIELD_MAP: Dict[_MapKey, List[_FieldSpec]] = {
 }
 
 # Prefixes that live in the *file* table rather than the object table.
-_FILE_PREFIXES: FrozenSet[str] = frozenset({"file-"})
+_FILE_PREFIXES: Final[frozenset[str]] = frozenset({"file-"})
 
 # Raw provider-ID prefixes that live in the object table (batches, responses).
-_OBJECT_PREFIXES: FrozenSet[str] = frozenset({"batch_", "resp_"})
+_OBJECT_PREFIXES: Final[frozenset[str]] = frozenset({"batch_", "resp_"})
 
 # Guards request-body rewriting against stack exhaustion from adversarially
 # deep payloads. Real OpenAI files/batches bodies nest only a few levels.
-_MAX_BODY_REWRITE_DEPTH = 64
+_MAX_BODY_REWRITE_DEPTH: Final = 64
 
 # Caps the distinct raw-provider-id guard lookups issued per request. A raw
 # file-id guard is an unindexed array-containment scan over
@@ -162,7 +162,7 @@ _MAX_BODY_REWRITE_DEPTH = 64
 # full-table scans. Legitimate callers reference managed IDs (resolved via an
 # indexed lookup, never the guard), so guarding more raw ids than this only
 # happens under abuse; the request is rejected rather than skipping the guard.
-_MAX_RAW_ID_GUARD_LOOKUPS = 100
+_MAX_RAW_ID_GUARD_LOOKUPS: Final = 100
 
 
 class _RawIdGuardBudget:
@@ -197,7 +197,7 @@ class _RawIdGuardBudget:
 # ---------------------------------------------------------------------------
 
 # Maps (provider, canonical_path) -> "files" | "batches"
-_LIST_ROUTE_TABLE: Dict[Tuple[str, str], str] = {
+_LIST_ROUTE_TABLE: Final[dict[tuple[str, str], str]] = {
     ("openai", "/v1/files"): "files",
     ("openai", "/v1/batches"): "batches",
     ("azure", "/v1/files"): "files",
@@ -216,7 +216,7 @@ def _passthrough_sentinel_model_id(provider: str) -> str:
 # Key under which the provider marker is stored in a file row's model_mappings.
 # Its value lands in flat_model_file_ids (built from model_mappings.values()),
 # giving the file table a DB-queryable provider scope it otherwise lacks.
-_PASSTHROUGH_PROVIDER_MARKER_KEY = "_passthrough_provider_marker"
+_PASSTHROUGH_PROVIDER_MARKER_KEY: Final = "_passthrough_provider_marker"
 
 
 def _passthrough_provider_marker(provider: str) -> str:
@@ -224,7 +224,7 @@ def _passthrough_provider_marker(provider: str) -> str:
 
 
 def _managed_id_matches_provider(unified_id: str, provider: str) -> bool:
-    payload = decode(unified_id)
+    payload: Final = decode(unified_id)
     return payload is not None and payload.provider == provider
 
 
@@ -234,7 +234,7 @@ def _managed_id_matches_provider(unified_id: str, provider: str) -> bool:
 #   /openai/v1/files              -> /v1/files
 #   /azure/openai/files           -> /files  (_canonical_path then prepends /v1/)
 #   /azure_ai/openai/files        -> /files
-_PASSTHROUGH_PREFIX_RE = re.compile(r"^/(?:azure(?:_ai)?/)?openai(?:_passthrough)?(?=/|$)")
+_PASSTHROUGH_PREFIX_RE: Final = re.compile(r"^/(?:azure(?:_ai)?/)?openai(?:_passthrough)?(?=/|$)")
 
 
 def _canonical_path(route: str) -> str:
@@ -276,7 +276,7 @@ async def _resolve_one(
     Raises ``HTTPException(404)`` on unknown / forged managed IDs — never
     forwarded upstream as a literal string.
     """
-    payload: Optional[ManagedIdPayload] = decode(managed_id)
+    payload: Final[ManagedIdPayload | None] = decode(managed_id)
     if payload is None:
         return managed_id  # not a passthrough managed ID; pass through
     verbose_proxy_logger.debug(
@@ -296,18 +296,18 @@ async def _resolve_one(
             detail=(f"Managed ID was minted for provider '{payload.provider}', not '{provider}'."),
         )
 
-    row_created_by: Optional[str] = None
-    row_team_id: Optional[str] = None
+    row_created_by: str | None = None
+    row_team_id: str | None = None
     found = False
 
-    raw_id = payload.raw_provider_id
+    raw_id: Final = payload.raw_provider_id
 
     # 2. DB lookup — pick table based on raw ID prefix
     if any(raw_id.startswith(p) for p in _FILE_PREFIXES):
         # File table — use hook's internal cache for speed when available
         if managed_files_hook is not None:
             try:
-                file_row = await managed_files_hook.get_unified_file_id(
+                file_row: Final = await managed_files_hook.get_unified_file_id(
                     managed_id,
                     litellm_parent_otel_span=None,
                 )
@@ -322,7 +322,7 @@ async def _resolve_one(
                 )
         if not found and prisma_client is not None:
             try:
-                db_row = await ManagedFileRepository(prisma_client).table.find_first(
+                db_row: Final = await ManagedFileRepository(prisma_client).table.find_first(
                     where={"unified_file_id": managed_id}
                 )
                 if db_row is not None:
@@ -338,7 +338,7 @@ async def _resolve_one(
         # Object table (batches, responses)
         if prisma_client is not None:
             try:
-                obj_row = await ManagedObjectRepository(prisma_client).table.find_first(
+                obj_row: Final = await ManagedObjectRepository(prisma_client).table.find_first(
                     where={"unified_object_id": managed_id}
                 )
                 if obj_row is not None:
@@ -373,7 +373,7 @@ async def _guard_raw_provider_id(
     provider: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Any,
-    budget: Optional[_RawIdGuardBudget] = None,
+    budget: _RawIdGuardBudget | None = None,
 ) -> None:
     """Deny a raw provider ID that maps to a managed resource the caller does
     not own, before it is forwarded upstream.
@@ -398,13 +398,13 @@ async def _guard_raw_provider_id(
         # id and scope to the current provider in the application layer (same as
         # _mint_or_reuse_file's dedup).
         try:
-            candidates = await ManagedFileRepository(prisma_client).table.find_many(
+            candidates: Final = await ManagedFileRepository(prisma_client).table.find_many(
                 where={"flat_model_file_ids": {"has": raw_id}},
             )
         except Exception:
             verbose_proxy_logger.debug("managed_id_rewriter: raw file-id guard lookup failed", exc_info=True)
             return
-        provider_rows = [
+        provider_rows: Final = [
             row for row in (candidates or []) if _managed_id_matches_provider(row.unified_file_id, provider)
         ]
         if provider_rows and not any(
@@ -419,7 +419,7 @@ async def _guard_raw_provider_id(
         # Object rows store model_object_id as "passthrough:{provider}:{raw}", so
         # the lookup is exact and already provider-scoped.
         try:
-            existing = await ManagedObjectRepository(prisma_client).table.find_first(
+            existing: Final = await ManagedObjectRepository(prisma_client).table.find_first(
                 where={"model_object_id": f"passthrough:{provider}:{raw_id}"}
             )
         except Exception:
@@ -434,7 +434,7 @@ async def _guard_raw_provider_id(
 # ---------------------------------------------------------------------------
 
 
-def _build_managed_file_object(snapshot: Optional[Dict[str, Any]], managed_id: str) -> Optional[OpenAIFileObject]:
+def _build_managed_file_object(snapshot: dict[str, Any] | None, managed_id: str) -> OpenAIFileObject | None:
     """Build an ``OpenAIFileObject`` (with the managed ID swapped in) from an
     upstream file response so the DB-served list returns the same metadata as a
     direct file GET.  Returns ``None`` when no usable snapshot is available, in
@@ -457,7 +457,7 @@ async def _mint_or_reuse_file(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Any,
     managed_files_hook: Any,
-    file_object_snapshot: Optional[Dict[str, Any]] = None,
+    file_object_snapshot: dict[str, Any] | None = None,
     is_create_route: bool = True,
 ) -> str:
     """Return an existing managed file ID or mint + store a new one."""
@@ -486,10 +486,10 @@ async def _mint_or_reuse_file(
         except Exception:
             candidates = []
             verbose_proxy_logger.debug("managed_id_rewriter: file dedup lookup failed", exc_info=True)
-        provider_rows = [
+        provider_rows: Final = [
             row for row in (candidates or []) if _managed_id_matches_provider(row.unified_file_id, provider)
         ]
-        owned_row = next(
+        owned_row: Final = next(
             (row for row in provider_rows if can_access_resource(user_api_key_dict, row.created_by, row.team_id)),
             None,
         )
@@ -518,7 +518,7 @@ async def _mint_or_reuse_file(
             return raw_id
 
     # No existing row — mint a new managed ID and store it.
-    managed_id = new_managed_id(provider, raw_id)
+    managed_id: Final = new_managed_id(provider, raw_id)
     verbose_proxy_logger.debug(
         "managed_id_rewriter: minted new managed file id for raw prefix=%s",
         raw_id.split("-", 1)[0],
@@ -567,7 +567,7 @@ async def _mint_or_reuse_object(
     # and causing every subsequent _resolve_one for that ID to return 404.
     # This mirrors the pattern in container_endpoints/ownership.py which uses
     # f"{purpose}:{provider}:{raw_id}" for the same reason.
-    namespaced_model_object_id = f"passthrough:{provider}:{raw_id}"
+    namespaced_model_object_id: Final = f"passthrough:{provider}:{raw_id}"
 
     async def _reuse_existing(existing: Any, refresh_snapshot: bool) -> str:
         """Resolve an already-persisted namespaced row: enforce the access
@@ -629,7 +629,7 @@ async def _mint_or_reuse_object(
         return await _reuse_existing(existing, refresh_snapshot=True)
 
     # No existing row — mint and upsert.
-    managed_id = new_managed_id(provider, raw_id)
+    managed_id: Final = new_managed_id(provider, raw_id)
     verbose_proxy_logger.debug(
         "managed_id_rewriter: minted new managed object id for raw prefix=%s",
         raw_id.split("_", 1)[0],
@@ -698,8 +698,8 @@ async def rewrite_response_ids(
     from litellm.proxy.auth.auth_utils import normalize_request_route
 
     # Strip passthrough prefix then normalize to get e.g. /v1/batches/{batch_id}
-    canonical = normalize_request_route(_canonical_path(route))
-    field_specs = BUILTIN_OUTPUT_ID_FIELD_MAP.get((provider, method, canonical))
+    canonical: Final = normalize_request_route(_canonical_path(route))
+    field_specs: Final = BUILTIN_OUTPUT_ID_FIELD_MAP.get((provider, method, canonical))
     if field_specs is None:
         verbose_proxy_logger.debug(
             "managed_id_rewriter: no output rewrite map for provider=%s method=%s route=%s",
@@ -712,9 +712,9 @@ async def rewrite_response_ids(
     # Collection endpoints (POST /v1/batches, /v1/responses) carry no resource
     # id in the path; everything else (retrieve / cancel / delete) does.  Only
     # creates may degrade to a raw id on a cross-owner collision.
-    is_create_route = "{" not in canonical
+    is_create_route: Final = "{" not in canonical
 
-    mutated = dict(body)  # shallow copy; only return if something changed
+    mutated: Final = dict(body)  # shallow copy; only return if something changed
     changed = False
 
     def _record(field_name: str, raw_value: str, managed_id: str) -> None:
@@ -791,7 +791,7 @@ def is_passthrough_list_route(provider: str, method: str, route: str) -> bool:
         return False
     from litellm.proxy.auth.auth_utils import normalize_request_route
 
-    canonical = normalize_request_route(_canonical_path(route))
+    canonical: Final = normalize_request_route(_canonical_path(route))
     return (provider, canonical) in _LIST_ROUTE_TABLE
 
 
@@ -809,7 +809,7 @@ def _parse_file_object(file_object: Any) -> Any:
     return file_object
 
 
-def _empty_list_response() -> Dict[str, Any]:
+def _empty_list_response() -> dict[str, Any]:
     return {
         "object": "list",
         "data": [],
@@ -819,8 +819,8 @@ def _empty_list_response() -> Dict[str, Any]:
     }
 
 
-def _parse_list_limit(query_params: Optional[Dict[str, Any]]) -> Tuple[int, int]:
-    params = query_params or {}
+def _parse_list_limit(query_params: dict[str, Any] | None) -> tuple[int, int]:
+    params: Final = query_params or {}
     try:
         raw_limit = int(params.get("limit", 20))
     except (TypeError, ValueError):
@@ -833,31 +833,31 @@ async def _build_list_where_with_cursor(
     prisma_client: Any,
     resource_kind: str,
     provider: str,
-    owner_filter: Dict[str, Any],
-    query_params: Optional[Dict[str, Any]],
-) -> Tuple[Dict[str, Any], str]:
+    owner_filter: dict[str, Any],
+    query_params: dict[str, Any] | None,
+) -> tuple[dict[str, Any], str]:
     """Return a Prisma ``where`` clause and fetch order for a list query."""
-    params = query_params or {}
-    after_id: Optional[str] = params.get("after")
-    before_id: Optional[str] = params.get("before")
-    where: Dict[str, Any] = dict(owner_filter)
+    params: Final = query_params or {}
+    after_id: Final[str | None] = params.get("after")
+    before_id: Final[str | None] = params.get("before")
+    where: dict[str, Any] = dict(owner_filter)
     fetch_order = "desc"
 
-    cursor_id = after_id or before_id
+    cursor_id: Final = after_id or before_id
     # A cursor minted for a different provider would resolve to that provider's
     # created_at boundary and silently skip/repeat this provider's rows, so
     # ignore it and serve the unscoped first page instead.
     if not cursor_id or not _managed_id_matches_provider(cursor_id, provider):
         return where, fetch_order
 
-    cursor_table = (
+    cursor_table: Final = (
         ManagedFileRepository(prisma_client).table
         if resource_kind == "files"
         else ManagedObjectRepository(prisma_client).table
     )
-    cursor_field = "unified_file_id" if resource_kind == "files" else "unified_object_id"
+    cursor_field: Final = "unified_file_id" if resource_kind == "files" else "unified_object_id"
     try:
-        cursor_row = await cursor_table.find_first(where={**owner_filter, cursor_field: cursor_id})
+        cursor_row: Final = await cursor_table.find_first(where={**owner_filter, cursor_field: cursor_id})
         if cursor_row is not None:
             if after_id:
                 op = "lt"
@@ -867,7 +867,7 @@ async def _build_list_where_with_cursor(
             # created_at is not unique, so the boundary must also compare the
             # unique id (the secondary sort key) to avoid skipping or repeating
             # rows that share the cursor row's timestamp across a page boundary.
-            boundary = {
+            boundary: Final = {
                 "OR": [
                     {"created_at": {op: cursor_row.created_at}},
                     {
@@ -887,10 +887,10 @@ async def _build_list_where_with_cursor(
 async def _fetch_list_rows(
     prisma_client: Any,
     resource_kind: str,
-    where: Dict[str, Any],
+    where: dict[str, Any],
     fetch_order: str,
     fetch_limit: int,
-) -> Optional[List[Any]]:
+) -> list[Any] | None:
     # created_at is not unique, so a second sort on the unique id column gives a
     # total order, keeping the limit+1 page boundary and cursor deterministic
     # across rows that share a created_at timestamp.
@@ -915,11 +915,11 @@ async def _fetch_provider_scoped_list_rows(
     prisma_client: Any,
     resource_kind: str,
     provider: str,
-    where: Dict[str, Any],
+    where: dict[str, Any],
     fetch_order: str,
     raw_limit: int,
     fetch_limit: int,
-) -> Tuple[List[Any], bool]:
+) -> tuple[list[Any], bool]:
     """Fetch one page of list rows scoped to *provider* at the DB level.
 
     Both resource kinds carry a provider-distinguishing value that the query
@@ -933,40 +933,40 @@ async def _fetch_provider_scoped_list_rows(
     A DB failure returns an empty page (fail closed) so the caller never falls
     through to the upstream provider.
     """
-    scoped_where = dict(where)
+    scoped_where: Final = dict(where)
     if resource_kind == "files":
         scoped_where["flat_model_file_ids"] = {"has": _passthrough_provider_marker(provider)}
     else:
         scoped_where["model_object_id"] = {"startswith": f"passthrough:{provider}:"}
 
-    rows = await _fetch_list_rows(prisma_client, resource_kind, scoped_where, fetch_order, fetch_limit)
+    rows: Final = await _fetch_list_rows(prisma_client, resource_kind, scoped_where, fetch_order, fetch_limit)
     if rows is None:
         return [], False
 
-    effective_limit = min(raw_limit, 100)
-    has_more = len(rows) > effective_limit
+    effective_limit: Final = min(raw_limit, 100)
+    has_more: Final = len(rows) > effective_limit
     page = rows[:effective_limit]
     if fetch_order == "asc":
         page = list(reversed(page))
     return page, has_more
 
 
-def _serialize_file_list_item(row: Any) -> Dict[str, Any]:
-    item: Dict[str, Any] = {
+def _serialize_file_list_item(row: Any) -> dict[str, Any]:
+    item: Final[dict[str, Any]] = {
         "id": row.unified_file_id,
         "object": "file",
         "created_at": int(row.created_at.timestamp()) if row.created_at else None,
     }
-    file_object = _parse_file_object(row.file_object)
+    file_object: Final = _parse_file_object(row.file_object)
     if isinstance(file_object, dict):
         item.update(file_object)
     item["id"] = row.unified_file_id  # managed ID always wins over stored raw id
     return item
 
 
-def _serialize_batch_list_item(row: Any) -> Dict[str, Any]:
-    item: Dict[str, Any] = {}
-    file_object = _parse_file_object(row.file_object)
+def _serialize_batch_list_item(row: Any) -> dict[str, Any]:
+    item: Final[dict[str, Any]] = {}
+    file_object: Final = _parse_file_object(row.file_object)
     if isinstance(file_object, dict):
         item.update(file_object)
     item["id"] = row.unified_object_id  # managed ID always wins
@@ -974,10 +974,10 @@ def _serialize_batch_list_item(row: Any) -> Dict[str, Any]:
     return item
 
 
-def _list_boundary_ids(rows: List[Any], resource_kind: str) -> Tuple[Optional[str], Optional[str]]:
+def _list_boundary_ids(rows: list[Any], resource_kind: str) -> tuple[str | None, str | None]:
     if not rows:
         return None, None
-    id_attr = "unified_file_id" if resource_kind == "files" else "unified_object_id"
+    id_attr: Final = "unified_file_id" if resource_kind == "files" else "unified_object_id"
     return getattr(rows[0], id_attr), getattr(rows[-1], id_attr)
 
 
@@ -986,8 +986,8 @@ async def list_passthrough_ids_from_db(
     route: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Any,
-    query_params: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
+    query_params: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Query the DB for managed IDs the caller owns and return an OpenAI-style
     paginated list response.
 
@@ -1006,12 +1006,12 @@ async def list_passthrough_ids_from_db(
 
     from litellm.proxy.auth.auth_utils import normalize_request_route
 
-    canonical = normalize_request_route(_canonical_path(route))
-    resource_kind = _LIST_ROUTE_TABLE.get((provider, canonical))
+    canonical: Final = normalize_request_route(_canonical_path(route))
+    resource_kind: Final = _LIST_ROUTE_TABLE.get((provider, canonical))
     if resource_kind is None:
         return None
 
-    owner_filter = build_owner_filter(user_api_key_dict)
+    owner_filter: Final = build_owner_filter(user_api_key_dict)
     if owner_filter is None:
         verbose_proxy_logger.warning("managed_id_rewriter: list denied — caller has no user_id or team_id")
         return _empty_list_response()
@@ -1067,9 +1067,9 @@ async def rewrite_path_ids(
     Walk URL path segments and resolve any passthrough managed IDs to raw
     provider IDs.  Returns *path* unchanged when no managed IDs are found.
     """
-    budget = _RawIdGuardBudget()
-    segments = path.split("/")
-    new_segments: List[str] = []
+    budget: Final = _RawIdGuardBudget()
+    segments: Final = path.split("/")
+    new_segments: Final[list[str]] = []
     changed = False
     for seg in segments:
         decoded_seg = unquote(seg)
@@ -1092,21 +1092,21 @@ async def rewrite_path_ids(
 
 
 async def rewrite_query_ids(
-    params: Optional[Dict[str, Any]],
+    params: dict[str, Any] | None,
     provider: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Any,
     managed_files_hook: Any,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """
     Walk query param values and resolve any passthrough managed IDs.
     Returns *params* unchanged (same object) when nothing is resolved.
     """
     if not params:
         return params
-    budget = _RawIdGuardBudget()
-    mutated = dict(params)
-    rewritten_keys: List[str] = []
+    budget: Final = _RawIdGuardBudget()
+    mutated: Final = dict(params)
+    rewritten_keys: Final[list[str]] = []
     for key, val in list(mutated.items()):
         if isinstance(val, str):
             if is_managed(val):
@@ -1124,12 +1124,12 @@ async def rewrite_query_ids(
 
 
 async def rewrite_body_ids(
-    body: Optional[Dict[str, Any]],
+    body: dict[str, Any] | None,
     provider: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Any,
     managed_files_hook: Any,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """
     Recursively walk a request body dict/list and resolve any passthrough
     managed IDs.  Skips litellm internal keys (``litellm_*``).
@@ -1138,13 +1138,13 @@ async def rewrite_body_ids(
     if not body:
         return body
 
-    budget = _RawIdGuardBudget()
+    budget: Final = _RawIdGuardBudget()
 
     async def _walk(node: Any, depth: int) -> Any:
         if depth >= _MAX_BODY_REWRITE_DEPTH:
             return node
         if isinstance(node, dict):
-            result: Dict[str, Any] = {}
+            result: Final[dict[str, Any]] = {}
             changed_inner = False
             for k, v in node.items():
                 # Skip litellm internal injection keys (e.g. litellm_logging_obj)
@@ -1157,7 +1157,7 @@ async def rewrite_body_ids(
                     changed_inner = True
             return result if changed_inner else node
         elif isinstance(node, list):
-            new_list = [await _walk(item, depth + 1) for item in node]
+            new_list: Final = [await _walk(item, depth + 1) for item in node]
             if any(n is not o for n, o in zip(new_list, node)):
                 return new_list
             return node
@@ -1168,7 +1168,7 @@ async def rewrite_body_ids(
             return node
         return node
 
-    rewritten = await _walk(body, 0)
+    rewritten: Final = await _walk(body, 0)
     if rewritten is not body:
         verbose_proxy_logger.debug("managed_id_rewriter: body ids rewritten provider=%s", provider)
     return rewritten

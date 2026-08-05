@@ -13,6 +13,7 @@ All /budget management endpoints
 
 #### BUDGET TABLE MANAGEMENT ####
 import math
+from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -23,7 +24,7 @@ from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.utils import jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 @router.post(
@@ -86,10 +87,10 @@ async def new_budget(
     if budget_obj.budget_reset_at is None and budget_obj.budget_duration is not None:
         budget_obj.budget_reset_at = get_budget_reset_time(budget_duration=budget_obj.budget_duration)
 
-    budget_obj_json = budget_obj.model_dump(exclude_none=True)
-    budget_obj_jsonified = jsonify_object(budget_obj_json)  # json dump any dictionaries
+    budget_obj_json: Final = budget_obj.model_dump(exclude_none=True)
+    budget_obj_jsonified: Final = jsonify_object(budget_obj_json)  # json dump any dictionaries
     try:
-        response = await BudgetRepository(prisma_client).table.create(
+        response: Final = await BudgetRepository(prisma_client).table.create(
             data={
                 **budget_obj_jsonified,  # type: ignore
                 "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
@@ -164,13 +165,13 @@ async def update_budget(
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
     # recompute budget_reset_at when the duration changes, unless the caller pinned a reset time explicitly
-    recomputed_reset_at = (
+    recomputed_reset_at: Final = (
         {"budget_reset_at": get_budget_reset_time(budget_duration=budget_obj.budget_duration)}
         if budget_obj.budget_duration is not None and "budget_reset_at" not in budget_obj.model_fields_set
         else {}
     )
 
-    response = await BudgetRepository(prisma_client).table.update(
+    response: Final = await BudgetRepository(prisma_client).table.update(
         where={"budget_id": budget_obj.budget_id},
         data={
             **budget_obj.model_dump(exclude_unset=True),  # type: ignore
@@ -204,7 +205,7 @@ async def info_budget(data: BudgetRequest):
             status_code=400,
             detail={"error": f"Specify list of budget id's to query. Passed in={data.budgets}"},
         )
-    response = await BudgetRepository(prisma_client).table.find_many(
+    response: Final = await BudgetRepository(prisma_client).table.find_many(
         where={"budget_id": {"in": data.budgets}},
     )
 
@@ -239,23 +240,18 @@ async def budget_settings(
     if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "{}, your role={}".format(
-                    CommonProxyErrors.not_allowed_access.value,
-                    user_api_key_dict.user_role,
-                )
-            },
+            detail={"error": f"{CommonProxyErrors.not_allowed_access.value}, your role={user_api_key_dict.user_role}"},
         )
 
     ## get budget item from db
-    db_budget_row = await BudgetRepository(prisma_client).table.find_first(where={"budget_id": budget_id})
+    db_budget_row: Final = await BudgetRepository(prisma_client).table.find_first(where={"budget_id": budget_id})
 
     if db_budget_row is not None:
         db_budget_row_dict = db_budget_row.model_dump(exclude_none=True)
     else:
         db_budget_row_dict = {}
 
-    allowed_args = {
+    allowed_args: Final = {
         "max_parallel_requests": {"type": "Integer"},
         "tpm_limit": {"type": "Integer"},
         "rpm_limit": {"type": "Integer"},
@@ -265,7 +261,7 @@ async def budget_settings(
         "model_max_budget": {"type": "Object"},
     }
 
-    return_val = []
+    return_val: Final = []
 
     for field_name, field_info in BudgetNewRequest.model_fields.items():
         if field_name in allowed_args:
@@ -304,15 +300,10 @@ async def list_budget(
     if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "{}, your role={}".format(
-                    CommonProxyErrors.not_allowed_access.value,
-                    user_api_key_dict.user_role,
-                )
-            },
+            detail={"error": f"{CommonProxyErrors.not_allowed_access.value}, your role={user_api_key_dict.user_role}"},
         )
 
-    response = await BudgetRepository(prisma_client).table.find_many()
+    response: Final = await BudgetRepository(prisma_client).table.find_many()
 
     return response
 
@@ -343,14 +334,9 @@ async def delete_budget(
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "{}, your role={}".format(
-                    CommonProxyErrors.not_allowed_access.value,
-                    user_api_key_dict.user_role,
-                )
-            },
+            detail={"error": f"{CommonProxyErrors.not_allowed_access.value}, your role={user_api_key_dict.user_role}"},
         )
 
-    response = await BudgetRepository(prisma_client).table.delete(where={"budget_id": data.id})
+    response: Final = await BudgetRepository(prisma_client).table.delete(where={"budget_id": data.id})
 
     return response

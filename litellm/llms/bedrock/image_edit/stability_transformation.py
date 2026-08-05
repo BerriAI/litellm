@@ -22,7 +22,7 @@ API Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parame
 """
 
 import base64
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -51,7 +51,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
     """
 
     @classmethod
-    def _is_stability_edit_model(cls, model: Optional[str] = None) -> bool:
+    def _is_stability_edit_model(cls, model: str | None = None) -> bool:
         """
         Returns True if the model is a Bedrock Stability edit model.
 
@@ -65,7 +65,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             etc.
         """
         if model:
-            model_lower = model.lower()
+            model_lower: Final = model.lower()
             if "stability." in model_lower and any(
                 [
                     "upscale" in model_lower,
@@ -100,7 +100,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         """
         Map OpenAI parameters to Bedrock Stability parameters.
 
@@ -108,15 +108,15 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         - size -> aspect_ratio
         - n -> (handled separately, Stability returns 1 image per request)
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         # Define mapping from OpenAI params to Stability params
-        param_mapping = {
+        param_mapping: Final = {
             "size": "aspect_ratio",
             # "n" and "response_format" are handled separately
         }
 
         # Create a copy to not mutate original - convert TypedDict to regular dict
-        mapped_params: Dict[str, Any] = dict(image_edit_optional_params)
+        mapped_params: Final[dict[str, Any]] = dict(image_edit_optional_params)
 
         for k, v in image_edit_optional_params.items():
             if k in param_mapping:
@@ -144,27 +144,26 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
 
         # Remove OpenAI params that have been mapped unless they're in stability
         for mapped in ["size", "n", "response_format"]:
-            if mapped in mapped_params:
-                del mapped_params[mapped]
+            mapped_params.pop(mapped, None)
 
         return mapped_params
 
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: Optional[str],
-        image: Optional[FileTypes],
-        image_edit_optional_request_params: Dict,
+        prompt: str | None,
+        image: FileTypes | None,
+        image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, Any]:
+    ) -> tuple[dict, Any]:
         """
         Transform OpenAI-style request to Bedrock Stability request format.
 
         Returns the request body dict that will be JSON-encoded by the handler.
         """
         # Build Bedrock Stability request
-        data: Dict[str, Any] = {
+        data: Final[dict[str, Any]] = {
             "output_format": "png",  # Default to PNG
         }
 
@@ -177,7 +176,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             image_b64: str
             if hasattr(image, "read") and callable(getattr(image, "read", None)):
                 # File-like object (e.g., BufferedReader from open())
-                image_bytes = image.read()  # type: ignore
+                image_bytes: Final = image.read()  # type: ignore
                 image_b64 = base64.b64encode(image_bytes).decode("utf-8")  # type: ignore
             elif isinstance(image, bytes):
                 # Raw bytes
@@ -190,7 +189,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                 image_b64 = base64.b64encode(bytes(image)).decode("utf-8")  # type: ignore
 
             # For style-transfer models, map image to init_image
-            model_lower = model.lower()
+            model_lower: Final = model.lower()
             if "style-transfer" in model_lower:
                 data["init_image"] = image_b64
             else:
@@ -273,8 +272,8 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform Bedrock Stability response to OpenAI-compatible ImageResponse.
@@ -283,7 +282,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         OpenAI expects: {"data": [{"b64_json": "base64..."}], "created": timestamp}
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Bedrock Stability response: {e}",
@@ -300,7 +299,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             )
 
         # Check finish_reasons
-        finish_reasons = response_data.get("finish_reasons", [])
+        finish_reasons: Final = response_data.get("finish_reasons", [])
         if finish_reasons and finish_reasons[0]:
             raise self.get_error_class(
                 error_message=f"Bedrock Stability error: {finish_reasons[0]}",
@@ -308,12 +307,12 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        model_response = ImageResponse()
+        model_response: Final = ImageResponse()
         if not model_response.data:
             model_response.data = []
 
         # Extract images from response
-        images = response_data.get("images", [])
+        images: Final = response_data.get("images", [])
         if images:
             for image_b64 in images:
                 if image_b64:
@@ -331,8 +330,8 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             model_response._hidden_params["additional_headers"] = {}
 
         # Set cost based on model
-        model_info = get_model_info(model, custom_llm_provider="bedrock")
-        cost_per_image = model_info.get("output_cost_per_image", 0)
+        model_info: Final = get_model_info(model, custom_llm_provider="bedrock")
+        cost_per_image: Final = model_info.get("output_cost_per_image", 0)
         if cost_per_image is not None:
             model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
                 cost_per_image
@@ -349,7 +348,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -369,9 +368,9 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment for Bedrock Stability image edit.

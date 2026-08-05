@@ -2,7 +2,7 @@
 Transformation for Calling Google models in their native format.
 """
 
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Any, Final, Literal
 
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
 from litellm.types.router import GenericLiteLLMParams
@@ -22,12 +22,12 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
 
     def validate_environment(
         self,
-        api_key: Optional[str],
-        headers: Optional[dict],
+        api_key: str | None,
+        headers: dict | None,
         model: str,
-        litellm_params: Optional[Union[GenericLiteLLMParams, dict]],
+        litellm_params: GenericLiteLLMParams | dict | None,
     ) -> dict:
-        default_headers = {
+        default_headers: Final = {
             "Content-Type": "application/json",
         }
 
@@ -60,7 +60,7 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
             Mapped parameters for the provider
         """
 
-        _generate_content_config_dict: Dict = {}
+        _generate_content_config_dict: Final[dict] = {}
 
         for param, value in generate_content_config_dict.items():
             camel_case_key = self._camel_to_snake(param)
@@ -71,9 +71,9 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
         self,
         model: str,
         contents: Any,
-        tools: Optional[Any],
-        generate_content_config_dict: Dict,
-        system_instruction: Optional[Any] = None,
+        tools: Any | None,
+        generate_content_config_dict: dict,
+        system_instruction: Any | None = None,
     ) -> dict:
         """
         Transform the generate content request for Vertex AI.
@@ -83,7 +83,7 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
             self._normalize_response_schema(generate_content_config_dict, model)
 
         # Build the request in Google GenAI format that Vertex AI expects
-        result = {
+        result: Final = {
             "model": model,
             "contents": contents,
         }

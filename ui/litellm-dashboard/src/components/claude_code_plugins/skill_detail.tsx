@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { ArrowLeftOutlined, CopyOutlined, CheckOutlined, LinkOutlined } from "@ant-design/icons";
-import { formatInstallCommand } from "./helpers";
+import { buildMarketplaceSettingsSnippet, formatInstallCommand } from "./helpers";
 import { Plugin } from "./types";
 
 interface SkillDetailProps {
@@ -30,6 +30,10 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
   })();
 
   const installCommand = formatInstallCommand(skill);
+
+  const settingsSnippet = buildMarketplaceSettingsSnippet(
+    typeof window !== "undefined" ? window.location.origin : "<proxy-url>",
+  );
 
   const detailRows = [
     ...(skill.category ? [{ property: "Category", value: skill.category }] : []),
@@ -298,21 +302,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
             >
               <span style={{ fontSize: 13, color: "#3c4043", fontWeight: 500 }}>~/.claude/settings.json</span>
               <button
-                onClick={() => {
-                  const snippet = JSON.stringify(
-                    {
-                      extraKnownMarketplaces: {
-                        "my-org": {
-                          source: "url",
-                          url: `${typeof window !== "undefined" ? window.location.origin : ""}/claude-code/marketplace.json`,
-                        },
-                      },
-                    },
-                    null,
-                    2,
-                  );
-                  copyToClipboard(snippet, "settings");
-                }}
+                onClick={() => copyToClipboard(settingsSnippet, "settings")}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -339,18 +329,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                 backgroundColor: "#fff",
               }}
             >
-              {JSON.stringify(
-                {
-                  extraKnownMarketplaces: {
-                    "my-org": {
-                      source: "url",
-                      url: `${typeof window !== "undefined" ? window.location.origin : "<proxy-url>"}/claude-code/marketplace.json`,
-                    },
-                  },
-                },
-                null,
-                2,
-              )}
+              {settingsSnippet}
             </pre>
           </div>
         </div>

@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 from fastapi import HTTPException
 from pydantic import (
@@ -13,10 +13,13 @@ from pydantic import (
 )
 from pydantic_core.core_schema import SerializerFunctionWrapHandler
 
-SCIM_ENTERPRISE_USER_SCHEMA = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
-SCIM_ENTERPRISE_METADATA_KEY = "scim_enterprise"
-SCIM_ENTITLEMENTS_METADATA_KEY = "scim_entitlements"
-SCIM_ROLES_METADATA_KEY = "scim_roles"
+SCIM_ENTERPRISE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
+SCIM_ENTERPRISE_METADATA_KEY: Final = "scim_enterprise"
+SCIM_ENTITLEMENTS_METADATA_KEY: Final = "scim_entitlements"
+SCIM_ROLES_METADATA_KEY: Final = "scim_roles"
+
+SCIM_MANAGED_TEAM_METADATA_KEY: Final = "scim_managed"
+SCIM_TEAM_DATA_METADATA_KEY: Final = "scim_data"
 
 
 class LiteLLM_UserScimMetadata(BaseModel):
@@ -71,9 +74,9 @@ class SCIMMultiValuedAttribute(BaseModel):
         return data
 
 
-SCIM_MULTI_VALUED_LIST_ADAPTER = TypeAdapter(List[SCIMMultiValuedAttribute])
+SCIM_MULTI_VALUED_LIST_ADAPTER: Final = TypeAdapter(List[SCIMMultiValuedAttribute])
 
-SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS = {
+SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS: Final = {
     "entitlements": SCIM_ENTITLEMENTS_METADATA_KEY,
     "roles": SCIM_ROLES_METADATA_KEY,
 }
@@ -117,7 +120,7 @@ class SCIMUser(SCIMResource):
 
     @model_serializer(mode="wrap")
     def _omit_absent_optional_blocks(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
-        dumped = handler(self)
+        dumped: Final = handler(self)
         if self.enterprise_user is None:
             dumped.pop(SCIM_ENTERPRISE_USER_SCHEMA, None)
             dumped.pop("enterprise_user", None)
@@ -131,6 +134,15 @@ class SCIMUser(SCIMResource):
 class SCIMMember(BaseModel):
     value: str  # User ID
     display: Optional[str] = None  # Username or email
+    type: str | None = None
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, v: object) -> str | None:
+        """Anything that is not a string carries no canonical type, and rejecting the
+        request over it would be a regression: before this field existed the value was
+        parsed away silently."""
+        return v if isinstance(v, str) else None
 
 
 class SCIMGroup(SCIMResource):
@@ -157,7 +169,7 @@ class SCIMPatchOperation(BaseModel):
     @classmethod
     def normalize_op(cls, v):
         if isinstance(v, str):
-            v_lower = v.lower()
+            v_lower: Final = v.lower()
             if v_lower not in {"add", "remove", "replace"}:
                 raise ValueError("op must be add, remove, or replace")
             return v_lower
@@ -197,7 +209,7 @@ class SCIMSchemaExtension(BaseModel):
     required: bool
 
     def model_dump(self, **kwargs):
-        d = super().model_dump(**kwargs)
+        d: Final = super().model_dump(**kwargs)
         d["schema"] = d.pop("schema_")
         return d
 
@@ -216,7 +228,7 @@ class SCIMResourceType(BaseModel):
     meta: Optional[Dict[str, Any]] = None
 
     def model_dump(self, **kwargs):
-        d = super().model_dump(**kwargs)
+        d: Final = super().model_dump(**kwargs)
         d["schema"] = d.pop("schema_")
         if d.get("schemaExtensions") is None:
             d.pop("schemaExtensions", None)
@@ -236,7 +248,7 @@ class SCIMSchemaAttribute(BaseModel):
     subAttributes: Optional[List["SCIMSchemaAttribute"]] = None
 
     def model_dump(self, **kwargs):
-        d = super().model_dump(**kwargs)
+        d: Final = super().model_dump(**kwargs)
         if d.get("subAttributes") is None:
             d.pop("subAttributes", None)
         return d
