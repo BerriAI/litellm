@@ -16,15 +16,16 @@ class AuditLogResponse(BaseModel):
     object_id: str
     before_value: Optional[Dict[str, Any]] = None
     updated_values: Optional[Dict[str, Any]] = None
+    object_alias: str | None = None
+    changed_by_user_email: str | None = None
+    changed_by_key_alias: str | None = None
 
 
 class PaginatedAuditLogResponse(BaseModel):
     """Response model for paginated audit logs"""
 
     audit_logs: List[AuditLogResponse]
-    total: int = Field(
-        ..., description="Total number of audit logs matching the filters"
-    )
+    total: int = Field(..., description="Total number of audit logs matching the filters")
     page: int = Field(..., description="Current page number")
     page_size: int = Field(..., description="Number of items per page")
     total_pages: int = Field(..., description="Total number of pages")

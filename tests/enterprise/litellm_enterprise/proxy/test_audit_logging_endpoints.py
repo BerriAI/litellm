@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -34,6 +34,11 @@ def mock_prisma_client():
         mock.db.litellm_auditlog.find_many = AsyncMock()
         mock.db.litellm_auditlog.find_unique = AsyncMock()
         mock.db.litellm_auditlog.count = AsyncMock()
+        mock.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+        mock.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+        mock.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+        mock.db.litellm_organizationtable.find_many = AsyncMock(return_value=[])
+        mock.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
         yield mock
 
 
@@ -41,9 +46,7 @@ def mock_prisma_client():
 async def test_get_audit_logs(mock_prisma_client):
     """Test successful retrieval of audit logs with pagination"""
     # Mock the database responses
-    mock_prisma_client.db.litellm_auditlog.find_many.return_value = [
-        AuditLogResponse(**MOCK_AUDIT_LOG)
-    ]
+    mock_prisma_client.db.litellm_auditlog.find_many.return_value = [AuditLogResponse(**MOCK_AUDIT_LOG)]
     mock_prisma_client.db.litellm_auditlog.count.return_value = 1
 
     # Mock the auth dependency
@@ -80,9 +83,7 @@ async def test_get_audit_logs(mock_prisma_client):
 async def test_get_audit_log_by_id(mock_prisma_client):
     """Test successful retrieval of a specific audit log by ID"""
     # Mock the database response
-    mock_prisma_client.db.litellm_auditlog.find_unique.return_value = AuditLogResponse(
-        **MOCK_AUDIT_LOG
-    )
+    mock_prisma_client.db.litellm_auditlog.find_unique.return_value = AuditLogResponse(**MOCK_AUDIT_LOG)
 
     # Mock the auth dependency
     with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth") as mock_auth:
