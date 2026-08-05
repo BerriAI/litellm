@@ -79,8 +79,8 @@ def _router_is_callable(proxy: ProxyClient) -> bool:
     return isinstance(result, Success)
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _ensure_complexity_smart_router(  # pyright: ignore[reportUnusedFunction]  # pytest autouse session fixture, wired by name
+@pytest.fixture(scope="session")
+def _ensure_complexity_smart_router(  # pyright: ignore[reportUnusedFunction]  # requested by the complexity test via usefixtures, wired by name
     client: ComplexityRouterClient,
 ) -> Iterator[None]:
     """Ensure the complexity router virtual model exists for this session.

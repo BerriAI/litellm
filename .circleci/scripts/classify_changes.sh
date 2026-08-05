@@ -8,7 +8,7 @@ has_backend=false
 while IFS= read -r file || [ -n "$file" ]; do
   [ -n "$file" ] || continue
   case "$file" in
-    ui/*) has_client=true ;;
+    ui/* | tests/e2e/ui/*) has_client=true ;;
     docs/* | *.md | *.mdx) : ;;
     *) has_backend=true ;;
   esac

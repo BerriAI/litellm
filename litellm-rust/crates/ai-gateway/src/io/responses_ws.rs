@@ -10,19 +10,18 @@ use litellm_core::responses::websocket::ResponsesWebSocketProviderConfig;
 use litellm_core::{CoreError, CoreResult};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::header::{HeaderName, AUTHORIZATION};
-use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::http::header::{AUTHORIZATION, HeaderName};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 use crate::constants::{
     DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS, DEFAULT_RESPONSES_WS_IDLE_TIMEOUT_SECS,
 };
 
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
-const MISSING_KEY_MESSAGE: &str =
-    "Missing OpenAI API Key - a Responses WebSocket call is being made but no key was passed via params or the OPENAI_API_KEY environment variable";
+const MISSING_KEY_MESSAGE: &str = "Missing OpenAI API Key - a Responses WebSocket call is being made but no key was passed via params or the OPENAI_API_KEY environment variable";
 
 pub type ResponsesUpstreamWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type UpstreamTx = SplitSink<ResponsesUpstreamWs, Message>;
@@ -83,8 +82,8 @@ impl ResponsesWebSocketConnection {
     }
 
     pub async fn recv_text(&self) -> CoreResult<Option<String>> {
-        let mut socket = self.socket.lock().await;
-        let Some(socket) = socket.as_mut() else {
+        let mut socket_guard = self.socket.lock().await;
+        let Some(socket) = socket_guard.as_mut() else {
             return Ok(None);
         };
         match socket.next().await {
@@ -456,9 +455,11 @@ mod tests {
         assert_eq!(fourth.event_type, ResponsesWsEventType::ResponseCompleted);
         let observed: Vec<_> = observed_rx.collect().await;
         assert_eq!(observed.len(), 4);
-        assert!(observed
-            .iter()
-            .all(|event| event.event_type != ResponsesWsEventType::ResponseCreate));
+        assert!(
+            observed
+                .iter()
+                .all(|event| event.event_type != ResponsesWsEventType::ResponseCreate)
+        );
     }
 
     #[tokio::test]

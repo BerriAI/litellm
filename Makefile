@@ -75,7 +75,7 @@ install-dev:
 bootstrap:
 	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
-	cd ui/litellm-dashboard && npm ci --no-audit --no-fund
+	cd ui/litellm-dashboard && ../../scripts/with_dashboard_node.sh npm install --no-audit --no-fund
 	@main_root=$$(git worktree list --porcelain | head -1 | sed 's/^worktree //'); \
 	if [ "$$main_root" != "$$(git rev-parse --show-toplevel)" ] && [ -f "$$main_root/.env" ] && [ ! -f .env ]; then \
 		cp "$$main_root/.env" .env && echo "bootstrap: copied .env from $$main_root"; \
@@ -177,7 +177,7 @@ lint-ruff-FULL-dev: install-dev
 	else echo "No changed .py files to check."; fi
 
 lint-basedpyright: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --base origin/litellm_internal_staging
+	$(UV_RUN) python scripts/type_check_gate.py --base origin/litellm_internal_staging
 
 lint-e2e-basedpyright: $(LINT_E2E_DEP_INSTALL)
 	$(UV_RUN) basedpyright tests/e2e
@@ -190,7 +190,7 @@ lint-type-discipline: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 # --update lowers each limit by what this branch fixed since its branch point, so
 # it needs the base ref fetched to resolve the merge-base.
 lint-basedpyright-budget-update: install-dev lint-fetch-base
-	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --update
+	$(UV_RUN) python scripts/type_check_gate.py --update
 
 lint-format: format-check
 
@@ -237,7 +237,7 @@ lint-dev: lint-format-changed check-circular-imports check-import-safety
 # test-linting.yml (Python), test-litellm-ui-build.yml's frontend-lint (dashboard), and
 # check-ui-api-types.yml (API-type drift), skipping any whose files you didn't stage.
 # Not auto-installed as a git hook so it never slows an unrelated human commit.
-pre-commit:
+pre-commit: bootstrap
 	./scripts/pre_commit_lint.sh
 
 # Testing targets
