@@ -83,13 +83,7 @@ def test_parameters_json_schema_transformation():
 
 
 def test_parameters_schema_transformation():
-    """Test that a functionDeclaration's `parameters` Schema is carried over and normalized.
-
-    Google GenAI function declarations carry their argument schema in `parameters`
-    (a Schema, whose type enums are uppercase) as well as in the newer
-    `parametersJsonSchema`. Only reading the latter silently dropped the whole
-    argument schema, leaving the model with a tool it could not call correctly.
-    """
+    """Test that a functionDeclaration's `parameters` Schema is carried over and normalized"""
     adapter = GoogleGenAIAdapter()
 
     tools = [
