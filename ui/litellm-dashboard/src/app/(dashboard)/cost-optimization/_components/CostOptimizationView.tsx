@@ -27,7 +27,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
     {
       key: "compression",
       label: "Prompt Compression",
-      children: <PromptCompressionTab accessToken={accessToken} />,
+      children: <PromptCompressionTab accessToken={accessToken} userRole={userRole} />,
     },
     {
       key: "caching",

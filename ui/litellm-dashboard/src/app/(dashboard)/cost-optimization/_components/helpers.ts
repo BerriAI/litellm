@@ -1,3 +1,5 @@
+import { GuardrailDefinitionLocation } from "@/components/guardrails/types";
+
 export interface GuardrailLitellmParams {
   guardrail?: string | null;
   api_base?: string | null;
@@ -8,6 +10,7 @@ export interface GuardrailListItem {
   guardrail_id: string;
   guardrail_name: string | null;
   litellm_params?: GuardrailLitellmParams | null;
+  guardrail_definition_location?: GuardrailDefinitionLocation | null;
 }
 
 export interface GuardrailListResponse {
@@ -21,6 +24,10 @@ export const isCompressionGuardrail = (guardrail: GuardrailListItem): boolean =>
 
 export const compressionGuardrailsOf = (response: GuardrailListResponse): GuardrailListItem[] =>
   (response.guardrails ?? []).filter(isCompressionGuardrail);
+
+/** Guardrails declared in the proxy config file are owned by that file; the API cannot rewrite them. */
+export const isConfigDefinedGuardrail = (guardrail: GuardrailListItem): boolean =>
+  guardrail.guardrail_definition_location === GuardrailDefinitionLocation.CONFIG;
 
 export interface CompressionGuardrailInput {
   name: string;

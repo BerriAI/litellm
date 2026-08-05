@@ -27,12 +27,14 @@ import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import PiiConfiguration from "./pii_configuration";
 import ToolPermissionRulesEditor, { ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
+import type { GuardrailDetailTab } from "../detailNavigation";
 
 export interface GuardrailInfoProps {
   guardrailId: string;
   onClose: () => void;
   accessToken: string | null;
   isAdmin: boolean;
+  initialTab?: GuardrailDetailTab;
 }
 
 interface ProviderParam {
@@ -51,7 +53,13 @@ interface ProviderParamsResponse {
   [provider: string]: { [key: string]: ProviderParam };
 }
 
-const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose, accessToken, isAdmin }) => {
+const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({
+  guardrailId,
+  onClose,
+  accessToken,
+  isAdmin,
+  initialTab = "overview",
+}) => {
   const [guardrailData, setGuardrailData] = useState<any>(null);
   const [guardrailProviderSpecificParams, setGuardrailProviderSpecificParams] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -512,7 +520,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
         </div>
       </div>
 
-      <TabGroup>
+      <TabGroup defaultIndex={isAdmin && initialTab === "settings" ? 1 : 0}>
         <TabList className="mb-4">
           <Tab key="overview">Overview</Tab>
           {isAdmin ? <Tab key="settings">Settings</Tab> : <></>}
