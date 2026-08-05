@@ -4,7 +4,11 @@ AUTO ROUTER MANAGEMENT ENDPOINTS
 POST /auto_router/test_routing - Route one prompt through an unsaved complexity-router config
 """
 
+from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Annotated, Final
+
+from pydantic import BaseModel, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
@@ -25,18 +29,23 @@ from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
 from litellm.types.management_endpoints.auto_router_endpoints import (
+    AutoRouterBenchmarkGroup,
+    AutoRouterBenchmarksResponse,
+    AutoRouterBenchmarkTotals,
+    AutoRouterCacheBucket,
+    AutoRouterCacheStats,
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
     RequestComplexityRouterConfig,
 )
 
 if TYPE_CHECKING:
-    from fastapi import APIRouter, Depends, HTTPException, status
+    from fastapi import APIRouter, Depends, HTTPException, Query, status
 
     from litellm.router import Router
 else:
     try:
-        from fastapi import APIRouter, Depends, HTTPException, status
+        from fastapi import APIRouter, Depends, HTTPException, Query, status
     except ImportError:
         # fastapi is only required for proxy, not for SDK usage
         pass
@@ -245,4 +254,203 @@ async def preview_auto_router_routing(
         routed_model=hook_response.model,
         routed_model_configured=hook_response.model in frozenset(llm_router.get_model_names()),
         routing_decision=hook_response.routing_decision,
+    )
+
+
+class _SessionAggRow(BaseModel):
+    router_name: str
+    router_type: str
+    sessions: int
+    turns: int
+    unordered_turns: int
+    covered_turns: int
+    cache_hits: int
+    same_model_turns: int
+    same_model_hits: int
+    first_visit_turns: int
+    first_visit_hits: int
+    return_turns: int
+    return_hits: int
+    return_expired_misses: int
+    return_within_ttl_misses: int
+    ttl_5m_turns: int
+    ttl_1h_turns: int
+    total_tokens: int
+    spend: float
+    saved_spend: float
+    session_seconds: float
+
+
+_SESSION_AGG_ROWS: Final = TypeAdapter(list[_SessionAggRow])
+
+_BENCHMARKS_SQL: Final = """
+SELECT
+    router_name,
+    router_type,
+    COUNT(*)::int AS sessions,
+    COALESCE(SUM(turns), 0)::int AS turns,
+    COALESCE(SUM(unordered_turns), 0)::int AS unordered_turns,
+    COALESCE(SUM(covered_turns), 0)::int AS covered_turns,
+    COALESCE(SUM(cache_hits), 0)::int AS cache_hits,
+    COALESCE(SUM(same_model_turns), 0)::int AS same_model_turns,
+    COALESCE(SUM(same_model_hits), 0)::int AS same_model_hits,
+    COALESCE(SUM(first_visit_turns), 0)::int AS first_visit_turns,
+    COALESCE(SUM(first_visit_hits), 0)::int AS first_visit_hits,
+    COALESCE(SUM(return_turns), 0)::int AS return_turns,
+    COALESCE(SUM(return_hits), 0)::int AS return_hits,
+    COALESCE(SUM(return_expired_misses), 0)::int AS return_expired_misses,
+    COALESCE(SUM(return_within_ttl_misses), 0)::int AS return_within_ttl_misses,
+    COALESCE(SUM(ttl_5m_turns), 0)::int AS ttl_5m_turns,
+    COALESCE(SUM(ttl_1h_turns), 0)::int AS ttl_1h_turns,
+    COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
+    COALESCE(SUM(spend), 0)::float8 AS spend,
+    COALESCE(SUM(saved_spend), 0)::float8 AS saved_spend,
+    COALESCE(SUM(EXTRACT(EPOCH FROM (last_turn_at - first_turn_at))), 0)::float8 AS session_seconds
+FROM "LiteLLM_AutoRouterSession"
+WHERE last_turn_at >= $1::timestamp AND first_turn_at < $2::timestamp
+GROUP BY router_name, router_type
+ORDER BY SUM(spend) DESC
+"""
+
+
+def _parse_benchmark_day(value: str) -> datetime:
+    try:
+        parsed: Final = datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid date format: {value}. Expected: 'YYYY-MM-DD'")
+    return parsed.replace(tzinfo=None)
+
+
+def _pct(numerator: float, denominator: float) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(100.0 * numerator / denominator, 1)
+
+
+def _cache_bucket(turns: int, hits: int) -> AutoRouterCacheBucket:
+    return AutoRouterCacheBucket(turns=turns, hits=hits, hit_rate_pct=_pct(hits, turns))
+
+
+def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
+    return_misses: Final = row.return_turns - row.return_hits
+    baseline_spend: Final = row.spend + row.saved_spend
+    sessions: Final = row.sessions
+    return AutoRouterBenchmarkTotals(
+        sessions=sessions,
+        turns=row.turns,
+        avg_turns_per_session=row.turns / sessions if sessions else 0.0,
+        avg_session_seconds=row.session_seconds / sessions if sessions else 0.0,
+        avg_tokens_per_session=row.total_tokens / sessions if sessions else 0.0,
+        spend=row.spend,
+        saved_spend=row.saved_spend,
+        baseline_spend=baseline_spend,
+        saved_pct=_pct(row.saved_spend, baseline_spend),
+        saved_per_session=row.saved_spend / sessions if sessions else 0.0,
+        cache=AutoRouterCacheStats(
+            coverage_pct=_pct(row.covered_turns, row.turns),
+            hit_rate_pct=_pct(row.cache_hits, row.covered_turns),
+            same_model=_cache_bucket(row.same_model_turns, row.same_model_hits),
+            first_visit=_cache_bucket(row.first_visit_turns, row.first_visit_hits),
+            return_to_tier=_cache_bucket(row.return_turns, row.return_hits),
+            unordered_turns=row.unordered_turns,
+            return_misses_expired=row.return_expired_misses,
+            return_misses_within_ttl=row.return_within_ttl_misses,
+            return_misses_unknown=max(return_misses - row.return_expired_misses - row.return_within_ttl_misses, 0),
+            ttl_5m_turns=row.ttl_5m_turns,
+            ttl_1h_turns=row.ttl_1h_turns,
+        ),
+    )
+
+
+def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
+    return _SessionAggRow(
+        router_name="",
+        router_type="",
+        sessions=sum(row.sessions for row in rows),
+        turns=sum(row.turns for row in rows),
+        unordered_turns=sum(row.unordered_turns for row in rows),
+        covered_turns=sum(row.covered_turns for row in rows),
+        cache_hits=sum(row.cache_hits for row in rows),
+        same_model_turns=sum(row.same_model_turns for row in rows),
+        same_model_hits=sum(row.same_model_hits for row in rows),
+        first_visit_turns=sum(row.first_visit_turns for row in rows),
+        first_visit_hits=sum(row.first_visit_hits for row in rows),
+        return_turns=sum(row.return_turns for row in rows),
+        return_hits=sum(row.return_hits for row in rows),
+        return_expired_misses=sum(row.return_expired_misses for row in rows),
+        return_within_ttl_misses=sum(row.return_within_ttl_misses for row in rows),
+        ttl_5m_turns=sum(row.ttl_5m_turns for row in rows),
+        ttl_1h_turns=sum(row.ttl_1h_turns for row in rows),
+        total_tokens=sum(row.total_tokens for row in rows),
+        spend=sum(row.spend for row in rows),
+        saved_spend=sum(row.saved_spend for row in rows),
+        session_seconds=sum(row.session_seconds for row in rows),
+    )
+
+
+@router.get(
+    "/auto_router/benchmarks",
+    tags=("auto router",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=AutoRouterBenchmarksResponse,
+)
+async def get_auto_router_benchmarks(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    start_date: Annotated[
+        str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to 30 days before end_date)")
+    ] = None,
+    end_date: Annotated[str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to today)")] = None,
+) -> AutoRouterBenchmarksResponse:
+    """
+    Benchmarks for the auto-router dashboard: session shape, savings against the configured
+    baseline, and prompt-caching behaviour bucketed by what the router did.
+
+    Reads the LiteLLM_AutoRouterSession rollup, folded once per request at spend-write time,
+    so this endpoint never scans LiteLLM_SpendLogs. A session is in the window when it
+    overlaps it: its last turn is on or after start_date and its first turn is on or before
+    end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
+    over that bucket's turns.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admin roles can view auto-router benchmarks across the deployment",
+        )
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+
+    end_day: Final = (
+        _parse_benchmark_day(end_date)
+        if end_date
+        else datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    )
+    start_day: Final = _parse_benchmark_day(start_date) if start_date else end_day - timedelta(days=30)
+    if end_day < start_day:
+        raise HTTPException(status_code=400, detail="end_date must not be earlier than start_date")
+
+    raw_rows: Final = await prisma_client.db.query_raw(
+        _BENCHMARKS_SQL,
+        start_day.isoformat(),
+        (end_day + timedelta(days=1)).isoformat(),
+    )
+    rows: Final = _SESSION_AGG_ROWS.validate_python(raw_rows or ())
+    groups: Final = tuple(
+        AutoRouterBenchmarkGroup(
+            router_name=row.router_name,
+            router_type=row.router_type,
+            **_benchmark_totals(row).model_dump(),
+        )
+        for row in rows
+    )
+    return AutoRouterBenchmarksResponse(
+        start_date=start_day.strftime("%Y-%m-%d"),
+        end_date=end_day.strftime("%Y-%m-%d"),
+        routers_in_scope=len(rows),
+        totals=_benchmark_totals(_summed_agg_row(rows)),
+        groups=groups,
     )

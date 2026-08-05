@@ -760,6 +760,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/benchmarks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Auto Router Benchmarks
+         * @description Benchmarks for the auto-router dashboard: session shape, savings against the configured
+         *     baseline, and prompt-caching behaviour bucketed by what the router did.
+         *
+         *     Reads the LiteLLM_AutoRouterSession rollup, folded once per request at spend-write time,
+         *     so this endpoint never scans LiteLLM_SpendLogs. A session is in the window when it
+         *     overlaps it: its last turn is on or after start_date and its first turn is on or before
+         *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
+         *     over that bucket's turns.
+         */
+        get: operations["get_auto_router_benchmarks_auto_router_benchmarks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/classifier/default_prompt": {
         parameters: {
             query?: never;
@@ -21296,6 +21323,189 @@ export interface components {
             } | null;
         };
         /**
+         * AutoRouterBenchmarkGroup
+         * @description One auto-router's slice of the benchmarks.
+         */
+        AutoRouterBenchmarkGroup: {
+            /** Avg Session Seconds */
+            avg_session_seconds: number;
+            /** Avg Tokens Per Session */
+            avg_tokens_per_session: number;
+            /** Avg Turns Per Session */
+            avg_turns_per_session: number;
+            /**
+             * Baseline Spend
+             * @description spend plus saved_spend: the estimated single-model cost
+             */
+            baseline_spend: number;
+            cache: components["schemas"]["AutoRouterCacheStats"];
+            /**
+             * Router Name
+             * @description The auto-router alias requests were sent to
+             */
+            router_name: string;
+            /**
+             * Router Type
+             * @description complexity, adaptive or quality
+             */
+            router_type: string;
+            /**
+             * Saved Pct
+             * @description saved_spend over baseline_spend, as a percentage
+             */
+            saved_pct: number;
+            /** Saved Per Session */
+            saved_per_session: number;
+            /**
+             * Saved Spend
+             * @description Signed dollars saved versus each router's savings baseline (derived from its hardest tier, or the configured override), from the same per-request savings record the usage tab reads
+             */
+            saved_spend: number;
+            /** Sessions */
+            sessions: number;
+            /**
+             * Spend
+             * @description What the routed traffic actually cost
+             */
+            spend: number;
+            /** Turns */
+            turns: number;
+        };
+        /**
+         * AutoRouterBenchmarkTotals
+         * @description Session-shape and savings aggregates over auto-routed traffic in the window.
+         */
+        AutoRouterBenchmarkTotals: {
+            /** Avg Session Seconds */
+            avg_session_seconds: number;
+            /** Avg Tokens Per Session */
+            avg_tokens_per_session: number;
+            /** Avg Turns Per Session */
+            avg_turns_per_session: number;
+            /**
+             * Baseline Spend
+             * @description spend plus saved_spend: the estimated single-model cost
+             */
+            baseline_spend: number;
+            cache: components["schemas"]["AutoRouterCacheStats"];
+            /**
+             * Saved Pct
+             * @description saved_spend over baseline_spend, as a percentage
+             */
+            saved_pct: number;
+            /** Saved Per Session */
+            saved_per_session: number;
+            /**
+             * Saved Spend
+             * @description Signed dollars saved versus each router's savings baseline (derived from its hardest tier, or the configured override), from the same per-request savings record the usage tab reads
+             */
+            saved_spend: number;
+            /** Sessions */
+            sessions: number;
+            /**
+             * Spend
+             * @description What the routed traffic actually cost
+             */
+            spend: number;
+            /** Turns */
+            turns: number;
+        };
+        /**
+         * AutoRouterBenchmarksResponse
+         * @description Benchmarks for the auto-router dashboard, aggregated from the per-session rollup.
+         */
+        AutoRouterBenchmarksResponse: {
+            /**
+             * End Date
+             * @description Window end day, YYYY-MM-DD UTC, inclusive
+             */
+            end_date: string;
+            /** Groups */
+            groups: components["schemas"]["AutoRouterBenchmarkGroup"][];
+            /** Routers In Scope */
+            routers_in_scope: number;
+            /**
+             * Start Date
+             * @description Window start day, YYYY-MM-DD UTC, inclusive
+             */
+            start_date: string;
+            totals: components["schemas"]["AutoRouterBenchmarkTotals"];
+        };
+        /**
+         * AutoRouterCacheBucket
+         * @description One prompt-caching bucket of turns, with how often those turns hit the cache.
+         */
+        AutoRouterCacheBucket: {
+            /**
+             * Hit Rate Pct
+             * @description hits over this bucket's turns, as a percentage
+             */
+            hit_rate_pct: number;
+            /**
+             * Hits
+             * @description Turns in this bucket whose response reported cache-read tokens
+             */
+            hits: number;
+            /**
+             * Turns
+             * @description Turns classified into this bucket
+             */
+            turns: number;
+        };
+        /**
+         * AutoRouterCacheStats
+         * @description Prompt-caching behaviour of auto-routed turns, bucketed by what the router did.
+         *
+         *     Every in-order turn falls in exactly one bucket: the session stayed on the same model,
+         *     visited a model for the first time (cold by design), or returned to a model it had
+         *     already used. Out-of-order turns (cross-pod flush races) are counted but not bucketed.
+         */
+        AutoRouterCacheStats: {
+            /**
+             * Coverage Pct
+             * @description Share of turns that carried cache telemetry
+             */
+            coverage_pct: number;
+            first_visit: components["schemas"]["AutoRouterCacheBucket"];
+            /**
+             * Hit Rate Pct
+             * @description All cache hits over telemetry-bearing turns
+             */
+            hit_rate_pct: number;
+            /**
+             * Return Misses Expired
+             * @description Return-to-tier misses where the model's recorded cache TTL had lapsed
+             */
+            return_misses_expired: number;
+            /**
+             * Return Misses Unknown
+             * @description Return-to-tier misses with no recorded TTL to attribute against
+             */
+            return_misses_unknown: number;
+            /**
+             * Return Misses Within Ttl
+             * @description Return-to-tier misses inside the recorded TTL: the prefix changed or the provider evicted the entry early; billing telemetry cannot distinguish the two
+             */
+            return_misses_within_ttl: number;
+            return_to_tier: components["schemas"]["AutoRouterCacheBucket"];
+            same_model: components["schemas"]["AutoRouterCacheBucket"];
+            /**
+             * Ttl 1H Turns
+             * @description Turns whose cache write used the one-hour TTL
+             */
+            ttl_1h_turns: number;
+            /**
+             * Ttl 5M Turns
+             * @description Turns whose cache write used the five-minute TTL
+             */
+            ttl_5m_turns: number;
+            /**
+             * Unordered Turns
+             * @description Turns that arrived out of order and were not bucketed
+             */
+            unordered_turns: number;
+        };
+        /**
          * AutoRouterClassifierDefaultPromptResponse
          * @description The built-in system prompt an auto-router's LLM classifier uses when none is configured.
          *
@@ -23317,6 +23527,11 @@ export interface components {
              * @description max response size in MB, if a response is larger than this size it will be rejected
              */
             max_response_size_mb?: number | null;
+            /**
+             * Maximum Autorouter Session Retention Period
+             * @description Maximum retention period for auto-router benchmark session rollup rows (e.g., '365d'). Rows whose last turn is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rollup rows are never deleted.
+             */
+            maximum_autorouter_session_retention_period?: string | null;
             /**
              * Maximum Spend Logs Retention Period
              * @description Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.
@@ -36446,6 +36661,40 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_auto_router_benchmarks_auto_router_benchmarks_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD UTC, inclusive (defaults to 30 days before end_date) */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD UTC, inclusive (defaults to today) */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterBenchmarksResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

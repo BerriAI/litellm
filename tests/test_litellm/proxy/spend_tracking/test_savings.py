@@ -62,7 +62,6 @@ def test_compression_savings_priced_at_input_rate():
         model="claude-sonnet-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=4389,
-        cache_read_input_tokens=0,
     )
     assert result.compression == pytest.approx(4389 * input_cost)
     assert result.compression > 0
@@ -78,7 +77,7 @@ def test_prompt_caching_savings_priced_at_input_minus_cache_read():
         model="claude-sonnet-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
-        cache_read_input_tokens=8200,
+        usage_object={"cache_read_input_tokens": 8200},
     )
     assert result.prompt_caching == pytest.approx(8200 * (input_cost - cache_read_cost))
     assert result.prompt_caching > 0
@@ -90,7 +89,7 @@ def test_unknown_model_fails_open_to_zero():
         model="totally-made-up-model-xyz",
         custom_llm_provider="anthropic",
         compression_saved_tokens=1000,
-        cache_read_input_tokens=1000,
+        usage_object={"cache_read_input_tokens": 1000},
     )
     assert result.compression == 0.0
     assert result.prompt_caching == 0.0
@@ -101,7 +100,7 @@ def test_missing_model_fails_open_to_zero():
         model=None,
         custom_llm_provider=None,
         compression_saved_tokens=1000,
-        cache_read_input_tokens=1000,
+        usage_object={"cache_read_input_tokens": 1000},
     )
     assert result.compression == 0.0
     assert result.prompt_caching == 0.0
@@ -112,7 +111,7 @@ def test_negative_token_counts_clamp_to_zero():
         model="claude-sonnet-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=-500,
-        cache_read_input_tokens=-500,
+        usage_object={"cache_read_input_tokens": -500},
     )
     assert result.compression == 0.0
     assert result.prompt_caching == 0.0
@@ -290,7 +289,6 @@ def test_autorouter_savings_zero_without_baseline():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
-        cache_read_input_tokens=0,
         routing_decision=None,
         usage_object=_cached_usage_object(),
     )
@@ -305,7 +303,6 @@ def test_compute_savings_spend_carries_a_losing_switch_through(monkeypatch):
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
-        cache_read_input_tokens=0,
         routing_decision={"conversation_continuing": True},
         usage_object=_cached_usage_object(),
     )
@@ -319,7 +316,6 @@ def test_the_driver_is_off_until_a_baseline_is_configured():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=1000,
-        cache_read_input_tokens=0,
         routing_decision={"conversation_continuing": True},
         usage_object=_cached_usage_object(),
     )
@@ -334,7 +330,6 @@ def test_malformed_usage_object_does_not_fail_the_spend_write():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=1000,
-        cache_read_input_tokens=0,
         routing_decision={"conversation_continuing": True},
         usage_object={"prompt_tokens": ["not", "a", "number"]},
     )
@@ -351,7 +346,7 @@ def test_model_without_cache_read_pricing_yields_no_caching_savings():
         model=model,
         custom_llm_provider="azure",
         compression_saved_tokens=0,
-        cache_read_input_tokens=5000,
+        usage_object={"cache_read_input_tokens": 5000},
     )
     assert result.prompt_caching == 0.0
 
@@ -622,7 +617,6 @@ def test_a_baseline_recorded_on_the_decision_turns_the_driver_on():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
-        cache_read_input_tokens=0,
         routing_decision={"conversation_continuing": True, "savings_baseline_model": "anthropic/claude-opus-5"},
         usage_object=_cached_usage_object(),
     )
@@ -636,7 +630,6 @@ def test_the_configured_baseline_overrides_the_recorded_one(monkeypatch):
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
-        cache_read_input_tokens=0,
         routing_decision={
             "conversation_continuing": True,
             "savings_baseline_model": "anthropic/claude-opus-5",
@@ -665,7 +658,6 @@ def test_a_non_string_recorded_baseline_is_ignored():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
-        cache_read_input_tokens=0,
         routing_decision={"conversation_continuing": True, "savings_baseline_model": ["anthropic/claude-opus-5"]},
         usage_object=_cached_usage_object(),
     )
@@ -697,7 +689,6 @@ def test_a_recorded_baseline_deployment_prices_at_its_configured_rate():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
-        cache_read_input_tokens=0,
         routing_decision=decision,
         usage_object=_cached_usage_object(),
         llm_router=lambda: router,
@@ -706,7 +697,6 @@ def test_a_recorded_baseline_deployment_prices_at_its_configured_rate():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
-        cache_read_input_tokens=0,
         routing_decision={k: v for k, v in decision.items() if k != "savings_baseline_deployment_id"},
         usage_object=_cached_usage_object(),
         llm_router=lambda: router,

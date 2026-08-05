@@ -2432,6 +2432,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
     )
+    maximum_autorouter_session_retention_period: str | None = Field(
+        None,
+        description="Maximum retention period for auto-router benchmark session rollup rows (e.g., '365d'). Rows whose last turn is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rollup rows are never deleted.",
+    )
     use_spend_logs_partitioning: bool | None = Field(
         None,
         description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
