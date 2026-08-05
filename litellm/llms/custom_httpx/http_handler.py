@@ -129,6 +129,21 @@ def _default_cached_client_timeout() -> httpx.Timeout:
     return httpx.Timeout(timeout=configured, connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS)
 
 
+_CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER: Final = 2
+
+
+def _handler_may_close_client(client_refcount: int, owns_client: bool) -> bool:
+    """
+    Whether a handler being finalized may close its client.
+
+    Only when the handler built the client and is still its sole referrer. Finalization
+    proves that nothing references the *handler*; it proves nothing about the client, which
+    a cached handler may have handed to consumers that outlive it. Callers must read the
+    refcount at the call site, since binding the client to a parameter would inflate it.
+    """
+    return owns_client and client_refcount <= _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER
+
+
 _STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS: Final = 5.0
 _STREAMING_ERROR_BODY_READ_EXECUTOR: Final = concurrent.futures.ThreadPoolExecutor(
     max_workers=50,
@@ -577,14 +592,15 @@ class AsyncHTTPHandler:
 
     async def close(self):
         # Close the client when you're done with it
-        await self._client.aclose()
+        if self._owns_client:
+            await self._client.aclose()
 
     async def __aenter__(self):
         return self.client
 
     async def __aexit__(self):
         # close the client when exiting
-        await self._client.aclose()
+        await self.close()
 
     async def get(
         self,
@@ -893,7 +909,9 @@ class AsyncHTTPHandler:
 
     def __del__(self) -> None:
         try:
-            asyncio.get_running_loop().create_task(self.close())
+            if not _handler_may_close_client(sys.getrefcount(self._client), self._owns_client):
+                return
+            asyncio.get_running_loop().create_task(self._client.aclose())
         except Exception:
             pass
 
@@ -1132,7 +1150,8 @@ class HTTPHandler:
 
     def close(self):
         # Close the client when you're done with it
-        self._client.close()
+        if self._owns_client:
+            self._client.close()
 
     def get(
         self,
@@ -1375,7 +1394,8 @@ class HTTPHandler:
 
     def __del__(self) -> None:
         try:
-            self.close()
+            if _handler_may_close_client(sys.getrefcount(self._client), self._owns_client):
+                self._client.close()
         except Exception:
             pass
 

@@ -1,10 +1,12 @@
 import asyncio
+import gc
 import io
 import os
 import pathlib
 import ssl
 import sys
 import threading
+import weakref
 from unittest.mock import MagicMock, patch
 
 import certifi
@@ -18,6 +20,7 @@ sys.path.insert(
 import litellm
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
+    _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER,
     AsyncHTTPHandler,
     HTTPHandler,
     MaskedHTTPStatusError,
@@ -924,3 +927,213 @@ def test_concurrent_sync_heal_creates_exactly_one_replacement():
     assert seen[0] is seen[1]
     assert not seen[0].is_closed
     handler.close()
+
+
+@pytest.fixture
+def fresh_llm_client_cache():
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    previous = getattr(litellm, "in_memory_llm_clients_cache", None)
+    litellm.in_memory_llm_clients_cache = LLMClientCache()
+    try:
+        yield
+    finally:
+        litellm.in_memory_llm_clients_cache = previous
+
+
+def test_sole_referrer_handler_may_close_but_a_sharing_one_may_not():
+    from litellm.llms.custom_httpx.http_handler import _handler_may_close_client
+
+    assert _handler_may_close_client(_CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER, owns_client=True)
+    assert not _handler_may_close_client(_CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER + 1, owns_client=True)
+    assert not _handler_may_close_client(_CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER, owns_client=False)
+
+
+@pytest.fixture
+def keepalive_server():
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from socketserver import ThreadingMixIn
+
+    class OkRequestHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, format, *args):
+            pass
+
+    class ThreadedServer(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+
+    server = ThreadedServer(("127.0.0.1", 0), OkRequestHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_exclusively_owned_sync_client_pool_is_closed_when_handler_is_collected(keepalive_server):
+    handler = HTTPHandler()
+    pool = handler._client._transport._pool
+    client_ref = weakref.ref(handler._client)
+    handler.get(keepalive_server)
+
+    assert pool._connections, "setup failed: no pooled connection to release"
+
+    del handler
+    gc.collect()
+
+    assert client_ref() is None
+    assert pool._connections == []
+
+
+@pytest.mark.asyncio
+async def test_exclusively_owned_async_client_pool_is_closed_when_handler_is_collected(keepalive_server, monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "force_ipv4", False)
+
+    handler = AsyncHTTPHandler()
+    pool = handler.client._transport._pool
+    await handler.get(keepalive_server)
+
+    assert pool._connections, "setup failed: no pooled connection to release"
+
+    del handler
+    gc.collect()
+    await asyncio.sleep(0.25)
+
+    assert pool._connections == []
+
+
+@pytest.mark.asyncio
+async def test_handed_out_async_client_pool_survives_handler_collection(keepalive_server, monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "force_ipv4", False)
+
+    handler = AsyncHTTPHandler()
+    consumer_client = handler.client
+    pool = consumer_client._transport._pool
+    await handler.get(keepalive_server)
+
+    assert pool._connections, "setup failed: no pooled connection to observe"
+
+    del handler
+    gc.collect()
+    await asyncio.sleep(0.25)
+
+    assert pool._connections != []
+    assert not consumer_client.is_closed
+    await consumer_client.aclose()
+
+
+def test_handed_out_sync_client_pool_survives_handler_collection(keepalive_server):
+    handler = HTTPHandler()
+    consumer_client = handler.client
+    pool = consumer_client._transport._pool
+    handler.get(keepalive_server)
+
+    assert pool._connections, "setup failed: no pooled connection to observe"
+
+    del handler
+    gc.collect()
+
+    assert pool._connections != []
+    assert not consumer_client.is_closed
+    consumer_client.close()
+
+
+def test_sync_close_leaves_caller_supplied_client_open():
+    supplied = httpx.Client()
+    handler = HTTPHandler(client=supplied)
+
+    handler.close()
+
+    assert not supplied.is_closed
+    supplied.close()
+
+
+@pytest.mark.asyncio
+async def test_async_aexit_closes_an_owned_client_but_not_an_assigned_one():
+    owning = AsyncHTTPHandler()
+    owned = owning.client
+
+    await owning.__aexit__()
+
+    assert owned.is_closed
+
+    borrowing = AsyncHTTPHandler()
+    original = borrowing.client
+    assigned = httpx.AsyncClient()
+    borrowing.client = assigned
+
+    await borrowing.__aexit__()
+
+    assert not assigned.is_closed
+    await assigned.aclose()
+    await original.aclose()
+
+
+@pytest.mark.asyncio
+async def test_async_close_leaves_assigned_client_open():
+    handler = AsyncHTTPHandler()
+    owned = handler.client
+    assigned = httpx.AsyncClient()
+    handler.client = assigned
+
+    await handler.close()
+
+    assert not assigned.is_closed
+    await assigned.aclose()
+    await owned.aclose()
+
+
+def test_client_handed_out_by_sync_cache_survives_eviction_and_collection(fresh_llm_client_cache):
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    handler = _get_httpx_client()
+    consumer_client = handler.client
+    handler_ref = weakref.ref(handler)
+
+    assert not consumer_client.is_closed
+    assert litellm.in_memory_llm_clients_cache.get_cache("httpx_client") is handler
+
+    litellm.in_memory_llm_clients_cache = LLMClientCache()
+    del handler
+    gc.collect()
+
+    assert litellm.in_memory_llm_clients_cache.get_cache("httpx_client") is None
+    assert handler_ref() is None
+    assert not consumer_client.is_closed
+
+    consumer_client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_handed_out_by_async_cache_survives_eviction_and_collection(fresh_llm_client_cache):
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.utils import LlmProviders
+
+    handler = get_async_httpx_client(llm_provider=LlmProviders.OPENAI)
+    consumer_client = handler.client
+    handler_ref = weakref.ref(handler)
+
+    assert not consumer_client.is_closed
+
+    litellm.in_memory_llm_clients_cache = LLMClientCache()
+    del handler
+    gc.collect()
+    await asyncio.sleep(0.1)
+
+    assert handler_ref() is None
+    assert not consumer_client.is_closed
+
+    await consumer_client.aclose()
