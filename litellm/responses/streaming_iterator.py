@@ -584,16 +584,16 @@ class BaseResponsesAPIStreamingIterator:
 
         elif _chunk_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
             _text: Final = getattr(chunk, "text", None)
-            _output_index: Final = getattr(chunk, "output_index", None)
+            _text_output_index: Final = getattr(chunk, "output_index", None)
             if (
                 isinstance(_text, str)
-                and isinstance(_output_index, int)
-                and _output_index not in self._streamed_output_items
+                and isinstance(_text_output_index, int)
+                and _text_output_index not in self._streamed_output_items
             ):
                 _content_index: Final = getattr(chunk, "content_index", 0) or 0
                 if 0 <= _content_index <= _MAX_CONTENT_INDEX:
-                    _item_id: Final = getattr(chunk, "item_id", None) or f"msg_{_output_index}"
-                    _existing: Final = self._streamed_text_only_items.get(_output_index)
+                    _item_id: Final = getattr(chunk, "item_id", None) or f"msg_{_text_output_index}"
+                    _existing: Final = self._streamed_text_only_items.get(_text_output_index)
                     _existing_content: Final = list(  # mutable-ok: copy existing content for slot replacement
                         getattr(_existing, "content", None) or []  # mutable-ok: empty fallback for missing content
                     )
@@ -603,26 +603,23 @@ class BaseResponsesAPIStreamingIterator:
                         "text": _text,
                         "annotations": _annotations or [],  # mutable-ok: empty fallback for missing annotations
                     }
-                    if _content_index < len(_existing_content):
-                        _content: Final = (
-                            _existing_content[:_content_index]
-                            + [_slot]  # mutable-ok: list concat for slot replacement
-                            + _existing_content[_content_index + 1 :]
-                        )
-                    else:
-                        _content: Final = (
-                            _existing_content
-                            + [  # mutable-ok: list concat for gap padding
-                                {  # mutable-ok: placeholder content dict for gap padding
-                                    "type": "output_text",
-                                    "text": "",
-                                    "annotations": [],  # mutable-ok: empty annotations placeholder
-                                }
-                                for _ in range(_content_index - len(_existing_content))
-                            ]
-                            + [_slot]  # mutable-ok: list concat appending final slot
-                        )
-                    self._streamed_text_only_items[_output_index] = (
+                    _content: Final = (  # mutable-ok: list concat building content array; computed once
+                        _existing_content[:_content_index]
+                        + [_slot]  # mutable-ok: list concat for slot replacement
+                        + _existing_content[_content_index + 1 :]
+                        if _content_index < len(_existing_content)
+                        else _existing_content
+                        + [  # mutable-ok: list concat for gap padding
+                            {  # mutable-ok: placeholder content dict for gap padding
+                                "type": "output_text",
+                                "text": "",
+                                "annotations": [],  # mutable-ok: empty annotations placeholder
+                            }
+                            for _ in range(_content_index - len(_existing_content))
+                        ]
+                        + [_slot]  # mutable-ok: list concat appending final slot
+                    )
+                    self._streamed_text_only_items[_text_output_index] = (
                         BaseLiteLLMOpenAIResponseObject(  # mutable-ok: incremental index-keyed fallback accumulation; no immutable equivalent
                             type="message",
                             id=getattr(_existing, "id", _item_id),
