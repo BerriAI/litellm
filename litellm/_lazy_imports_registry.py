@@ -269,6 +269,12 @@ LLM_CONFIG_NAMES: Final = (
     "ZAIChatConfig",
     "AIMLChatConfig",
     "VolcEngineChatConfig",
+    "BytePlusChatConfig",
+    "BytePlusConfig",
+    "BytePlusEmbeddingConfig",
+    "BytePlusImageGenerationConfig",
+    "BytePlusTextToSpeechConfig",
+    "BytePlusResponsesAPIConfig",
     "CodestralTextCompletionConfig",
     "InceptionTextCompletionConfig",
     "AzureOpenAIAssistantsAPIConfig",
@@ -282,6 +288,7 @@ LLM_CONFIG_NAMES: Final = (
     "HostedVLLMEmbeddingConfig",
     # Alias for backwards compatibility
     "VolcEngineConfig",  # Alias for VolcEngineChatConfig
+    "BytePlusConfig",  # Alias for BytePlusChatConfig
     "LlamafileChatConfig",
     "LiteLLMProxyChatConfig",
     "VLLMConfig",
@@ -1049,6 +1056,30 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.volcengine.chat.transformation",
         "VolcEngineChatConfig",
     ),
+    "BytePlusChatConfig": (
+        ".llms.byteplus.chat.transformation",
+        "BytePlusChatConfig",
+    ),
+    "BytePlusConfig": (
+        ".llms.byteplus.chat.transformation",
+        "BytePlusChatConfig",
+    ),
+    "BytePlusEmbeddingConfig": (
+        ".llms.byteplus.embedding.transformation",
+        "BytePlusEmbeddingConfig",
+    ),
+    "BytePlusImageGenerationConfig": (
+        ".llms.byteplus.image_generation.transformation",
+        "BytePlusImageGenerationConfig",
+    ),
+    "BytePlusTextToSpeechConfig": (
+        ".llms.byteplus.text_to_speech.transformation",
+        "BytePlusTextToSpeechConfig",
+    ),
+    "BytePlusResponsesAPIConfig": (
+        ".llms.byteplus.responses.transformation",
+        "BytePlusResponsesAPIConfig",
+    ),
     "CodestralTextCompletionConfig": (
         ".llms.codestral.completion.transformation",
         "CodestralTextCompletionConfig",
@@ -1089,6 +1120,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.volcengine.chat.transformation",
         "VolcEngineChatConfig",
     ),  # Alias
+    "BytePlusConfig": (
+        ".llms.byteplus.chat.transformation",
+        "BytePlusChatConfig",
+    ),
     "LlamafileChatConfig": (
         ".llms.llamafile.chat.transformation",
         "LlamafileChatConfig",

@@ -7711,6 +7711,7 @@ class ProviderConfigManager:
             LlmProviders.CEREBRAS: (lambda: litellm.CerebrasConfig(), False),
             LlmProviders.BASETEN: (lambda: litellm.BasetenConfig(), False),
             LlmProviders.VOLCENGINE: (lambda: litellm.VolcEngineConfig(), False),
+            LlmProviders.BYTEPLUS: (lambda: litellm.BytePlusConfig(), False),
             LlmProviders.TEXT_COMPLETION_CODESTRAL: (
                 lambda: litellm.CodestralTextCompletionConfig(),
                 False,
@@ -7942,6 +7943,12 @@ class ProviderConfigManager:
             )
 
             return VolcEngineEmbeddingConfig()
+        elif litellm.LlmProviders.BYTEPLUS == provider:
+            from litellm.llms.byteplus.embedding.transformation import (
+                BytePlusEmbeddingConfig,
+            )
+
+            return BytePlusEmbeddingConfig()
         elif litellm.LlmProviders.DASHSCOPE == provider:
             from litellm.llms.dashscope.embed.transformation import (
                 DashScopeEmbeddingConfig,

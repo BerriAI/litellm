@@ -1,0 +1,87 @@
+import httpx
+import pytest
+
+from litellm.llms.byteplus.embedding.transformation import BytePlusEmbeddingConfig
+
+
+class TestBytePlusEmbeddingConfig:
+    def test_get_supported_openai_params(self):
+        config = BytePlusEmbeddingConfig()
+        params = config.get_supported_openai_params("skylark-embedding-vision-250615")
+        assert "encoding_format" in params
+        assert "dimensions" in params
+        assert "sparse_embedding" in params
+
+    def test_get_complete_url_text(self):
+        config = BytePlusEmbeddingConfig()
+        url = config.get_complete_url(
+            api_base="https://ark.ap-southeast.bytepluses.com/api/v3",
+            api_key="key",
+            model="doubao-embedding-text",
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == "https://ark.ap-southeast.bytepluses.com/api/v3/embeddings"
+
+    def test_get_complete_url_multimodal(self):
+        config = BytePlusEmbeddingConfig()
+        url = config.get_complete_url(
+            api_base="https://ark.ap-southeast.bytepluses.com/api/v3",
+            api_key="key",
+            model="skylark-embedding-vision-250615",
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == "https://ark.ap-southeast.bytepluses.com/api/v3/embeddings/multimodal"
+
+    def test_transform_embedding_request_multimodal(self):
+        config = BytePlusEmbeddingConfig()
+        multimodal_input = [
+            {"type": "video_url", "video_url": {"url": "https://example.com/video.mp4"}},
+            {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+            {"type": "text", "text": "What is in the video?"},
+        ]
+        data = config.transform_embedding_request(
+            model="skylark-embedding-vision-250615",
+            input=multimodal_input,
+            optional_params={
+                "encoding_format": "float",
+                "dimensions": 1024,
+                "sparse_embedding": {"type": "enabled"},
+            },
+            headers={},
+        )
+        assert data["model"] == "skylark-embedding-vision-250615"
+        assert len(data["input"]) == 3
+        assert data["encoding_format"] == "float"
+        assert data["dimensions"] == 1024
+        assert data["sparse_embedding"] == {"type": "enabled"}
+
+    def test_transform_embedding_response_multimodal_object(self):
+        config = BytePlusEmbeddingConfig()
+        mock_json = {
+            "created": 1743575029,
+            "data": {
+                "embedding": [-0.123, -0.355, 0.255],
+                "sparse_embedding": [{"index": 1, "value": 0.088}],
+                "object": "embedding",
+            },
+            "id": "req-123",
+            "model": "skylark-embedding-vision-250615",
+            "object": "list",
+            "usage": {"prompt_tokens": 25, "total_tokens": 25},
+        }
+        raw_resp = httpx.Response(status_code=200, json=mock_json)
+        res = config.transform_embedding_response(
+            model="skylark-embedding-vision-250615",
+            raw_response=raw_resp,
+            model_response=None,
+            logging_obj=None,
+            api_key="key",
+            request_data={},
+            optional_params={},
+            litellm_params={},
+        )
+        assert res.model == "skylark-embedding-vision-250615"
+        assert len(res.data) == 1
+        assert res.data[0]["embedding"] == [-0.123, -0.355, 0.255]

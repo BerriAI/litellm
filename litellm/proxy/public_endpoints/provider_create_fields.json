@@ -3229,5 +3229,33 @@
       }
     ],
     "default_model_placeholder": "cursor/claude-4-sonnet"
+  },
+  {
+    "provider": "BYTEPLUS",
+    "provider_display_name": "BytePlus",
+    "litellm_provider": "byteplus",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": "Your BytePlus API key",
+        "tooltip": "Get API key from BytePlus ModelArk Console",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://ark.ap-southeast.bytepluses.com/api/v3",
+        "tooltip": "BytePlus API Base URL",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://ark.ap-southeast.bytepluses.com/api/v3"
+      }
+    ],
+    "default_model_placeholder": "byteplus/seed-2-0-lite-260228"
   }
 ]

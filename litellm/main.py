@@ -7901,7 +7901,10 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers:
+    if (
+        custom_llm_provider == "openai"
+        or custom_llm_provider in litellm.openai_compatible_providers
+    ) and custom_llm_provider != "byteplus":
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
                 message="'voice' is required to be passed as a string for OpenAI TTS",
@@ -8228,6 +8231,32 @@ def speech(
         aws_polly_config: Final = cast(AWSPollyTextToSpeechConfig, text_to_speech_provider_config)
 
         response = aws_polly_config.dispatch_text_to_speech(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            litellm_params_dict=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            base_llm_http_handler=base_llm_http_handler,
+            aspeech=aspeech or False,
+            api_base=api_base,
+            api_key=api_key,
+            **kwargs,
+        )
+    elif custom_llm_provider == "byteplus":
+        from litellm.llms.byteplus.text_to_speech.transformation import (
+            BytePlusTextToSpeechConfig,
+        )
+
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = BytePlusTextToSpeechConfig()
+
+        byteplus_config = cast(
+            BytePlusTextToSpeechConfig, text_to_speech_provider_config
+        )
+        response = byteplus_config.dispatch_text_to_speech(
             model=model,
             input=input,
             voice=voice,
