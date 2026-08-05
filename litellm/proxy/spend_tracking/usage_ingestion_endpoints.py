@@ -1,8 +1,9 @@
 import asyncio
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
 from typing import Annotated, Final, Literal, NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -33,7 +34,7 @@ class ExternalUsageRecord(BaseModel):
     idempotency_key: str | None = Field(
         default=None, max_length=255, description="Becomes the spend-log request_id for dedup on retries."
     )
-    tags: list[str] | None = None
+    tags: list[str] | None = None  # mutable-ok: serialized as a JSON array by spend logs
     end_user_id: str | None = None
 
     @model_validator(mode="after")
@@ -44,7 +45,7 @@ class ExternalUsageRecord(BaseModel):
 
 
 class UsageIngestRequest(BaseModel):
-    records: list[ExternalUsageRecord] = Field(min_length=1, max_length=MAX_RECORDS_PER_REQUEST)
+    records: tuple[ExternalUsageRecord, ...] = Field(min_length=1, max_length=MAX_RECORDS_PER_REQUEST)
 
 
 class UsageIngestRecordResult(BaseModel):
@@ -55,7 +56,7 @@ class UsageIngestRecordResult(BaseModel):
 
 
 class UsageIngestResponse(BaseModel):
-    results: list[UsageIngestRecordResult]
+    results: tuple[UsageIngestRecordResult, ...]
 
 
 class KeyAttribution(NamedTuple):
@@ -64,29 +65,31 @@ class KeyAttribution(NamedTuple):
     organization_id: str | None
 
 
-ReserveSpendFn = Callable[[ExternalUsageRecord, str, str, KeyAttribution, float], Awaitable[bool]]
-
-
 @dataclass(frozen=True, slots=True)
 class UsageIngestionDeps:
     lookup_key: Callable[[str], Awaitable[KeyAttribution | None]]
-    reserve_spend_log: ReserveSpendFn
+    reserve_spend_log: Callable[[ExternalUsageRecord, str, str, KeyAttribution, float], Awaitable[bool]]
     record_spend: Callable[..., Awaitable[None]]
     compute_cost: Callable[[litellm.ModelResponse, str], float]
     generate_request_id: Callable[[], str]
 
 
-def _build_usage_kwargs(record: ExternalUsageRecord, hashed_token: str) -> dict[str, object]:
-    metadata = {
-        "user_api_key": hashed_token,
-        "user_api_key_end_user_id": record.end_user_id,
-        "tags": list(record.tags) if record.tags else [],
-    }
-    return {
-        "model": record.model,
-        "call_type": "ingest_external_usage",
-        "litellm_params": {"model": record.model, "metadata": metadata},
-    }
+def _build_usage_kwargs(record: ExternalUsageRecord, hashed_token: str) -> Mapping[str, object]:
+    tags: Final = list(record.tags) if record.tags else []  # mutable-ok: real list required by json serializer
+    metadata: Final = MappingProxyType(
+        {
+            "user_api_key": hashed_token,
+            "user_api_key_end_user_id": record.end_user_id,
+            "tags": tags,
+        }
+    )
+    return MappingProxyType(
+        {
+            "model": record.model,
+            "call_type": "ingest_external_usage",
+            "litellm_params": MappingProxyType({"model": record.model, "metadata": metadata}),
+        }
+    )
 
 
 def _build_completion_response(record: ExternalUsageRecord, request_id: str) -> litellm.ModelResponse:
@@ -111,7 +114,7 @@ def build_spend_log_payload(
     key: KeyAttribution,
     cost: float,
 ) -> SpendLogsPayload:
-    payload: SpendLogsPayload = get_logging_payload(
+    payload: Final[SpendLogsPayload] = get_logging_payload(
         kwargs=_build_usage_kwargs(record, hashed_token),
         response_obj=_build_completion_response(record, request_id),
         start_time=record.start_time,
@@ -149,7 +152,7 @@ async def process_external_usage_record(
 
     try:
         cost: Final = _resolve_cost(deps, record, response)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001  # pricing lookup raises arbitrary provider-specific errors; any failure means the model is unpriceable and the record must carry an explicit cost
         verbose_proxy_logger.info("ingest usage: cost computation failed for model %s: %s", record.model, e)
         return UsageIngestRecordResult(
             request_id=request_id,
@@ -207,7 +210,7 @@ async def reserve_spend_log_atomic(
 
     if disable_spend_logs is False:
         payload: Final = prisma_client.jsonify_object(
-            {**build_spend_log_payload(record, request_id, hashed_token, key, cost)}
+            build_spend_log_payload(record, request_id, hashed_token, key, cost)
         )
         from prisma.errors import UniqueViolationError
 
@@ -285,8 +288,8 @@ def default_ingestion_deps() -> UsageIngestionDeps:
 
 @router.post(
     "/spend/usage",
-    tags=["Budget & Spend Tracking"],
-    dependencies=[Depends(user_api_key_auth)],
+    tags=["Budget & Spend Tracking"],  # mutable-ok: fastapi decorator contract takes a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi decorator contract takes a list
     response_model=UsageIngestResponse,
 )
 async def ingest_external_usage(
@@ -313,5 +316,7 @@ async def ingest_external_usage(
         )
 
     deps: Final = default_ingestion_deps()
-    results: Final = [await process_external_usage_record(record, deps) for record in request.records]
+    results: Final = tuple(
+        await asyncio.gather(*(process_external_usage_record(record, deps) for record in request.records))
+    )
     return UsageIngestResponse(results=results)
