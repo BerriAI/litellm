@@ -5385,6 +5385,9 @@ class TestClassifierFallbackChoice:
         assert response.model == "gpt-4o"
         assert response.routing_decision is not None
         assert response.routing_decision["cause"] == "default_model_fallback"
+        # No tier was decided, so the provenance record must not claim one. The internal
+        # outcome carries a tier only because the plugin path needs a pool to pick from.
+        assert "tier" not in response.routing_decision
 
     @pytest.mark.asyncio
     async def test_a_classifier_failure_does_not_pin_the_session_to_the_default_model(self, mock_router_instance):

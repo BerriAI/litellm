@@ -789,12 +789,12 @@ class ComplexityRouter(CustomLogger):
     def _default_model_fallback_outcome(self) -> ClassificationOutcome:
         """The classifier-failed outcome for classifier_fallback='default_model'.
 
-        The outcome still carries a tier because every downstream consumer is keyed on one, so it
-        reports the tier whose pool holds default_model, and MEDIUM when no pool does. That tier is
-        provenance only in the usual case: the pre-routing hook routes this cause straight to
-        default_model rather than picking from the tier's pool, since a pool with several models
-        would otherwise land somewhere else and the point of this fallback is a known destination
-        when classification failed.
+        The outcome still carries a tier because ClassificationOutcome requires one, so it reports
+        the tier whose pool holds default_model, and MEDIUM when no pool does. Nothing about the
+        request produced that tier, so the pre-routing hook drops it from the logged routing
+        decision: it routes this cause straight to default_model rather than picking from the
+        tier's pool, since a pool with several models would otherwise land somewhere else and the
+        point of this fallback is a known destination when classification failed.
 
         On a router with routing plugins the hook does not short-circuit, because default_model was
         never checked against the plugin pipeline and routing to it directly would let a failed
@@ -1682,9 +1682,8 @@ class ComplexityRouter(CustomLogger):
             # here would let a failed classifier silently bypass a policy plugin. Those
             # routers fall through to the tier pool below, which does run the plugins.
             verbose_router_logger.info(
-                "ComplexityRouter: routing decision cause=%s, tier=%s, score=n/a, signals=%s, routed_model=%s",
+                "ComplexityRouter: routing decision cause=%s, tier=n/a, score=n/a, signals=%s, routed_model=%s",
                 outcome.cause,
-                classified_tier.value,
                 outcome.signals,
                 fallback_model,
             )
@@ -1695,7 +1694,6 @@ class ComplexityRouter(CustomLogger):
                     routed_model=fallback_model,
                     conversation_continuing=conversation_continuing,
                     cause=outcome.cause,
-                    tier=classified_tier,
                     signals=outcome.signals,
                     escalation_keyword=escalation_keyword,
                     escalated=False,
