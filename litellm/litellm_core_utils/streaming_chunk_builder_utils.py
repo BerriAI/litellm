@@ -39,6 +39,34 @@ if TYPE_CHECKING:
     )
 
 
+def capture_cache_creation_token_details(
+    prompt_tokens_details: PromptTokensDetailsWrapper | None,
+    current: CacheCreationTokenDetails | None,
+) -> CacheCreationTokenDetails | None:
+    incoming: Final = cast(
+        CacheCreationTokenDetails | None,
+        getattr(prompt_tokens_details, "cache_creation_token_details", None),
+    )
+    if incoming is not None:
+        return incoming
+    return current
+
+
+def attach_cache_creation_token_details(
+    prompt_tokens_details: PromptTokensDetailsWrapper | None,
+    cache_creation_token_details: CacheCreationTokenDetails | None,
+) -> PromptTokensDetailsWrapper | None:
+    if prompt_tokens_details is None or cache_creation_token_details is None:
+        return prompt_tokens_details
+    existing: Final = cast(
+        CacheCreationTokenDetails | None,
+        getattr(prompt_tokens_details, "cache_creation_token_details", None),
+    )
+    if existing is not None:
+        return prompt_tokens_details
+    return prompt_tokens_details.model_copy(update={"cache_creation_token_details": cache_creation_token_details})
+
+
 class ChunkProcessor:
     def __init__(self, chunks: list, messages: list | None = None):
         self.chunks = self._sort_chunks(chunks)
@@ -693,21 +721,22 @@ class ChunkProcessor:
                         "web_search_requests",
                     )
 
-                prompt_tokens_details = cast(
-                    PromptTokensDetailsWrapper | None,
-                    usage_chunk_dict["prompt_tokens_details"],
+                prompt_tokens_details = (
+                    cast(
+                        PromptTokensDetailsWrapper | None,
+                        usage_chunk_dict["prompt_tokens_details"],
+                    )
+                    or prompt_tokens_details
                 )
 
-                cache_creation_token_details = self._capture_cache_creation_token_details(
+                cache_creation_token_details = capture_cache_creation_token_details(
                     prompt_tokens_details, cache_creation_token_details
                 )
 
                 if usage_chunk_dict["cost"] is not None:
                     cost = usage_chunk_dict["cost"]
 
-        prompt_tokens_details = self._attach_cache_creation_token_details(
-            prompt_tokens_details, cache_creation_token_details
-        )
+        prompt_tokens_details = attach_cache_creation_token_details(prompt_tokens_details, cache_creation_token_details)
 
         completion_tokens = self._reset_anthropic_cursor_completion_tokens(
             chunks=chunks,
@@ -726,34 +755,6 @@ class ChunkProcessor:
             prompt_tokens_details=prompt_tokens_details,
             cost=cost,
         )
-
-    @staticmethod
-    def _capture_cache_creation_token_details(
-        prompt_tokens_details: PromptTokensDetailsWrapper | None,
-        current: CacheCreationTokenDetails | None,
-    ) -> CacheCreationTokenDetails | None:
-        incoming: Final = cast(
-            CacheCreationTokenDetails | None,
-            getattr(prompt_tokens_details, "cache_creation_token_details", None),
-        )
-        if incoming is not None:
-            return incoming
-        return current
-
-    @staticmethod
-    def _attach_cache_creation_token_details(
-        prompt_tokens_details: PromptTokensDetailsWrapper | None,
-        cache_creation_token_details: CacheCreationTokenDetails | None,
-    ) -> PromptTokensDetailsWrapper | None:
-        if prompt_tokens_details is None or cache_creation_token_details is None:
-            return prompt_tokens_details
-        existing: Final = cast(
-            CacheCreationTokenDetails | None,
-            getattr(prompt_tokens_details, "cache_creation_token_details", None),
-        )
-        if existing is not None:
-            return prompt_tokens_details
-        return prompt_tokens_details.model_copy(update={"cache_creation_token_details": cache_creation_token_details})
 
     @staticmethod
     def _reset_anthropic_cursor_completion_tokens(
