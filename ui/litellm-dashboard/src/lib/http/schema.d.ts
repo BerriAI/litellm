@@ -21154,24 +21154,32 @@ export interface components {
             first_visit_hits: number;
             /** First Visit Turns */
             first_visit_turns: number;
+            /** Five Minute Cache Turns */
+            five_minute_cache_turns: number;
             /** Hit Rate Pct */
             hit_rate_pct: number;
             /** Hits */
             hits: number;
             /** Misses */
             misses: number;
+            /** One Hour Cache Turns */
+            one_hour_cache_turns: number;
             /** Prefix Change Miss Pct */
             prefix_change_miss_pct: number;
             /** Prefix Change Misses */
             prefix_change_misses: number;
-            /** Ttl Seconds */
-            ttl_seconds: number;
             /** Turns */
             turns: number;
             /** Unattributed Miss Pct */
             unattributed_miss_pct: number;
             /** Unattributed Misses */
             unattributed_misses: number;
+            /** Unknown Cache Ttl Turns */
+            unknown_cache_ttl_turns: number;
+            /** Unknown Ttl Hits */
+            unknown_ttl_hits: number;
+            /** Unknown Ttl Turns */
+            unknown_ttl_turns: number;
             /** Unordered Hits */
             unordered_hits: number;
             /** Unordered Turns */

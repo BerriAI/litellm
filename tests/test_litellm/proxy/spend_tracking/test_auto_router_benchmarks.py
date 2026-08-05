@@ -44,9 +44,7 @@ class TestSummarize:
         assert result.savings_pct < 0
 
     def test_session_shape_averages_over_sessions_not_turns(self):
-        result = summarize(
-            _Counters(sessions=2, turns=64, total_tokens=10_000, total_session_seconds=7200.0)
-        )
+        result = summarize(_Counters(sessions=2, turns=64, total_tokens=10_000, total_session_seconds=7200.0))
         assert result.avg_turns_per_session == pytest.approx(32.0)
         assert result.avg_session_seconds == pytest.approx(3600.0)
         assert result.avg_tokens_per_session == pytest.approx(5000.0)
@@ -87,9 +85,7 @@ class TestCacheView:
     def test_traffic_that_never_touched_the_cache_is_left_out_of_the_hit_rate(self):
         """A model with caching off would otherwise read as a wall of misses. It is absent
         from the buckets, and coverage says how much of the traffic that was."""
-        cache = summarize(
-            _Counters(sessions=1, turns=100, turns_with_usage=40, warm_turns=40, warm_hits=36)
-        ).cache
+        cache = summarize(_Counters(sessions=1, turns=100, turns_with_usage=40, warm_turns=40, warm_hits=36)).cache
         assert cache is not None
         assert cache.turns == 40
         assert cache.coverage_pct == pytest.approx(40.0)
@@ -110,8 +106,8 @@ class TestCacheView:
         cache = summarize(
             _Counters(
                 sessions=1,
-                turns=24,
-                turns_with_usage=24,
+                turns=26,
+                turns_with_usage=26,
                 first_visit_turns=5,
                 first_visit_hits=1,
                 warm_turns=10,
@@ -120,22 +116,21 @@ class TestCacheView:
                 expired_hits=2,
                 unordered_turns=4,
                 unordered_hits=3,
+                unknown_ttl_turns=2,
+                unknown_ttl_hits=1,
             )
         ).cache
         assert cache is not None
-        assert cache.hits == 14
-        assert cache.misses == 10
+        assert cache.hits == 15
+        assert cache.misses == 11
         assert (cache.cold_misses, cache.prefix_change_misses, cache.expired_misses) == (4, 2, 3)
-        assert cache.unattributed_misses == 1
+        assert cache.unattributed_misses == 2
         assert (
             cache.cold_misses + cache.prefix_change_misses + cache.expired_misses + cache.unattributed_misses
             == cache.misses
         )
         assert (
-            cache.cold_miss_pct
-            + cache.prefix_change_miss_pct
-            + cache.expired_miss_pct
-            + cache.unattributed_miss_pct
+            cache.cold_miss_pct + cache.prefix_change_miss_pct + cache.expired_miss_pct + cache.unattributed_miss_pct
             == pytest.approx(100.0)
         )
 
@@ -143,7 +138,15 @@ class TestCacheView:
         """Its cause is unknowable, but the provider still said whether it hit, so the
         rate a reader looks at stays exact and only the attribution abstains."""
         cache = summarize(
-            _Counters(sessions=1, turns=10, turns_with_usage=10, warm_turns=6, warm_hits=6, unordered_turns=4, unordered_hits=2)
+            _Counters(
+                sessions=1,
+                turns=10,
+                turns_with_usage=10,
+                warm_turns=6,
+                warm_hits=6,
+                unordered_turns=4,
+                unordered_hits=2,
+            )
         ).cache
         assert cache is not None
         assert cache.hits == 8
@@ -152,12 +155,22 @@ class TestCacheView:
     def test_a_router_with_no_cache_evidence_has_no_cache_view(self):
         assert summarize(_Counters(sessions=1, turns=5, turns_with_usage=0)).cache is None
 
-    def test_ttl_follows_the_tier_the_majority_of_turns_used(self):
-        five_minute = summarize(_Counters(sessions=1, turns=10, turns_with_usage=10, ephemeral_1h_turns=4)).cache
-        one_hour = summarize(_Counters(sessions=1, turns=10, turns_with_usage=10, ephemeral_1h_turns=6)).cache
-        assert five_minute is not None and one_hour is not None
-        assert five_minute.ttl_seconds == 300.0
-        assert one_hour.ttl_seconds == 3600.0
+    def test_ttl_distribution_preserves_mixed_and_unknown_traffic(self):
+        cache = summarize(
+            _Counters(
+                sessions=1,
+                turns=10,
+                turns_with_usage=10,
+                first_visit_turns=10,
+                cache_5m_turns=3,
+                cache_1h_turns=6,
+                cache_ttl_unknown_turns=1,
+            )
+        ).cache
+        assert cache is not None
+        assert cache.five_minute_cache_turns == 3
+        assert cache.one_hour_cache_turns == 6
+        assert cache.unknown_cache_ttl_turns == 1
 
 
 class TestTotals:

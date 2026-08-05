@@ -1412,8 +1412,12 @@ model LiteLLM_AutoRouterSession {
   expired_hits       Int      @default(0)
   unordered_turns    Int      @default(0)
   unordered_hits     Int      @default(0)
+  unknown_ttl_turns  Int      @default(0)
+  unknown_ttl_hits   Int      @default(0)
 
-  ephemeral_1h_turns Int      @default(0)
+  cache_5m_turns          Int @default(0)
+  cache_1h_turns          Int @default(0)
+  cache_ttl_unknown_turns Int @default(0)
 
   tiers              Json     @default("{}")
 

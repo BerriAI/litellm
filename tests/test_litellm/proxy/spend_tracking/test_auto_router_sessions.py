@@ -112,9 +112,16 @@ class TestCacheEvidence:
         built = _build(cache_read_tokens=0, cache_creation_tokens=0)
         assert built is not None and built.cached_prefix_tokens == 0
 
-    def test_a_turn_with_no_one_hour_evidence_is_scored_against_the_five_minute_tier(self):
-        assert ttl_seconds({"cache_creation_input_tokens": 10}) == CACHE_TTL_5M_SECONDS
-        assert ttl_seconds(None) == CACHE_TTL_5M_SECONDS
+    def test_a_cache_read_does_not_guess_which_ttl_created_the_entry(self):
+        assert ttl_seconds({"cache_read_input_tokens": 10}) is None
+        assert ttl_seconds(None) is None
+
+    def test_five_minute_cache_writes_are_scored_against_the_five_minute_tier(self):
+        usage = {
+            "cache_creation_input_tokens": 10,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 10},
+        }
+        assert ttl_seconds(usage) == CACHE_TTL_5M_SECONDS
 
     def test_one_hour_cache_writes_are_scored_against_the_one_hour_tier(self):
         usage = {
@@ -122,3 +129,13 @@ class TestCacheEvidence:
             "cache_creation_token_details": {"ephemeral_1h_input_tokens": 10},
         }
         assert ttl_seconds(usage) == CACHE_TTL_1H_SECONDS
+
+    def test_a_mixed_ttl_write_is_not_collapsed_to_one_ttl(self):
+        usage = {
+            "cache_creation_input_tokens": 20,
+            "cache_creation_token_details": {
+                "ephemeral_5m_input_tokens": 10,
+                "ephemeral_1h_input_tokens": 10,
+            },
+        }
+        assert ttl_seconds(usage) is None

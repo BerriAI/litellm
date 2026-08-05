@@ -105,7 +105,11 @@ async def test_the_three_buckets_partition_every_turn(rollup_client, prisma_db):
         ],
     )
     row = (await _rows(prisma_db))[0]
-    assert row["first_visit_turns"] + row["warm_turns"] + row["expired_turns"] == row["turns"] == 4
+    assert (
+        row["first_visit_turns"] + row["warm_turns"] + row["expired_turns"] + row["unknown_ttl_turns"]
+        == row["turns"]
+        == 4
+    )
 
 
 async def test_a_turn_that_only_read_the_cache_leaves_the_written_terms_alone(rollup_client, prisma_db):
@@ -118,6 +122,7 @@ async def test_a_turn_that_only_read_the_cache_leaves_the_written_terms_alone(ro
     )
     row = (await _rows(prisma_db))[0]
     assert row["tiers"][HAIKU] == [T0 + 10, 3600.0, 5000]
+    assert (row["cache_5m_turns"], row["cache_1h_turns"], row["cache_ttl_unknown_turns"]) == (0, 2, 0)
 
 
 async def test_counters_accumulate_across_flushes(rollup_client, prisma_db):
@@ -169,7 +174,7 @@ async def test_a_turn_arriving_before_an_already_recorded_one_is_not_called_warm
     assert row["tiers"][HAIKU][0] == T0 + 600
 
 
-async def test_every_turn_lands_in_exactly_one_of_the_four_buckets(rollup_client, prisma_db):
+async def test_every_turn_lands_in_exactly_one_bucket(rollup_client, prisma_db):
     await _flush(
         rollup_client,
         [
@@ -181,12 +186,18 @@ async def test_every_turn_lands_in_exactly_one_of_the_four_buckets(rollup_client
     )
     await _flush(rollup_client, [replace(TURN, started_at=T0 + 5)])
     row = (await _rows(prisma_db))[0]
-    buckets = row["first_visit_turns"] + row["warm_turns"] + row["expired_turns"] + row["unordered_turns"]
+    buckets = (
+        row["first_visit_turns"]
+        + row["warm_turns"]
+        + row["expired_turns"]
+        + row["unordered_turns"]
+        + row["unknown_ttl_turns"]
+    )
     assert buckets == row["turns"] == 5
     assert row["unordered_turns"] == 1
 
 
-async def test_a_first_visit_to_a_new_tier_keeps_its_own_ttl_even_with_no_cache_write(rollup_client, prisma_db):
+async def test_a_first_visit_to_a_new_tier_does_not_invent_a_ttl(rollup_client, prisma_db):
     await _flush(
         rollup_client,
         [
@@ -195,14 +206,51 @@ async def test_a_first_visit_to_a_new_tier_keeps_its_own_ttl_even_with_no_cache_
                 TURN,
                 model=OPUS,
                 started_at=T0 + 10,
-                ttl_seconds=3600.0,
+                ttl_seconds=None,
                 cache_creation_tokens=0,
                 cached_prefix_tokens=0,
             ),
         ],
     )
     row = (await _rows(prisma_db))[0]
-    assert row["tiers"][OPUS] == [T0 + 10, 3600.0, 0]
+    assert row["tiers"][OPUS] == [T0 + 10, None, 0]
+
+
+async def test_a_cache_read_without_a_recorded_write_keeps_ttl_unknown(rollup_client, prisma_db):
+    await _flush(
+        rollup_client,
+        [
+            replace(TURN, cache_creation_tokens=0, cached_prefix_tokens=2000, cache_hit=True, ttl_seconds=None),
+            replace(
+                TURN,
+                started_at=T0 + 60,
+                cache_creation_tokens=0,
+                cached_prefix_tokens=2000,
+                cache_hit=True,
+                ttl_seconds=None,
+            ),
+        ],
+    )
+    row = (await _rows(prisma_db))[0]
+    assert row["tiers"][HAIKU] == [T0 + 60, None, 2000]
+    assert (row["first_visit_turns"], row["unknown_ttl_turns"], row["unknown_ttl_hits"]) == (1, 1, 1)
+    assert (row["cache_5m_turns"], row["cache_1h_turns"], row["cache_ttl_unknown_turns"]) == (0, 0, 2)
+
+
+async def test_a_late_cache_write_revives_a_dead_tier(rollup_client, prisma_db):
+    await _flush(
+        rollup_client,
+        [replace(TURN, started_at=T0 + 600, cache_creation_tokens=0, cached_prefix_tokens=0, ttl_seconds=None)],
+    )
+    await _flush(rollup_client, [replace(TURN, ttl_seconds=3600.0)])
+    await _flush(
+        rollup_client,
+        [replace(TURN, started_at=T0 + 1200, cache_creation_tokens=0, cache_hit=True, ttl_seconds=None)],
+    )
+    row = (await _rows(prisma_db))[0]
+    assert row["tiers"][HAIKU] == [T0 + 1200, 3600.0, 2000]
+    assert (row["first_visit_turns"], row["warm_turns"], row["expired_turns"]) == (1, 1, 0)
+    assert (row["cache_5m_turns"], row["cache_1h_turns"], row["cache_ttl_unknown_turns"]) == (0, 2, 0)
 
 
 async def test_a_growing_conversation_records_the_whole_live_prefix(rollup_client, prisma_db):
@@ -234,4 +282,11 @@ async def test_a_turn_that_touched_no_cache_is_left_out_of_the_cache_view(rollup
     row = (await _rows(prisma_db))[0]
     assert row["turns"] == 2
     assert row["turns_with_usage"] == 0
-    assert row["first_visit_turns"] + row["warm_turns"] + row["expired_turns"] + row["unordered_turns"] == 0
+    assert (
+        row["first_visit_turns"]
+        + row["warm_turns"]
+        + row["expired_turns"]
+        + row["unordered_turns"]
+        + row["unknown_ttl_turns"]
+        == 0
+    )

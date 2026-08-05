@@ -43,7 +43,7 @@ class TurnFacts:
     cache_hit: bool
     cache_creation_tokens: int
     cached_prefix_tokens: int
-    ttl_seconds: float
+    ttl_seconds: float | None
 
 
 PARAM_NAMES: Final = (
@@ -60,7 +60,6 @@ PARAM_NAMES: Final = (
     "cache_hit",
     "written_tokens",
     "prefix_tokens",
-    "one_hour",
     "ttl",
 )
 
@@ -78,7 +77,6 @@ PARAM_NAMES: Final = (
     _CACHE_HIT,
     _WRITTEN_TOKENS,
     _PREFIX_TOKENS,
-    _ONE_HOUR,
     _TTL,
 ) = (f"${position}" for position in range(1, len(PARAM_NAMES) + 1))
 
@@ -99,30 +97,36 @@ def bind(turn: TurnFacts) -> tuple[object, ...]:
         int(turn.cache_hit),
         turn.cache_creation_tokens,
         turn.cached_prefix_tokens,
-        int(turn.ttl_seconds >= CACHE_TTL_1H_SECONDS),
         turn.ttl_seconds,
     )
 
 
 _SEEN: Final = f"t.tiers ? {_MODEL}"
 _CACHED_AT: Final = f"(t.tiers -> {_MODEL} ->> 0)::float8"
-_CACHED_TTL: Final = f"GREATEST((t.tiers -> {_MODEL} ->> 1)::float8, 1)"
+_CACHED_TTL: Final = f"(t.tiers -> {_MODEL} ->> 1)::float8"
 _CACHED_TOKENS: Final = f"(t.tiers -> {_MODEL} ->> 2)::float8"
 _IDLE: Final = f"({_STARTED_AT}::float8 - {_CACHED_AT})"
 
 _COVERED: Final = f"{_PREFIX_TOKENS}::float8 > 0"
 _LIVE: Final = f"{_SEEN} AND {_CACHED_TOKENS} > 0"
 _UNORDERED: Final = f"{_COVERED} AND {_LIVE} AND {_IDLE} < 0"
-_WARM: Final = f"{_COVERED} AND {_LIVE} AND {_IDLE} >= 0 AND {_IDLE} <= {_CACHED_TTL}"
-_EXPIRED: Final = f"{_COVERED} AND {_LIVE} AND {_IDLE} > {_CACHED_TTL}"
-_REFRESHED: Final = f"NOT ({_SEEN}) OR ({_PREFIX_TOKENS}::float8 > 0 AND {_IDLE} >= 0)"
-_REWROTE: Final = f"NOT ({_SEEN}) OR ({_WRITTEN_TOKENS}::float8 > 0 AND {_IDLE} >= 0)"
+_KNOWN_CACHED_TTL: Final = f"{_CACHED_TTL} IN ({CACHE_TTL_5M_SECONDS}, {CACHE_TTL_1H_SECONDS})"
+_WARM: Final = f"{_COVERED} AND {_LIVE} AND {_KNOWN_CACHED_TTL} AND {_IDLE} >= 0 AND {_IDLE} <= {_CACHED_TTL}"
+_EXPIRED: Final = f"{_COVERED} AND {_LIVE} AND {_KNOWN_CACHED_TTL} AND {_IDLE} > {_CACHED_TTL}"
+_UNKNOWN_TTL: Final = f"{_COVERED} AND {_LIVE} AND {_IDLE} >= 0 AND NOT COALESCE({_KNOWN_CACHED_TTL}, FALSE)"
+_REFRESHED: Final = f"NOT ({_SEEN}) OR ({_COVERED} AND (NOT ({_LIVE}) OR {_IDLE} >= 0))"
+_REWROTE: Final = f"{_WRITTEN_TOKENS}::float8 > 0 AND (NOT ({_LIVE}) OR {_IDLE} >= 0 OR {_CACHED_TTL} IS NULL)"
+_NEXT_TTL: Final = f"CASE WHEN {_REWROTE} THEN {_TTL}::float8 ELSE {_CACHED_TTL} END"
+_NEXT_TTL_IS_5M: Final = f"{_NEXT_TTL} = {CACHE_TTL_5M_SECONDS}"
+_NEXT_TTL_IS_1H: Final = f"{_NEXT_TTL} = {CACHE_TTL_1H_SECONDS}"
 
 _UPSERT_SQL: Final = f"""
 INSERT INTO "LiteLLM_AutoRouterSession" AS t (
     api_key, session_id, model_group, router_kind, baseline_model,
     turns, turns_with_usage, total_tokens, spend, baseline_spend,
-    first_visit_turns, first_visit_hits, ephemeral_1h_turns,
+    first_visit_turns, first_visit_hits,
+    unknown_ttl_turns, unknown_ttl_hits,
+    cache_5m_turns, cache_1h_turns, cache_ttl_unknown_turns,
     tiers, first_turn_at, last_turn_at, updated_at
 )
 VALUES (
@@ -130,7 +134,12 @@ VALUES (
     1, CASE WHEN {_COVERED} THEN 1 ELSE 0 END, {_TOTAL_TOKENS}::bigint, {_SPEND}, {_BASELINE_SPEND},
     CASE WHEN {_COVERED} THEN 1 ELSE 0 END,
     CASE WHEN {_COVERED} THEN {_CACHE_HIT} ELSE 0 END,
-    {_ONE_HOUR},
+    0, 0,
+    CASE WHEN {_COVERED} AND {_TTL}::float8 = {CACHE_TTL_5M_SECONDS} THEN 1 ELSE 0 END,
+    CASE WHEN {_COVERED} AND {_TTL}::float8 = {CACHE_TTL_1H_SECONDS} THEN 1 ELSE 0 END,
+    CASE WHEN {_COVERED} AND NOT COALESCE(
+        {_TTL}::float8 = {CACHE_TTL_5M_SECONDS} OR {_TTL}::float8 = {CACHE_TTL_1H_SECONDS}, FALSE
+    ) THEN 1 ELSE 0 END,
     jsonb_build_object({_MODEL}, jsonb_build_array(
         {_STARTED_AT}::float8, {_TTL}::float8, {_PREFIX_TOKENS}::float8
     )),
@@ -153,9 +162,13 @@ ON CONFLICT (api_key, session_id, model_group) DO UPDATE SET
     warm_hits         = t.warm_hits         + CASE WHEN {_WARM} THEN {_CACHE_HIT} ELSE 0 END,
     expired_turns     = t.expired_turns     + CASE WHEN {_EXPIRED} THEN 1 ELSE 0 END,
     expired_hits      = t.expired_hits      + CASE WHEN {_EXPIRED} THEN {_CACHE_HIT} ELSE 0 END,
+    unknown_ttl_turns = t.unknown_ttl_turns + CASE WHEN {_UNKNOWN_TTL} THEN 1 ELSE 0 END,
+    unknown_ttl_hits  = t.unknown_ttl_hits  + CASE WHEN {_UNKNOWN_TTL} THEN {_CACHE_HIT} ELSE 0 END,
 
-
-    ephemeral_1h_turns = t.ephemeral_1h_turns + {_ONE_HOUR},
+    cache_5m_turns = t.cache_5m_turns + CASE WHEN {_COVERED} AND {_NEXT_TTL_IS_5M} THEN 1 ELSE 0 END,
+    cache_1h_turns = t.cache_1h_turns + CASE WHEN {_COVERED} AND {_NEXT_TTL_IS_1H} THEN 1 ELSE 0 END,
+    cache_ttl_unknown_turns = t.cache_ttl_unknown_turns
+        + CASE WHEN {_COVERED} AND NOT COALESCE({_NEXT_TTL_IS_5M} OR {_NEXT_TTL_IS_1H}, FALSE) THEN 1 ELSE 0 END,
     baseline_model = COALESCE(t.baseline_model, {_BASELINE_MODEL}),
     tiers = t.tiers || jsonb_build_object({_MODEL}, jsonb_build_array(
         CASE WHEN {_REFRESHED} THEN {_STARTED_AT}::float8 ELSE {_CACHED_AT} END,
@@ -187,16 +200,17 @@ class AutoRouterSessionQueue(BaseUpdateQueue):
             verbose_proxy_logger.warning("auto_router_sessions: dropped %d turns (%s)", len(staged), e)
 
 
-def ttl_seconds(usage_obj: Mapping[str, object] | None) -> float:
-    """The cache tier this turn wrote against; no one-hour evidence means the 5m default."""
+def ttl_seconds(usage_obj: Mapping[str, object] | None) -> float | None:
     if usage_obj is None:
-        return CACHE_TTL_5M_SECONDS
+        return None
     details: Final = usage_obj.get("cache_creation_token_details")
     if not isinstance(details, Mapping):
-        return CACHE_TTL_5M_SECONDS
-    if int(details.get("ephemeral_1h_input_tokens") or 0) > 0:
-        return CACHE_TTL_1H_SECONDS
-    return CACHE_TTL_5M_SECONDS
+        return None
+    five_minute: Final = int(details.get("ephemeral_5m_input_tokens") or 0) > 0
+    one_hour: Final = int(details.get("ephemeral_1h_input_tokens") or 0) > 0
+    if five_minute == one_hour:
+        return None
+    return CACHE_TTL_1H_SECONDS if one_hour else CACHE_TTL_5M_SECONDS
 
 
 def _as_utc(moment: datetime) -> float:

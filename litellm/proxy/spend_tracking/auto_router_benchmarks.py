@@ -15,8 +15,6 @@ from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel
 
-from litellm.proxy.spend_tracking.auto_router_sessions import CACHE_TTL_1H_SECONDS, CACHE_TTL_5M_SECONDS
-
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
@@ -40,11 +38,14 @@ class _Counters:
     expired_hits: int = 0
     unordered_turns: int = 0
     unordered_hits: int = 0
-    ephemeral_1h_turns: int = 0
+    unknown_ttl_turns: int = 0
+    unknown_ttl_hits: int = 0
+    cache_5m_turns: int = 0
+    cache_1h_turns: int = 0
+    cache_ttl_unknown_turns: int = 0
 
 
 class AutoRouterCacheBenchmark(BaseModel):
-    ttl_seconds: float
     turns: int
     hits: int
     misses: int
@@ -61,6 +62,11 @@ class AutoRouterCacheBenchmark(BaseModel):
     expired_hit_rate_pct: float
     unordered_turns: int
     unordered_hits: int
+    unknown_ttl_turns: int
+    unknown_ttl_hits: int
+    five_minute_cache_turns: int
+    one_hour_cache_turns: int
+    unknown_cache_ttl_turns: int
     cold_misses: int
     prefix_change_misses: int
     expired_misses: int
@@ -146,16 +152,21 @@ def _summarize_cache(counters: _Counters) -> AutoRouterCacheBenchmark | None:
     if counters.turns_with_usage == 0:
         return None
     covered: Final = counters.turns_with_usage
-    hits: Final = counters.first_visit_hits + counters.warm_hits + counters.expired_hits + counters.unordered_hits
+    hits: Final = (
+        counters.first_visit_hits
+        + counters.warm_hits
+        + counters.expired_hits
+        + counters.unordered_hits
+        + counters.unknown_ttl_hits
+    )
     misses: Final = covered - hits
     cold: Final = counters.first_visit_turns - counters.first_visit_hits
     prefix_changed: Final = counters.warm_turns - counters.warm_hits
     savable: Final = counters.expired_turns - counters.expired_hits
-    unattributed: Final = counters.unordered_turns - counters.unordered_hits
+    unattributed: Final = (
+        counters.unordered_turns - counters.unordered_hits + counters.unknown_ttl_turns - counters.unknown_ttl_hits
+    )
     return AutoRouterCacheBenchmark(
-        ttl_seconds=(
-            CACHE_TTL_1H_SECONDS if counters.ephemeral_1h_turns * 2 > counters.turns else CACHE_TTL_5M_SECONDS
-        ),
         turns=covered,
         hits=hits,
         misses=misses,
@@ -172,6 +183,11 @@ def _summarize_cache(counters: _Counters) -> AutoRouterCacheBenchmark | None:
         expired_hit_rate_pct=_pct(counters.expired_hits, counters.expired_turns),
         unordered_turns=counters.unordered_turns,
         unordered_hits=counters.unordered_hits,
+        unknown_ttl_turns=counters.unknown_ttl_turns,
+        unknown_ttl_hits=counters.unknown_ttl_hits,
+        five_minute_cache_turns=counters.cache_5m_turns,
+        one_hour_cache_turns=counters.cache_1h_turns,
+        unknown_cache_ttl_turns=counters.cache_ttl_unknown_turns,
         cold_misses=cold,
         prefix_change_misses=prefix_changed,
         expired_misses=savable,
