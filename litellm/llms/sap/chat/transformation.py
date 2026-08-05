@@ -4,12 +4,13 @@ Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orches
 
 from collections.abc import AsyncIterator, Iterator
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final, Union, cast
 
 import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionThinkingBlock
 from litellm.types.utils import ModelResponse
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -53,6 +54,69 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
 
 def validate_dict(data: dict, model) -> dict:
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
+
+
+class _SAPThoughtBlock(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    content: str = ""
+    signature: str | None = None
+
+
+class _SAPMessageWithThoughts(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    reasoning_content: tuple[_SAPThoughtBlock, ...]
+    thinking_blocks: tuple[ChatCompletionThinkingBlock, ...] = ()
+
+
+class _SAPChoiceWithMessage(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    message: _SAPMessageWithThoughts
+
+
+def _thinking_block(block: _SAPThoughtBlock) -> ChatCompletionThinkingBlock:
+    return ChatCompletionThinkingBlock(type="thinking", thinking=block.content, signature=block.signature)
+
+
+def _parse_choice_with_thoughts(choice: object) -> _SAPChoiceWithMessage | None:
+    try:
+        return _SAPChoiceWithMessage.model_validate(choice)
+    except ValidationError:
+        return None
+
+
+def _normalize_choice(choice: object) -> object:
+    parsed: Final = _parse_choice_with_thoughts(choice)
+    if parsed is None:
+        return choice
+
+    blocks: Final = tuple(_thinking_block(block) for block in parsed.message.reasoning_content)
+    reasoning_text: Final = "".join(block.content for block in parsed.message.reasoning_content)
+    choice_dict: Final = cast(dict[str, object], choice)
+    message: Final = cast(dict[str, object], choice_dict["message"])
+
+    return {
+        **choice_dict,
+        "message": {
+            **message,
+            "reasoning_content": reasoning_text or None,
+            "thinking_blocks": [*parsed.message.thinking_blocks, *blocks],
+        },
+    }
+
+
+def _normalize_final_result(final_result: object) -> object:
+    if not isinstance(final_result, dict):
+        return final_result
+
+    result: Final = cast(dict[str, object], final_result)
+    choices: Final = result.get("choices")
+    if not isinstance(choices, list):
+        return result
+
+    return {**result, "choices": [_normalize_choice(choice) for choice in cast(list[object], choices)]}
 
 
 def _messages_to_sap_template(messages: list[dict[str, str]]) -> list:  # type: ignore[type-arg]
@@ -391,7 +455,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        response = ModelResponse.model_validate(raw_response.json()["final_result"])
+        raw_body: Final = cast(dict[str, object], raw_response.json())
+        response = ModelResponse.model_validate(_normalize_final_result(raw_body["final_result"]))
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models
         # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```

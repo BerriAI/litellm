@@ -639,3 +639,102 @@ class TestSAPTransformationIntegration:
                 config["config"]["modules"][1]["translation"]["input"]["type"]
                 == "sap_document_translation"
             )
+
+
+class TestTransformResponseGeminiThoughtSignatures:
+    """Gemini 3.x returns list-shaped reasoning_content (signed thought blocks) on tool-call follow-ups."""
+
+    @staticmethod
+    def _transform(message):
+        from unittest.mock import MagicMock
+
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+        from litellm.types.utils import ModelResponse
+
+        raw_response = MagicMock()
+        raw_response.json.return_value = {
+            "final_result": {
+                "id": "test-id",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gemini-3.5-flash",
+                "choices": [
+                    {"index": 0, "message": message, "finish_reason": "stop"},
+                ],
+            }
+        }
+        raw_response.text = '{"final_result": {...}}'
+
+        return GenAIHubOrchestrationConfig().transform_response(
+            model="gemini-3.5-flash",
+            raw_response=raw_response,
+            model_response=ModelResponse(id="test", model="test"),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[{"role": "user", "content": "test"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+    def test_list_shaped_reasoning_content_is_flattened_and_signatures_kept(self):
+        result = self._transform(
+            {
+                "role": "assistant",
+                "content": "Ticket ABC-123 is open.",
+                "reasoning_content": [
+                    {"content": "Checking the ticket. ", "signature": "sig-one"},
+                    {"content": "It is open.", "signature": "sig-two"},
+                ],
+            }
+        )
+
+        message = result.choices[0].message
+        assert message.content == "Ticket ABC-123 is open."
+        assert message.reasoning_content == "Checking the ticket. It is open."
+        assert [block["signature"] for block in message.thinking_blocks] == [
+            "sig-one",
+            "sig-two",
+        ]
+        assert [block["thinking"] for block in message.thinking_blocks] == [
+            "Checking the ticket. ",
+            "It is open.",
+        ]
+        assert all(block["type"] == "thinking" for block in message.thinking_blocks)
+
+    def test_signature_only_block_with_empty_text(self):
+        result = self._transform(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_ticket_status",
+                            "arguments": '{"ticket_id": "ABC-123"}',
+                        },
+                    }
+                ],
+                "reasoning_content": [{"content": "", "signature": "CtMHAdHtim920NjKZTfLS9W/gDXBihg="}],
+            }
+        )
+
+        message = result.choices[0].message
+        assert getattr(message, "reasoning_content", None) is None
+        assert message.thinking_blocks[0]["signature"] == "CtMHAdHtim920NjKZTfLS9W/gDXBihg="
+        assert message.tool_calls[0].function.name == "get_ticket_status"
+
+    def test_string_reasoning_content_is_untouched(self):
+        result = self._transform(
+            {
+                "role": "assistant",
+                "content": "hi",
+                "reasoning_content": "plain gemini 2.5 style reasoning",
+            }
+        )
+
+        message = result.choices[0].message
+        assert message.reasoning_content == "plain gemini 2.5 style reasoning"
+        assert getattr(message, "thinking_blocks", None) is None
