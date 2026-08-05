@@ -6021,16 +6021,16 @@ def test_initialize_deployment_for_pass_through_keeps_bedrock_iam_deployment():
     ]
 
 
-def test_initialize_deployment_for_pass_through_sets_credentials_with_api_key():
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-        passthrough_endpoint_router,
+def test_pass_through_deployment_api_key_resolves_via_get_credentials():
+    from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+        PassthroughEndpointRouter,
     )
 
-    passthrough_endpoint_router.credentials.clear()
     router = _router_with_two_pass_through_deployments([False, False])
+    passthrough_router = PassthroughEndpointRouter(llm_router_getter=lambda: router)
     assert len(router.get_model_list()) == 2
     assert (
-        passthrough_endpoint_router.get_credentials(
+        passthrough_router.get_credentials(
             custom_llm_provider="openai", region_name=None
         )
         == "sk-fake-for-tests"

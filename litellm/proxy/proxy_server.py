@@ -8289,6 +8289,19 @@ class ProxyStartupEvent:
         )
 
         if store_model_in_db is True:
+            ### GET STORED CREDENTIALS ###
+            scheduler.add_job(
+                proxy_config.get_credentials,
+                "interval",
+                seconds=config_reload_interval_seconds,
+                # REMOVED jitter parameter - major cause of memory leak
+                args=[prisma_client],
+                id="get_credentials_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            )
+            await proxy_config.get_credentials(prisma_client=prisma_client)
+
             # MEMORY LEAK FIX: Increase interval from 10s to 30s minimum
             # Frequent polling was causing excessive memory allocations
             scheduler.add_job(
@@ -8304,19 +8317,6 @@ class ProxyStartupEvent:
 
             # this will load all existing models on proxy startup
             await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
-
-            ### GET STORED CREDENTIALS ###
-            scheduler.add_job(
-                proxy_config.get_credentials,
-                "interval",
-                seconds=config_reload_interval_seconds,
-                # REMOVED jitter parameter - major cause of memory leak
-                args=[prisma_client],
-                id="get_credentials_job",
-                replace_existing=True,
-                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-            )
-            await proxy_config.get_credentials(prisma_client=prisma_client)
 
             proxy_config.start_config_sync_subscriber(
                 prisma_client=prisma_client,
