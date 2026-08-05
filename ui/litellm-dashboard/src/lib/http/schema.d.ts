@@ -760,6 +760,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/benchmarks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Auto Router Benchmarks
+         * @description Savings, session shape and prompt-cache behaviour for every auto-router.
+         *
+         *     Admin-only. Reads the per-session rollup only; no per-request table is scanned.
+         *     `start_date` and `end_date` are inclusive calendar dates, clamped to the most recent
+         *     30 days. Pass `model_group` to scope every figure to one auto-router.
+         */
+        get: operations["get_auto_router_benchmarks_auto_router_benchmarks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/test_routing": {
         parameters: {
             query?: never;
@@ -21252,6 +21276,121 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** AutoRouterBenchmark */
+        AutoRouterBenchmark: {
+            /** Avg Session Seconds */
+            avg_session_seconds: number;
+            /** Avg Tokens Per Session */
+            avg_tokens_per_session: number;
+            /** Avg Turns Per Session */
+            avg_turns_per_session: number;
+            /** Baseline Spend */
+            baseline_spend: number;
+            cache: components["schemas"]["AutoRouterCacheBenchmark"] | null;
+            /** Saved Per Session */
+            saved_per_session: number;
+            /** Savings */
+            savings: number;
+            /** Savings Pct */
+            savings_pct: number;
+            /** Sessions */
+            sessions: number;
+            /** Spend */
+            spend: number;
+            /** Total Tokens */
+            total_tokens: number;
+            /** Turns */
+            turns: number;
+        };
+        /** AutoRouterBenchmarksResponse */
+        AutoRouterBenchmarksResponse: {
+            /**
+             * End Date
+             * Format: date
+             */
+            end_date: string;
+            /** Groups */
+            groups: components["schemas"]["AutoRouterGroupBenchmark"][];
+            /** Routers In Scope */
+            routers_in_scope: number;
+            /**
+             * Start Date
+             * Format: date
+             */
+            start_date: string;
+            totals: components["schemas"]["AutoRouterBenchmark"];
+        };
+        /** AutoRouterCacheBenchmark */
+        AutoRouterCacheBenchmark: {
+            /** Cold Miss Pct */
+            cold_miss_pct: number;
+            /** Cold Misses */
+            cold_misses: number;
+            /** Coverage Pct */
+            coverage_pct: number;
+            /** Expired Hit Rate Pct */
+            expired_hit_rate_pct: number;
+            /** Expired Hits */
+            expired_hits: number;
+            /** Expired Miss Pct */
+            expired_miss_pct: number;
+            /** Expired Misses */
+            expired_misses: number;
+            /** Expired Turns */
+            expired_turns: number;
+            /** First Visit Hit Rate Pct */
+            first_visit_hit_rate_pct: number;
+            /** First Visit Hits */
+            first_visit_hits: number;
+            /** First Visit Turns */
+            first_visit_turns: number;
+            /** Five Minute Cache Turns */
+            five_minute_cache_turns: number;
+            /** Hit Rate Pct */
+            hit_rate_pct: number;
+            /** Hits */
+            hits: number;
+            /** Misses */
+            misses: number;
+            /** One Hour Cache Turns */
+            one_hour_cache_turns: number;
+            /** Prefix Change Miss Pct */
+            prefix_change_miss_pct: number;
+            /** Prefix Change Misses */
+            prefix_change_misses: number;
+            /** Turns */
+            turns: number;
+            /** Unattributed Miss Pct */
+            unattributed_miss_pct: number;
+            /** Unattributed Misses */
+            unattributed_misses: number;
+            /** Unknown Cache Ttl Turns */
+            unknown_cache_ttl_turns: number;
+            /** Unknown Ttl Hits */
+            unknown_ttl_hits: number;
+            /** Unknown Ttl Turns */
+            unknown_ttl_turns: number;
+            /** Unordered Hits */
+            unordered_hits: number;
+            /** Unordered Turns */
+            unordered_turns: number;
+            /** Warm Hit Rate Pct */
+            warm_hit_rate_pct: number;
+            /** Warm Hits */
+            warm_hits: number;
+            /** Warm Turns */
+            warm_turns: number;
+        };
+        /** AutoRouterGroupBenchmark */
+        AutoRouterGroupBenchmark: {
+            /** Baseline Model */
+            baseline_model: string | null;
+            benchmark: components["schemas"]["AutoRouterBenchmark"];
+            /** Model Group */
+            model_group: string;
+            /** Router Kind */
+            router_kind: string;
+        };
         /**
          * AutoRouterRoutingTestRequest
          * @description A single prompt to classify against a complexity-router config that need not be saved yet.
@@ -36313,6 +36452,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_auto_router_benchmarks_auto_router_benchmarks_get: {
+        parameters: {
+            query: {
+                start_date: string;
+                end_date: string;
+                model_group?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterBenchmarksResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

@@ -5606,6 +5606,16 @@ async def update_daily_tag_spend(
         verbose_proxy_logger.error("Error updating daily tag spend: %s", e)
 
 
+async def update_auto_router_sessions(
+    prisma_client: PrismaClient,
+    proxy_logging_obj: ProxyLogging,
+):
+    """Separate scheduler job for the auto-router benchmarks rollup, kept off the
+    update_spend job so rollup upserts never extend the wall time of key, team and org
+    budget commits. The queue drops rather than blocks when full; the flush never raises."""
+    await proxy_logging_obj.db_spend_update_writer.auto_router_session_queue.flush(prisma_client=prisma_client)
+
+
 async def update_spend_logs_job(
     prisma_client: PrismaClient,
     db_writer_client: AsyncHTTPHandler | None,

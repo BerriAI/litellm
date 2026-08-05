@@ -16,10 +16,11 @@ import time
 import traceback
 import warnings
 from collections.abc import AsyncGenerator, Callable, Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import UnionType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Final,
     Literal,
@@ -544,6 +545,10 @@ from litellm.proxy.response_api_endpoints.endpoints import router as response_ro
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.proxy.spend_tracking.auto_router_benchmarks import (
+    AutoRouterBenchmarksResponse,
+    fetch_benchmarks,
+)
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
@@ -5927,7 +5932,9 @@ class ProxyConfig:
         """
         Reschedule the spend log cleanup job based on current general_settings.
         This is called when maximum_spend_logs_retention_period is updated dynamically.
-        If the retention period is None, the job will be removed.
+        The job is always rescheduled: spend-log pruning inside it still requires the
+        retention setting, but the auto-router rollup is garbage collected past its
+        read horizon regardless.
         """
         global scheduler, general_settings, prisma_client
         if scheduler is None:
@@ -5940,53 +5947,50 @@ class ProxyConfig:
         except Exception:
             pass  # Job might not exist, which is fine
 
-        # Schedule new job if retention period is set (not None)
-        retention_period: Final = general_settings.get("maximum_spend_logs_retention_period")
-        if retention_period is not None:
-            from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
-                SpendLogCleanup,
+        from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+            SpendLogCleanup,
+        )
+
+        spend_log_cleanup: Final = SpendLogCleanup()
+        cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
+
+        if cleanup_cron:
+            from apscheduler.triggers.cron import CronTrigger
+
+            try:
+                cron_trigger: Final = CronTrigger.from_crontab(cleanup_cron)
+                scheduler.add_job(
+                    spend_log_cleanup.cleanup_old_spend_logs,
+                    cron_trigger,
+                    args=[prisma_client],
+                    id="spend_log_cleanup_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
+                verbose_proxy_logger.info("Spend log cleanup rescheduled with cron: %s", cleanup_cron)
+            except ValueError:
+                verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
+        else:
+            # Interval-based scheduling (existing behavior)
+            from litellm.litellm_core_utils.duration_parser import (
+                duration_in_seconds,
             )
 
-            spend_log_cleanup: Final = SpendLogCleanup()
-            cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
-
-            if cleanup_cron:
-                from apscheduler.triggers.cron import CronTrigger
-
-                try:
-                    cron_trigger: Final = CronTrigger.from_crontab(cleanup_cron)
-                    scheduler.add_job(
-                        spend_log_cleanup.cleanup_old_spend_logs,
-                        cron_trigger,
-                        args=[prisma_client],
-                        id="spend_log_cleanup_job",
-                        replace_existing=True,
-                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                    )
-                    verbose_proxy_logger.info("Spend log cleanup rescheduled with cron: %s", cleanup_cron)
-                except ValueError:
-                    verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
-            else:
-                # Interval-based scheduling (existing behavior)
-                from litellm.litellm_core_utils.duration_parser import (
-                    duration_in_seconds,
+            retention_interval: Final = general_settings.get("maximum_spend_logs_retention_interval", "1d")
+            try:
+                interval_seconds: Final = duration_in_seconds(retention_interval)
+                scheduler.add_job(
+                    spend_log_cleanup.cleanup_old_spend_logs,
+                    "interval",
+                    seconds=interval_seconds + random.randint(0, 60),
+                    args=[prisma_client],
+                    id="spend_log_cleanup_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                 )
-
-                retention_interval: Final = general_settings.get("maximum_spend_logs_retention_interval", "1d")
-                try:
-                    interval_seconds: Final = duration_in_seconds(retention_interval)
-                    scheduler.add_job(
-                        spend_log_cleanup.cleanup_old_spend_logs,
-                        "interval",
-                        seconds=interval_seconds + random.randint(0, 60),
-                        args=[prisma_client],
-                        id="spend_log_cleanup_job",
-                        replace_existing=True,
-                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                    )
-                    verbose_proxy_logger.info("Spend log cleanup rescheduled with interval: %s", retention_interval)
-                except ValueError:
-                    verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
+                verbose_proxy_logger.info("Spend log cleanup rescheduled with interval: %s", retention_interval)
+            except ValueError:
+                verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
 
     async def _update_general_settings(self, db_general_settings: Json | None):
         """
@@ -8199,6 +8203,19 @@ class ProxyStartupEvent:
             f"({tag_spend_update_interval / batch_writing_interval:.1f}x main job interval)"
         )
 
+        ### AUTO-ROUTER BENCHMARKS ROLLUP (separate scheduler job) ###
+        from litellm.proxy.utils import update_auto_router_sessions
+
+        scheduler.add_job(
+            update_auto_router_sessions,
+            "interval",
+            seconds=batch_writing_interval,
+            args=(prisma_client, proxy_logging_obj),
+            id="update_auto_router_sessions_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
         ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
         if general_settings.get("disable_spend_logs", False) is False:
             from litellm.proxy.utils import _monitor_spend_logs_queue
@@ -8315,42 +8332,43 @@ class ProxyStartupEvent:
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
         ### SPEND LOG CLEANUP ###
-        if general_settings.get("maximum_spend_logs_retention_period") is not None:
-            spend_log_cleanup: Final = SpendLogCleanup()
-            cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
+        ## Always scheduled: spend-log pruning inside it still requires the retention
+        ## setting, but the auto-router rollup is collected past its read horizon regardless
+        spend_log_cleanup: Final = SpendLogCleanup()
+        cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
 
-            if cleanup_cron:
-                from apscheduler.triggers.cron import CronTrigger
+        if cleanup_cron:
+            from apscheduler.triggers.cron import CronTrigger
 
-                try:
-                    cron_trigger: Final = CronTrigger.from_crontab(cleanup_cron)
-                    scheduler.add_job(
-                        spend_log_cleanup.cleanup_old_spend_logs,
-                        cron_trigger,
-                        args=[prisma_client],
-                        id="spend_log_cleanup_job",
-                        replace_existing=True,
-                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                    )
-                    verbose_proxy_logger.info("Spend log cleanup scheduled with cron: %s", cleanup_cron)
-                except ValueError:
-                    verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
-            else:
-                # Interval-based scheduling (existing behavior)
-                retention_interval: Final = general_settings.get("maximum_spend_logs_retention_interval", "1d")
-                try:
-                    interval_seconds: Final = duration_in_seconds(retention_interval)
-                    scheduler.add_job(
-                        spend_log_cleanup.cleanup_old_spend_logs,
-                        "interval",
-                        seconds=interval_seconds + random.randint(0, 60),
-                        args=[prisma_client],
-                        id="spend_log_cleanup_job",
-                        replace_existing=True,
-                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                    )
-                except ValueError:
-                    verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
+            try:
+                cron_trigger: Final = CronTrigger.from_crontab(cleanup_cron)
+                scheduler.add_job(
+                    spend_log_cleanup.cleanup_old_spend_logs,
+                    cron_trigger,
+                    args=[prisma_client],
+                    id="spend_log_cleanup_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
+                verbose_proxy_logger.info("Spend log cleanup scheduled with cron: %s", cleanup_cron)
+            except ValueError:
+                verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
+        else:
+            # Interval-based scheduling (existing behavior)
+            retention_interval: Final = general_settings.get("maximum_spend_logs_retention_interval", "1d")
+            try:
+                interval_seconds: Final = duration_in_seconds(retention_interval)
+                scheduler.add_job(
+                    spend_log_cleanup.cleanup_old_spend_logs,
+                    "interval",
+                    seconds=interval_seconds + random.randint(0, 60),
+                    args=[prisma_client],
+                    id="spend_log_cleanup_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
+            except ValueError:
+                verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
         ### CHECK BATCH COST ###
         if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
             try:
@@ -16373,6 +16391,50 @@ async def get_adaptive_router_state(
         for tagged in tagged_routers
     ]
     return {"routers": snapshots}
+
+
+def _auto_router_error(message: str) -> dict[str, str]:
+    return {"error": message}  # mutable-ok: HTTPException serializes its detail from a real dict
+
+
+@router.get(
+    "/auto_router/benchmarks",
+    tags=["auto_router"],  # mutable-ok: FastAPI types tags as List[str]
+    response_model=AutoRouterBenchmarksResponse,
+)
+async def get_auto_router_benchmarks(
+    start_date: date,
+    end_date: date,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    model_group: str | None = None,
+):
+    """Savings, session shape and prompt-cache behaviour for every auto-router.
+
+    Admin-only. Reads the per-session rollup only; no per-request table is scanned.
+    `start_date` and `end_date` are inclusive calendar dates, clamped to the most recent
+    30 days. Pass `model_group` to scope every figure to one auto-router.
+    """
+    if not _user_has_admin_view(user_api_key_dict):
+        raise HTTPException(
+            status_code=403,
+            detail=_auto_router_error(CommonProxyErrors.not_allowed_access.value),
+        )
+    if end_date < start_date:
+        raise HTTPException(
+            status_code=400,
+            detail=_auto_router_error("end_date must not be earlier than start_date."),
+        )
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail=_auto_router_error(CommonProxyErrors.db_not_connected_error.value),
+        )
+    return await fetch_benchmarks(
+        prisma_client=prisma_client,
+        start_date=start_date,
+        end_date=end_date,
+        model_group=model_group,
+    )
 
 
 @router.get("/routes", dependencies=[Depends(user_api_key_auth)])
