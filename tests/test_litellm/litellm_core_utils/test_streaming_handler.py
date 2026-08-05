@@ -14,6 +14,7 @@ import traceback
 from typing import Optional
 
 import litellm
+from litellm import verbose_logger
 from litellm._logging import session_id_var, trace_id_var
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import (
@@ -4003,6 +4004,66 @@ async def test_stream_wrapper_aclose_restores_consumer_correlation_context():
 
         assert trace_id_var.get() == "outer-trace-aclose"
         assert session_id_var.get() == "outer-session-aclose"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+@pytest.mark.asyncio
+async def test_stream_wrapper_aclose_keeps_context_active_through_close_failure_diagnostic(monkeypatch):
+    """If closing the underlying provider stream raises, aclose()'s except
+    branch logs a debug diagnostic. That log line must still carry the
+    closing stream's own trace_id/session_id - the outer context must not be
+    restored until after the close attempt (and its diagnostic) completes."""
+    trace_id_var.set("outer-trace-close-fail")
+    session_id_var.set("outer-session-close-fail")
+    try:
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="close-fail-call",
+            function_id="fn-close-fail",
+            kwargs={"litellm_session_id": "close-fail-session"},
+        )
+
+        class _RaisingAsyncCloseStream:
+            async def aclose(self):
+                raise RuntimeError("boom closing stream")
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        wrapper = CustomStreamWrapper(
+            completion_stream=_RaisingAsyncCloseStream(),
+            model="gpt-3.5-turbo",
+            logging_obj=log_obj,
+        )
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "close-fail-session"
+
+        captured_ids = {}
+        real_debug = verbose_logger.debug
+
+        def fake_debug(msg, *args, **kwargs):
+            if "error closing completion_stream" in msg:
+                captured_ids["trace_id"] = trace_id_var.get()
+                captured_ids["session_id"] = session_id_var.get()
+            return real_debug(msg, *args, **kwargs)
+
+        monkeypatch.setattr(verbose_logger, "debug", fake_debug)
+
+        await wrapper.aclose()
+
+        assert captured_ids["trace_id"] == log_obj.litellm_trace_id
+        assert captured_ids["session_id"] == "close-fail-session"
+        assert trace_id_var.get() == "outer-trace-close-fail"
+        assert session_id_var.get() == "outer-session-close-fail"
     finally:
         trace_id_var.set("")
         session_id_var.set("")

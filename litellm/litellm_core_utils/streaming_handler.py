@@ -276,7 +276,10 @@ class CustomStreamWrapper:
         self._restore_consumer_correlation_context(guarded=True)
 
     async def aclose(self):
-        self._restore_consumer_correlation_context()
+        # Restore the consumer's outer context only after the underlying
+        # provider stream's own close (and its diagnostic logging below, if
+        # closing fails) completes - not before - so those log lines still
+        # carry this closing stream's own trace_id/session_id.
         if self.completion_stream is not None:
             stream_to_close: Final = self.completion_stream
             self.completion_stream = None
@@ -296,6 +299,7 @@ class CustomStreamWrapper:
                         "CustomStreamWrapper.aclose: error closing completion_stream: %s",
                         e,
                     )
+        self._restore_consumer_correlation_context()
 
     def check_send_stream_usage(self, stream_options: dict | None):
         return stream_options is not None and stream_options.get("include_usage", False) is True
