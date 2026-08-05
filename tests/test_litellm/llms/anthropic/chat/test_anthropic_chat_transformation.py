@@ -5867,3 +5867,19 @@ def test_is_anthropic_usage_object_distinguishes_chat_usage():
         ).model_dump()
     )
     assert not AnthropicConfig.is_anthropic_usage_object({"input_tokens": 3, "output_tokens": 5})
+
+
+def test_is_anthropic_usage_object_rejects_responses_api_usage():
+    """completion_cost checks the Anthropic shape before the Responses API shape, so a
+    Responses API usage payload, whose cache reads live in nested input_tokens_details,
+    must never match; matching would route it past the converter that reads the nested
+    field and its cache reads would be billed at the full input rate."""
+    assert not AnthropicConfig.is_anthropic_usage_object(
+        {
+            "input_tokens": 4017,
+            "output_tokens": 5,
+            "total_tokens": 4022,
+            "input_tokens_details": {"cached_tokens": 4014},
+            "output_tokens_details": {"reasoning_tokens": 0},
+        }
+    )

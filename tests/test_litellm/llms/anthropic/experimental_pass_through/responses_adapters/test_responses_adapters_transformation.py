@@ -989,6 +989,13 @@ class TestTranslateResponse:
             "cache_read_input_tokens": 4004,
         }
 
+    def test_missing_usage_maps_to_zero_tokens(self):
+        """A response without a usage object must map to zeroed Anthropic usage."""
+        assert LiteLLMAnthropicToResponsesAPIAdapter.translate_responses_api_usage_to_anthropic_usage(None) == {
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+
     def test_model_and_id_preserved(self):
         """Model and response ID from the Responses API are forwarded."""
         response = _make_mock_response(
