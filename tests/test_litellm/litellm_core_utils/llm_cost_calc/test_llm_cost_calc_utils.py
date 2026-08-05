@@ -757,11 +757,11 @@ def test_generic_cost_per_token_gpt56_terra_cache_costs_by_tier_and_context(
     [
         ("azure/gpt-5.6", 5e-6, 3e-5, 5e-7),
         ("azure/gpt-5.6-sol", 5e-6, 3e-5, 5e-7),
-        ("azure/gpt-5.6-terra", 2.5e-6, 1.5e-5, 2.5e-7),
-        ("azure/gpt-5.6-luna", 1e-6, 6e-6, 1e-7),
+        ("azure/gpt-5.6-terra", 2e-6, 1.2e-5, 2e-7),
+        ("azure/gpt-5.6-luna", 2e-7, 1.2e-6, 2e-8),
         ("azure/us/gpt-5.6", 5.5e-6, 3.3e-5, 5.5e-7),
-        ("azure/eu/gpt-5.6-terra", 2.75e-6, 1.65e-5, 2.75e-7),
-        ("azure/eu/gpt-5.6-luna", 1.1e-6, 6.6e-6, 1.1e-7),
+        ("azure/eu/gpt-5.6-terra", 2.2e-6, 1.32e-5, 2.2e-7),
+        ("azure/eu/gpt-5.6-luna", 2.2e-7, 1.32e-6, 2.2e-8),
     ],
 )
 def test_generic_cost_per_token_azure_gpt56(
