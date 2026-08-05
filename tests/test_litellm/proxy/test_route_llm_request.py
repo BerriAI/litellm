@@ -20,7 +20,7 @@ from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_reque
         ("acompletion", {"messages": [{"role": "user", "content": "Hello"}]}),
         ("aembedding", {"input": "Hello"}),
         ("aimage_generation", {"prompt": "a cat"}),
-        ("aspeech", {}),
+        ("aspeech", {"input": "hello", "voice": "alloy"}),
         ("atranscription", {}),
         ("amoderation", {"input": "Hello"}),
         ("arerank", {}),
@@ -1070,6 +1070,7 @@ def test_raise_if_required_body_param_missing_rejects_missing_param(route_type, 
         ("aembedding", {"model": "text-embedding-3-small", "input": "hi"}),
         ("arerank", {"model": "rerank-model"}),
         ("aimage_generation", {"model": "dall-e-3", "prompt": "a cat"}),
+        ("aspeech", {"model": "tts-1", "input": "hello", "voice": "alloy"}),
     ],
 )
 def test_raise_if_required_body_param_missing_allows_valid_requests(route_type, data):
@@ -1104,29 +1105,30 @@ async def test_route_request_rejects_chat_completion_without_messages():
         ("anthropic_messages", "messages", {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 5}),
         ("anthropic_messages", "max_tokens", {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 5}),
         ("avector_store_search", "query", {"query": "q"}),
+        ("aspeech", "model", {"model": "tts-1", "input": "hello", "voice": "alloy"}),
+        ("aspeech", "input", {"model": "tts-1", "input": "hello", "voice": "alloy"}),
+        ("aspeech", "voice", {"model": "tts-1", "input": "hello", "voice": "alloy"}),
     ],
 )
 def test_raise_if_required_body_param_missing_returns_400(route_type, missing_param, valid_data):
     """Omitting a required body param must raise a deliberate 400, not fall through to a 500.
 
     Regression for endpoints (moderations, images, ocr, responses, anthropic
-    messages, vector store search) that previously dispatched to a router method
-    with the param as a required positional arg, producing an opaque 500.
+    messages, vector store search, speech) that previously dispatched to a router
+    method with the param as a required positional arg, producing an opaque 500.
     """
     from litellm.proxy.route_llm_request import (
         ProxyMissingRequiredParamError,
         raise_if_required_body_param_missing,
     )
 
-    # Missing the required param -> 400 naming that param.
     data_missing = {k: v for k, v in valid_data.items() if k != missing_param}
     with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
-        raise_if_required_body_param_missing(route_type, {"model": "m", **data_missing})
+        raise_if_required_body_param_missing(route_type, data_missing)
     assert exc_info.value.status_code == 400
     assert exc_info.value.param == missing_param
 
-    # A present value must not raise (happy path unchanged).
-    raise_if_required_body_param_missing(route_type, {"model": "m", **valid_data})
+    raise_if_required_body_param_missing(route_type, valid_data)
 
 
 def test_raise_if_required_body_param_missing_ignores_unlisted_route():

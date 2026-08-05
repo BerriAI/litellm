@@ -161,6 +161,7 @@ REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
     "aresponses": ("input",),
     "anthropic_messages": ("messages", "max_tokens"),
     "avector_store_search": ("query",),
+    "aspeech": ("model", "input", "voice"),
 }
 
 
