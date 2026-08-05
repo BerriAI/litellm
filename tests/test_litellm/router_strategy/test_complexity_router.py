@@ -4444,12 +4444,7 @@ class TestContextAwareClassifier:
         follow_up_reminder = f"{markers[0]}Budget: 42 tokens remaining. Do not mention this.{markers[1]}"
         messages = [_ASKED, _ANSWERED, {"role": "user", "content": follow_up_reminder}]
 
-        # Without custom markers configured, the OpenClaw-style follow-up isn't recognized as a
-        # reminder at all, so it wins "newest human ask" over the real question.
         assert _extract_current_ask_and_system_prompt(messages)[0] == follow_up_reminder
-
-        # With the harness's markers configured, it strips to empty and is skipped in favor of the
-        # earlier real ask, exactly like the built-in <system-reminder> case.
         assert _extract_current_ask_and_system_prompt(messages, markers)[0] == _ASK
 
     @pytest.mark.parametrize(
