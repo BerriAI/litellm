@@ -263,6 +263,107 @@ class TestReasoningContentFinalResponse:
         assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
         assert reasoning_items[0].content[0].text == "Reasoning for first answer"
 
+    def test_signature_only_thinking_block_still_emits_reasoning_item(self):
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="10",
+                        role="assistant",
+                        reasoning_content="",
+                        thinking_blocks=[
+                            {"type": "thinking", "thinking": "", "signature": "signature-payload"}
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test input",
+            responses_api_request={},
+            chat_completion_response=response,
+        )
+
+        reasoning_items = [
+            item for item in responses_api_response.output if item.type == "reasoning"
+        ]
+        assert len(reasoning_items) == 1, "Signature-only thinking should still surface a reasoning item"
+        assert reasoning_items[0].content == []
+        assert "signature-payload" in reasoning_items[0].encrypted_content
+
+    def test_redacted_thinking_block_preserved_as_encrypted_content(self):
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="10",
+                        role="assistant",
+                        thinking_blocks=[{"type": "redacted_thinking", "data": "redacted-payload"}],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test input",
+            responses_api_request={},
+            chat_completion_response=response,
+        )
+
+        reasoning_items = [
+            item for item in responses_api_response.output if item.type == "reasoning"
+        ]
+        assert len(reasoning_items) == 1
+        assert "redacted-payload" in reasoning_items[0].encrypted_content
+
+    def test_visible_thinking_keeps_text_and_signature(self):
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="10",
+                        role="assistant",
+                        reasoning_content="counting the primes",
+                        thinking_blocks=[
+                            {"type": "thinking", "thinking": "counting the primes", "signature": "sig"}
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test input",
+            responses_api_request={},
+            chat_completion_response=response,
+        )
+
+        reasoning_items = [
+            item for item in responses_api_response.output if item.type == "reasoning"
+        ]
+        assert len(reasoning_items) == 1
+        assert reasoning_items[0].content[0].text == "counting the primes"
+        assert "sig" in reasoning_items[0].encrypted_content
+
 
 def test_streaming_chunk_id_raw():
     """Test that streaming chunk IDs are raw (not encoded) to match OpenAI format"""
