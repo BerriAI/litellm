@@ -22,7 +22,7 @@ def _get_proxy_llm_router() -> "Router | None":
     return llm_router
 
 
-def _get_str_value(values: dict | None, key: str) -> str | None:
+def _get_str_value(values: dict[str, object] | None, key: str) -> str | None:
     value: Final = values.get(key) if values is not None else None
     return value if isinstance(value, str) else None
 
