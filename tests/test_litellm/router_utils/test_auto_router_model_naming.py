@@ -147,3 +147,37 @@ def test_config_check_ignores_the_model_entirely():
         )
         is not None
     )
+
+
+CUSTOM_TIER_WRITE: dict = {
+    "classifier_type": "llm",
+    "classifier_llm_config": {"model": "haiku-classifier"},
+    "tier_definitions": [
+        {"name": "CASUAL", "description": "greetings and chitchat"},
+        {"name": "CODING", "description": "any programming task"},
+    ],
+    "fallback_tier": "CASUAL",
+    "tiers": {"CASUAL": "cheap-model", "CODING": "mid-model"},
+}
+
+
+def test_validate_accepts_a_custom_tier_config():
+    assert validate_complexity_router_config_write(complexity_router_config=CUSTOM_TIER_WRITE) is None
+
+
+@pytest.mark.parametrize(
+    "overrides, expected_fragment",
+    [
+        ({"session_affinity": True}, "session_affinity"),
+        ({"adaptive": True}, "adaptive"),
+        ({"fallback_tier": None}, "fallback_tier is required"),
+    ],
+)
+def test_validate_rejects_custom_tiers_combined_with_order_dependent_features(overrides, expected_fragment):
+    """The lock-down must fire at the write boundary with a readable 400, not silently
+    at load or as a runtime crash on the severity-order paths."""
+    violation = validate_complexity_router_config_write(
+        complexity_router_config={**CUSTOM_TIER_WRITE, **overrides}
+    )
+    assert violation is not None
+    assert expected_fragment in violation

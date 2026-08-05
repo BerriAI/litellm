@@ -51,6 +51,38 @@ model_list:
           REASONING: o1-preview
 ```
 
+### Custom tier definitions
+
+`tier_definitions` replaces the built-in SIMPLE/MEDIUM/COMPLEX/REASONING with an operator-defined tier set. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet, so the classifier reasons over your taxonomy directly:
+
+```yaml
+model_list:
+  - model_name: support-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        classifier_type: llm
+        classifier_llm_config:
+          model: haiku-classifier
+        tier_definitions:
+          - name: CASUAL
+            description: greetings, chitchat, and quick factual questions
+          - name: CODING
+            description: any programming task, code review, or debugging
+          - name: RESEARCH
+            description: multi-step analysis, proofs, or open-ended research
+        fallback_tier: CODING
+        classification_prompt: Sort each request by the kind of work our support desk must do to answer it.
+        tiers:
+          CASUAL: gpt-4o-mini
+          CODING: gpt-4o
+          RESEARCH: o1-preview
+```
+
+The rules: between 2 and 8 tiers, unique names, every defined tier mapped in `tiers` and no other keys, and `classifier_type: llm` (the heuristic scorer only produces the built-in tiers). `fallback_tier` is required and names the tier routed to when the classifier call fails, since the heuristic fallback cannot produce custom tiers. `classification_prompt` is optional and replaces the rubric's opening instructions; the per-tier bullets and the trust-boundary paragraph that tells the classifier to ignore tier requests embedded in quoted caller text are always appended after it and cannot be overridden. It also works without `tier_definitions` to reword the instructions over the built-in tiers.
+
+The order of `tier_definitions` is ascending severity, so list the cheapest tier first and the deepest last. `keyword_tier_rules` may target the defined names, and when a prompt matches several rules the most severe matched tier wins, ranked by that order, exactly as the built-in set ranks by SIMPLE through REASONING. Features built on the built-in tier ladder are rejected at config write when combined with `tier_definitions`: escalation keywords, `adaptive`, `session_affinity`, and `plugins`. Spend logs record the custom tier name in `routing_decision.tier`, and a classifier failure is visible as `cause: classifier_fallback`.
+
 ### Full Configuration
 
 ```yaml

@@ -42,9 +42,21 @@ class KeywordTierRule(BaseModel):
         min_length=1,
         description="Keywords/phrases that trigger this rule (lexical or semantic match)",
     )
-    tier: ComplexityTier = Field(
-        description="Tier to route to when this rule matches",
+    tier: str = Field(
+        description=(
+            "Tier to route to when this rule matches: a built-in tier name, or with "
+            "tier_definitions set, one of the defined tier names"
+        ),
     )
+
+    @field_validator("tier", mode="before")
+    @classmethod
+    def _coerce_tier(cls, value: object) -> object:
+        if isinstance(value, ComplexityTier):
+            return value.value
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
     @model_validator(mode="after")
     def _normalize_keywords(self) -> "KeywordTierRule":
@@ -56,6 +68,47 @@ class KeywordTierRule(BaseModel):
         if not cleaned:
             raise ValueError("keyword_tier_rules entries must contain at least one non-empty keyword")
         self.keywords = cleaned
+        return self
+
+
+MAX_TIER_DEFINITIONS: Final[int] = 8
+MAX_TIER_NAME_CHARS: Final[int] = 64
+MAX_TIER_DESCRIPTION_CHARS: Final[int] = 500
+MAX_CLASSIFICATION_PROMPT_CHARS: Final[int] = 2000
+
+
+class TierDefinition(BaseModel):
+    """An operator-defined tier: the name the LLM classifier must return and its rubric description."""
+
+    name: str = Field(
+        description="Tier name; becomes a value the LLM classifier can return and a key of `tiers`",
+    )
+    description: str = Field(
+        description="What belongs in this tier; rendered as this tier's bullet in the classifier rubric",
+    )
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "TierDefinition":
+        name: Final = self.name.strip()
+        description: Final = self.description.strip()
+        if not name:
+            raise ValueError("tier_definitions entries must have a non-empty name")
+        if not description:
+            raise ValueError(f"tier_definitions entry {name!r} must have a non-empty description")
+        if len(name) > MAX_TIER_NAME_CHARS:
+            raise ValueError(
+                f"tier_definitions name {name[:MAX_TIER_NAME_CHARS]!r}... exceeds {MAX_TIER_NAME_CHARS} characters"
+            )
+        if len(description) > MAX_TIER_DESCRIPTION_CHARS:
+            raise ValueError(
+                f"tier_definitions description for {name!r} exceeds {MAX_TIER_DESCRIPTION_CHARS} characters"
+            )
+        if any(char in "\n\r" for char in name) or any(char in "\n\r" for char in description):
+            raise ValueError(
+                f"tier_definitions entry {name!r} must not contain newlines; the rubric renders one line per tier"
+            )
+        self.name = name
+        self.description = description
         return self
 
 
@@ -260,6 +313,37 @@ class ComplexityRouterConfig(BaseModel):
         description=(
             "Mapping of complexity tiers to a model or model pool. "
             "A list is randomly picked from when adaptive=False, and used as a soft-floor home pool when adaptive=True"
+        ),
+    )
+
+    tier_definitions: tuple[TierDefinition, ...] | None = Field(
+        default=None,
+        description=(
+            "Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. "
+            "Each entry's name becomes a value the LLM classifier can return and its description "
+            "becomes that tier's rubric bullet. List order is ascending severity and decides which "
+            "tier wins when several keyword_tier_rules match. Requires classifier_type 'llm', a "
+            "fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, "
+            "adaptive selection, session affinity, and plugins are unavailable with a custom tier "
+            "set because they are built on the built-in tier ladder."
+        ),
+    )
+    fallback_tier: str | None = Field(
+        default=None,
+        description=(
+            "Tier routed to when the LLM classifier fails (timeout, provider error, or an "
+            "unparseable reply). Required with tier_definitions and must name a defined tier; "
+            "the heuristic scorer cannot produce custom tiers, so this replaces the heuristic "
+            "fallback for custom tier sets."
+        ),
+    )
+    classification_prompt: str | None = Field(
+        default=None,
+        description=(
+            "Replaces the opening instructions of the LLM classifier rubric (the judging-criteria "
+            "prose). The per-tier bullets and the trust-boundary paragraph telling the classifier "
+            "to ignore tier requests embedded in quoted caller text are always appended after it "
+            "and cannot be overridden. Requires classifier_type 'llm'."
         ),
     )
 
@@ -483,6 +567,103 @@ class ComplexityRouterConfig(BaseModel):
     def _validate_llm_classifier_config(self) -> "ComplexityRouterConfig":
         if self.classifier_type == "llm" and self.classifier_llm_config is None:
             raise ValueError("classifier_llm_config is required when classifier_type is 'llm'")
+        return self
+
+    @property
+    def has_custom_tiers(self) -> bool:
+        """True when the operator replaced the built-in tier set via tier_definitions."""
+        return self.tier_definitions is not None
+
+    def tier_names(self) -> tuple[str, ...]:
+        """The active tier names: the defined names, or the built-in set in severity order."""
+        if self.tier_definitions is not None:
+            return tuple(definition.name for definition in self.tier_definitions)
+        return tuple(tier.value for tier in TIER_SEVERITY_ORDER)
+
+    @model_validator(mode="after")
+    def _validate_tier_definitions(self) -> "ComplexityRouterConfig":
+        if self.tier_definitions is None:
+            if self.fallback_tier is not None:
+                raise ValueError("fallback_tier requires tier_definitions")
+            return self
+        names: Final = tuple(definition.name for definition in self.tier_definitions)
+        if not 2 <= len(names) <= MAX_TIER_DEFINITIONS:
+            raise ValueError(
+                f"tier_definitions must define between 2 and {MAX_TIER_DEFINITIONS} tiers, got {len(names)}"
+            )
+        folded: Final = tuple(name.casefold() for name in names)
+        duplicated: Final = tuple(
+            sorted(frozenset(name for name, fold in zip(names, folded) if folded.count(fold) > 1))
+        )
+        if duplicated:
+            raise ValueError(f"tier_definitions names must be unique (case-insensitive): {', '.join(duplicated)}")
+        if self.classifier_type != "llm":
+            raise ValueError(
+                "tier_definitions requires classifier_type 'llm': the heuristic scorer only produces the built-in tiers"
+            )
+        order_dependent: Final = tuple(
+            label
+            for label, enabled in (
+                ("adaptive", self.adaptive),
+                ("session_affinity", self.session_affinity),
+                ("escalation_keywords", bool(self.escalation_keywords)),
+                ("plugins", bool(self.plugins)),
+            )
+            if enabled
+        )
+        if order_dependent:
+            raise ValueError(
+                f"{', '.join(order_dependent)} cannot be combined with tier_definitions: these features "
+                "rely on the built-in tier severity order, which a custom tier set does not define"
+            )
+        defined: Final = frozenset(names)
+        configured: Final = frozenset(self.tiers)
+        missing: Final = tuple(sorted(defined - configured))
+        if missing:
+            raise ValueError(f"tiers must map every defined tier to a model; missing: {', '.join(missing)}")
+        unknown: Final = tuple(sorted(configured - defined))
+        if unknown:
+            raise ValueError(f"tiers keys must be defined in tier_definitions; unknown: {', '.join(unknown)}")
+        if self.fallback_tier is None:
+            raise ValueError(
+                "fallback_tier is required with tier_definitions: it is where requests route when the "
+                "LLM classifier fails"
+            )
+        stripped_fallback: Final = self.fallback_tier.strip()
+        if stripped_fallback not in defined:
+            raise ValueError(
+                f"fallback_tier {self.fallback_tier!r} is not one of the defined tiers: {', '.join(names)}"
+            )
+        self.fallback_tier = stripped_fallback
+        return self
+
+    @model_validator(mode="after")
+    def _validate_classification_prompt(self) -> "ComplexityRouterConfig":
+        if self.classification_prompt is None:
+            return self
+        stripped: Final = self.classification_prompt.strip()
+        if not stripped:
+            raise ValueError("classification_prompt must not be blank")
+        if len(stripped) > MAX_CLASSIFICATION_PROMPT_CHARS:
+            raise ValueError(f"classification_prompt exceeds {MAX_CLASSIFICATION_PROMPT_CHARS} characters")
+        if self.classifier_type != "llm":
+            raise ValueError("classification_prompt requires classifier_type 'llm'")
+        self.classification_prompt = stripped
+        return self
+
+    @model_validator(mode="after")
+    def _validate_keyword_rule_tiers(self) -> "ComplexityRouterConfig":
+        if not self.keyword_tier_rules:
+            return self
+        valid: Final = frozenset(self.tier_names())
+        unknown: Final = tuple(
+            sorted(frozenset(rule.tier for rule in self.keyword_tier_rules if rule.tier not in valid))
+        )
+        if unknown:
+            raise ValueError(
+                f"keyword_tier_rules reference unknown tiers: {', '.join(unknown)}; "
+                f"valid tiers: {', '.join(self.tier_names())}"
+            )
         return self
 
     @model_validator(mode="after")

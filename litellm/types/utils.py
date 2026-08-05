@@ -2772,6 +2772,7 @@ RoutingDecisionCause = Literal[
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
     "llm_classifier",
+    "classifier_fallback",
     "literal_keyword_match",
     "semantic_keyword_match",
     "session_affinity_pin",
