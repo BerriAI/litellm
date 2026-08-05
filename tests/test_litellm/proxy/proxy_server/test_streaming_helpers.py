@@ -196,9 +196,7 @@ async def test_async_assistants_data_generator_hook_failure_yields_error_chunk(
     async def _noop_failure(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(
-        ps.proxy_logging_obj, "async_post_call_streaming_hook", _boom_hook
-    )
+    monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_hook", _boom_hook)
     monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _noop_failure)
 
     stream = _FakeAssistantsStream([_simple_chunk()])
@@ -385,9 +383,7 @@ def test_get_streaming_fallback_metadata_no_additional_headers():
 def test_get_streaming_fallback_metadata_zero_fallback_count():
     stream = _FakeStream(
         [],
-        hidden_params={
-            "additional_headers": {"x-litellm-attempted-fallbacks": 0}
-        },
+        hidden_params={"additional_headers": {"x-litellm-attempted-fallbacks": 0}},
     )
     assert _get_streaming_fallback_metadata(stream) == (False, None, [])
 
@@ -558,9 +554,7 @@ async def test_apply_streaming_chunk_hooks_appends_to_str_so_far(monkeypatch):
     async def _passthrough(*, user_api_key_dict, response, data, str_so_far=None):
         return response
 
-    monkeypatch.setattr(
-        ps.proxy_logging_obj, "async_post_call_streaming_hook", _passthrough
-    )
+    monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_hook", _passthrough)
 
     new_chunk, new_str = await _apply_streaming_chunk_hooks(
         chunk=chunk,
@@ -870,9 +864,7 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
         out.append(line)
 
     # First entry is the successful "partial" chunk (bytes), last is the error.
-    assert any(
-        isinstance(item, str) and item.startswith('data: {"error":') for item in out
-    )
+    assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
 
 
 # ---------------------------------------------------------------------------
@@ -934,7 +926,7 @@ async def test_iter_with_keepalive_hot_path_no_task_wrapping():
     """When keepalive_seconds <= 0, the generator is a transparent pass-through."""
     chunks = [_simple_chunk(content="a"), _simple_chunk(content="b")]
     out = []
-    async for item in _iter_with_keepalive(_async_iter(chunks), keepalive_seconds=0):
+    async for item in _iter_with_keepalive(_async_iter(chunks), lambda _: 0, keepalive_seconds=0):
         out.append(item)
 
     assert out == chunks
@@ -944,7 +936,9 @@ async def test_iter_with_keepalive_hot_path_no_task_wrapping():
 @pytest.mark.asyncio
 async def test_iter_with_keepalive_emits_sentinel_when_stream_stalls():
     """With a short keepalive interval and a stalled upstream, _STREAM_KEEPALIVE
-    sentinels appear before the delayed chunk arrives."""
+    sentinels appear before the delayed chunk arrives. The resolver returns a
+    constant interval, since this test pins the timing mechanics, not
+    re-resolution."""
     import asyncio
 
     async def _slow_stream():
@@ -953,7 +947,7 @@ async def test_iter_with_keepalive_emits_sentinel_when_stream_stalls():
         yield _simple_chunk(content="second")
 
     items = []
-    async for item in _iter_with_keepalive(_slow_stream(), keepalive_seconds=0.05):
+    async for item in _iter_with_keepalive(_slow_stream(), lambda _: 0.05, keepalive_seconds=0.05):
         items.append(item)
 
     sentinels = [i for i in items if i is ps._STREAM_KEEPALIVE]
@@ -975,12 +969,79 @@ async def test_iter_with_keepalive_cancel_on_early_close():
             await asyncio.sleep(10)
             yield _simple_chunk()
 
-    gen = _iter_with_keepalive(_infinite_stream(), keepalive_seconds=0.05)
+    gen = _iter_with_keepalive(_infinite_stream(), lambda _: 0.05, keepalive_seconds=0.05)
     # Advance once to get the sentinel; then close before the real chunk.
     first = await gen.__anext__()
     assert first is ps._STREAM_KEEPALIVE
     # aclose must not raise, and must drain the cancelled task cleanly.
     await gen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_iter_with_keepalive_disables_after_fallback_lowers_interval():
+    """Greptile P1: a mid-stream router fallback can hand off to a deployment
+    with a different (or disabled) keepalive policy partway through the same
+    stream. The interval must be re-resolved against each chunk's own identity,
+    not the one picked before iteration started, or heartbeats keep using the
+    pre-fallback deployment's policy for the rest of the stream."""
+    import asyncio
+
+    async def _slow_stream():
+        yield _simple_chunk(content="first")
+        await asyncio.sleep(0.3)
+        yield _simple_chunk(content="second")
+
+    def _resolver(item):
+        # First chunk resolves under the enabled interval used to start the
+        # wrapper; every chunk after that resolves as if a fallback disabled it.
+        return 0.0 if item.choices[0].delta.content == "first" else 999.0
+
+    items = []
+    async for item in _iter_with_keepalive(_slow_stream(), _resolver, keepalive_seconds=0.05):
+        items.append(item)
+
+    sentinels = [i for i in items if i is ps._STREAM_KEEPALIVE]
+    real_chunks = [i for i in items if i is not ps._STREAM_KEEPALIVE]
+
+    assert sentinels == [], f"expected no sentinels once the resolver disables keepalive; got {len(sentinels)}"
+    assert len(real_chunks) == 2
+    assert real_chunks[0].choices[0].delta.content == "first"
+    assert real_chunks[1].choices[0].delta.content == "second"
+
+
+@pytest.mark.asyncio
+async def test_iter_with_keepalive_enables_after_fallback_raises_interval():
+    """Symmetric case: a mid-stream fallback to a deployment with a *shorter*
+    keepalive interval must take effect immediately, not stay pinned to the
+    longer interval the stream started with. The interval used to wait for a
+    chunk is resolved from the *previous* chunk (the only one seen so far when
+    that wait begins), so the stall has to follow the fallback chunk rather
+    than precede it: waiting for "third" is where the shorter interval bites."""
+    import asyncio
+
+    async def _slow_stream():
+        yield _simple_chunk(content="first")
+        yield _simple_chunk(content="second")
+        await asyncio.sleep(0.3)
+        yield _simple_chunk(content="third")
+
+    def _resolver(item):
+        # "first" resolves under an interval too long to fire before "second"
+        # arrives; "second" (the fallback chunk) resolves as if the fallback
+        # deployment enabled a much shorter interval for everything after it.
+        return 999.0 if item.choices[0].delta.content == "first" else 0.05
+
+    items = []
+    async for item in _iter_with_keepalive(_slow_stream(), _resolver, keepalive_seconds=999.0):
+        items.append(item)
+
+    sentinels = [i for i in items if i is ps._STREAM_KEEPALIVE]
+    real_chunks = [i for i in items if i is not ps._STREAM_KEEPALIVE]
+
+    assert len(sentinels) >= 2, (
+        f"expected >= 2 sentinels once the resolver enables a short interval; got {len(sentinels)}"
+    )
+    assert len(real_chunks) == 3
 
 
 def test_resolve_keepalive_seconds_client_value_ignored_without_override_permission(monkeypatch):
