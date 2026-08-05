@@ -999,9 +999,11 @@ class ComplexityRouter(CustomLogger):
             raise ValueError("LLM classifier returned empty content")
         raw_tier: Final = _TierReply.model_validate_json(content).tier
         if self.config.has_custom_tiers:
-            if raw_tier not in self.config.tier_names():
+            folded: Final = raw_tier.strip().casefold()
+            matched: Final = next((name for name in self.config.tier_names() if name.casefold() == folded), None)
+            if matched is None:
                 raise ValueError(f"LLM classifier returned an unknown tier: {raw_tier!r}")
-            return raw_tier
+            return matched
         tier: Final = self.config.tier_for_label(raw_tier)
         if tier is None:
             raise ValueError(f"LLM classifier returned an unrecognized tier: {raw_tier!r}")

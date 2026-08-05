@@ -5941,6 +5941,31 @@ class TestTierDefinitionsClassifier:
         assert "tier_boundaries" not in result.routing_decision
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            pytest.param("research", id="different-case"),
+            pytest.param(" RESEARCH ", id="surrounding-whitespace"),
+        ],
+    )
+    async def test_custom_tier_reply_resolves_case_insensitively_to_the_canonical_name(
+        self, custom_tier_router, mock_router_instance, reply
+    ):
+        """A model that answers in the wrong case or with stray whitespace still names a
+        defined tier, matching the built-in path's label resolution; rejecting it would
+        silently reroute the request to the fallback tier. The decision records the
+        canonical configured name, never the model's spelling."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response(f'{{"tier": "{reply}"}}'))
+        result = await custom_tier_router.async_pre_routing_hook(
+            model="custom-tier-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "compare these two consensus protocols"}],
+        )
+        assert result.model == "deep-model"
+        assert result.routing_decision["tier"] == "RESEARCH"
+        assert result.routing_decision["cause"] == "llm_classifier"
+
+    @pytest.mark.asyncio
     async def test_classifier_failure_routes_to_the_fallback_tier(self, custom_tier_router, mock_router_instance):
         """The heuristic scorer cannot produce a custom tier, so it must never be the
         fallback: a classifier outage routes to the operator-chosen fallback_tier."""
