@@ -473,6 +473,17 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             output_tokens=output_tokens,
         )
 
+        cache_creation = int(getattr(raw_usage, "cache_creation_input_tokens", 0) or 0)
+        if cache_creation:
+            anthropic_usage["cache_creation_input_tokens"] = cache_creation
+
+        cache_read = int(getattr(raw_usage, "cache_read_input_tokens", 0) or 0)
+        if not cache_read:
+            input_tokens_details = getattr(raw_usage, "input_tokens_details", None)
+            cache_read = int(getattr(input_tokens_details, "cached_tokens", 0) or 0)
+        if cache_read:
+            anthropic_usage["cache_read_input_tokens"] = cache_read
+
         return AnthropicMessagesResponse(
             id=response.id,
             type="message",
