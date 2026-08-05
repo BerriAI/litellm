@@ -22,8 +22,6 @@ from litellm.types.utils import (
     Usage,
 )
 
-_OPENAI_WEB_SEARCH_PROVIDERS: Final = frozenset({"openai", "azure"})
-
 
 class StandardBuiltInToolCostTracking:
     """
@@ -307,42 +305,17 @@ class StandardBuiltInToolCostTracking:
         response_object: object,
         custom_llm_provider: str | None,
     ) -> Usage | None:
-        """Return a Usage carrying server_tool_use.web_search_requests sourced from the
-        provider's response when the reconstructed Usage does not already expose the field.
-
-        Anthropic reports the count in the usage block of its raw /v1/messages response.
-        OpenAI and Azure OpenAI report no count at all, so their billable web_search_call
-        output items are counted instead."""
-        anthropic_usage: Final = StandardBuiltInToolCostTracking._usage_with_anthropic_web_search(
-            usage=usage, response_object=response_object
-        )
-        if custom_llm_provider not in _OPENAI_WEB_SEARCH_PROVIDERS:
-            return anthropic_usage
-        if _get_web_search_requests(getattr(anthropic_usage, "server_tool_use", None)) is not None:
-            return anthropic_usage
-
-        from litellm.llms.openai.cost_calculation import (
-            get_web_search_requests_from_response,
-        )
-
-        web_search_requests: Final = get_web_search_requests_from_response(response_object)
-        if web_search_requests is None:
-            return anthropic_usage
-        return StandardBuiltInToolCostTracking._with_web_search_requests(anthropic_usage, web_search_requests)
-
-    @staticmethod
-    def _usage_with_anthropic_web_search(usage: Usage | None, response_object: object) -> Usage | None:
-        """Return a Usage carrying server_tool_use.web_search_requests sourced from a
-        raw Anthropic /v1/messages response dict when the reconstructed Usage dropped
-        it (or was never supplied). The original Usage is returned unchanged when it
-        already exposes the field or the response is not an Anthropic dict."""
-        from litellm.llms.anthropic.cost_calculation import (
-            get_anthropic_web_search_requests_from_response,
-        )
+        """Return a Usage carrying server_tool_use.web_search_requests read off the provider's
+        raw response, for the providers whose reconstructed Usage drops the count or never
+        reported one. The Usage is returned unchanged when it already exposes the field or the
+        response carries no count."""
+        from litellm.llms import get_web_search_requests_from_response
 
         if usage is not None and (_get_web_search_requests(getattr(usage, "server_tool_use", None)) is not None):
             return usage
-        web_search_requests: Final = get_anthropic_web_search_requests_from_response(response_object)
+        web_search_requests: Final = get_web_search_requests_from_response(
+            custom_llm_provider=custom_llm_provider, response_object=response_object
+        )
         if web_search_requests is None:
             return usage
         return StandardBuiltInToolCostTracking._with_web_search_requests(usage, web_search_requests)

@@ -88,7 +88,7 @@ def cost_for_web_search_requests(
 
     ``default_cost_per_request`` is the provider's list price, used when the model has no
     ``search_context_cost_per_query`` entry in the pricing map. A model entry always wins,
-    so per-deployment pricing overrides stay in effect.
+    including an explicit ``0.0``, so per-deployment pricing overrides stay in effect.
 
     Returns ``None`` when no request count is available, so callers can fall back to
     pricing that does not depend on a count.
@@ -99,7 +99,7 @@ def cost_for_web_search_requests(
 
     search_costs: Final = model_info.get("search_context_cost_per_query")
     model_cost_per_request: Final = search_costs.get("search_context_size_medium") if search_costs else None
-    cost_per_request: Final = model_cost_per_request or default_cost_per_request
+    cost_per_request: Final = default_cost_per_request if model_cost_per_request is None else model_cost_per_request
     return web_search_requests * cost_per_request
 
 

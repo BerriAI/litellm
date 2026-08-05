@@ -648,11 +648,7 @@ def _assistant_message():
     }
 
 
-# OpenAI list price for the hosted web search tool: $10.00 / 1k calls
-# https://developers.openai.com/api/docs/pricing
 OPENAI_WEB_SEARCH_LIST_PRICE_PER_CALL = 10.0 / 1000
-# Azure serves the same tool via Grounding with Bing Search: $14 / 1k transactions
-# https://www.microsoft.com/en-us/bing/apis/grounding-pricing
 AZURE_WEB_SEARCH_LIST_PRICE_PER_CALL = 14.0 / 1000
 
 
@@ -815,3 +811,76 @@ def test_completion_cost_includes_openai_web_search_fee(local_model_cost_map):
     cost = litellm.completion_cost(completion_response=response, model=model, custom_llm_provider="openai")
 
     assert cost == pytest.approx(expected_token_cost + billable_searches * OPENAI_WEB_SEARCH_LIST_PRICE_PER_CALL)
+
+
+def test_openai_responses_web_search_honors_explicit_zero_price(local_model_cost_map):
+    """
+    A deployment is free to price web search at zero, e.g. when the fee is covered elsewhere.
+    An explicit 0.0 in the cost map must be charged as zero rather than falling back to the
+    provider list price, which would inflate response costs, spend records and budgets.
+    """
+    model = "openai-zero-priced-web-search-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "responses",
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "search_context_cost_per_query": {
+                    "search_context_size_low": 0.0,
+                    "search_context_size_medium": 0.0,
+                    "search_context_size_high": 0.0,
+                },
+            }
+        }
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=None,
+        response_object=_responses_api_response(
+            [_web_search_call("search", index=0), _web_search_call("search", index=1)],
+            model=model,
+        ),
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == 0.0, f"an explicit zero web search price must not fall back to the list price, got ${cost}"
+
+
+def test_web_search_count_on_usage_wins_over_the_raw_response_count(local_model_cost_map):
+    """
+    When the provider reported a count in usage, that count is authoritative and the raw
+    response is not re-read. Otherwise a response that also carries a count would silently
+    override reconciled usage and bill a different number of searches.
+    """
+    from litellm.types.utils import ServerToolUse, Usage
+
+    model = "claude-3-7-sonnet-20250219"
+    raw_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "hi"}],
+        "usage": {"input_tokens": 100, "output_tokens": 50, "server_tool_use": {"web_search_requests": 5}},
+    }
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        server_tool_use=ServerToolUse(web_search_requests=1),
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=raw_response,
+        custom_llm_provider="anthropic",
+        standard_built_in_tools_params=None,
+    )
+
+    per_query_cost = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
+    assert cost == pytest.approx(per_query_cost), f"expected 1 search from usage, got ${cost}"
