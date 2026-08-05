@@ -102,6 +102,21 @@ const tierConfigSummary = (tiers: ComplexityTiers): string => {
   return parts.length > 0 ? parts.join(" · ") : "No tiers configured yet";
 };
 
+// Why the submit is unavailable, or null when it is available. The button reads this to disable
+// itself and to say what is missing, so the two can never give different answers. Checks the
+// config actually being built, not which preset (if any) it came from: a preset only ever
+// prefills once (handlePresetChange), and everything after that is edited exactly like Custom.
+const getSubmitBlockedReason = (
+  config: ComplexityRouterConfigValue,
+  keywordTierRules: KeywordTierRule[],
+  referencedModelsParams: Parameters<typeof getReferencedModelsError>[0],
+  availableModelSet: Set<string>,
+): string | null =>
+  getMissingTiersError(config.tiers) ??
+  getTierLabelsError(config.tier_labels) ??
+  getKeywordTierRulesError(keywordTierRules) ??
+  getReferencedModelsError(referencedModelsParams, availableModelSet);
+
 const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   handleOk,
   accessToken,
@@ -222,15 +237,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     embeddingModel,
   };
 
-  // Why the submit is unavailable, or null when it is available. The button reads this to disable
-  // itself and to say what is missing, so the two can never give different answers. Checks the
-  // config actually being built, not which preset (if any) it came from: a preset only ever
-  // prefills once (handlePresetChange), and everything after that is edited exactly like Custom.
-  const submitBlockedReason =
-    getMissingTiersError(complexityRouterConfig.tiers) ??
-    getTierLabelsError(complexityRouterConfig.tier_labels) ??
-    getKeywordTierRulesError(keywordTierRules) ??
-    getReferencedModelsError(referencedModelsParams, availableModelSet);
+  const submitBlockedReason = getSubmitBlockedReason(
+    complexityRouterConfig,
+    keywordTierRules,
+    referencedModelsParams,
+    availableModelSet,
+  );
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
     tiers: complexityRouterConfig.tiers,
@@ -240,6 +252,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     classifierContextWindowSize: complexityRouterConfig.classifier_context_window_size,
     classifierContextPerTurnChars: complexityRouterConfig.classifier_context_per_turn_chars,
     classifierContextIncludeAssistantTurns: complexityRouterConfig.classifier_context_include_assistant_turns,
+    classifierFallback: complexityRouterConfig.classifier_fallback,
     sessionAffinity: complexityRouterConfig.session_affinity ?? DEFAULT_SESSION_AFFINITY,
     customTechnicalKeywords,
     keywordTierRules,

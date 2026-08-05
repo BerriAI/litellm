@@ -13,7 +13,7 @@ import asyncio
 import math
 import re
 import time
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
@@ -109,7 +109,7 @@ from .auth_utils import get_model_from_request, get_request_route_template
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -828,9 +828,6 @@ def _is_api_route_allowed(
 def _is_user_proxy_admin(user_obj: LiteLLM_UserTable | None):
     if user_obj is None:
         return False
-
-    if user_obj.user_role is not None and user_obj.user_role == LitellmUserRoles.PROXY_ADMIN.value:
-        return True
 
     if user_obj.user_role is not None and user_obj.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return True
