@@ -63,19 +63,10 @@ describe("AgentsPanel", () => {
     });
   });
 
-  it("should render the Health Check toggle for admins and non-admins", () => {
-    const { unmount } = render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
-    expect(screen.getByText("Health Check")).toBeInTheDocument();
-    unmount();
-
-    render(<AgentsPanel accessToken="test-token" userRole="Internal User" />);
-    expect(screen.getByText("Health Check")).toBeInTheDocument();
-  });
-
-  it("should call getAgentsList with health_check=false on initial load", async () => {
+  it("should call getAgentsList on initial load", async () => {
     render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
     await waitFor(() => {
-      expect(networking.getAgentsList).toHaveBeenCalledWith("test-token", false);
+      expect(networking.getAgentsList).toHaveBeenCalledWith("test-token");
     });
   });
 
@@ -105,20 +96,6 @@ describe("AgentsPanel", () => {
     const keylessRow = screen.getByText("Keyless Agent").closest("tr")!;
     expect(within(keyedRow).getByText("Active")).toBeInTheDocument();
     expect(within(keylessRow).getByText("Needs Setup")).toBeInTheDocument();
-  });
-
-  it("should refetch with health_check=true when the toggle is enabled", async () => {
-    const user = userEvent.setup();
-    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
-    await waitFor(() => {
-      expect(networking.getAgentsList).toHaveBeenCalledWith("test-token", false);
-    });
-
-    await user.click(screen.getByRole("switch"));
-
-    await waitFor(() => {
-      expect(networking.getAgentsList).toHaveBeenCalledWith("test-token", true);
-    });
   });
 
   it("should delete an agent through the ⋯ menu and confirm modal, then refetch", async () => {
@@ -256,39 +233,5 @@ describe("AgentsPanel", () => {
 
     expect(screen.queryByText("Superseded Agent")).not.toBeInTheDocument();
     expect(screen.getByText("Current Agent")).toBeInTheDocument();
-  });
-
-  it("should keep rows visible during a health-check refetch instead of re-showing the skeleton", async () => {
-    const user = userEvent.setup();
-    const agents = [
-      {
-        agent_id: "agent-1",
-        agent_name: "Stable Agent",
-        litellm_params: { model: "gpt-4" },
-        spend: 0,
-        keys: [],
-      },
-    ];
-    let resolveRefetch: (value: { agents: typeof agents }) => void = () => {};
-    vi.mocked(networking.getAgentsList)
-      .mockResolvedValueOnce({ agents })
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveRefetch = resolve;
-          }),
-      );
-
-    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
-    expect(await screen.findByText("Stable Agent")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("switch"));
-
-    expect(screen.getByText("Stable Agent")).toBeInTheDocument();
-    expect(screen.queryByTestId("skeleton-row")).not.toBeInTheDocument();
-
-    await act(async () => {
-      resolveRefetch({ agents });
-    });
   });
 });

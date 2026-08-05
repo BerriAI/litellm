@@ -8,9 +8,6 @@ import { Agent } from "@/components/agents/types";
 const baseProps = {
   isLoading: false,
   isAdmin: true,
-  healthCheckEnabled: false,
-  isHealthCheckLoading: false,
-  onHealthCheckToggle: vi.fn(),
   onAgentClick: vi.fn(),
   onDeleteClick: vi.fn(),
 };
@@ -133,15 +130,5 @@ describe("AgentsTable", () => {
     render(<AgentsTable agents={[]} {...baseProps} isLoading />);
     expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
     expect(screen.queryByText("No agents yet")).not.toBeInTheDocument();
-  });
-
-  it("invokes the health-check toggle from the toolbar", async () => {
-    const user = userEvent.setup();
-    const onHealthCheckToggle = vi.fn();
-    render(<AgentsTable agents={[]} {...baseProps} onHealthCheckToggle={onHealthCheckToggle} />);
-
-    expect(screen.getByText("Health Check")).toBeInTheDocument();
-    await user.click(screen.getByRole("switch"));
-    expect(onHealthCheckToggle).toHaveBeenCalledWith(true, expect.anything());
   });
 });

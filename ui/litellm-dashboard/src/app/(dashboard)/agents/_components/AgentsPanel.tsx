@@ -35,10 +35,8 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [isHealthCheckLoading, setIsHealthCheckLoading] = useState(false);
   const [agentToDelete, setAgentToDelete] = useState<{ id: string; name: string } | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [healthCheckEnabled, setHealthCheckEnabled] = useState(false);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
@@ -52,7 +50,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
       }
       setIsLoading(true);
       try {
-        const response: AgentsResponse = await getAgentsList(accessToken, false);
+        const response: AgentsResponse = await getAgentsList(accessToken);
         if (!cancelled) {
           setAgentsList(response.agents || []);
         }
@@ -73,25 +71,15 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     };
   }, [accessToken]);
 
-  const refetchAgents = async (healthCheck: boolean) => {
+  const refetchAgents = async () => {
     if (!accessToken) {
       return;
     }
     try {
-      const response: AgentsResponse = await getAgentsList(accessToken, healthCheck);
+      const response: AgentsResponse = await getAgentsList(accessToken);
       setAgentsList(response.agents || []);
     } catch (error) {
       console.error("Error fetching agents:", error);
-    }
-  };
-
-  const handleHealthCheckToggle = async (checked: boolean) => {
-    setHealthCheckEnabled(checked);
-    setIsHealthCheckLoading(true);
-    try {
-      await refetchAgents(checked);
-    } finally {
-      setIsHealthCheckLoading(false);
     }
   };
 
@@ -107,7 +95,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
   };
 
   const handleSuccess = () => {
-    refetchAgents(healthCheckEnabled);
+    refetchAgents();
   };
 
   const handleDeleteClick = (agentId: string, agentName: string) => {
@@ -121,7 +109,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     try {
       await deleteAgentCall(accessToken, agentToDelete.id);
       NotificationsManager.success(`Agent "${agentToDelete.name}" deleted successfully`);
-      await refetchAgents(healthCheckEnabled);
+      await refetchAgents();
     } catch (error) {
       console.error("Error deleting agent:", error);
       NotificationsManager.fromBackend("Failed to delete agent");
@@ -173,9 +161,6 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
           agents={agentsList}
           isLoading={isLoading}
           isAdmin={isAdmin}
-          healthCheckEnabled={healthCheckEnabled}
-          isHealthCheckLoading={isHealthCheckLoading}
-          onHealthCheckToggle={handleHealthCheckToggle}
           onAgentClick={(id) => setSelectedAgentId(id)}
           onDeleteClick={handleDeleteClick}
         />
