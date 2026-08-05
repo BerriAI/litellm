@@ -5,11 +5,11 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 import datetime
 import enum
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
+from typing import Any, Dict, Final, Generic, get_type_hints, List, Literal, Optional, Tuple, TypeVar, Union
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from typing_extensions import Protocol, Required, TypedDict
+from typing_extensions import Protocol, Required, TypedDict, runtime_checkable
 
 from litellm._uuid import uuid
 
@@ -17,7 +17,7 @@ from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
-from .utils import CustomPricingLiteLLMParams, ModelResponse
+from .utils import CustomPricingLiteLLMParams, ModelResponse, StandardLoggingRoutingDecision
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
@@ -117,6 +117,7 @@ class UpdateRouterConfig(BaseModel):
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
     model_group_alias: Optional[Dict[str, Union[str, Dict]]] = {}
+    enable_tag_filtering: Optional[bool] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -203,7 +204,7 @@ class CredentialLiteLLMParams(BaseModel):
     watsonx_region_name: Optional[str] = None
 
 
-_RESERVED_INIT_KEYS = frozenset({"self", "params", "__class__"})
+_RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
 
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
@@ -293,7 +294,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         2. Convert max_retries from string to int if needed.
         """
         if isinstance(data, dict):
-            filtered = {k: v for k, v in data.items() if k not in _RESERVED_INIT_KEYS}
+            filtered: Final = {k: v for k, v in data.items() if k not in _RESERVED_INIT_KEYS}
             if "max_retries" in filtered and isinstance(filtered["max_retries"], str):
                 filtered["max_retries"] = int(filtered["max_retries"])
             return filtered
@@ -711,7 +712,7 @@ class RouterRateLimitErrorBasic(ValueError):
         model: str,
     ):
         self.model = model
-        _message = f"{RouterErrors.no_deployments_available.value}."
+        _message: Final = f"{RouterErrors.no_deployments_available.value}."
         super().__init__(_message)
 
 
@@ -802,7 +803,7 @@ class MockRouterTestingParams:
         from litellm.secret_managers.main import str_to_bool
 
         def extract_bool_param(name: str) -> Optional[bool]:
-            value = kwargs.pop(name, None)
+            value: Final = kwargs.pop(name, None)
             return str_to_bool(value) if isinstance(value, str) else value
 
         return cls(
@@ -827,6 +828,32 @@ class PreRoutingHookResponse(BaseModel):
 
     model: str
     messages: Optional[List[Dict[str, Any]]]
+    routing_decision: StandardLoggingRoutingDecision | None = None
+
+
+_PreRoutingStrategyT_co = TypeVar("_PreRoutingStrategyT_co", covariant=True)
+
+
+@dataclass(frozen=True, slots=True)
+class TaggedPreRoutingStrategy(Generic[_PreRoutingStrategyT_co]):
+    """A pre-routing strategy paired with the deployment `tags` it was registered under."""
+
+    tags: tuple[str, ...]
+    strategy: _PreRoutingStrategyT_co
+
+
+@runtime_checkable
+class PreRoutingStrategy(Protocol):
+    """Structural interface shared by the auto / complexity / adaptive / quality routers."""
+
+    async def async_pre_routing_hook(
+        self,
+        model: str,
+        request_kwargs: dict[str, Any],
+        messages: list[dict[str, Any]] | None = None,
+        input: "str | list[Any] | None" = None,
+        specific_deployment: bool | None = False,
+    ) -> "PreRoutingHookResponse | None": ...
 
 
 class RoutingContext(BaseModel):
@@ -852,6 +879,7 @@ class RoutingContext(BaseModel):
     signals: dict[str, Any] = Field(default_factory=dict)
 
 
+@runtime_checkable
 class RoutingPlugin(Protocol):
     """Interface a custom routing plugin must implement to run in `Router(plugins=[...])`."""
 
@@ -877,7 +905,7 @@ class AdaptiveRouterWeights(BaseModel):
     @field_validator("cost")
     @classmethod
     def _weights_sum_to_one(cls, v, info):
-        q = info.data.get("quality", 0.7)
+        q: Final = info.data.get("quality", 0.7)
         if abs(q + v - 1.0) > 0.001:
             raise ValueError(f"weights must sum to 1.0, got quality={q} + cost={v} = {q + v}")
         return v

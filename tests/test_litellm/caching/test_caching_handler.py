@@ -556,3 +556,69 @@ async def test_embedding_cache_falls_back_to_token_counter_for_legacy_entries():
     assert cache_hit
     # token_counter over "hello world" yields a nonzero count — fallback path still runs
     assert response.usage.prompt_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_hit_sets_custom_llm_provider_on_logging_obj():
+    """A full embedding cache hit must stamp the resolved provider onto the logging
+    obj so spend logs record the provider instead of None/unknown."""
+    from litellm.types.utils import CallTypes
+
+    llm_caching_handler = LLMCachingHandler(
+        original_function=MagicMock(),
+        request_kwargs={},
+        start_time=datetime.now(),
+    )
+
+    cached_result = [
+        {
+            "embedding": [-0.025, -0.019],
+            "index": 0,
+            "object": "embedding",
+            "model": "text-embedding-3-small",
+            "prompt_tokens": 5,
+        }
+    ]
+
+    logging_obj = _build_logging_obj(CallTypes.aembedding.value, stream=False)
+    logging_obj.async_success_handler = AsyncMock()
+
+    response, cache_hit = llm_caching_handler._process_async_embedding_cached_response(
+        final_embedding_cached_response=None,
+        cached_result=cached_result,
+        kwargs={"model": "text-embedding-3-small", "input": "hello world"},
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        model="text-embedding-3-small",
+    )
+
+    assert cache_hit
+    assert logging_obj.model_call_details["custom_llm_provider"] == "openai"
+
+
+def test_request_kwargs_does_not_retain_logging_obj():
+    """
+    The caching handler lives on logging_obj._llm_caching_handler, so keeping
+    litellm_logging_obj inside request_kwargs closes a reference cycle
+    (Logging -> LLMCachingHandler -> kwargs -> Logging). That cycle keeps the
+    full request payload alive until a generational GC pass instead of being
+    freed by refcount when the request finishes; under bursts of large-token
+    requests this presents as stepwise RSS growth that never returns to
+    baseline. Other kwargs (messages included) must be preserved.
+    """
+    logging_obj = MagicMock()
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hello"}],
+        "litellm_logging_obj": logging_obj,
+    }
+
+    handler = LLMCachingHandler(
+        original_function=MagicMock(),
+        request_kwargs=kwargs,
+        start_time=datetime.now(),
+    )
+
+    assert "litellm_logging_obj" not in handler.request_kwargs
+    assert handler.request_kwargs["messages"] == kwargs["messages"]
+    assert handler.request_kwargs["model"] == "gpt-4o"

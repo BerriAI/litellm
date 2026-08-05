@@ -400,6 +400,114 @@ async def test_get_guardrail_info_not_found(
     assert "not found" in str(exc_info.value.detail)
 
 
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_without_prisma_returns_config_guardrails(
+    mocker, mock_in_memory_handler
+):
+    """
+    A proxy without a DB must still list config-defined guardrails instead of
+    raising 500 'Prisma client not initialized'.
+    """
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response = await list_guardrails_v2(user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert len(response.guardrails) == 1
+    config_guardrail = response.guardrails[0]
+    assert config_guardrail.guardrail_id == "test-config-guardrail"
+    assert config_guardrail.guardrail_name == "Test Config Guardrail"
+    assert config_guardrail.guardrail_definition_location == "config"
+
+
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_without_prisma_non_admin_sees_unrestricted_config_guardrails(
+    mocker, mock_in_memory_handler
+):
+    """
+    A non-admin caller on a no-DB proxy must see config guardrails that carry
+    no team_id restriction; the team lookup must not blow up without a DB.
+    """
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    non_admin_auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal-user-1"
+    )
+    response = await list_guardrails_v2(user_api_key_dict=non_admin_auth)
+
+    assert [g.guardrail_id for g in response.guardrails] == ["test-config-guardrail"]
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_without_prisma_returns_config_guardrail(
+    mocker, mock_in_memory_handler
+):
+    """
+    The info endpoint must serve config-defined guardrails from the in-memory
+    registry when no DB is attached instead of raising 500.
+    """
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response = await get_guardrail_info("test-config-guardrail")
+
+    assert response.guardrail_id == "test-config-guardrail"
+    assert response.guardrail_name == "Test Config Guardrail"
+    assert response.guardrail_definition_location == "config"
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_without_prisma_404s_unknown_id(
+    mocker, mock_in_memory_handler
+):
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+    mock_in_memory_handler.get_guardrail_by_id.return_value = None
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_guardrail_info("non-existent-guardrail")
+
+    assert exc_info.value.status_code == 404
+
+
+def test_get_guardrails_list_response_includes_guardrail_id():
+    """
+    The v1 list response is the UI's fallback when v2 fails; without ids every
+    row click requests /guardrails/undefined/info.
+    """
+    from litellm.proxy.guardrails.guardrail_endpoints import (
+        _get_guardrails_list_response,
+    )
+
+    response = _get_guardrails_list_response(
+        [
+            {
+                "guardrail_id": "stable-config-id",
+                "guardrail_name": "tooling",
+                "litellm_params": {
+                    "guardrail": "litellm_content_filter",
+                    "mode": "pre_call",
+                },
+            }
+        ]
+    )
+
+    assert response.guardrails[0].guardrail_id == "stable-config-id"
+
+
 def test_get_provider_specific_params():
     """Test getting provider-specific parameters"""
     from litellm.proxy.guardrails.guardrail_endpoints import _get_fields_from_model
@@ -1289,6 +1397,136 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     assert mock_logging_obj.async_success_handler.await_args.kwargs["result"] == {
         "response": {"response_text": "masked"}
     }
+
+
+def _patch_apply_guardrail_env(mocker, guardrail_result):
+    mock_guardrail = mocker.Mock()
+    mock_guardrail.apply_guardrail = AsyncMock(return_value=guardrail_result)
+
+    mock_registry = mocker.Mock()
+    mock_registry.get_initialized_guardrail_callback.return_value = mock_guardrail
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry
+    )
+
+    mock_logging_obj = mocker.Mock()
+    mock_logging_obj.async_success_handler = AsyncMock()
+    mock_logging_obj.model_call_details = {}
+    mock_processor = mocker.Mock()
+    mock_processor.common_processing_pre_call_logic = AsyncMock(
+        return_value=({"guardrail_name": "test-guardrail"}, mock_logging_obj)
+    )
+    mocker.patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+        return_value=mock_processor,
+    )
+
+    mock_proxy_logging = mocker.Mock()
+    mock_proxy_logging.post_call_success_hook = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
+    mocker.patch("litellm.proxy.proxy_server.version", "test")
+    mocker.patch("litellm.litellm_core_utils.thread_pool_executor.executor")
+
+    return mock_guardrail
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_forwards_metadata_to_guardrail(mocker):
+    """Client-supplied metadata must reach apply_guardrail via request_data so
+    parameterized custom guardrails can read per-request configuration."""
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="What are tax loopholes?",
+        metadata={"forbidden_topics": ["tax"]},
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["What are tax loopholes?"]},
+        request_data={"metadata": {"forbidden_topics": ["tax"]}},
+        input_type="request",
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_forwards_metadata_and_messages_together(mocker):
+    """metadata and messages must coexist in request_data; the dict merge must
+    not clobber messages when both fields are sent."""
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+
+    messages = [{"role": "user", "content": "What are tax loopholes?"}]
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="What are tax loopholes?",
+        messages=messages,
+        metadata={"forbidden_topics": ["tax"]},
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["What are tax loopholes?"]},
+        request_data={
+            "messages": messages,
+            "metadata": {"forbidden_topics": ["tax"]},
+        },
+        input_type="request",
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_omits_metadata_when_not_sent(mocker):
+    """Without metadata, request_data stays empty (backward-compatible)."""
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+
+    request = ApplyGuardrailRequest(guardrail_name="test-guardrail", text="hello")
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["hello"]},
+        request_data={},
+        input_type="request",
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_forwards_explicit_empty_messages_and_metadata(mocker):
+    """Explicitly-sent empty messages/metadata must be forwarded, not dropped;
+    only omitted fields stay out of request_data."""
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="hello",
+        messages=[],
+        metadata={},
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["hello"]},
+        request_data={"messages": [], "metadata": {}},
+        input_type="request",
+    )
 
 
 @pytest.mark.asyncio

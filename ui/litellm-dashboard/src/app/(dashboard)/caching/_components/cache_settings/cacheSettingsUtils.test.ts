@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { buildCachePayload, buildInitialValues, fieldsForSection } from "./cacheSettingsUtils";
+import { buildCachePayload, buildInitialValues, configuredSecretFields, fieldsForSection } from "./cacheSettingsUtils";
+import { REDACTED_VALUE } from "./cacheSettingsFields";
 
 describe("fieldsForSection", () => {
   it("should only include a redis-type-specific field when that type is selected", () => {
@@ -82,5 +83,50 @@ describe("buildCachePayload", () => {
   it("should exclude fields that do not belong to the selected redis type", () => {
     const payload = buildCachePayload("node", { sentinel_nodes: '[["localhost",26379]]' }, { forTesting: false });
     expect(payload).not.toHaveProperty("sentinel_nodes");
+  });
+
+  it("should drop a secret whose value is the redacted marker so it is never persisted", () => {
+    const payload = buildCachePayload(
+      "node",
+      { host: "localhost", password: REDACTED_VALUE, url: REDACTED_VALUE },
+      { forTesting: false },
+    );
+    expect(payload).not.toHaveProperty("password");
+    expect(payload).not.toHaveProperty("url");
+    expect(payload.host).toBe("localhost");
+  });
+
+  it("should send a real new secret value the admin typed", () => {
+    const payload = buildCachePayload("node", { password: "brandnewpw" }, { forTesting: false });
+    expect(payload.password).toBe("brandnewpw");
+  });
+});
+
+describe("secret handling", () => {
+  it("buildInitialValues never prefills a credential, even when the server reports it configured", () => {
+    const serverValues = {
+      host: "localhost",
+      password: REDACTED_VALUE,
+      url: REDACTED_VALUE,
+      sentinel_password: REDACTED_VALUE,
+    };
+    const values = buildInitialValues(serverValues);
+    expect(values.password).toBe("");
+    expect(values.url).toBe("");
+    expect(values.sentinel_password).toBe("");
+    // non-secret fields are still prefilled
+    expect(values.host).toBe("localhost");
+  });
+
+  it("configuredSecretFields reports which credentials the server marked as set", () => {
+    const configured = configuredSecretFields({
+      password: REDACTED_VALUE,
+      url: "",
+      host: "localhost",
+    });
+    expect(configured.has("password")).toBe(true);
+    expect(configured.has("url")).toBe(false);
+    // a non-secret field is never reported as a configured secret
+    expect(configured.has("host")).toBe(false);
   });
 });

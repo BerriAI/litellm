@@ -35,6 +35,8 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "litellm.migrationServiceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.migrationJob.extraInitContainers }}
       initContainers:
         {{- tpl (toYaml .) $ | nindent 8 }}
