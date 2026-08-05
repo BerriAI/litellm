@@ -1,4 +1,4 @@
-suite: "hpa with behavior"
+suite: "hpa"
 templates:
   - hpa.yaml
 tests:
@@ -23,14 +23,44 @@ tests:
       - equal: { path: spec.behavior.scaleUp.stabilizationWindowSeconds, value: 60 }
       - equal: { path: spec.behavior.scaleDown.stabilizationWindowSeconds, value: 90 }
 
----
-suite: "hpa without behavior"
-templates:
-  - hpa.yaml
-tests:
   - it: "does not render behavior when not set"
     set:
       autoscaling.enabled: true
     asserts:
       - isKind: { of: HorizontalPodAutoscaler }
       - isNull: { path: spec.behavior }
+
+  - it: "scales on cpu at the documented 60 percent by default"
+    set:
+      autoscaling.enabled: true
+    asserts:
+      - isKind: { of: HorizontalPodAutoscaler }
+      - equal: { path: "spec.metrics[0].resource.name", value: cpu }
+      - equal: { path: "spec.metrics[0].resource.target.type", value: Utilization }
+      - equal: { path: "spec.metrics[0].resource.target.averageUtilization", value: 60 }
+
+  - it: "does not scale on memory by default"
+    set:
+      autoscaling.enabled: true
+    asserts:
+      - lengthEqual: { path: spec.metrics, count: 1 }
+
+  - it: "honours an explicit cpu target override"
+    set:
+      autoscaling.enabled: true
+      autoscaling.targetCPUUtilizationPercentage: 75
+    asserts:
+      - equal: { path: "spec.metrics[0].resource.target.averageUtilization", value: 75 }
+
+  - it: "renders a memory metric only when a memory target is set"
+    set:
+      autoscaling.enabled: true
+      autoscaling.targetMemoryUtilizationPercentage: 80
+    asserts:
+      - lengthEqual: { path: spec.metrics, count: 2 }
+      - equal: { path: "spec.metrics[1].resource.name", value: memory }
+      - equal: { path: "spec.metrics[1].resource.target.averageUtilization", value: 80 }
+
+  - it: "renders no hpa when autoscaling is disabled"
+    asserts:
+      - hasDocuments: { count: 0 }
