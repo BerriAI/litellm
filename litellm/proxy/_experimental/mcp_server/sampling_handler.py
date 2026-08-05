@@ -18,7 +18,15 @@ if typing.TYPE_CHECKING:
     from fastapi import Request
     from mcp.client.session import ClientSession
     from mcp.shared.context import RequestContext
-    from mcp.types import ContentBlock, SamplingMessageContentBlock
+    from mcp.types import (
+        ContentBlock,
+        CreateMessageResult,
+        CreateMessageResultWithTools,
+        ErrorData,
+        SamplingMessageContentBlock,
+        TextContent,
+        ToolUseContent,
+    )
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
