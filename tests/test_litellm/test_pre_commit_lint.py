@@ -163,6 +163,18 @@ def test_full_output_is_saved_to_a_log_file_in_the_git_dir(tmp_path: Path) -> No
     assert "pre-commit: full log:" not in log
 
 
+def test_unwritable_log_warns_and_falls_back_to_running_without_one(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    (repo / ".git" / "pre_commit_lint.log").mkdir()
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "linting Python" in proc.stdout
+    assert "output will not be saved" in proc.stderr
+    assert "pre-commit: full log:" not in proc.stdout
+    failing = _run(repo, bin_dir, {"STUB_FAIL": "make-lint"})
+    assert failing.returncode == 1
+
+
 def test_failing_run_exit_code_survives_the_log_pipeline(tmp_path: Path) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     proc = _run(repo, bin_dir, {"STUB_FAIL": "make-lint"})
