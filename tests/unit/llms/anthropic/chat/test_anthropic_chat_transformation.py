@@ -6798,3 +6798,34 @@ def test_chat_dummy_tool_result_for_an_orphaned_tool_call_replays_a_byte_identic
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[0]["messages"]] == ["user", "assistant", "user"]
     assert requests[0]["messages"][2]["content"][0]["type"] == "tool_result"
+
+
+def test_transform_parsed_response_preserves_existing_hidden_params():
+    from litellm.types.utils import ModelResponse
+
+    config = AnthropicConfig()
+    raw_response = MagicMock()
+    raw_response.headers = {"request-id": "req_vertex"}
+    raw_response.status_code = 200
+    completion_response = {
+        "id": "msg_vertex",
+        "model": "claude-sonnet-4-5@20250929",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+        "content": [{"type": "text", "text": "Hello"}],
+    }
+    model_response = ModelResponse()
+    model_response._hidden_params = {
+        "custom_llm_provider": "vertex_ai",
+        "region_name": "us-east5",
+    }
+
+    result = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=raw_response,
+        model_response=model_response,
+    )
+
+    assert result._hidden_params["custom_llm_provider"] == "vertex_ai"
+    assert result._hidden_params["region_name"] == "us-east5"
+    assert result._hidden_params["original_response"] == completion_response["content"]
