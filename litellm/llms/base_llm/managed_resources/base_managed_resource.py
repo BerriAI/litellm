@@ -188,7 +188,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         if resource_object is not None:
             # Handle both dict and Pydantic models
             if hasattr(resource_object, "model_dump_json"):
-                db_data["resource_object"] = resource_object.model_dump_json()  # type: ignore
+                db_data["resource_object"] = resource_object.model_dump_json()
             elif isinstance(resource_object, dict):
                 db_data["resource_object"] = json.dumps(resource_object)
 

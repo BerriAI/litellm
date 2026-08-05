@@ -59,9 +59,9 @@ try:
 
     A2A_SDK_AVAILABLE = True
 except ImportError:
-    Client = None  # type: ignore[misc, assignment]
-    ClientConfig = None  # type: ignore[misc, assignment]
-    create_client = None  # type: ignore[misc, assignment]
+    Client = None
+    ClientConfig = None
+    create_client = None
 
 # Import our custom card resolver that supports multiple well-known paths
 from litellm.a2a_protocol.card_resolver import (
@@ -788,10 +788,10 @@ async def create_a2a_client(
     # Stash LiteLLM-owned handles on the client so the localhost-retry path can reuse
     # the configured httpx client (with this agent's trace-id/auth headers) without
     # excavating a2a-sdk private internals.
-    a2a_client._litellm_httpx_client = httpx_client  # type: ignore[attr-defined]
+    a2a_client._litellm_httpx_client = httpx_client
     agent_card: Final = getattr(a2a_client, "_card", None)
     if agent_card is not None:
-        a2a_client._litellm_agent_card = agent_card  # type: ignore[attr-defined]
+        a2a_client._litellm_agent_card = agent_card
 
     verbose_logger.info("A2A client created for %s", base_url)
 

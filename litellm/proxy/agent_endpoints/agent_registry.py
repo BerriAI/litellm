@@ -148,7 +148,7 @@ class AgentRegistry:
             # create a stable hash id for config item
             config_hash = self._create_agent_id(agent_config_item)
 
-            self.register_agent(agent_config=AgentResponse(agent_id=config_hash, **agent_config_item))  # type: ignore
+            self.register_agent(agent_config=AgentResponse(agent_id=config_hash, **agent_config_item))
 
     def load_agents_from_db_and_config(
         self,
@@ -175,7 +175,7 @@ class AgentRegistry:
                 if not isinstance(db_agent, dict):
                     raise ValueError("db_agents must be a list of dictionaries")
 
-                self.register_agent(agent_config=AgentResponse(**db_agent))  # type: ignore
+                self.register_agent(agent_config=AgentResponse(**db_agent))
 
         self.load_agents_from_config(agent_config if agent_config is not None else self.config_agents)
         return self.agent_list
@@ -269,7 +269,7 @@ class AgentRegistry:
                     created_agent_dict["object_permission"] = created_agent.object_permission.model_dump()
                 except Exception:
                     created_agent_dict["object_permission"] = created_agent.object_permission.dict()
-            return AgentResponse(**created_agent_dict)  # type: ignore
+            return AgentResponse(**created_agent_dict)
         except Exception as e:
             raise Exception(f"Error adding agent to DB: {e}")
 
@@ -361,7 +361,7 @@ class AgentRegistry:
                     patched_agent_dict["object_permission"] = patched_agent.object_permission.model_dump()
                 except Exception:
                     patched_agent_dict["object_permission"] = patched_agent.object_permission.dict()
-            return AgentResponse(**patched_agent_dict)  # type: ignore
+            return AgentResponse(**patched_agent_dict)
         except Exception as e:
             raise Exception(f"Error patching agent in DB: {e}")
 
@@ -448,7 +448,7 @@ class AgentRegistry:
                     updated_agent_dict["object_permission"] = updated_agent.object_permission.model_dump()
                 except Exception:
                     updated_agent_dict["object_permission"] = updated_agent.object_permission.dict()
-            return AgentResponse(**updated_agent_dict)  # type: ignore
+            return AgentResponse(**updated_agent_dict)
         except Exception as e:
             raise Exception(f"Error updating agent in DB: {e}")
 

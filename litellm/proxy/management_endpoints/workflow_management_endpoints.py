@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 try:
     from prisma.errors import UniqueViolationError
 except ImportError:
-    UniqueViolationError = None  # type: ignore
+    UniqueViolationError = None
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger

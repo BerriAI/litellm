@@ -348,7 +348,7 @@ class GuardrailRegistry:
 
             guardrails: Final[list[Guardrail]] = []
             for guardrail in guardrails_from_db:
-                guardrails.append(Guardrail(**(dict(guardrail))))  # type: ignore
+                guardrails.append(Guardrail(**(dict(guardrail))))
 
             return guardrails
         except Exception as e:
@@ -366,7 +366,7 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))  # type: ignore
+            return Guardrail(**(dict(guardrail)))
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
@@ -382,7 +382,7 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))  # type: ignore
+            return Guardrail(**(dict(guardrail)))
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
@@ -472,7 +472,7 @@ class InMemoryGuardrailHandler:
                 custom_guardrail_callback = initializer(
                     litellm_params,
                     guardrail,
-                    llm_router,  # type: ignore
+                    llm_router,
                 )
             else:
                 custom_guardrail_callback = initializer(litellm_params, guardrail)
@@ -563,7 +563,7 @@ class InMemoryGuardrailHandler:
             default_on=default_on,
             **extra_params,
         )
-        litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)  # type: ignore
+        litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)
 
         return _guardrail_callback
 

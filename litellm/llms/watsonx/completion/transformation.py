@@ -301,7 +301,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         generated_text: Final = json_resp["results"][0]["generated_text"]
         prompt_tokens: Final = json_resp["results"][0]["input_token_count"]
         completion_tokens: Final = json_resp["results"][0]["generated_token_count"]
-        model_response.choices[0].message.content = generated_text  # type: ignore
+        model_response.choices[0].message.content = generated_text
         model_response.choices[0].finish_reason = map_finish_reason(json_resp["results"][0]["stop_reason"])
         if json_resp.get("created_at"):
             try:
