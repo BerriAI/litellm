@@ -149,7 +149,7 @@ if [ -n "$spec_files" ]; then
         status=1
     elif ( cd ui/litellm-dashboard && LITELLM_PYTHON="uv run --no-sync python" npm run gen:api ); then
         if ! git diff --quiet -- ui/litellm-dashboard/src/lib/http/schema.d.ts; then
-            echo "✗ Dashboard API types are stale; regenerated src/lib/http/schema.d.ts. Stage it and re-run make pre-commit." >&2
+            echo "✗ Dashboard API types are stale; regenerated src/lib/http/schema.d.ts. Stage it and commit; re-run make pre-commit only if other checks failed too." >&2
             status=1
         fi
     else
