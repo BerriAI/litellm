@@ -2,11 +2,14 @@ import os
 import sys
 from unittest.mock import MagicMock
 
+import httpx
+
 sys.path.insert(
     0, os.path.abspath("../../../../../..")
 )  # Adds the parent directory to the system path
 
 from litellm.llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
+from litellm.types.utils import EmbeddingResponse
 
 
 class TestJinaAIEmbeddingTransform:
@@ -86,3 +89,36 @@ class TestJinaAIEmbeddingTransform:
             "input": expected_input,
         }
         assert result == expected_result
+
+    def test_transform_embedding_response_logs_request_input(self):
+        request_data = {"model": self.model, "input": ["hello world"]}
+        raw_response = httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {
+                        "object": "embedding",
+                        "embedding": [0.1, 0.2, 0.3],
+                        "index": 0,
+                    }
+                ],
+                "model": self.model,
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+            request=httpx.Request("POST", "https://api.jina.ai/v1/embeddings"),
+        )
+
+        response = self.config.transform_embedding_response(
+            model=self.model,
+            raw_response=raw_response,
+            model_response=EmbeddingResponse(),
+            logging_obj=self.logging_obj,
+            api_key="test-api-key",
+            request_data=request_data,
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert response.model == self.model
+        assert self.logging_obj.post_call.call_args.kwargs["input"] == ["hello world"]
