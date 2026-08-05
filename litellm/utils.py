@@ -721,7 +721,7 @@ def _restore_correlation_context_if_supported(logging_obj: object) -> None:
     is deliberate: the getattr() below is exactly how this stays type-safe
     while still tolerating a stand-in that lacks the method.
     """
-    restore = getattr(logging_obj, "_restore_correlation_context", None)
+    restore: Final = getattr(logging_obj, "_restore_correlation_context", None)
     if restore is not None:
         restore()
 
@@ -761,15 +761,21 @@ def _is_streaming_response_for_correlation(result: object) -> bool:
     return isinstance(result, CustomStreamWrapper)
 
 
+# Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
 def function_setup(
-    original_function: str, rules_obj, start_time, *args, is_async_call: bool = True, **kwargs
-):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
+    original_function: str,
+    rules_obj: Rules,
+    start_time: datetime.datetime,
+    *args: Any,  # noqa: ANN401  # positional passthrough to the wrapped LLM call
+    is_async_call: bool = True,
+    **kwargs: Any,  # noqa: ANN401  # kwargs-ok: forwarded to Logging()/callbacks, varies per call_type
+) -> tuple[LiteLLMLoggingObject, dict[str, Any]]:
     ### NOTICES ###
     if litellm.set_verbose is True:
         verbose_logger.warning(
             "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
         )
-    logging_obj: LiteLLMLoggingObject | None = None
+    logging_obj: LiteLLMLoggingObject | None = None  # rebind-ok: set to the real object further down on success
     try:
         global callback_list, add_breadcrumb, user_logger_fn, Logging
 
@@ -1052,7 +1058,8 @@ def function_setup(
         ):
             stream = True
         get_litellm_logging_class: Final = getattr(sys.modules[__name__], "get_litellm_logging_class")
-        logging_obj = get_litellm_logging_class()(  # Victim for object pool
+        # Victim for object pool
+        logging_obj = get_litellm_logging_class()(  # rebind-ok: 2nd assignment to logging_obj (see initial None above)
             model=model,
             messages=messages,
             stream=stream,
@@ -1871,9 +1878,10 @@ def client(original_function):
                         elif isinstance(e, openai.APIError):  # generic api error
                             kwargs["retry_strategy"] = "constant_retry"
                         result = await litellm.acompletion_with_retries(*args, **kwargs)
-                        return result
                     except Exception:
                         pass
+                    else:
+                        return result
                 elif (
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
@@ -1903,9 +1911,10 @@ def client(original_function):
                         elif isinstance(e, openai.APIError):  # generic api error
                             kwargs["retry_strategy"] = "constant_retry"
                         result = await litellm.aresponses_with_retries(*args, **kwargs)
-                        return result
                     except Exception:
                         pass
+                    else:
+                        return result
 
             deployment_num_retries: Final = kwargs.get("num_retries")
             if deployment_num_retries is not None:

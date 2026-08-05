@@ -14,10 +14,10 @@ from litellm.litellm_core_utils.secret_redaction import redact_string
 
 set_verbose = False
 
-session_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("session_id", default="")
-trace_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("trace_id", default="")
+session_id_var: Final[contextvars.ContextVar[str]] = contextvars.ContextVar("session_id", default="")
+trace_id_var: Final[contextvars.ContextVar[str]] = contextvars.ContextVar("trace_id", default="")
 
-_MAX_CORRELATION_ID_LENGTH = 256
+_MAX_CORRELATION_ID_LENGTH: Final = 256
 
 
 def _sanitize_correlation_id(value: str) -> str:
@@ -29,7 +29,7 @@ def _sanitize_correlation_id(value: str) -> str:
     forge fake log entries, or submit an oversized value repeated across every
     log line for the request.
     """
-    stripped = "".join(ch for ch in value if ch.isprintable())
+    stripped: Final = "".join(ch for ch in value if ch.isprintable())
     return stripped[:_MAX_CORRELATION_ID_LENGTH]
 
 
@@ -116,16 +116,16 @@ class CorrelationContextFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if not litellm.request_correlation_in_logs:
             return True
-        trace_id = trace_id_var.get()
+        trace_id: Final = trace_id_var.get()
         if trace_id:
-            record.trace_id = trace_id
-        session_id = session_id_var.get()
+            record.trace_id = trace_id  # rebind-ok: stamping the LogRecord is the Filter interface's contract
+        session_id: Final = session_id_var.get()
         if session_id:
-            record.session_id = session_id
+            record.session_id = session_id  # rebind-ok: stamping the LogRecord is the Filter interface's contract
         return True
 
 
-_correlation_filter = CorrelationContextFilter()
+_correlation_filter: Final = CorrelationContextFilter()
 
 
 json_logs = bool(os.getenv("JSON_LOGS", False))
@@ -272,12 +272,12 @@ class CorrelationPlainFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
-        formatted = super().format(record)
-        trace_id = getattr(record, "trace_id", None)
-        session_id = getattr(record, "session_id", None)
+        formatted: Final = super().format(record)
+        trace_id: Final = getattr(record, "trace_id", None)
+        session_id: Final = getattr(record, "session_id", None)
         if not trace_id and not session_id:
             return formatted
-        parts = tuple(
+        parts: Final = tuple(
             p
             for p in (f"trace_id={trace_id}" if trace_id else None, f"session_id={session_id}" if session_id else None)
             if p

@@ -238,14 +238,16 @@ class CustomStreamWrapper:
         that has since taken over the same Task/thread's context.
         """
         try:
-            logging_obj = getattr(self, "logging_obj", None)
+            logging_obj: Final = getattr(self, "logging_obj", None)
             if logging_obj is None:
                 return
-            method_name = "_restore_correlation_context_if_unclaimed" if guarded else "_restore_correlation_context"
-            restore = getattr(logging_obj, method_name, None)
+            method_name: Final = (
+                "_restore_correlation_context_if_unclaimed" if guarded else "_restore_correlation_context"
+            )
+            restore: Final = getattr(logging_obj, method_name, None)
             if restore is not None:
                 restore()
-        except Exception:  # noqa: BLE001  # best-effort cleanup; must never raise into the caller's actual stream handling regardless of what's wrong with logging_obj
+        except Exception:  # noqa: BLE001,S110  # best-effort cleanup; must never raise or log noise into the caller's stream handling
             pass
 
     def __del__(self) -> None:

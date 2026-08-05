@@ -68,7 +68,7 @@ _SHA256_HEX_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 
 # W3C Trace Context traceparent header: https://www.w3.org/TR/trace-context/
 # e.g. "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-_TRACEPARENT_RE = re.compile(r"^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$", re.IGNORECASE)
+_TRACEPARENT_RE: Final = re.compile(r"^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$", re.IGNORECASE)
 
 
 def _trace_id_from_traceparent(traceparent: str) -> str | None:
@@ -76,10 +76,10 @@ def _trace_id_from_traceparent(traceparent: str) -> str | None:
     "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" -> the 32-hex
     trace-id in the middle. An all-zero trace-id is invalid per spec and is
     rejected, matching how the OpenTelemetry SDK itself treats it."""
-    match = _TRACEPARENT_RE.match(traceparent.strip())
+    match: Final = _TRACEPARENT_RE.match(traceparent.strip())
     if not match:
         return None
-    trace_id = match.group(1).lower()
+    trace_id: Final = match.group(1).lower()
     return trace_id if trace_id != "0" * 32 else None
 
 
@@ -1119,24 +1119,24 @@ class LiteLLMProxyRequestSetup:
         # anything - but lets a caller's existing traceparent/baggage headers
         # (from real OTel instrumentation) correlate with litellm's own logs
         # instead of generating an unrelated trace_id.
-        normalized_headers = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
+        normalized_headers: Final = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
         if "litellm_trace_id" not in data:
-            traceparent = normalized_headers.get("traceparent")
+            traceparent: Final = normalized_headers.get("traceparent")
             if isinstance(traceparent, str):
-                trace_id_from_traceparent = _trace_id_from_traceparent(traceparent)
+                trace_id_from_traceparent: Final = _trace_id_from_traceparent(traceparent)
                 if trace_id_from_traceparent:
                     metadata_from_headers["trace_id"] = trace_id_from_traceparent
-                    data["litellm_trace_id"] = trace_id_from_traceparent
+                    data["litellm_trace_id"] = trace_id_from_traceparent  # rebind-ok: data is an out-param
                     verbose_proxy_logger.debug(
                         "Extracted trace_id from W3C traceparent header: %s", trace_id_from_traceparent
                     )
         if "litellm_session_id" not in data:
-            baggage = normalized_headers.get("baggage")
+            baggage: Final = normalized_headers.get("baggage")
             if isinstance(baggage, str):
-                session_id_from_baggage = _session_id_from_baggage(baggage)
+                session_id_from_baggage: Final = _session_id_from_baggage(baggage)
                 if session_id_from_baggage:
                     metadata_from_headers["session_id"] = session_id_from_baggage
-                    data["litellm_session_id"] = session_id_from_baggage
+                    data["litellm_session_id"] = session_id_from_baggage  # rebind-ok: data is an out-param
                     verbose_proxy_logger.debug("Extracted session_id from W3C baggage header")
 
         if isinstance(data[_metadata_variable_name], dict):
