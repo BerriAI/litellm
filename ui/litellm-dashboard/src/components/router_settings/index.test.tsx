@@ -8,11 +8,29 @@ vi.mock("antd", async (importOriginal) => {
   return {
     ...actual,
     Select: Object.assign(
-      ({ value, onChange, children }: any) => (
-        <select data-testid="strategy-select" value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
-          {children}
-        </select>
-      ),
+      ({ value, onChange, children, mode, options, "data-testid": testId }: any) =>
+        mode === "multiple" ? (
+          <select
+            multiple
+            data-testid={testId || "multi-select"}
+            value={value ?? []}
+            onChange={(e) => onChange(Array.from(e.target.selectedOptions).map((o: any) => o.value))}
+          >
+            {(options || []).map((option: any) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <select
+            data-testid={testId || "strategy-select"}
+            value={value ?? ""}
+            onChange={(e) => onChange(e.target.value)}
+          >
+            {children}
+          </select>
+        ),
       {
         Option: ({ value, children }: any) => <option value={value}>{children}</option>,
       },
@@ -121,6 +139,8 @@ describe("RouterSettings", () => {
     await waitFor(() => {
       expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
     });
+    expect(screen.queryByText("Default LiteLLM Params")).not.toBeInTheDocument();
+    expect(screen.getByText("Cache Control Injection Points")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -186,5 +206,129 @@ describe("RouterSettings", () => {
       expect(NotificationsManager.fromBackend).toHaveBeenCalled();
     });
     expect(NotificationsManager.success).not.toHaveBeenCalled();
+  });
+
+  it("should preserve untouched default_litellm_params by omitting it from an unrelated save", async () => {
+    vi.mocked(getCallbacksCall).mockResolvedValue({
+      router_settings: {
+        ...mockCallbacksResponse.router_settings,
+        default_litellm_params: {
+          cache_control_injection_points: [{ location: "message", role: "system", index: 2 }],
+        },
+        optional_pre_call_checks: ["prompt_caching"],
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          router_settings: expect.not.objectContaining({
+            default_litellm_params: expect.anything(),
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("should save frontend-owned cache-control fields after an explicit edit", async () => {
+    vi.mocked(getCallbacksCall).mockResolvedValue({
+      router_settings: {
+        ...mockCallbacksResponse.router_settings,
+        default_litellm_params: { timeout: 30 },
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("switch", { name: "Cache Control Injection Points" })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("switch", { name: "Cache Control Injection Points" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          router_settings: expect.objectContaining({
+            default_litellm_params: {
+              timeout: 30,
+              cache_control_injection_points: [{ location: "message" }],
+            },
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("should remove cache-control fields after they are explicitly disabled", async () => {
+    vi.mocked(getCallbacksCall).mockResolvedValue({
+      router_settings: {
+        ...mockCallbacksResponse.router_settings,
+        default_litellm_params: {
+          timeout: 30,
+          cache_control_injection_points: [{ location: "message", index: -1 }],
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("cache-control-index-input-0")).toHaveValue("-1");
+    });
+
+    await user.click(screen.getByRole("switch", { name: "Cache Control Injection Points" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          router_settings: expect.objectContaining({
+            default_litellm_params: { timeout: 30 },
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("should save a newly-selected optional pre-call check picked from the multi-select", async () => {
+    vi.mocked(getCallbacksCall).mockResolvedValue({
+      router_settings: {
+        ...mockCallbacksResponse.router_settings,
+        optional_pre_call_checks: [],
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("optional-pre-call-checks-select")).toBeInTheDocument();
+    });
+
+    await user.selectOptions(screen.getByTestId("optional-pre-call-checks-select"), "prompt_caching");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          router_settings: expect.objectContaining({
+            optional_pre_call_checks: ["prompt_caching"],
+          }),
+        }),
+      ),
+    );
   });
 });
