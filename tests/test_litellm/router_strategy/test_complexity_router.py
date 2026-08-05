@@ -5304,9 +5304,9 @@ class TestSavingsBaselineOnDecision:
         assert "derive_savings_baseline=False" in source
 
 
-class TestSavingsBaselineCache:
-    """Derivation walks and prices the hardest tier's pool, so the TTL bounds it to
-    one walk per window per router instead of one per request."""
+class TestSavingsBaselinePinnedPerInstance:
+    """Derivation walks and prices the hardest tier's pool, so it runs once per router
+    instance; the create and edit flows rebuild the instance, which re-derives."""
 
     @staticmethod
     def _router_and_parent() -> tuple[ComplexityRouter, Router]:
@@ -5323,38 +5323,36 @@ class TestSavingsBaselineCache:
         )
         return router, parent
 
-    def test_a_deployment_change_inside_the_window_is_served_from_cache(self):
+    def test_the_first_derivation_is_pinned_for_the_instance_lifetime(self):
         router, parent = self._router_and_parent()
         assert router.savings_baseline.model == "anthropic/claude-sonnet-5"
         parent.model_name_to_deployment_indices.clear()
         assert router.savings_baseline.model == "anthropic/claude-sonnet-5"
 
-    def test_an_expired_window_re_derives_from_the_live_router(self):
-        """A cached answer must not outlive the window: once the groups no longer
-        resolve through the live router, an expired cache re-derives and reports
-        nothing rather than replaying a model the router lost."""
-        import time as time_module
-
-        from litellm.router_strategy.savings_baseline import Baseline
-
+    def test_a_rebuilt_instance_re_derives_from_the_live_router(self):
+        """Editing a router goes through unregister and re-add, so a fresh instance is
+        what carries a config change into the baseline."""
         router, parent = self._router_and_parent()
+        assert router.savings_baseline.model == "anthropic/claude-sonnet-5"
         parent.model_name_to_deployment_indices.clear()
-        router._savings_baseline_cache = (
-            time_module.monotonic() - 31.0,
-            Baseline("anthropic/claude-sonnet-5"),
+        rebuilt = ComplexityRouter(
+            model_name="savings-router",
+            litellm_router_instance=parent,
+            complexity_router_config={"tiers": {"SIMPLE": "cheap", "REASONING": ["cheap", "top"]}},
         )
-        assert router.savings_baseline is None
+        assert rebuilt.savings_baseline is None
 
-    def test_the_configured_setting_bypasses_a_warm_cache(self, monkeypatch):
+    def test_the_configured_setting_bypasses_the_pin(self, monkeypatch):
         router, _ = self._router_and_parent()
         assert router.savings_baseline.model == "anthropic/claude-sonnet-5"
         monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", "claude-opus-5")
         assert router.savings_baseline is None
 
-    def test_an_unresolvable_pool_is_cached_and_not_re_priced_per_request(self):
+    def test_an_unresolvable_pool_is_derived_once_and_pinned_as_none(self):
         router, parent = self._router_and_parent()
         parent.model_name_to_deployment_indices.clear()
         router.config.tiers = {"SIMPLE": "utter-nonsense-no-provider-owns"}
         assert router.savings_baseline is None
-        assert router._savings_baseline_cache is not None
-        assert router._savings_baseline_cache[1] is None
+        assert router._savings_baseline_derived is True
+        router.config.tiers = {"SIMPLE": "claude-haiku-4-5"}
+        assert router.savings_baseline is None

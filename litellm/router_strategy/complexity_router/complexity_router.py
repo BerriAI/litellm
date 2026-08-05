@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import random
 import re
-import time
 from collections.abc import Iterator, Mapping, Sequence
 from itertools import islice
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
@@ -159,8 +158,6 @@ def _effective_turn_off_message_logging(request_kwargs: Mapping[str, Any] | None
         "turn_off_message_logging"
     )
 
-
-_SAVINGS_BASELINE_TTL_SECONDS: Final = 30.0
 
 _REMINDER_OPEN: Final = "<system-reminder>"
 _REMINDER_CLOSE: Final = "</system-reminder>"
@@ -483,7 +480,8 @@ class ComplexityRouter(CustomLogger):
         self.adaptive_router: AdaptiveRouter | None = None
         self._model_tiers: dict[str, tuple[ComplexityTier, ...]] = {}
         self._adaptive_init_attempted = False
-        self._savings_baseline_cache: tuple[float, Baseline | None] | None = None
+        self._savings_baseline: Baseline | None = None
+        self._savings_baseline_derived = False
 
         verbose_router_logger.debug("ComplexityRouter initialized for %s with tiers: %s", model_name, self.config.tiers)
 
@@ -506,22 +504,20 @@ class ComplexityRouter(CustomLogger):
 
         ``None`` when `litellm_settings.autorouter_savings_baseline_model` is set (the
         spend writer reads that setting directly and it wins) or when this router was
-        built with ``derive_savings_baseline=False``. TTL-cached, ``None`` results
-        included, so the pool walk stays off the per-request hot path while a
-        deployment change still lands within the window.
+        built with ``derive_savings_baseline=False``. Derived once on first use and
+        pinned for the instance's lifetime: creating or editing the router rebuilds
+        the instance, which re-derives. Deferred past ``__init__`` because during a
+        config load this router can be constructed before its tier deployments are.
         """
         import litellm
         from litellm.router_strategy.savings_baseline import resolve_baseline
 
         if not self._derive_savings_baseline or litellm.autorouter_savings_baseline_model is not None:
             return None
-        now: Final = time.monotonic()
-        cached: Final = self._savings_baseline_cache
-        if cached is not None and now - cached[0] < _SAVINGS_BASELINE_TTL_SECONDS:
-            return cached[1]
-        baseline: Final = resolve_baseline(self.litellm_router_instance, self._hardest_tier_models())
-        self._savings_baseline_cache = (now, baseline)
-        return baseline
+        if not self._savings_baseline_derived:
+            self._savings_baseline = resolve_baseline(self.litellm_router_instance, self._hardest_tier_models())
+            self._savings_baseline_derived = True
+        return self._savings_baseline
 
     def _estimate_tokens(self, text: str) -> int:
         """
