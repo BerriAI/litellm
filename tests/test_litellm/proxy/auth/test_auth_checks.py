@@ -5462,3 +5462,55 @@ async def test_get_project_object_db_fetch_returns_cached_obj():
     assert isinstance(result, LiteLLM_ProjectTableCachedObj)
     assert result.project_id == "p-1"
     assert result.project_alias == "proj"
+
+
+@pytest.mark.asyncio
+async def test_common_checks_rejects_blocked_end_user():
+    """
+    Regression for a blocked customer being admitted by core auth: /customer/block writes
+    LiteLLM_EndUserTable.blocked=True, so common_checks must reject the request even when the
+    optional enterprise blocked-user callback isn't configured.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    with pytest.raises(Exception) as exc_info:
+        await common_checks(
+            request_body={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+            team_object=None,
+            user_object=None,
+            end_user_object=LiteLLM_EndUserTable(user_id="blocked-demo", blocked=True),
+            global_proxy_spend=None,
+            general_settings={},
+            route="/chat/completions",
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=UserAPIKeyAuth(token="test-token"),
+            request=MagicMock(spec=Request),
+        )
+
+    assert "End user=blocked-demo is blocked" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_common_checks_allows_unblocked_end_user():
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    result = await common_checks(
+        request_body={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        team_object=None,
+        user_object=None,
+        end_user_object=LiteLLM_EndUserTable(user_id="allowed-demo", blocked=False),
+        global_proxy_spend=None,
+        general_settings={},
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=UserAPIKeyAuth(token="test-token"),
+        request=MagicMock(spec=Request),
+    )
+
+    assert result is True
