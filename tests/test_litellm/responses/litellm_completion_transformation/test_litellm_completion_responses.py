@@ -319,9 +319,12 @@ class TestLiteLLMCompletionResponsesConfig:
                 "rs_"
             ), f"Expected ID to start with 'rs_', got: {reasoning_item.id}"
         assert reasoning_item.status == "completed"
-        assert reasoning_item.role == "assistant"
+        assert len(reasoning_item.summary) == 1
+        assert reasoning_item.summary[0].type == "summary_text"
+        assert "step by step" in reasoning_item.summary[0].text
+        assert "42" in reasoning_item.summary[0].text
         assert len(reasoning_item.content) == 1
-        assert reasoning_item.content[0].type == "output_text"
+        assert reasoning_item.content[0].type == "reasoning_text"
         assert "step by step" in reasoning_item.content[0].text
         assert "42" in reasoning_item.content[0].text
 

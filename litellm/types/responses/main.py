@@ -101,6 +101,30 @@ class CustomToolCallOutputItem(BaseLiteLLMOpenAIResponseObject):
     status: Optional[Literal["in_progress", "completed", "incomplete"]] = None
 
 
+class ReasoningSummaryText(BaseLiteLLMOpenAIResponseObject):
+    """A summary part of a Responses API reasoning item"""
+
+    type: Literal["summary_text"] = "summary_text"
+    text: str
+
+
+class ReasoningText(BaseLiteLLMOpenAIResponseObject):
+    """A raw chain-of-thought part of a Responses API reasoning item"""
+
+    type: Literal["reasoning_text"] = "reasoning_text"
+    text: str
+
+
+class ReasoningOutputItem(BaseLiteLLMOpenAIResponseObject):
+    """A Responses API reasoning output item"""
+
+    type: Literal["reasoning"] = "reasoning"
+    id: str
+    status: Optional[str] = None
+    summary: List[ReasoningSummaryText]
+    content: List[ReasoningText]
+
+
 class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     """
     Generic response API output item
