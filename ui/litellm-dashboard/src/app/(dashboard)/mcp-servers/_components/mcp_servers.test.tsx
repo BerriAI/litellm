@@ -27,6 +27,15 @@ vi.mock("@/components/molecules/notifications_manager", () => ({
   },
 }));
 
+vi.mock("@/app/(dashboard)/hooks/proxySettings/useProxySettings", () => ({
+  __esModule: true,
+  default: vi.fn(() => ({
+    PROXY_BASE_URL: "",
+    PROXY_LOGOUT_URL: "",
+    LITELLM_UI_API_DOC_BASE_URL: null,
+  })),
+}));
+
 const createQueryClient = () =>
   new QueryClient({
     defaultOptions: {
