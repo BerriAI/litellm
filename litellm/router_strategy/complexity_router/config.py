@@ -6,7 +6,7 @@ All values are configurable via proxy config.yaml.
 """
 
 from enum import Enum
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -22,17 +22,17 @@ class ComplexityTier(str, Enum):
     REASONING = "REASONING"
 
 
-TIER_SEVERITY_ORDER: tuple[ComplexityTier, ...] = (
+TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
     ComplexityTier.SIMPLE,
     ComplexityTier.MEDIUM,
     ComplexityTier.COMPLEX,
     ComplexityTier.REASONING,
 )
 
-DEFAULT_TIER_DISTANCE_PENALTY: float = 0.5
+DEFAULT_TIER_DISTANCE_PENALTY: Final[float] = 0.5
 
-DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE: int = 3
-DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS: int = 200
+DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE: Final[int] = 3
+DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS: Final[int] = 200
 
 
 class KeywordTierRule(BaseModel):
@@ -52,7 +52,7 @@ class KeywordTierRule(BaseModel):
         # _keyword_matches treats "" / " " as a substring that matches essentially every
         # prompt, so a single stray blank would silently force this rule's tier for all
         # traffic. Require at least one real keyword to remain.
-        cleaned = [stripped for keyword in self.keywords if (stripped := keyword.strip())]
+        cleaned: Final = [stripped for keyword in self.keywords if (stripped := keyword.strip())]
         if not cleaned:
             raise ValueError("keyword_tier_rules entries must contain at least one non-empty keyword")
         self.keywords = cleaned
@@ -63,7 +63,7 @@ class KeywordTierRule(BaseModel):
 # Note: Keywords should be full words/phrases to avoid substring false positives.
 # The matching logic uses word boundary detection for single-word keywords.
 
-DEFAULT_CODE_KEYWORDS: list[str] = [
+DEFAULT_CODE_KEYWORDS: Final[list[str]] = [
     "function",
     "class",
     "def",
@@ -111,7 +111,7 @@ DEFAULT_CODE_KEYWORDS: list[str] = [
     "pull request",
 ]
 
-DEFAULT_REASONING_KEYWORDS: list[str] = [
+DEFAULT_REASONING_KEYWORDS: Final[list[str]] = [
     "step by step",
     "think through",
     "let's think",
@@ -133,7 +133,7 @@ DEFAULT_REASONING_KEYWORDS: list[str] = [
     "conclude",
 ]
 
-DEFAULT_TECHNICAL_KEYWORDS: list[str] = [
+DEFAULT_TECHNICAL_KEYWORDS: Final[list[str]] = [
     "architecture",
     "distributed",
     "scalable",
@@ -165,10 +165,10 @@ DEFAULT_TECHNICAL_KEYWORDS: list[str] = [
     # Note: "async", "kubernetes", "docker" are in DEFAULT_CODE_KEYWORDS
 ]
 
-DEFAULT_ESCALATION_KEYWORDS: list[str] = ["LITELLM ESCALATE"]
+DEFAULT_ESCALATION_KEYWORDS: Final[list[str]] = ["LITELLM ESCALATE"]
 
 
-DEFAULT_SIMPLE_KEYWORDS: list[str] = [
+DEFAULT_SIMPLE_KEYWORDS: Final[list[str]] = [
     "what is",
     "what's",
     "define",
@@ -201,7 +201,7 @@ DEFAULT_SIMPLE_KEYWORDS: list[str] = [
 
 # ─── Default Dimension Weights ───
 
-DEFAULT_DIMENSION_WEIGHTS: dict[str, float] = {
+DEFAULT_DIMENSION_WEIGHTS: Final[dict[str, float]] = {
     "tokenCount": 0.10,  # Reduced - length is less important than content
     "codePresence": 0.30,  # High - code requests need capable models
     "reasoningMarkers": 0.25,  # High - explicit reasoning requests
@@ -214,7 +214,7 @@ DEFAULT_DIMENSION_WEIGHTS: dict[str, float] = {
 
 # ─── Default Tier Boundaries ───
 
-DEFAULT_TIER_BOUNDARIES: dict[str, float] = {
+DEFAULT_TIER_BOUNDARIES: Final[dict[str, float]] = {
     "simple_medium": 0.15,  # Lower threshold to catch more MEDIUM cases
     "medium_complex": 0.35,  # Lower threshold to catch technical COMPLEX cases
     "complex_reasoning": 0.60,  # Reasoning tier reserved for explicit reasoning markers
@@ -223,7 +223,7 @@ DEFAULT_TIER_BOUNDARIES: dict[str, float] = {
 
 # ─── Default Token Thresholds ───
 
-DEFAULT_TOKEN_THRESHOLDS: dict[str, int] = {
+DEFAULT_TOKEN_THRESHOLDS: Final[dict[str, int]] = {
     "simple": 15,  # Only very short prompts (<15 tokens) are penalized
     "complex": 400,  # Long prompts (>400 tokens) get complexity boost
 }
@@ -231,7 +231,7 @@ DEFAULT_TOKEN_THRESHOLDS: dict[str, int] = {
 
 # ─── Default Tier to Model Mapping ───
 
-DEFAULT_TIER_MODELS: dict[str, str] = {
+DEFAULT_TIER_MODELS: Final[dict[str, str]] = {
     "SIMPLE": "gpt-4o-mini",
     "MEDIUM": "gpt-4o",
     "COMPLEX": "claude-sonnet-4-20250514",
@@ -446,6 +446,15 @@ class ComplexityRouterConfig(BaseModel):
         description="RoutingPlugin instances that narrow the classified tier's candidate models before selection",
     )
 
+    reminder_markers: tuple[str, str] | None = Field(
+        default=None,
+        description=(
+            "Override the (open, close) marker pair used to recognize and strip harness-injected "
+            "reminder blocks before classification. Defaults to Claude Code's convention, "
+            "('<system-reminder>', '</system-reminder>'), when unset. Matching is case-insensitive."
+        ),
+    )
+
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)  # Allow additional fields
 
     @field_validator("tiers", mode="before")
@@ -453,7 +462,7 @@ class ComplexityRouterConfig(BaseModel):
     def _coerce_tier_values(cls, value: object) -> object:
         if not isinstance(value, dict):
             return value
-        coerced: dict[str, object] = {}
+        coerced: Final[dict[str, object]] = {}
         for key, item in value.items():
             if isinstance(item, str):
                 coerced[key] = item
@@ -483,7 +492,7 @@ class ComplexityRouterConfig(BaseModel):
         normalized = {tier: (models if isinstance(models, list) else [models]) for tier, models in self.tiers.items()}
         if not any(normalized.values()):
             raise ValueError("adaptive=True requires at least one non-empty tier pool")
-        empty = [tier for tier, models in normalized.items() if not models]
+        empty: Final = [tier for tier, models in normalized.items() if not models]
         if empty:
             raise ValueError(f"adaptive=True tier pools must be non-empty; empty tiers: {empty}")
         self.tiers = normalized
@@ -508,6 +517,18 @@ class ComplexityRouterConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _normalize_reminder_markers(self) -> "ComplexityRouterConfig":
+        if self.reminder_markers is None:
+            return self
+        open_marker, close_marker = (marker.strip().lower() for marker in self.reminder_markers)
+        if not open_marker or not close_marker:
+            raise ValueError("reminder_markers entries must not be blank")
+        if open_marker == close_marker:
+            raise ValueError("reminder_markers open and close must be different strings")
+        self.reminder_markers = (open_marker, close_marker)
+        return self
+
 
 # Combined default config
-DEFAULT_COMPLEXITY_CONFIG = ComplexityRouterConfig()
+DEFAULT_COMPLEXITY_CONFIG: Final = ComplexityRouterConfig()
