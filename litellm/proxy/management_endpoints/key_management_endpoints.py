@@ -4463,8 +4463,7 @@ async def check_encryption_endpoint(
     )
     from litellm.proxy.proxy_server import prisma_client
 
-    if not _user_has_admin_view(user_api_key_dict):
-        _require_proxy_admin(user_api_key_dict)
+    _require_proxy_admin(user_api_key_dict)
     if prisma_client is None:
         raise HTTPException(
             status_code=500,

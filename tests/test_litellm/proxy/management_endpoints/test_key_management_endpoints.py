@@ -15394,36 +15394,33 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
 
 
 @pytest.mark.asyncio
-async def test_check_encryption_endpoint_allows_proxy_admin_viewer():
-    """The residual-scan endpoint performs no writes, so proxy_admin_viewer reads it
-    with the same access as proxy_admin."""
+async def test_check_encryption_endpoint_rejects_proxy_admin_viewer():
+    """The residual scan walks and decrypt-classifies every credential-bearing table,
+    so it stays proxy_admin-only despite being read-only."""
     from litellm.proxy.management_endpoints import credential_migration as cm
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         check_encryption_endpoint,
     )
 
-    report = cm.MigrationReport()
-    report.add(cm.LocationReport(location="model_table", scanned=2, legacy=0))
-
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
         user_id="viewer-user",
     )
+    mock_check = AsyncMock(return_value=cm.MigrationReport())
 
     with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch.object(
-        cm, "check_encryption", AsyncMock(return_value=report)
+        cm, "check_encryption", mock_check
     ):
-        result = await check_encryption_endpoint(user_api_key_dict=user_api_key_dict)
+        with pytest.raises(HTTPException) as exc_info:
+            await check_encryption_endpoint(user_api_key_dict=user_api_key_dict)
 
-    assert result["status"] == "success"
-    assert result["report"]["residual_legacy"] == 0
-    assert result["report"]["locations"]["model_table"]["scanned"] == 2
+    assert exc_info.value.status_code == 403
+    mock_check.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_migrate_encryption_endpoint_rejects_proxy_admin_viewer():
-    """The re-encryption write sibling stays proxy_admin-only even though its
-    /check twin is viewer-readable."""
+    """The re-encryption write sibling is also proxy_admin-only."""
     from litellm.proxy.management_endpoints import credential_migration as cm
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         migrate_encryption_endpoint,
