@@ -574,7 +574,7 @@ def _fix_enum_types(schema, depth=0):
                 _fix_enum_types(item, depth=depth + 1)
 
 
-def _convert_oneof_to_anyof(schema, depth=0):
+def _convert_oneof_to_anyof(schema: dict[str, Any], depth: int = 0) -> None:
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
