@@ -191,8 +191,14 @@ impl AnthropicMessagesProviderConfig for BedrockMessagesConfig {
         model: &str,
         response: AnthropicMessagesResponse,
     ) -> CoreResult<AnthropicMessagesResponse> {
-        let _ = (model, response);
-        todo!("restamp the requested model when Bedrock omits it")
+        if response.model.is_empty() {
+            return Ok(AnthropicMessagesResponse {
+                model: model.to_string(),
+                ..response
+            });
+        }
+
+        Ok(response)
     }
 }
 
@@ -317,12 +323,13 @@ mod tests {
             "stop_sequence": null
         }))
         .expect("response");
-        assert_eq!(
-            BEDROCK_MESSAGES_CONFIG
-                .transform_response("claude", response)
-                .expect("response")
-                .model,
-            "claude"
-        );
+        let response = BEDROCK_MESSAGES_CONFIG
+            .transform_response("claude", response)
+            .expect("response");
+        assert_eq!(response.model, "claude");
+
+        let serialized = serde_json::to_value(response).expect("serialize");
+        assert!(serialized["stop_reason"].is_null());
+        assert!(serialized["stop_sequence"].is_null());
     }
 }
