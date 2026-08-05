@@ -284,3 +284,146 @@ def test_blank_prompt_is_rejected():
 def test_semantic_matching_without_an_embedding_model_is_rejected():
     with pytest.raises(ValidationError):
         _request("what is 2+2", semantic_keyword_matching=True)
+
+
+class TestAutoRouterBenchmarks:
+    from litellm.proxy.management_endpoints.auto_router_endpoints import _SessionAggRow
+
+    ROW = _SessionAggRow(
+        router_name="live-auto",
+        router_type="complexity",
+        sessions=4,
+        turns=40,
+        unordered_turns=1,
+        covered_turns=38,
+        cache_hits=28,
+        same_model_turns=20,
+        same_model_hits=19,
+        first_visit_turns=8,
+        first_visit_hits=2,
+        return_turns=11,
+        return_hits=6,
+        return_expired_misses=2,
+        return_within_ttl_misses=1,
+        ttl_5m_turns=30,
+        ttl_1h_turns=5,
+        total_tokens=4000,
+        spend=10.0,
+        saved_spend=30.0,
+        session_seconds=400.0,
+    )
+
+    def test_overall_hit_rate_counts_hits_independently_of_bucketing(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _benchmark_totals
+
+        totals = _benchmark_totals(self.ROW)
+        bucket_hits = (
+            totals.cache.same_model.hits + totals.cache.first_visit.hits + totals.cache.return_to_tier.hits
+        )
+        assert bucket_hits == 27
+        assert totals.cache.hit_rate_pct == pytest.approx(100.0 * 28 / 38, abs=0.1)
+
+    def test_fold_math_matches_hand_computed_truth(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _benchmark_totals
+
+        totals = _benchmark_totals(self.ROW)
+        assert totals.sessions == 4
+        assert totals.turns == 40
+        assert totals.avg_turns_per_session == 10.0
+        assert totals.avg_session_seconds == 100.0
+        assert totals.avg_tokens_per_session == 1000.0
+        assert totals.baseline_spend == 40.0
+        assert totals.saved_pct == 75.0
+        assert totals.saved_per_session == 7.5
+        assert totals.cache.coverage_pct == 95.0
+        assert totals.cache.hit_rate_pct == pytest.approx(73.7)
+        assert totals.cache.same_model.hit_rate_pct == 95.0
+        assert totals.cache.first_visit.hit_rate_pct == 25.0
+        assert totals.cache.return_to_tier.hit_rate_pct == pytest.approx(54.5)
+        assert totals.cache.return_misses_unknown == 2
+        assert totals.cache.unordered_turns == 1
+
+    def test_a_losing_router_reports_negative_savings(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _benchmark_totals
+
+        losing = self.ROW.model_copy(update={"saved_spend": -5.0})
+        totals = _benchmark_totals(losing)
+        assert totals.baseline_spend == 5.0
+        assert totals.saved_pct == -100.0
+
+    def test_an_empty_window_folds_to_zeros(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import (
+            _benchmark_totals,
+            _summed_agg_row,
+        )
+
+        totals = _benchmark_totals(_summed_agg_row([]))
+        assert totals.sessions == 0
+        assert totals.turns == 0
+        assert totals.saved_pct == 0.0
+        assert totals.cache.hit_rate_pct == 0.0
+
+    def test_totals_sum_counters_across_groups_before_deriving_ratios(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import (
+            _benchmark_totals,
+            _summed_agg_row,
+        )
+
+        other = self.ROW.model_copy(update={"router_name": "auto-2", "sessions": 1, "turns": 10, "spend": 0.0})
+        summed = _summed_agg_row([self.ROW, other])
+        totals = _benchmark_totals(summed)
+        assert summed.sessions == 5
+        assert summed.turns == 50
+        assert totals.avg_turns_per_session == 10.0
+        assert totals.spend == 10.0
+
+    @pytest.mark.asyncio
+    async def test_non_admin_roles_cannot_read_benchmarks(self):
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
+
+        with pytest.raises(HTTPException) as err:
+            await get_auto_router_benchmarks(
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-x"),
+                start_date="2026-08-01",
+                end_date="2026-08-02",
+            )
+        assert err.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_a_reversed_window_is_rejected(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
+
+        monkeypatch.setattr(proxy_server, "prisma_client", object())
+        with pytest.raises(HTTPException) as err:
+            await get_auto_router_benchmarks(
+                user_api_key_dict=ADMIN,
+                start_date="2026-08-05",
+                end_date="2026-08-01",
+            )
+        assert err.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_endpoint_returns_groups_and_totals_from_the_rollup(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
+
+        captured: dict = {}
+
+        class _DB:
+            async def query_raw(self, sql: str, *params: object):
+                captured["sql"] = sql
+                captured["params"] = params
+                return [TestAutoRouterBenchmarks.ROW.model_dump()]
+
+        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
+
+        response = await get_auto_router_benchmarks(
+            user_api_key_dict=ADMIN,
+            start_date="2026-07-01",
+            end_date="2026-08-01",
+        )
+        assert captured["params"] == ("2026-07-01T00:00:00", "2026-08-02T00:00:00")
+        assert response.routers_in_scope == 1
+        assert response.groups[0].router_name == "live-auto"
+        assert response.groups[0].saved_pct == response.totals.saved_pct == 75.0
