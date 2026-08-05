@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -68,6 +69,48 @@ def test_symlinked_root_keeps_diagnostics_in_tree(tmp_path):
         }
     )
     assert gate.count_basedpyright(payload, root=link) == {"reportArgumentType": 1}
+
+
+def test_node_options_with_heap_sets_the_flag_in_a_bare_env():
+    assert gate.node_options_with_heap({}) == gate.NODE_HEAP_OPTION
+
+
+def test_node_options_with_heap_appends_after_caller_flags_so_it_wins():
+    # node resolves a repeated --max-old-space-size last-wins, so ours must come
+    # after any caller-set value while keeping their other flags.
+    merged = gate.node_options_with_heap(
+        {"NODE_OPTIONS": "--max-old-space-size=4096 --no-warnings"}
+    )
+    assert merged == f"--max-old-space-size=4096 --no-warnings {gate.NODE_HEAP_OPTION}"
+
+
+def _stub_basedpyright(tmp_path, monkeypatch, script_body):
+    stub = tmp_path / "basedpyright"
+    stub.write_text(f"#!/bin/sh\n{script_body}\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path), prepend=os.pathsep)
+
+
+def test_run_basedpyright_exports_the_raised_heap_to_the_child(tmp_path, monkeypatch):
+    captured = tmp_path / "node_options.txt"
+    _stub_basedpyright(
+        tmp_path,
+        monkeypatch,
+        f'echo "$NODE_OPTIONS" > "{captured}"\necho \'{{"generalDiagnostics": []}}\'',
+    )
+    monkeypatch.delenv("NODE_OPTIONS", raising=False)
+    assert json.loads(gate.run_basedpyright(cwd=tmp_path)) == {"generalDiagnostics": []}
+    assert captured.read_text().strip() == gate.NODE_HEAP_OPTION
+
+
+def test_run_basedpyright_fails_loudly_on_a_crash_exit_code(tmp_path, monkeypatch):
+    import pytest
+
+    # 134 is SIGABRT, what node dies with on a heap OOM; it must never read as a
+    # clean zero-error run.
+    _stub_basedpyright(tmp_path, monkeypatch, "exit 134")
+    with pytest.raises(SystemExit):
+        gate.run_basedpyright(cwd=tmp_path)
 
 
 def test_at_or_under_ceiling_passes():
