@@ -356,7 +356,7 @@ async def responses_api(
         # Store in managed objects table if background mode is enabled
         if data.get("background") and isinstance(response, ResponsesAPIResponse):
             if response.status in ["queued", "in_progress"]:
-                from litellm_enterprise.proxy.hooks.managed_files import (  # type: ignore
+                from litellm_enterprise.proxy.hooks.managed_files import (
                     _PROXY_LiteLLMManagedFiles,
                 )
 
@@ -1327,7 +1327,7 @@ async def responses_websocket_endpoint(
     async def return_body():
         return _body_bytes
 
-    request.body = return_body  # type: ignore
+    request.body = return_body
 
     # Phase 1: pre-call processing (auth, guardrails, rate limits)
     base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)

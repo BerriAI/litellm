@@ -123,21 +123,21 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                         format: str | None = None
                         detail: str | None = None
                         if isinstance(img_element.get("image_url"), dict):
-                            _image_url = img_element["image_url"].get("url")  # type: ignore
-                            format = img_element["image_url"].get("format")  # type: ignore
-                            detail = img_element["image_url"].get("detail")  # type: ignore
+                            _image_url = img_element["image_url"].get("url")
+                            format = img_element["image_url"].get("format")
+                            detail = img_element["image_url"].get("detail")
                         else:
-                            _image_url = img_element.get("image_url")  # type: ignore
+                            _image_url = img_element.get("image_url")
                         if _image_url and "https://" in _image_url:
                             image_obj = convert_to_anthropic_image_obj(_image_url, format=format)
                             converted_image_url = convert_generic_image_chunk_to_openai_image_obj(image_obj)
                             if detail is not None:
-                                img_element["image_url"] = {  # type: ignore
+                                img_element["image_url"] = {
                                     "url": converted_image_url,
                                     "detail": detail,
                                 }
                             else:
-                                img_element["image_url"] = converted_image_url  # type: ignore
+                                img_element["image_url"] = converted_image_url
                     elif element.get("type") == "file":
                         file_element = cast(ChatCompletionFileObject, element)
                         _file_field = file_element.get("file")
@@ -152,8 +152,8 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                             # Convert HTTP/HTTPS file URL to base64 data
                             try:
                                 base64_data = convert_url_to_base64(file_id)
-                                _file_field["file_data"] = base64_data  # type: ignore
-                                _file_field.pop("file_id", None)  # type: ignore
+                                _file_field["file_data"] = base64_data
+                                _file_field.pop("file_id", None)
                             except Exception:
                                 # If conversion fails, leave as is and let the API handle it
                                 pass

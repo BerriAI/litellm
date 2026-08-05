@@ -1,7 +1,6 @@
-from typing import Any, Dict, Final, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Optional
 
-from fastapi import HTTPException
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, field_validator
 
 from litellm.proxy._types import (
     LiteLLM_UserTableWithKeyCount,

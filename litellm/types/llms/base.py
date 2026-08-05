@@ -9,7 +9,7 @@ class LiteLLMPydanticObjectBase(BaseModel):
     Implements default functions, all pydantic objects should have.
     """
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)  # noqa
         except Exception:
@@ -63,7 +63,7 @@ class HiddenParams(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
         except Exception:

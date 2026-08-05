@@ -832,9 +832,6 @@ def _is_user_proxy_admin(user_obj: LiteLLM_UserTable | None):
     if user_obj.user_role is not None and user_obj.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return True
 
-    if user_obj.user_role is not None and user_obj.user_role == LitellmUserRoles.PROXY_ADMIN.value:
-        return True
-
     return False
 
 

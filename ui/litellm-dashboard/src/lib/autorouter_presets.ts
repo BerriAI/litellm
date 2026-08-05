@@ -1,4 +1,7 @@
-import { ComplexityRouterConfigPayload } from "@/components/add_model/build_complexity_router_config";
+import {
+  ComplexityRouterConfigPayload,
+  hydrateTierLabels,
+} from "@/components/add_model/build_complexity_router_config";
 import {
   ComplexityRouterConfigValue,
   ComplexityTiers,
@@ -150,6 +153,7 @@ export const buildPresetPrefill = (
         COMPLEX: resolveTier(config.tiers.COMPLEX),
         REASONING: resolveTier(config.tiers.REASONING),
       },
+      tier_labels: hydrateTierLabels(config.tier_labels),
       classifier_type: config.classifier_type,
       classifier_llm_config: config.classifier_llm_config && {
         ...config.classifier_llm_config,

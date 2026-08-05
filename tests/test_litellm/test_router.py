@@ -6343,8 +6343,9 @@ async def test_acompletion_deferred_stream_skipped_when_stream_already_set():
         return
         yield
 
+    noop_stream = noop_aiter()
     already_set_wrapper = CustomStreamWrapper(
-        completion_stream=noop_aiter(),
+        completion_stream=noop_stream,
         model="openai/gpt-4o",
         logging_obj=logging_obj,
         custom_llm_provider="openai",
@@ -6376,6 +6377,89 @@ async def test_acompletion_deferred_stream_skipped_when_stream_already_set():
         )
 
     assert result is not None, "should return a streaming wrapper without errors"
+    assert already_set_wrapper.completion_stream is noop_stream, "completion_stream must not be re-fetched"
+    await noop_stream.aclose()
+
+
+def test_completion_deferred_stream_error_propagates_through_completion():
+    """Regression: the sync router path needs the same eager fetch as the async one.
+
+    A deferred-stream CustomStreamWrapper hands back a wrapper whose HTTP call has
+    not happened yet, so without fetch_sync_stream() the provider error surfaces on
+    first iteration, outside _completion's except block. The deployment is then never
+    marked failed and function_with_fallbacks never sees the error.
+    """
+    import litellm as _litellm
+
+    rate_limit_err = _litellm.RateLimitError(
+        message="Resource exhausted",
+        llm_provider="vertex_ai",
+        model="gemini-2.0-flash",
+    )
+    make_call_invocations = []
+
+    def failing_make_call(**kwargs):
+        make_call_invocations.append(kwargs)
+        raise rate_limit_err
+
+    router = _make_router_with_vertex_and_fallback()
+    deferred_wrapper = _make_deferred_stream_wrapper(failing_make_call)
+
+    with patch("litellm.completion", return_value=deferred_wrapper):
+        with pytest.raises(_litellm.RateLimitError):
+            router._completion(
+                model="vertex_ai/gemini-2.0-flash",
+                messages=[{"role": "user", "content": "Hello"}],
+                stream=True,
+                specific_deployment=router.model_list[0],
+            )
+
+    assert len(make_call_invocations) == 1, (
+        "the deferred HTTP call must run inside _completion's try block; "
+        "without the eager fetch_sync_stream() fix it is deferred to first iteration"
+    )
+
+
+def test_completion_deferred_stream_skipped_when_stream_already_set():
+    """A non-deferred sync provider already has completion_stream populated, so the
+    eager fetch must be skipped and make_call left untouched.
+    """
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    def would_fail(**kwargs):
+        raise RuntimeError("should not be called")
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"litellm_params": {}}
+    already_set_stream = iter([])
+
+    already_set_wrapper = CustomStreamWrapper(
+        completion_stream=already_set_stream,
+        model="openai/gpt-4o",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        make_call=would_fail,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+            }
+        ],
+    )
+
+    with patch("litellm.completion", return_value=already_set_wrapper):
+        result = router._completion(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            specific_deployment=router.model_list[0],
+        )
+
+    assert result is not None, "should return a streaming wrapper without errors"
+    assert already_set_wrapper.completion_stream is already_set_stream, "completion_stream must not be re-fetched"
 
 
 class TestAdvisorSubCallCooldown:

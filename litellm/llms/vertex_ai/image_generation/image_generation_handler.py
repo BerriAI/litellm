@@ -83,7 +83,7 @@ class VertexImageGeneration(VertexLLM):
         extra_headers: dict | None = None,
     ) -> ImageResponse:
         if aimg_generation is True:
-            return self.aimage_generation(  # type: ignore
+            return self.aimage_generation(
                 prompt=prompt,
                 api_base=api_base,
                 vertex_project=vertex_project,
@@ -106,9 +106,9 @@ class VertexImageGeneration(VertexLLM):
             else:
                 _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
 
-            sync_handler: HTTPHandler = HTTPHandler(**_params)  # type: ignore
+            sync_handler: HTTPHandler = HTTPHandler(**_params)
         else:
-            sync_handler = client  # type: ignore
+            sync_handler = client
 
         # url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
 
@@ -195,7 +195,7 @@ class VertexImageGeneration(VertexLLM):
                 params={"timeout": timeout},
             )
         else:
-            self.async_handler = client  # type: ignore
+            self.async_handler = client
 
         # make POST request to
         # https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict

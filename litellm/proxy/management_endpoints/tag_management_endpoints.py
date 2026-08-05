@@ -218,7 +218,7 @@ async def get_deployments_by_model(model: str, llm_router: "Router") -> list["De
     return [
         Deployment(
             model_name=deployment["model_name"],
-            litellm_params=LiteLLM_Params(**deployment["litellm_params"]),  # type: ignore
+            litellm_params=LiteLLM_Params(**deployment["litellm_params"]),
             model_info=ModelInfo(**deployment.get("model_info") or {}),
         )
         for deployment in deployments
@@ -536,7 +536,7 @@ def _validate_tag_list_date_range(start_date: str | None, end_date: str | None) 
         return
     try:
         start: Final = datetime.strptime(start_date, "%Y-%m-%d")
-        end: Final = datetime.strptime(end_date, "%Y-%m-%d")  # type: ignore[arg-type]
+        end: Final = datetime.strptime(end_date, "%Y-%m-%d")
     except ValueError as e:
         raise HTTPException(
             status_code=400,

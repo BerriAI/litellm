@@ -5462,3 +5462,25 @@ async def test_get_project_object_db_fetch_returns_cached_obj():
     assert isinstance(result, LiteLLM_ProjectTableCachedObj)
     assert result.project_id == "p-1"
     assert result.project_alias == "proj"
+
+
+def test_is_user_proxy_admin_rejects_view_only_admin():
+    """This predicate skips `non_proxy_admin_allowed_routes_check` entirely, so an
+    Admin Viewer answering True here would gain every write route. Read parity for
+    that role belongs in the route checks, never here."""
+    from litellm.proxy.auth.auth_checks import _is_user_proxy_admin
+
+    viewer = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    admin = LiteLLM_UserTable(
+        user_id="admin_user",
+        user_email="admin@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+    )
+
+    assert _is_user_proxy_admin(user_obj=viewer) is False
+    assert _is_user_proxy_admin(user_obj=admin) is True
+    assert _is_user_proxy_admin(user_obj=None) is False

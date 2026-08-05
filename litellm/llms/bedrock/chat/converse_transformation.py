@@ -178,17 +178,15 @@ class AmazonConverseConfig(BaseConfig):
                 new_content = []
                 for item in content:
                     if isinstance(item, dict) and item.get("type") == "text":
-                        new_item = {"type": "guarded_text", "text": item["text"]}  # type: ignore
+                        new_item = {"type": "guarded_text", "text": item["text"]}
                         new_content.append(new_item)
                     else:
                         new_content.append(item)
 
-                messages_copy[user_message_index]["content"] = new_content  # type: ignore
+                messages_copy[user_message_index]["content"] = new_content
             elif isinstance(content, str):
                 # If content is a string, convert it to guarded_text
-                messages_copy[user_message_index]["content"] = [  # type: ignore
-                    {"type": "guarded_text", "text": content}  # type: ignore
-                ]
+                messages_copy[user_message_index]["content"] = [{"type": "guarded_text", "text": content}]
 
         return messages_copy
 
@@ -886,7 +884,7 @@ class AmazonConverseConfig(BaseConfig):
                 _tool_choice_value = self.map_tool_choice_values(
                     model=model,
                     tool_choice=value,
-                    drop_params=drop_params,  # type: ignore
+                    drop_params=drop_params,
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
@@ -959,7 +957,7 @@ class AmazonConverseConfig(BaseConfig):
 
     def _map_request_metadata_param(self, value: Any, optional_params: dict) -> None:
         if value is not None and isinstance(value, dict):
-            self._validate_request_metadata(value)  # type: ignore
+            self._validate_request_metadata(value)
             optional_params["requestMetadata"] = value
 
     def _map_context_management_param(self, value: dict | list, optional_params: dict) -> None:
@@ -1083,7 +1081,7 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params["maxTokens"] = thinking_token_budget + DEFAULT_MAX_TOKENS
 
     @overload
-    def _get_cache_point_block(
+    def get_cache_point_block(
         self,
         message_block: OpenAIMessageContentListBlock
         | ChatCompletionUserMessage
@@ -1095,7 +1093,7 @@ class AmazonConverseConfig(BaseConfig):
         pass
 
     @overload
-    def _get_cache_point_block(
+    def get_cache_point_block(
         self,
         message_block: OpenAIMessageContentListBlock
         | ChatCompletionUserMessage
@@ -1106,7 +1104,7 @@ class AmazonConverseConfig(BaseConfig):
     ) -> ContentBlock | None:
         pass
 
-    def _get_cache_point_block(
+    def get_cache_point_block(
         self,
         message_block: OpenAIMessageContentListBlock
         | ChatCompletionUserMessage
@@ -1151,14 +1149,14 @@ class AmazonConverseConfig(BaseConfig):
                 system_prompt_indices.append(idx)
                 if isinstance(message["content"], str) and message["content"]:
                     system_content_blocks.append(SystemContentBlock(text=message["content"]))
-                    cache_block = self._get_cache_point_block(message, block_type="system", model=model)
+                    cache_block = self.get_cache_point_block(message, block_type="system", model=model)
                     if cache_block:
                         system_content_blocks.append(cache_block)
                 elif isinstance(message["content"], list):
                     for m in message["content"]:
                         if m.get("type") == "text" and m.get("text"):
                             system_content_blocks.append(SystemContentBlock(text=m["text"]))
-                            cache_block = self._get_cache_point_block(m, block_type="system", model=model)
+                            cache_block = self.get_cache_point_block(m, block_type="system", model=model)
                             if cache_block:
                                 system_content_blocks.append(cache_block)
         if len(system_prompt_indices) > 0:
@@ -1597,7 +1595,7 @@ class AmazonConverseConfig(BaseConfig):
         for config_name, config_class in self.get_config_blocks().items():
             config_value = inference_params.pop(config_name, None)
             if config_value is not None:
-                data[config_name] = config_class(**config_value)  # type: ignore
+                data[config_name] = config_class(**config_value)
 
         # Tool Config
         if bedrock_tool_config is not None:
@@ -2085,7 +2083,7 @@ class AmazonConverseConfig(BaseConfig):
         json_mode: Final[bool | None] = optional_params.get("json_mode", None)
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = ConverseResponseBlock(**response.json())  # type: ignore
+            completion_response: Final = ConverseResponseBlock(**response.json())
         except Exception as e:
             raise BedrockError(
                 message=f"Error converting to valid response block={e}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues",
