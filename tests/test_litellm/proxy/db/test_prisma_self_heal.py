@@ -12,6 +12,7 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
+from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
@@ -720,3 +721,33 @@ async def test_health_check_reports_real_outage_with_correct_label(
     assert kwargs["call_type"] == "health_check"
     assert "health_check()" in kwargs["traceback_str"]
     assert "disconnect()" not in kwargs["traceback_str"]
+
+
+@pytest.mark.asyncio
+async def test_health_check_not_alerted_when_reader_recreate_in_flight(
+    mock_proxy_logging, no_backoff_sleep
+):
+    """With a read replica configured, a SELECT 1 routed to the reader that
+    races the reader's planned engine recreate must not be reported: both the
+    routed writer and reader wrappers are inspected for an in-flight recreate."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    reader_holder = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    reader = reader_holder.db
+    client.db = RoutingPrismaWrapper(client.db, reader)
+    reader.query_raw = AsyncMock(
+        side_effect=httpx.ConnectError("All connection attempts failed")
+    )
+
+    await reader._reconnection_lock.acquire()
+    try:
+        with pytest.raises(httpx.ConnectError):
+            await client.health_check()
+    finally:
+        reader._reconnection_lock.release()
+
+    await asyncio.sleep(0)
+    mock_proxy_logging.failure_handler.assert_not_called()
