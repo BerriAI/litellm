@@ -2788,6 +2788,24 @@ def test_add_litellm_metadata_from_request_headers_baggage_sets_session_id_only(
     assert "litellm_trace_id" not in data
 
 
+def test_add_litellm_metadata_from_request_headers_baggage_session_id_not_logged_raw(caplog):
+    """The raw baggage session.id value must never reach the debug log line -
+    it isn't sanitized until set_session_id() runs much later in
+    Logging.__init__(), so logging it here would let a caller with control
+    characters or terminal escape sequences forge plaintext log output."""
+    import logging
+
+    poisoned = "poisoned\x1b[31mFAKE_RED_TEXT\x1b[0m"
+    headers = {"baggage": f"session.id={poisoned}"}
+    data = {"metadata": {}}
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=headers, data=data, _metadata_variable_name="metadata"
+        )
+    assert data["litellm_session_id"] == poisoned
+    assert not any(poisoned in record.getMessage() for record in caplog.records)
+
+
 def test_add_litellm_metadata_from_request_headers_traceparent_and_baggage_together():
     """traceparent and baggage are resolved independently - trace_id and
     session_id do not have to be the same value, unlike the chain_id path."""

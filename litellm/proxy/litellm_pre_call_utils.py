@@ -1137,9 +1137,7 @@ class LiteLLMProxyRequestSetup:
                 if session_id_from_baggage:
                     metadata_from_headers["session_id"] = session_id_from_baggage
                     data["litellm_session_id"] = session_id_from_baggage
-                    verbose_proxy_logger.debug(
-                        "Extracted session_id from W3C baggage header: %s", session_id_from_baggage
-                    )
+                    verbose_proxy_logger.debug("Extracted session_id from W3C baggage header")
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(metadata_from_headers)
