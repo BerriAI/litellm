@@ -57,6 +57,98 @@ class MockDynamicGuardrail(CustomGuardrail):
         return inputs
 
 
+class MockRecordingGuardrail(CustomGuardrail):
+    """Mock guardrail that records the request_data it was handed."""
+
+    def __init__(self, guardrail_name: str):
+        super().__init__(guardrail_name=guardrail_name)
+        self.request_data: Optional[dict] = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.request_data = request_data
+        return inputs
+
+
+class TestAnthropicMessagesHandlerStreamingRequestData:
+    """Post-call guardrails on streaming /v1/messages receive the response and identity metadata"""
+
+    @pytest.mark.asyncio
+    async def test_terminal_chunk_passes_assembled_response_and_metadata(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        handler = AnthropicMessagesHandler()
+        guardrail = MockRecordingGuardrail(guardrail_name="test")
+        mock_response = ModelResponse(
+            id="msg_123",
+            created=1234567890,
+            model="claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello world", role="assistant"),
+                )
+            ],
+        )
+
+        with (
+            patch.object(handler, "_check_streaming_has_ended", return_value=True),
+            patch(
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                return_value=mock_response,
+            ),
+        ):
+            await handler.process_output_streaming_response(
+                responses_so_far=[b"data: some chunk"],
+                guardrail_to_apply=guardrail,
+                litellm_logging_obj=MagicMock(),
+                user_api_key_dict=UserAPIKeyAuth(user_id="u-1", team_id="t-1"),
+                request_data={"model": "claude-sonnet-4-5"},
+            )
+
+        assert guardrail.request_data is not None
+        assert guardrail.request_data["response"] is mock_response
+        assert (
+            guardrail.request_data["litellm_metadata"]["user_api_key_user_id"] == "u-1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_mid_stream_chunk_passes_responses_so_far_and_metadata(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        handler = AnthropicMessagesHandler()
+        guardrail = MockRecordingGuardrail(guardrail_name="test")
+        responses_so_far = [b"data: some chunk"]
+
+        with (
+            patch.object(handler, "_check_streaming_has_ended", return_value=False),
+            patch.object(
+                handler, "get_streaming_string_so_far", return_value="partial text"
+            ),
+        ):
+            await handler.process_output_streaming_response(
+                responses_so_far=responses_so_far,
+                guardrail_to_apply=guardrail,
+                litellm_logging_obj=MagicMock(),
+                user_api_key_dict=UserAPIKeyAuth(user_id="u-1", team_id="t-1"),
+                request_data={"model": "claude-sonnet-4-5"},
+            )
+
+        assert guardrail.request_data is not None
+        assert guardrail.request_data["responses"] is responses_so_far
+        assert (
+            guardrail.request_data["litellm_metadata"]["user_api_key_user_id"] == "u-1"
+        )
+
+
 class TestAnthropicMessagesHandlerStreamingOutputProcessing:
     """Test streaming output processing functionality"""
 

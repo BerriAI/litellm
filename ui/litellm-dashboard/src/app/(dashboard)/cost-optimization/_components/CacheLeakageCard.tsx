@@ -102,22 +102,19 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
     <TooltipProvider delay={300}>
       <Card>
         <CardHeader>
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div className="min-w-0">
               <CardTitle>Cache leakage by {dimension === "model" ? "model" : "virtual key"}</CardTitle>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <p className="mt-1 text-sm text-muted-foreground line-clamp-2">
                 {subject} sending large volumes of uncached input with a low cache hit rate are likely missing prompt
                 caching. Potential savings is approximate: uncached input priced at the realized cache-read discount.
-                {dimension === "model" ? " Limited to Anthropic (Claude) models, which support prompt caching." : ""}
               </p>
             </div>
-            <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
+            <div className="shrink-0">
+              <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
+            </div>
           </div>
-          <Tabs
-            value={dimension}
-            onValueChange={(value) => setDimension(value === "model" ? "model" : "key")}
-            className="mt-3"
-          >
+          <Tabs value={dimension} onValueChange={(value) => setDimension(value === "model" ? "model" : "key")}>
             <TabsList>
               <TabsTrigger value="key">By virtual key</TabsTrigger>
               <TabsTrigger value="model">By model</TabsTrigger>

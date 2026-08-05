@@ -43,10 +43,12 @@ class KeyLoggingCallback(BaseModel):
 
 class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
+    priority: str | None = None
 
 
 class ObjectPermission(BaseModel):
     mcp_servers: list[str] | None = None
+    mcp_access_groups: list[str] | None = None
 
 
 class KeyGenerateBody(BaseModel):
@@ -96,6 +98,7 @@ class LiteLLMBudgetTable(BaseModel):
 
 class KeyInfo(BaseModel):
     key_alias: str | None = None
+    metadata: KeyMetadata | None = None
     models: list[str] = []
     tpm_limit: int | None = None
     rpm_limit: int | None = None
@@ -693,6 +696,7 @@ class LiteLLMParamsBody(BaseModel):
     complexity_router_config: dict[str, object] | None = None
     mock_response: str | None = None
     timeout: float | None = None
+    tpm: int | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
