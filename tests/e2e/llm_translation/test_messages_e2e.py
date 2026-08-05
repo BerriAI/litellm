@@ -35,6 +35,8 @@ class _OptionalMessagesBody(BaseModel):
 
 
 ANTHROPIC_BACKEND = "anthropic/claude-haiku-4-5"
+BEDROCK_INVOKE_BACKEND = "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+PROVIDER_REQUEST_ID_HEADER = "llm_provider-x-amzn-requestid"
 
 WEATHER_TOOL = AnthropicCustomTool(
     name="get_weather",
@@ -217,3 +219,55 @@ class TestAnthropicMessages:
             ),
         )
         assert_error_or_server_known(result, "messages missing model")
+
+
+class TestBedrockMessagesProviderHeaders:
+    """LIT-3724 / #32160: a streaming /v1/messages call over native Bedrock invoke
+    must forward the upstream provider response headers to the client, so a
+    customer can pull ``x-amzn-requestid`` off the response to open an AWS support
+    case. Before the fix the streaming path dropped them: a bare async generator
+    cannot carry the header context, so only the non-streaming path forwarded
+    them. The proxy re-exposes provider headers as ``llm_provider-*`` (lowercased).
+    """
+
+    def _register(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> tuple[str, str]:
+        model = f"e2e-bedrock-messages-headers-{unique_marker()}"
+        model_id = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(
+                model=BEDROCK_INVOKE_BACKEND,
+                aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+                aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+                aws_region_name="os.environ/AWS_REGION",
+            ),
+        )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        return model, resources.key()
+
+    @pytest.mark.covers("llm.messages.bedrock_invoke.basic.stream.provider_headers")
+    def test_streaming_messages_forwards_bedrock_request_id_header(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model, key = self._register(endpoints_client, resources)
+
+        result = endpoints_client.proxy.messages_stream(
+            key,
+            AnthropicMessagesBody(
+                model=model,
+                max_tokens=64,
+                stream=True,
+                messages=[ChatMessage(role="user", content="Count from one to three.")],
+            ),
+        )
+        require_successful_call(result)
+        assert result.is_streaming, f"response was not streamed: {result.headers}"
+        assert not result.stream_error, f"stream errored: {result.stream_error}"
+
+        request_id = result.headers.get(PROVIDER_REQUEST_ID_HEADER)
+        assert request_id is not None and request_id.strip(), (
+            "streaming /v1/messages over Bedrock dropped the provider request id header; "
+            f"expected a non-empty {PROVIDER_REQUEST_ID_HEADER!r} (LIT-3724 / #32160) so the "
+            f"customer can open an AWS support case, got headers={result.headers}"
+        )
