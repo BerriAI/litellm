@@ -1104,7 +1104,7 @@ async def get_batch_from_database(
             prisma_client=prisma_client,
             verbose_proxy_logger=verbose_proxy_logger,
             db_batch_object=db_batch_object,
-            unified_batch_id=unified_batch_id if isinstance(unified_batch_id, str) else None,
+            unified_batch_id=unified_batch_id,
         )
 
         verbose_proxy_logger.debug(
