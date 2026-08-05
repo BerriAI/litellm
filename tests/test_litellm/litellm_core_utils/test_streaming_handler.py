@@ -4006,3 +4006,52 @@ async def test_stream_wrapper_aclose_restores_consumer_correlation_context():
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+def test_handle_stream_fallback_error_restores_context_only_after_exception_mapping(monkeypatch):
+    """_map_anthropic_exception/_map_aleph_alpha_exception synchronously log a
+    debug diagnostic (the raw status code) as part of exception_type()'s
+    mapping. The consumer's outer context must not be restored until that
+    mapping call returns, or the diagnostic log line would carry the outer
+    (or empty) trace_id/session_id instead of the failing stream's own."""
+    trace_id_var.set("outer-trace-fallback")
+    session_id_var.set("outer-session-fallback")
+    try:
+        log_obj = Logging(
+            model="claude-3-opus",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="fallback-error-call",
+            function_id="fn-fallback-error",
+            kwargs={"litellm_session_id": "fallback-error-session"},
+        )
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="claude-3-opus",
+            custom_llm_provider="anthropic",
+            logging_obj=log_obj,
+        )
+
+        captured_ids = {}
+
+        def fake_exception_type(**kwargs):
+            captured_ids["trace_id"] = trace_id_var.get()
+            captured_ids["session_id"] = session_id_var.get()
+            return ValueError("mapped boom")
+
+        monkeypatch.setattr("litellm.litellm_core_utils.streaming_handler.exception_type", fake_exception_type)
+
+        with pytest.raises(Exception):
+            wrapper._handle_stream_fallback_error(RuntimeError("boom"))
+
+        # The mapper ran while the stream's own ids were still active.
+        assert captured_ids["trace_id"] == log_obj.litellm_trace_id
+        assert captured_ids["session_id"] == "fallback-error-session"
+        # Restored to the consumer's outer context once mapping/raise completes.
+        assert trace_id_var.get() == "outer-trace-fallback"
+        assert session_id_var.get() == "outer-session-fallback"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")

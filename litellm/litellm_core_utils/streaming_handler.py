@@ -2220,10 +2220,14 @@ class CustomStreamWrapper:
         429 (rate-limit) is explicitly exempted from the 4xx filter because
         it is transient and the Router should switch to another model group.
         """
-        self._restore_consumer_correlation_context()
         from litellm.exceptions import MidStreamFallbackError
 
-        # Map to OpenAI exception format
+        # Map to OpenAI exception format. Some providers' mappers (e.g.
+        # _map_anthropic_exception, _map_aleph_alpha_exception) synchronously
+        # log a debug diagnostic (the raw status code) as part of mapping -
+        # restore the consumer's outer context only after this completes, so
+        # that diagnostic log line still carries the failing stream's own
+        # trace_id/session_id instead of the consumer's (or an empty one).
         if isinstance(e, OpenAIError):
             mapped_exception: Exception = e
         else:
@@ -2237,6 +2241,7 @@ class CustomStreamWrapper:
                 )
             except Exception as mapping_error:
                 mapped_exception = mapping_error
+        self._restore_consumer_correlation_context()
 
         def _normalize_status_code(exc: Exception) -> int | None:
             """Best-effort status_code extraction."""
