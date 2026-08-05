@@ -4,7 +4,7 @@ import types
 from collections.abc import Callable
 from typing import Final
 
-import httpx  # type: ignore
+import httpx
 
 import litellm
 from litellm.utils import Choices, Message, ModelResponse, Usage
@@ -268,7 +268,7 @@ def completion(
                         message=message_obj,
                     )
                     choices_list.append(choice_obj)
-                model_response.choices = choices_list  # type: ignore
+                model_response.choices = choices_list
             except Exception:
                 raise AlephAlphaError(
                     message=json.dumps(completion_response),

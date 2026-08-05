@@ -44,7 +44,7 @@ from openai.types.responses.response import (
 
 # Handle OpenAI SDK version compatibility for Text type
 try:
-    from openai.types.responses.response_create_params import Text as ResponseText  # type: ignore[attr-defined] # fmt: skip # isort: skip
+    from openai.types.responses.response_create_params import Text as ResponseText  # fmt: skip # isort: skip
 except (ImportError, AttributeError):
     # Fall back to the concrete config type available in all SDK versions
     from openai.types.responses.response_text_config_param import (
@@ -343,7 +343,7 @@ class OpenAIFileObject(BaseModel):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
         except Exception:
@@ -420,7 +420,7 @@ class CreateBatchRequest(TypedDict, total=False):
     """
 
     completion_window: Literal["24h"]
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"]
+    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses"]
     input_file_id: str
     metadata: Optional[Dict[str, str]]
     output_expires_after: FileExpiresAfter
@@ -2334,7 +2334,7 @@ class OpenAIVideoObject(BaseModel):
     def __getitem__(self, key):
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)
         except Exception:

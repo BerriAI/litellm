@@ -1384,6 +1384,39 @@ async def test_user_info_nonexistent_user(mocker):
 
 
 @pytest.mark.asyncio
+async def test_user_info_no_user_id_view_only_admin_gets_proxy_admin_payload(mocker):
+    """PROXY_ADMIN_VIEW_ONLY must take the proxy-admin branch; otherwise /user/info
+    silently narrows to the viewer's own row instead of the whole tenant."""
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth, UserInfoResponse
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.get_data = mocker.AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    admin_payload = UserInfoResponse(user_id=None, user_info=None, keys=[], teams=[])
+    mock_get_user_info_for_proxy_admin = mocker.AsyncMock(return_value=admin_payload)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._get_user_info_for_proxy_admin",
+        mock_get_user_info_for_proxy_admin,
+    )
+
+    viewer = UserAPIKeyAuth(
+        user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    )
+    mock_request = mocker.MagicMock(spec=Request)
+
+    response = await user_info(
+        user_id=None, user_api_key_dict=viewer, request=mock_request
+    )
+
+    mock_get_user_info_for_proxy_admin.assert_awaited_once_with(user_api_key_dict=viewer)
+    assert response is admin_payload
+
+
+@pytest.mark.asyncio
 async def test_new_user_default_teams_flow(mocker):
     """
     Test that when teams are set via default_internal_user_params:
@@ -3213,13 +3246,9 @@ def test_enforce_user_info_access_admin_bypass():
     _enforce_user_info_access(user_id="someone_else", user_api_key_dict=admin)
 
 
-def test_enforce_user_info_access_view_only_admin_blocked_from_other_users():
-    """PROXY_ADMIN_VIEW_ONLY is not a true admin for /user/info — the upstream
-    route check applies the same `user_id == valid_token.user_id` rule, so the
-    re-check here must mirror that and deny cross-user lookups."""
-    import pytest
-    from fastapi import HTTPException
-
+def test_enforce_user_info_access_view_only_admin_can_read_other_users():
+    """PROXY_ADMIN_VIEW_ONLY has read parity with PROXY_ADMIN, so the ownership
+    re-check must wave it through for another user's id."""
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         _enforce_user_info_access,
@@ -3229,9 +3258,7 @@ def test_enforce_user_info_access_view_only_admin_blocked_from_other_users():
         user_id="viewer",
         user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
     )
-    with pytest.raises(HTTPException) as exc_info:
-        _enforce_user_info_access(user_id="someone_else", user_api_key_dict=viewer)
-    assert exc_info.value.status_code == 403
+    _enforce_user_info_access(user_id="someone_else", user_api_key_dict=viewer)
 
 
 def test_enforce_user_info_access_view_only_admin_can_read_own():

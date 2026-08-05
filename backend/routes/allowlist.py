@@ -44,6 +44,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/router/",
     "/router_settings",
     "/adaptive_router/",
+    "/auto_router/",
     "/fallback",
     "/fallbacks",
     "/cache_settings",

@@ -865,7 +865,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                 )
 
                 if delta_usage:
-                    pending_delta["usage"] = delta_usage  # type: ignore[arg-type]
+                    pending_delta["usage"] = delta_usage
 
                 yield pending_delta
                 pending_delta = None
@@ -884,7 +884,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                 delta_usage, start_usage_snapshot
             )
             if delta_usage:
-                pending_delta["usage"] = delta_usage  # type: ignore[arg-type]
+                pending_delta["usage"] = delta_usage
             yield pending_delta
 
 

@@ -85,7 +85,7 @@ class TraceloopLogger:
                     )
                 if "temperature" in optional_params:
                     span.set_attribute(
-                        SpanAttributes.LLM_REQUEST_TEMPERATURE,  # type: ignore
+                        SpanAttributes.LLM_REQUEST_TEMPERATURE,
                         kwargs.get("temperature"),
                     )
 

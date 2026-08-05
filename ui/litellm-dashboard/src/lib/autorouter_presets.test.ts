@@ -50,20 +50,24 @@ describe("autorouter_presets", () => {
   it("reports only the models the caller is missing, and none when the family is fully available", () => {
     const preset = getPresetByKey("openai_family")!;
     const required = [...getRequiredModelsInPreset(preset)];
+    const [held] = required;
 
-    expect(getMissingModelsInPreset(preset, new Set(["gpt-5-nano"]))).toEqual(
-      required.filter((m) => m !== "gpt-5-nano").sort(),
-    );
+    expect(getMissingModelsInPreset(preset, new Set([held]))).toEqual(required.filter((m) => m !== held).sort());
     expect(getMissingModelsInPreset(preset, new Set(required))).toEqual([]);
   });
 
   // Admins spell version numbers with either "-" or "." (claude-sonnet-4-5 vs claude-sonnet-4.5);
-  // a caller who only registered one form still satisfies a preset that names the other.
+  // a caller who only registered one form still satisfies a preset that names the other. The
+  // caller's spellings are derived from the preset itself so that renaming a preset's models in
+  // autorouter_presets.json can't quietly turn this into a no-op (the inequality below fails
+  // instead, if no preset model carries a version number at all).
   it("treats a preset's model as available under either version-separator spelling", () => {
     const preset = getPresetByKey("anthropic_family")!;
-    expect(
-      getMissingModelsInPreset(preset, new Set(["claude-haiku-4.5", "claude-sonnet-4.5", "claude-opus-5"])),
-    ).toEqual([]);
+    const required = [...getRequiredModelsInPreset(preset)];
+    const dottedSpellings = required.map((model) => model.replace(/(\d)-(\d)/g, "$1.$2"));
+
+    expect(dottedSpellings).not.toEqual(required);
+    expect(getMissingModelsInPreset(preset, new Set(dottedSpellings))).toEqual([]);
   });
 
   // The two-arm mirror: a differently-punctuated preset model must not be reported missing.
@@ -170,6 +174,20 @@ describe("autorouter_presets", () => {
     // The whole point of the separator normalization: a caller whose proxy only registered the
     // dotted form of a version number still gets that model written into the tier, not the
     // preset's own hyphenated spelling (which the caller never actually registered).
+    it("prefills a preset's tier_labels and leaves them undefined when the preset has none", () => {
+      const base = {
+        tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+        classifier_type: "heuristic" as const,
+        session_affinity: false,
+      };
+      const labeled = buildPresetPrefill(
+        { ...base, tier_labels: { SIMPLE: "Cheap", REASONING: "Deep" } },
+        new Set(["gpt-5-nano"]),
+      );
+      expect(labeled.complexityRouterConfig.tier_labels).toEqual({ SIMPLE: "Cheap", REASONING: "Deep" });
+      expect(buildPresetPrefill(base, new Set(["gpt-5-nano"])).complexityRouterConfig.tier_labels).toBeUndefined();
+    });
+
     it("rewrites a preset's model name to the caller's differently-punctuated registered spelling", () => {
       const config = {
         tiers: { SIMPLE: ["claude-sonnet-4-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },

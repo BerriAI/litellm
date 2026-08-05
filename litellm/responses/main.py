@@ -39,7 +39,7 @@ from litellm.types.llms.openai import (
 
 # Handle ResponseText import with fallback
 if TYPE_CHECKING:
-    from litellm.types.llms.openai import ResponseText  # type: ignore
+    from litellm.types.llms.openai import ResponseText
 else:
     ResponseText = str  # Fallback for ResponseText import
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
@@ -77,7 +77,7 @@ def mock_responses_api_response(
     mock_response: str = "In a peaceful grove beneath a silver moon, a unicorn named Lumina discovered a hidden pool that reflected the stars. As she dipped her horn into the water, the pool began to shimmer, revealing a pathway to a magical realm of endless night skies. Filled with wonder, Lumina whispered a wish for all who dream to find their own hidden magic, and as she glanced back, her hoofprints sparkled like stardust.",
 ):
     return ResponsesAPIResponse(
-        **{  # type: ignore
+        **{
             "id": "resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b",
             "object": "response",
             "created_at": 1741476542,
@@ -293,7 +293,7 @@ async def aresponses_api_with_mcp(
     # Auto-Execute Tools Handling
     # If auto-execute tools is True, then we need to execute the tool calls
     #########################################################
-    if should_auto_execute and isinstance(response, ResponsesAPIResponse):  # type: ignore
+    if should_auto_execute and isinstance(response, ResponsesAPIResponse):
         tool_calls: Final = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(response=response)
 
         if tool_calls:
@@ -465,11 +465,7 @@ async def aresponses(
             if isinstance(input, str):
                 client_input: list[AllMessageValues] = [{"role": "user", "content": input}]
             else:
-                client_input = [
-                    item  # type: ignore[misc]
-                    for item in input
-                    if isinstance(item, dict) and "role" in item
-                ]
+                client_input = [item for item in input if isinstance(item, dict) and "role" in item]
             (
                 model,
                 merged_input,
@@ -583,11 +579,7 @@ def _apply_prompt_management_to_responses_call(
     if isinstance(input, str):
         client_input: list[AllMessageValues] = [{"role": "user", "content": input}]
     else:
-        client_input = [
-            item  # type: ignore[misc]
-            for item in input
-            if isinstance(item, dict) and "role" in item
-        ]
+        client_input = [item for item in input if isinstance(item, dict) and "role" in item]
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and litellm_logging_obj.should_run_prompt_management_hooks(
         prompt_id=prompt_id, non_default_params=kwargs
@@ -907,7 +899,7 @@ def responses(
     local_vars: Final = locals()
 
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aresponses", False) is True
         use_chat_completions_api = _pop_use_chat_completions_api_kw(kwargs)
@@ -1232,7 +1224,7 @@ def delete_responses(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("adelete_responses", False) is True
 
@@ -1403,7 +1395,7 @@ def get_responses(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aget_responses", False) is True
 
@@ -1552,7 +1544,7 @@ def list_input_items(
     """List input items for a response"""
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("alist_input_items", False) is True
 
@@ -1696,7 +1688,7 @@ def cancel_responses(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acancel_responses", False) is True
 
@@ -1868,7 +1860,7 @@ def compact_responses(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acompact_responses", False) is True
 
@@ -1997,7 +1989,7 @@ async def _aresponses_websocket(
     ``BaseResponsesAPIConfig``, and hands off to
     ``BaseLLMHTTPHandler.async_responses_websocket``.
     """
-    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
     user: Final = kwargs.get("user", None)
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
     litellm_params_dict: Final = get_litellm_params(**kwargs)
