@@ -1308,18 +1308,19 @@ def test_map_extra_body_params_translates_truncate_prompt_tokens():
     assert result == {"prompt_truncate_len": 4096}
 
 
-def test_map_extra_body_params_truncate_prompt_tokens_conflicts_with_alias():
+def test_map_extra_body_params_truncate_prompt_tokens_native_wins():
     config = FireworksAIConfig()
-    with pytest.raises(litellm.BadRequestError, match="aliases"):
-        config.map_extra_body_params(
-            {"prompt_truncate_len": 2048, "extra_body": {"truncate_prompt_tokens": 4096}},
-            _REASONING_MODEL,
-        )
-    with pytest.raises(litellm.BadRequestError, match="aliases"):
-        config.map_extra_body_params(
-            {"extra_body": {"truncate_prompt_tokens": 4096, "prompt_truncate_len": 2048}},
-            _REASONING_MODEL,
-        )
+    top_level = config.map_extra_body_params(
+        {"prompt_truncate_len": 2048, "extra_body": {"truncate_prompt_tokens": 4096}},
+        _REASONING_MODEL,
+    )
+    assert top_level == {"prompt_truncate_len": 2048}
+
+    nested = config.map_extra_body_params(
+        {"extra_body": {"truncate_prompt_tokens": 4096, "prompt_truncate_len": 2048}},
+        _REASONING_MODEL,
+    )
+    assert nested == {"extra_body": {"prompt_truncate_len": 2048}}
 
 
 def test_map_extra_body_params_chat_template_kwargs_enable_thinking():
@@ -1337,28 +1338,29 @@ def test_map_extra_body_params_chat_template_kwargs_enable_thinking():
     assert enabled == {}
 
 
-def test_map_extra_body_params_chat_template_kwargs_conflicts_with_reasoning_effort():
+def test_map_extra_body_params_chat_template_kwargs_native_reasoning_effort_wins():
     config = FireworksAIConfig()
-    with pytest.raises(litellm.BadRequestError, match="enable_thinking"):
-        config.map_extra_body_params(
-            {
-                "reasoning_effort": "high",
-                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
-            },
-            _REASONING_MODEL,
-        )
+    result = config.map_extra_body_params(
+        {
+            "reasoning_effort": "high",
+            "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+        },
+        _REASONING_MODEL,
+    )
+    assert result == {"reasoning_effort": "high"}
 
 
-def test_map_extra_body_params_chat_template_kwargs_conflicts_with_thinking():
+def test_map_extra_body_params_chat_template_kwargs_native_thinking_wins():
     config = FireworksAIConfig()
-    with pytest.raises(litellm.BadRequestError, match="enable_thinking"):
-        config.map_extra_body_params(
-            {
-                "thinking": {"type": "enabled", "budget_tokens": 4096},
-                "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
-            },
-            _REASONING_MODEL,
-        )
+    thinking = {"type": "enabled", "budget_tokens": 4096}
+    result = config.map_extra_body_params(
+        {
+            "thinking": thinking,
+            "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
+        },
+        _REASONING_MODEL,
+    )
+    assert result == {"thinking": thinking}
 
 
 def test_map_extra_body_params_chat_template_kwargs_dropped_for_non_reasoning_model():
@@ -1366,6 +1368,15 @@ def test_map_extra_body_params_chat_template_kwargs_dropped_for_non_reasoning_mo
     result = config.map_extra_body_params(
         {"extra_body": {"chat_template_kwargs": {"enable_thinking": False, "custom_flag": 1}}},
         _NON_REASONING_MODEL,
+    )
+    assert result == {}
+
+
+def test_map_extra_body_params_non_dict_chat_template_kwargs_dropped():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": "enable_thinking"}},
+        _REASONING_MODEL,
     )
     assert result == {}
 
@@ -1401,25 +1412,37 @@ def test_map_extra_body_params_guided_grammar_and_choice():
     }
 
 
-def test_map_extra_body_params_guided_conflicts_with_response_format():
+def test_map_extra_body_params_guided_native_response_format_wins():
     config = FireworksAIConfig()
-    with pytest.raises(litellm.BadRequestError, match="response_format"):
-        config.map_extra_body_params(
-            {
-                "response_format": {"type": "json_object"},
-                "extra_body": {"guided_json": {"type": "object"}},
-            },
-            _REASONING_MODEL,
-        )
+    top_level = config.map_extra_body_params(
+        {
+            "response_format": {"type": "json_object"},
+            "extra_body": {"guided_json": {"type": "object"}},
+        },
+        _REASONING_MODEL,
+    )
+    assert top_level == {"response_format": {"type": "json_object"}}
+
+    nested_format = {"type": "json_object"}
+    nested = config.map_extra_body_params(
+        {"extra_body": {"guided_json": {"type": "object"}, "response_format": nested_format}},
+        _REASONING_MODEL,
+    )
+    assert nested == {"extra_body": {"response_format": nested_format}}
 
 
-def test_map_extra_body_params_multiple_guided_params_rejected():
+def test_map_extra_body_params_multiple_guided_params_priority_order():
     config = FireworksAIConfig()
-    with pytest.raises(litellm.BadRequestError, match="multiple guided decoding params"):
-        config.map_extra_body_params(
-            {"extra_body": {"guided_json": {"type": "object"}, "guided_grammar": "root ::= 'x'"}},
-            _REASONING_MODEL,
-        )
+    result = config.map_extra_body_params(
+        {"extra_body": {"guided_grammar": "root ::= 'x'", "guided_json": {"type": "object"}}},
+        _REASONING_MODEL,
+    )
+    assert result == {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"schema": {"type": "object"}},
+        }
+    }
 
 
 @pytest.mark.parametrize(
