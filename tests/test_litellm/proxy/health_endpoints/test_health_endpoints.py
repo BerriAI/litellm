@@ -2438,3 +2438,22 @@ class TestConfigBaseForHealthCheck:
             allow_client_side_credentials=True,
         )
         assert base["api_key"] == "sk-configured"
+
+    def test_stored_credential_reference_is_dropped_with_the_credentials(self):
+        """A stored-credential name resolves to the same secrets downstream, so a
+        request that redirects the destination must not keep it either."""
+        config = {**self.CONFIG, "litellm_credential_name": "OpenAI-prod"}
+        base = self._base(config, {"api_base": "https://caller.example/v1"})
+        assert "litellm_credential_name" not in base
+        assert "api_key" not in base
+
+    def test_stored_credential_reference_kept_when_request_sets_no_connection(self):
+        """The Admin UI tests a configured model by naming it plus its stored
+        credential and nothing else; that keeps working."""
+        config = {**self.CONFIG, "litellm_credential_name": "OpenAI-prod"}
+        base = self._base(
+            config,
+            {"model": "openai/gpt-4o", "litellm_credential_name": "OpenAI-prod", "custom_llm_provider": "openai"},
+        )
+        assert base["litellm_credential_name"] == "OpenAI-prod"
+        assert base["api_key"] == "sk-configured"
