@@ -52,6 +52,7 @@ if TYPE_CHECKING:
 
     from litellm.router import Router
     from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
+    from litellm.router_strategy.savings_baseline import Baseline
     from litellm.types.router import PreRoutingHookResponse
 else:
     Router = Any
@@ -417,6 +418,7 @@ class ComplexityRouter(CustomLogger):
         litellm_router_instance: Router,
         complexity_router_config: dict[str, Any] | None = None,
         default_model: str | None = None,
+        derive_savings_baseline: bool = True,
     ):
         """
         Initialize ComplexityRouter.
@@ -426,9 +428,13 @@ class ComplexityRouter(CustomLogger):
             litellm_router_instance: The LiteLLM Router instance.
             complexity_router_config: Optional configuration dict from proxy config.
             default_model: Optional default model to use if tier cannot be determined.
+            derive_savings_baseline: False for callers whose decisions are never spend
+                tracked, such as the routing-test preview, where the resolved baseline
+                would leak deployment mappings the caller was not authorized for.
         """
         self.model_name = model_name
         self.litellm_router_instance = litellm_router_instance
+        self._derive_savings_baseline = derive_savings_baseline
 
         # Parse config - always create a new instance to avoid singleton mutation
         if complexity_router_config:
@@ -474,8 +480,44 @@ class ComplexityRouter(CustomLogger):
         self.adaptive_router: AdaptiveRouter | None = None
         self._model_tiers: dict[str, tuple[ComplexityTier, ...]] = {}
         self._adaptive_init_attempted = False
+        self._savings_baseline: Baseline | None = None
+        self._savings_baseline_derived = False
 
         verbose_router_logger.debug("ComplexityRouter initialized for %s with tiers: %s", model_name, self.config.tiers)
+
+    def _hardest_tier_models(self) -> tuple[str, ...]:
+        """The model pool of the most severe tier this router configures.
+
+        The hardest *configured* tier, not REASONING unconditionally: a deployment
+        that only defines SIMPLE and MEDIUM is still measured against the best it
+        could actually have picked.
+        """
+        for tier in reversed(TIER_SEVERITY_ORDER):
+            models = self.config.tiers.get(tier.value)
+            if models:
+                return tuple(models) if isinstance(models, list) else (models,)
+        return ()
+
+    @property
+    def savings_baseline(self) -> Baseline | None:
+        """The derived counterfactual this router's savings are measured against.
+
+        ``None`` when `litellm_settings.autorouter_savings_baseline_model` is set (the
+        spend writer reads that setting directly and it wins) or when this router was
+        built with ``derive_savings_baseline=False``. Derived once on first use and
+        pinned for the instance's lifetime: creating or editing the router rebuilds
+        the instance, which re-derives. Deferred past ``__init__`` because during a
+        config load this router can be constructed before its tier deployments are.
+        """
+        import litellm
+        from litellm.router_strategy.savings_baseline import resolve_baseline
+
+        if not self._derive_savings_baseline or litellm.autorouter_savings_baseline_model is not None:
+            return None
+        if not self._savings_baseline_derived:
+            self._savings_baseline = resolve_baseline(self.litellm_router_instance, self._hardest_tier_models())
+            self._savings_baseline_derived = True
+        return self._savings_baseline
 
     def _estimate_tokens(self, text: str) -> int:
         """
@@ -716,6 +758,10 @@ class ComplexityRouter(CustomLogger):
             cause=cause,
             conversation_continuing=conversation_continuing,
         )
+        if (baseline := self.savings_baseline) is not None:
+            decision["savings_baseline_model"] = baseline.model
+            if baseline.deployment_id is not None:
+                decision["savings_baseline_deployment_id"] = baseline.deployment_id
         if tier is not None:
             decision["tier"] = tier.value
         if score is not None:
