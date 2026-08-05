@@ -148,6 +148,29 @@ def test_all_blocks_passing_exits_zero(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
+def test_full_output_is_saved_to_a_log_file_in_the_git_dir(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    (repo / "scratch.txt").write_text("")
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    log_file = repo / ".git" / "pre_commit_lint.log"
+    log = log_file.read_text()
+    assert "linting Python" in log
+    assert "linting dashboard" in log
+    assert "API types" in log
+    assert "unstaged/untracked changes" in log
+    assert f"pre-commit: full log: {log_file}" in proc.stdout
+    assert "pre-commit: full log:" not in log
+
+
+def test_failing_run_exit_code_survives_the_log_pipeline(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    proc = _run(repo, bin_dir, {"STUB_FAIL": "make-lint"})
+    assert proc.returncode == 1
+    log = (repo / ".git" / "pre_commit_lint.log").read_text()
+    assert "Python lint failed" in log
+
+
 def _wait_until(predicate: Callable[[], bool], timeout_seconds: float) -> bool:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:

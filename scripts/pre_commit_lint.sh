@@ -17,6 +17,15 @@
 
 set -eu
 
+if [ -z "${PRE_COMMIT_LINT_INNER:-}" ]; then
+    log_file=$(git rev-parse --path-format=absolute --git-path pre_commit_lint.log)
+    echo "pre-commit: logging full output to $log_file"
+    PRE_COMMIT_LINT_INNER=1 "$0" "$@" 2>&1 | tee "$log_file"
+    log_status="${PIPESTATUS[0]}"
+    echo "pre-commit: full log: $log_file"
+    exit "$log_status"
+fi
+
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
