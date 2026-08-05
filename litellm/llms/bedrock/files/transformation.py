@@ -759,7 +759,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             import hashlib
 
             import requests
-            from botocore.auth import SigV4Auth
+            from botocore.auth import S3SigV4Auth
             from botocore.awsrequest import AWSRequest
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
@@ -804,7 +804,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         # Get region name for non-LLM API calls (same as s3_v2.py)
         signing_region: Final = self.get_aws_region_name_for_non_llm_api_calls(aws_region_name=aws_region_name)
 
-        SigV4Auth(credentials, "s3", signing_region).add_auth(aws_request)
+        S3SigV4Auth(credentials, "s3", signing_region).add_auth(aws_request)
 
         # Return signed headers and body
         signed_body = aws_request.body
@@ -1015,7 +1015,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         try:
             import hashlib
 
-            from botocore.auth import SigV4Auth
+            from botocore.auth import S3SigV4Auth
             from botocore.awsrequest import AWSRequest
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
@@ -1038,7 +1038,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             url=api_base,
             headers={"x-amz-content-sha256": empty_body_hash},
         )
-        auth: Final = SigV4Auth(credentials, "s3", aws_region_name)  # any-ok: botocore untyped
+        auth: Final = S3SigV4Auth(credentials, "s3", aws_region_name)  # any-ok: botocore untyped
         auth.add_auth(aws_request)  # any-ok: botocore request mutation is untyped
         return dict(aws_request.headers)  # any-ok: botocore headers are untyped
 
