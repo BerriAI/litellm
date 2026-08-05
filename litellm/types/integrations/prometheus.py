@@ -837,10 +837,12 @@ class PrometheusMetricLabels:
         return default_labels + custom_labels
 
 
-_USER_API_KEY_LABEL_VALUE_INIT_ALIASES: Final[dict[str, str]] = {
-    # Some tests / call sites use ``api_key_hash``; Prometheus field is ``hashed_api_key``.
-    "api_key_hash": "hashed_api_key",
-}
+_USER_API_KEY_LABEL_VALUE_INIT_ALIASES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        # Some tests / call sites use ``api_key_hash``; Prometheus field is ``hashed_api_key``.
+        "api_key_hash": "hashed_api_key",
+    }
+)
 
 
 @dataclass(frozen=True, init=False)

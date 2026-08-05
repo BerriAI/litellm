@@ -177,7 +177,7 @@ async def create_batch(
             }
 
         input_file_id: Final = _create_batch_data.get("input_file_id", None)
-        unified_file_id: Union[str, Literal[False]] = False
+        unified_file_id: str | Literal[False] = False
 
         model_from_file_id = None
         if input_file_id:

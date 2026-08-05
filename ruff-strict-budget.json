@@ -111,7 +111,7 @@
     "limit": 3
   },
   "F401": {
-    "limit": 20
+    "limit": 17
   },
   "FURB136": {
     "limit": 0

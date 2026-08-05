@@ -2,7 +2,7 @@
 #   picks based on response time (for streaming, this is time to first token)
 import random
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
@@ -14,7 +14,7 @@ from litellm.types.utils import LiteLLMPydanticObjectBase
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 

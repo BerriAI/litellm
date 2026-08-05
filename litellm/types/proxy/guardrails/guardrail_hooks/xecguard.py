@@ -1,4 +1,4 @@
-from typing import Any, Final, Literal, cast
+from typing import Final, Literal
 
 from pydantic import Field
 
@@ -43,13 +43,10 @@ class XecGuardConfigModel(GuardrailConfigModel):
             "the guardrail defaults to System Prompt Enforcement + "
             "Harmful Content Protection."
         ),
-        json_schema_extra=cast(
-            Any,
-            {
-                "ui_type": "multiselect",
-                "options": XECGUARD_DEFAULT_POLICY_OPTIONS,
-            },
-        ),
+        json_schema_extra={
+            "ui_type": "multiselect",
+            "options": list(XECGUARD_DEFAULT_POLICY_OPTIONS),
+        },
     )
     block_on_error: bool | None = Field(
         default=None,

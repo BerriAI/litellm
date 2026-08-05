@@ -167,7 +167,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
