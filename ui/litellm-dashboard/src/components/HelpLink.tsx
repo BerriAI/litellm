@@ -47,13 +47,13 @@ export const HelpLink: React.FC<HelpLinkProps> = ({
   className = "",
 }) => {
   const baseClasses =
-    "inline-flex items-center gap-1.5 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 rounded";
+    "inline-flex items-center gap-1.5 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 rounded-sm";
 
   const variantClasses = {
     inline: "text-blue-600 hover:text-blue-800 text-sm font-medium hover:underline",
     subtle: "text-gray-500 hover:text-gray-700 text-xs",
     button:
-      "text-blue-600 hover:text-blue-700 border border-gray-200 hover:border-gray-300 px-3 py-1.5 rounded-md bg-white hover:bg-gray-50 text-sm font-medium shadow-sm",
+      "text-blue-600 hover:text-blue-700 border border-gray-200 hover:border-gray-300 px-3 py-1.5 rounded-md bg-white hover:bg-gray-50 text-sm font-medium shadow-xs",
   };
 
   return (
@@ -65,7 +65,7 @@ export const HelpLink: React.FC<HelpLinkProps> = ({
       title="Open documentation in a new tab"
     >
       <span>{children}</span>
-      <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+      <ExternalLink className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       <span className="sr-only">(opens in a new tab)</span>
     </a>
   );
@@ -88,7 +88,7 @@ export const HelpIcon: React.FC<HelpIconProps> = ({ content, learnMoreHref, lear
     <div className="relative inline-block ml-1.5">
       <button
         type="button"
-        className="inline-flex items-center justify-center w-4 h-4 text-gray-400 hover:text-gray-600 transition-colors cursor-help focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-full"
+        className="inline-flex items-center justify-center w-4 h-4 text-gray-400 hover:text-gray-600 transition-colors cursor-help focus:outline-hidden focus:ring-2 focus:ring-blue-500 rounded-full"
         onMouseEnter={() => setShowTooltip(true)}
         onMouseLeave={() => setShowTooltip(false)}
         onFocus={() => setShowTooltip(true)}
@@ -169,7 +169,7 @@ export const DocsMenu: React.FC<DocsMenuProps> = ({ items, children = "Docs", cl
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-700 text-xs transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 rounded px-2 py-1"
+        className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-700 text-xs transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 rounded-sm px-2 py-1"
         aria-expanded={isOpen}
         aria-haspopup="true"
       >
@@ -189,7 +189,7 @@ export const DocsMenu: React.FC<DocsMenuProps> = ({ items, children = "Docs", cl
               onClick={() => setIsOpen(false)}
             >
               <span>{item.label}</span>
-              <ExternalLink className="h-3.5 w-3.5 text-gray-400 flex-shrink-0 ml-2" aria-hidden="true" />
+              <ExternalLink className="h-3.5 w-3.5 text-gray-400 shrink-0 ml-2" aria-hidden="true" />
             </a>
           ))}
         </div>

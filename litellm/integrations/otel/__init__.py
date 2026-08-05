@@ -13,15 +13,15 @@ The ``LITELLM_OTEL_V2`` env var gates whether the factory in
 class (from :mod:`logger`).
 """
 
-from litellm.integrations.otel.model.config import (
-    OTEL_V2_ENV,
-    OpenTelemetryV2Config,
-    is_otel_v2_enabled,
-)
 from litellm.integrations.otel.model.baggage import (
     BAGGAGE_PROMOTED_KEYS,
     DEFAULT_BAGGAGE_METADATA_KEYS,
     promoted_baggage,
+)
+from litellm.integrations.otel.model.config import (
+    OTEL_V2_ENV,
+    OpenTelemetryV2Config,
+    is_otel_v2_enabled,
 )
 from litellm.integrations.otel.model.metadata import (
     RequestContext,
@@ -52,6 +52,7 @@ from litellm.integrations.otel.model.semconv import (
     GenAIProvider,
     JsonRpc,
     LiteLLM,
+    LiteLLMError,
     MCPMethod,
     Metric,
     Network,
@@ -87,6 +88,7 @@ __all__ = [
     "HTTP",
     "JsonRpc",
     "LiteLLM",
+    "LiteLLMError",
     "MCP",
     "MCPMethod",
     "Metric",

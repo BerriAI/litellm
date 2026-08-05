@@ -2,7 +2,7 @@
 Types and field definitions for cache settings management endpoints
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Final, List, Optional
 
 from pydantic import BaseModel
 
@@ -20,7 +20,7 @@ class CacheSettingsField(BaseModel):
 
 
 # Redis type descriptions
-REDIS_TYPE_DESCRIPTIONS: Dict[str, str] = {
+REDIS_TYPE_DESCRIPTIONS: Final[Dict[str, str]] = {
     "node": "Standard Redis node/single instance",
     "cluster": "Redis Cluster mode for high availability and horizontal scaling",
     "sentinel": "Redis Sentinel mode for high availability with automatic failover",
@@ -28,7 +28,7 @@ REDIS_TYPE_DESCRIPTIONS: Dict[str, str] = {
 
 
 # Define all available cache settings fields
-CACHE_SETTINGS_FIELDS: List[CacheSettingsField] = [
+CACHE_SETTINGS_FIELDS: Final[List[CacheSettingsField]] = [
     CacheSettingsField(
         field_name="redis_type",
         field_type="String",
@@ -40,6 +40,15 @@ CACHE_SETTINGS_FIELDS: List[CacheSettingsField] = [
         redis_type=None,
     ),
     # Common fields for all Redis types
+    CacheSettingsField(
+        field_name="url",
+        field_type="String",
+        field_value=None,
+        field_description="Full Redis/Valkey connection URL (e.g. redis://:password@host:6379/1). When set, it takes precedence over Host, Port, Username, Password, and Database Index.",
+        field_default=None,
+        ui_field_name="Redis URL",
+        redis_type=None,
+    ),
     CacheSettingsField(
         field_name="host",
         field_type="String",
@@ -56,6 +65,15 @@ CACHE_SETTINGS_FIELDS: List[CacheSettingsField] = [
         field_description="Redis server port number",
         field_default="6379",
         ui_field_name="Port",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="db",
+        field_type="Integer",
+        field_value=None,
+        field_description="Logical database index to isolate the cache (e.g. 1 for redis://host:6379/1)",
+        field_default=None,
+        ui_field_name="Database Index",
         redis_type=None,
     ),
     CacheSettingsField(

@@ -3,7 +3,8 @@
 import json
 import traceback
 from collections import deque
-from typing import Any, AsyncIterator, Dict
+from collections.abc import AsyncIterator
+from typing import Any, Final
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
@@ -33,14 +34,14 @@ class AnthropicResponsesStreamWrapper:
         self._message_id: str = f"msg_{uuid.uuid4()}"
         self._current_block_index: int = -1
         # Map item_id -> content_block_index so we can stop the right block later
-        self._item_id_to_block_index: Dict[str, int] = {}
+        self._item_id_to_block_index: dict[str, int] = {}
         # Track open function_call items by item_id so we can emit tool_use start
-        self._pending_tool_ids: Dict[str, str] = {}  # item_id -> call_id / name accumulator
+        self._pending_tool_ids: dict[str, str] = {}  # item_id -> call_id / name accumulator
         self._sent_message_start = False
         self._sent_message_stop = False
         self._chunk_queue: deque = deque()
 
-    def _make_message_start(self) -> Dict[str, Any]:
+    def _make_message_start(self) -> dict[str, Any]:
         return {
             "type": "message_start",
             "message": {
@@ -75,8 +76,9 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- message_start ----
         if event_type == "response.created":
-            self._sent_message_start = True
-            self._chunk_queue.append(self._make_message_start())
+            if not self._sent_message_start:
+                self._sent_message_start = True
+                self._chunk_queue.append(self._make_message_start())
             return
 
         # ---- content_block_start for a new output message item ----
@@ -84,7 +86,7 @@ class AnthropicResponsesStreamWrapper:
             item = getattr(event, "item", None) or (event.get("item") if isinstance(event, dict) else None)
             if item is None:
                 return
-            item_type = getattr(item, "type", None) or (item.get("type") if isinstance(item, dict) else None)
+            item_type: Final = getattr(item, "type", None) or (item.get("type") if isinstance(item, dict) else None)
             item_id = getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None)
 
             if item_type == "message":
@@ -99,7 +101,7 @@ class AnthropicResponsesStreamWrapper:
                     }
                 )
             elif item_type == "function_call":
-                call_id = (
+                call_id: Final = (
                     getattr(item, "call_id", None) or (item.get("call_id") if isinstance(item, dict) else None) or ""
                 )
                 name = getattr(item, "name", None) or (item.get("name") if isinstance(item, dict) else None) or ""
@@ -221,7 +223,7 @@ class AnthropicResponsesStreamWrapper:
             "response.failed",
             "response.incomplete",
         ):
-            response_obj = getattr(event, "response", None) or (
+            response_obj: Final = getattr(event, "response", None) or (
                 event.get("response") if isinstance(event, dict) else None
             )
             stop_reason = "end_turn"
@@ -231,10 +233,10 @@ class AnthropicResponsesStreamWrapper:
             cache_read_tokens = 0
 
             if response_obj is not None:
-                status = getattr(response_obj, "status", None)
+                status: Final = getattr(response_obj, "status", None)
                 if status == "incomplete":
                     stop_reason = "max_tokens"
-                usage = getattr(response_obj, "usage", None)
+                usage: Final = getattr(response_obj, "usage", None)
                 if usage is not None:
                     input_tokens = getattr(usage, "input_tokens", 0) or 0
                     output_tokens = getattr(usage, "output_tokens", 0) or 0
@@ -246,7 +248,7 @@ class AnthropicResponsesStreamWrapper:
 
             # Check if tool_use was in the output to override stop_reason
             if response_obj is not None:
-                output = getattr(response_obj, "output", []) or []
+                output: Final = getattr(response_obj, "output", []) or []
                 for out_item in output:
                     out_type = getattr(out_item, "type", None) or (
                         out_item.get("type") if isinstance(out_item, dict) else None
@@ -255,7 +257,7 @@ class AnthropicResponsesStreamWrapper:
                         stop_reason = "tool_use"
                         break
 
-            usage_delta: Dict[str, Any] = {
+            usage_delta: Final[dict[str, Any]] = {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
             }
@@ -278,7 +280,7 @@ class AnthropicResponsesStreamWrapper:
     def __aiter__(self) -> "AnthropicResponsesStreamWrapper":
         return self
 
-    async def __anext__(self) -> Dict[str, Any]:
+    async def __anext__(self) -> dict[str, Any]:
         # Return any queued chunks first
         if self._chunk_queue:
             return self._chunk_queue.popleft()
@@ -298,7 +300,7 @@ class AnthropicResponsesStreamWrapper:
         except StopAsyncIteration:
             pass
         except Exception as e:
-            verbose_logger.error(f"AnthropicResponsesStreamWrapper error: {e}\n{traceback.format_exc()}")
+            verbose_logger.error("AnthropicResponsesStreamWrapper error: %s\n%s", e, traceback.format_exc())
 
         # Drain any remaining queued chunks
         if self._chunk_queue:

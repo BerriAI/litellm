@@ -6,8 +6,9 @@ import concurrent.futures
 import inspect
 import json
 import os
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, Union, cast
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -49,21 +50,53 @@ from litellm.types.guardrails import (
     ToolPermissionGuardrailConfigModel,
 )
 
+if TYPE_CHECKING:
+    from types import CodeType
+
+    from prisma.actions import LiteLLM_GuardrailsTableActions
+    from prisma.models import LiteLLM_GuardrailsTable
+
+    from litellm.proxy.utils import PrismaClient
+
 #### GUARDRAILS ENDPOINTS ####
 
-router = APIRouter()
-GUARDRAIL_REGISTRY = GuardrailRegistry()
+router: Final = APIRouter()
+GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
+
+
+def _guardrails_table(prisma_client: "PrismaClient") -> "LiteLLM_GuardrailsTableActions[LiteLLM_GuardrailsTable]":
+    table: Final[LiteLLM_GuardrailsTableActions[LiteLLM_GuardrailsTable]] = GuardrailsRepository(prisma_client).table
+    return table
+
+
+async def _create_guardrail_row(prisma_client: "PrismaClient", data: Mapping[str, object]) -> "LiteLLM_GuardrailsTable":
+    row: Final[LiteLLM_GuardrailsTable] = await GuardrailsRepository(prisma_client).table.create(data=data)
+    return row
+
+
+async def _delete_guardrail_row(prisma_client: "PrismaClient", where: Mapping[str, object]) -> None:
+    await GuardrailsRepository(prisma_client).table.delete(where=where)
+
+
+async def _find_team_guardrail_rows(
+    prisma_client: "PrismaClient", where: Mapping[str, object]
+) -> "Sequence[LiteLLM_GuardrailsTable]":
+    rows: Final[Sequence[LiteLLM_GuardrailsTable]] = await GuardrailsRepository(prisma_client).table.find_many(
+        where=where,
+        order={"created_at": "desc"},
+    )
+    return rows
 
 
 def _get_guardrails_list_response(
-    guardrails_config: List[Dict],
+    guardrails_config: list[dict],
 ) -> ListGuardrailsResponse:
     """
     Helper function to get the guardrails list response
     """
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 
-    guardrail_configs: List[GuardrailInfoResponse] = []
+    guardrail_configs: Final[list[GuardrailInfoResponse]] = []
     for guardrail in guardrails_config:
         litellm_params = guardrail.get("litellm_params") or {}
         masked_params = _get_masked_values(
@@ -73,6 +106,7 @@ def _get_guardrails_list_response(
         )
         guardrail_configs.append(
             GuardrailInfoResponse(
+                guardrail_id=guardrail.get("guardrail_id"),
                 guardrail_name=guardrail.get("guardrail_name"),
                 litellm_params=masked_params,
                 guardrail_info=guardrail.get("guardrail_info"),
@@ -124,9 +158,9 @@ async def list_guardrails():
     """
     from litellm.proxy.proxy_server import proxy_config
 
-    config = proxy_config.config
+    config: Final = proxy_config.config
 
-    _guardrails_config = cast(Optional[list[dict]], config.get("guardrails"))
+    _guardrails_config: Final = cast(list[dict] | None, config.get("guardrails"))
 
     if _guardrails_config is None:
         return _get_guardrails_list_response([])
@@ -178,18 +212,19 @@ async def list_guardrails_v2(
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Prisma client not initialized")
-
-    is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    is_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
     try:
-        guardrails = await GUARDRAIL_REGISTRY.get_all_guardrails_from_db(prisma_client=prisma_client)
+        guardrails = (
+            await GUARDRAIL_REGISTRY.get_all_guardrails_from_db(prisma_client=prisma_client)
+            if prisma_client is not None
+            else []
+        )
 
-        excluded_guardrail_ids: set = set()
+        excluded_guardrail_ids: Final[set] = set()
         if not is_admin:
-            caller_team_ids = await _get_user_team_ids(user_api_key_dict)
-            allowed: List[Guardrail] = []
+            caller_team_ids: Final = await _get_user_team_ids(user_api_key_dict)
+            allowed: Final[list[Guardrail]] = []
             for g in guardrails:
                 g_team_id = g.get("team_id")
                 if g_team_id is None or g_team_id in caller_team_ids:
@@ -200,10 +235,10 @@ async def list_guardrails_v2(
                         excluded_guardrail_ids.add(gid)
             guardrails = allowed
 
-        guardrail_configs: List[GuardrailInfoResponse] = []
-        seen_guardrail_ids: set = excluded_guardrail_ids.copy()
+        guardrail_configs: Final[list[GuardrailInfoResponse]] = []
+        seen_guardrail_ids: Final[set] = excluded_guardrail_ids.copy()
         for guardrail in guardrails:
-            litellm_params: Optional[Union[LitellmParams, dict]] = guardrail.get("litellm_params")
+            litellm_params: LitellmParams | dict | None = guardrail.get("litellm_params")
             litellm_params_dict = (
                 litellm_params.model_dump(exclude_none=True)
                 if isinstance(litellm_params, LitellmParams)
@@ -231,7 +266,7 @@ async def list_guardrails_v2(
             seen_guardrail_ids.add(guardrail.get("guardrail_id"))
 
         # get guardrails initialized on litellm config.yaml
-        in_memory_guardrails = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
+        in_memory_guardrails: Final = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
         for guardrail in in_memory_guardrails:
             gid = guardrail.get("guardrail_id")
             if gid in seen_guardrail_ids:
@@ -271,7 +306,7 @@ async def list_guardrails_v2(
 
         return ListGuardrailsResponse(guardrails=guardrail_configs)
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting guardrails from db: {e}")
+        verbose_proxy_logger.exception("Error getting guardrails from db: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -349,33 +384,36 @@ async def create_guardrail(
     try:
         result = await GUARDRAIL_REGISTRY.add_guardrail_to_db(guardrail=request.guardrail, prisma_client=prisma_client)
 
-        guardrail_name = result.get("guardrail_name", "Unknown")
-        guardrail_id = result.get("guardrail_id", "Unknown")
+        guardrail_name: Final = result.get("guardrail_name", "Unknown")
+        guardrail_id: Final = result.get("guardrail_id", "Unknown")
 
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(guardrail=cast(Guardrail, result), source="db")
             verbose_proxy_logger.info(
-                f"Immediate sync: Successfully initialized guardrail '{guardrail_name}' (ID: {guardrail_id})"
+                "Immediate sync: Successfully initialized guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
         except (ValueError, TypeError) as init_error:
             # Configuration error — roll back the DB write so the guardrail isn't orphaned
             if prisma_client is not None:
                 try:
-                    await GuardrailsRepository(prisma_client).table.delete(where={"guardrail_id": guardrail_id})
+                    await _delete_guardrail_row(prisma_client, where={"guardrail_id": guardrail_id})
                 except Exception as rollback_err:
-                    verbose_proxy_logger.warning(f"Rollback failed for guardrail '{guardrail_id}': {rollback_err}")
+                    verbose_proxy_logger.warning("Rollback failed for guardrail '%s': %s", guardrail_id, rollback_err)
             raise HTTPException(
                 status_code=400,
                 detail=f"Guardrail configuration error: {init_error}",
             )
         except Exception as init_error:
             verbose_proxy_logger.warning(
-                f"Immediate sync: Failed to initialize guardrail '{guardrail_name}' (ID: {guardrail_id}) in memory: {init_error}"
+                "Immediate sync: Failed to initialize guardrail '%s' (ID: %s) in memory: %s",
+                guardrail_name,
+                guardrail_id,
+                init_error,
             )
 
         return result
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error adding guardrail to db: {e}")
+        verbose_proxy_logger.exception("Error adding guardrail to db: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -453,31 +491,34 @@ async def update_guardrail(
 
     try:
         # Check if guardrail exists
-        existing_guardrail = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
+        existing_guardrail: Final = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
 
         if existing_guardrail is None:
             raise HTTPException(status_code=404, detail=f"Guardrail with ID {guardrail_id} not found")
 
-        result = await GUARDRAIL_REGISTRY.update_guardrail_in_db(
+        result: Final = await GUARDRAIL_REGISTRY.update_guardrail_in_db(
             guardrail_id=guardrail_id,
             guardrail=request.guardrail,
             prisma_client=prisma_client,
         )
 
-        guardrail_name = result.get("guardrail_name", "Unknown")
+        guardrail_name: Final = result.get("guardrail_name", "Unknown")
 
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.update_in_memory_guardrail(
                 guardrail_id=guardrail_id, guardrail=cast(Guardrail, result)
             )
             verbose_proxy_logger.info(
-                f"Immediate sync: Successfully updated guardrail '{guardrail_name}' (ID: {guardrail_id})"
+                "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
         except Exception as update_error:
             verbose_proxy_logger.warning(
-                f"Immediate sync: Failed to update '{guardrail_name}' (ID: {guardrail_id}) in memory: {update_error}"
+                "Immediate sync: Failed to update '%s' (ID: %s) in memory: %s",
+                guardrail_name,
+                guardrail_id,
+                update_error,
             )
 
         return result
@@ -527,29 +568,32 @@ async def delete_guardrail(
 
     try:
         # Check if guardrail exists
-        existing_guardrail = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
+        existing_guardrail: Final = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
 
         if existing_guardrail is None:
             raise HTTPException(status_code=404, detail=f"Guardrail with ID {guardrail_id} not found")
 
-        result = await GUARDRAIL_REGISTRY.delete_guardrail_from_db(
+        result: Final = await GUARDRAIL_REGISTRY.delete_guardrail_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
 
-        guardrail_name = result.get("guardrail_name", "Unknown")
+        guardrail_name: Final = result.get("guardrail_name", "Unknown")
 
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.delete_in_memory_guardrail(
                 guardrail_id=guardrail_id,
             )
             verbose_proxy_logger.info(
-                f"Immediate sync: Successfully removed guardrail '{guardrail_name}' (ID: {guardrail_id}) from memory"
+                "Immediate sync: Successfully removed guardrail '%s' (ID: %s) from memory", guardrail_name, guardrail_id
             )
         except Exception as delete_error:
             verbose_proxy_logger.warning(
-                f"Immediate sync: Failed to remove guardrail '{guardrail_name}' (ID: {guardrail_id}) from memory: {delete_error}"
+                "Immediate sync: Failed to remove guardrail '%s' (ID: %s) from memory: %s",
+                guardrail_name,
+                guardrail_id,
+                delete_error,
             )
 
         return result
@@ -561,18 +605,18 @@ async def delete_guardrail(
 
 # --- Team guardrail registration (Generic Guardrail API spec) ---
 
-GENERIC_GUARDRAIL_API = "generic_guardrail_api"
+GENERIC_GUARDRAIL_API: Final = "generic_guardrail_api"
 
 
 class RegisterGuardrailRequest(BaseModel):
     """Request body for POST /guardrails/register. Follows Generic Guardrail API config."""
 
     guardrail_name: str
-    litellm_params: Dict[str, Any]  # guardrail, mode, api_base required; api_key, headers, etc. optional
-    guardrail_info: Optional[Dict[str, Any]] = None
-    team_id: Optional[str] = None
+    litellm_params: dict[str, Any]  # guardrail, mode, api_base required; api_key, headers, etc. optional
+    guardrail_info: dict[str, object] | None = None
+    team_id: str | None = None
 
-    def get_litellm_params_dict(self) -> Dict[str, Any]:
+    def get_litellm_params_dict(self) -> dict[str, Any]:
         return dict(self.litellm_params)
 
 
@@ -580,7 +624,7 @@ class RegisterGuardrailResponse(BaseModel):
     guardrail_id: str
     guardrail_name: str
     status: str
-    submitted_at: Optional[datetime] = None
+    submitted_at: datetime | None = None
 
 
 class GuardrailSubmissionSummary(BaseModel):
@@ -594,22 +638,22 @@ class GuardrailSubmissionItem(BaseModel):
     guardrail_id: str
     guardrail_name: str
     status: str  # pending_review | active | rejected
-    team_id: Optional[str] = None
+    team_id: str | None = None
     team_guardrail: bool = (
         False  # True when submitted via team (team_id set); use to distinguish team vs regular guardrails
     )
-    litellm_params: Optional[Dict[str, Any]] = None
-    guardrail_info: Optional[Dict[str, Any]] = None
-    submitted_by_user_id: Optional[str] = None
-    submitted_by_email: Optional[str] = None
-    submitted_at: Optional[datetime] = None
-    reviewed_at: Optional[datetime] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    litellm_params: dict[str, object] | None = None
+    guardrail_info: dict[str, object] | None = None
+    submitted_by_user_id: str | None = None
+    submitted_by_email: str | None = None
+    submitted_at: datetime | None = None
+    reviewed_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class ListGuardrailSubmissionsResponse(BaseModel):
-    submissions: List[GuardrailSubmissionItem]
+    submissions: list[GuardrailSubmissionItem]
     summary: GuardrailSubmissionSummary
 
 
@@ -635,7 +679,7 @@ async def register_guardrail(
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     # Resolve team_id: prefer request body, fall back to API key's team
-    team_id = request.team_id or user_api_key_dict.team_id
+    team_id: Final = request.team_id or user_api_key_dict.team_id
     if not team_id:
         raise HTTPException(
             status_code=400,
@@ -643,28 +687,28 @@ async def register_guardrail(
         )
 
     # Validate team membership for non-admin users when team differs from key
-    is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    is_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
     if not is_admin and team_id != user_api_key_dict.team_id:
-        user_team_ids = await _get_user_team_ids(user_api_key_dict)
+        user_team_ids: Final = await _get_user_team_ids(user_api_key_dict)
         if team_id not in user_team_ids:
             raise HTTPException(
                 status_code=403,
                 detail=f"You are not a member of team {team_id!r}",
             )
 
-    params = request.get_litellm_params_dict()
+    params: Final = request.get_litellm_params_dict()
     if params.get("guardrail") != GENERIC_GUARDRAIL_API:
         raise HTTPException(
             status_code=400,
             detail=f"Only guardrails with litellm_params.guardrail={GENERIC_GUARDRAIL_API!r} are accepted for registration",
         )
-    api_base = params.get("api_base")
+    api_base: Final = params.get("api_base")
     if not api_base:
         raise HTTPException(
             status_code=400,
             detail="litellm_params.api_base is required for generic_guardrail_api",
         )
-    parsed = urlparse(api_base)
+    parsed: Final = urlparse(api_base)
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(
             status_code=400,
@@ -675,7 +719,7 @@ async def register_guardrail(
             status_code=400,
             detail="litellm_params.api_base must contain a valid hostname",
         )
-    mode = params.get("mode")
+    mode: Final = params.get("mode")
     if mode is None:
         raise HTTPException(
             status_code=400,
@@ -683,9 +727,7 @@ async def register_guardrail(
         )
 
     try:
-        existing = await GuardrailsRepository(prisma_client).table.find_unique(
-            where={"guardrail_name": request.guardrail_name}
-        )
+        existing = await _guardrails_table(prisma_client).find_unique(where={"guardrail_name": request.guardrail_name})
         if existing is not None:
             raise HTTPException(
                 status_code=400,
@@ -697,16 +739,17 @@ async def register_guardrail(
         verbose_proxy_logger.exception("Error checking guardrail name uniqueness: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-    now = datetime.now(timezone.utc)
-    litellm_params_str = safe_dumps(params)
-    guardrail_info = dict(request.guardrail_info or {})
+    now: Final = datetime.now(timezone.utc)
+    litellm_params_str: Final = safe_dumps(params)
+    guardrail_info: Final = dict(request.guardrail_info or {})
     guardrail_info["submitted_by_user_id"] = user_api_key_dict.user_id
     guardrail_info["submitted_by_email"] = user_api_key_dict.user_email
     guardrail_info["team_guardrail"] = True  # Mark as team submission for filtering/display
-    guardrail_info_str = safe_dumps(guardrail_info)
+    guardrail_info_str: Final = safe_dumps(guardrail_info)
 
     try:
-        created = await GuardrailsRepository(prisma_client).table.create(
+        created: Final = await _create_guardrail_row(
+            prisma_client,
             data={
                 "guardrail_name": request.guardrail_name,
                 "litellm_params": litellm_params_str,
@@ -716,7 +759,7 @@ async def register_guardrail(
                 "submitted_at": now,
                 "created_at": now,
                 "updated_at": now,
-            }
+            },
         )
         return RegisterGuardrailResponse(
             guardrail_id=created.guardrail_id,
@@ -729,7 +772,7 @@ async def register_guardrail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _parse_json_field(value: Any) -> Optional[Dict[str, Any]]:
+def _parse_json_field(value: object) -> dict[str, Any] | None:
     if value is None:
         return None
     if isinstance(value, dict):
@@ -742,7 +785,7 @@ def _parse_json_field(value: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-async def _get_user_team_ids(user_api_key_dict: UserAPIKeyAuth) -> List[str]:
+async def _get_user_team_ids(user_api_key_dict: UserAPIKeyAuth) -> list[str]:
     """Return the list of team_ids the caller belongs to (empty list if none)."""
     from litellm.proxy.auth.auth_checks import get_user_object
     from litellm.proxy.proxy_server import (
@@ -753,7 +796,7 @@ async def _get_user_team_ids(user_api_key_dict: UserAPIKeyAuth) -> List[str]:
 
     if not user_api_key_dict.user_id or prisma_client is None:
         return []
-    user_obj = await get_user_object(
+    user_obj: Final = await get_user_object(
         user_id=user_api_key_dict.user_id,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
@@ -766,13 +809,13 @@ async def _get_user_team_ids(user_api_key_dict: UserAPIKeyAuth) -> List[str]:
     return [t for t in user_obj.teams if t]
 
 
-def _row_to_submission_item(row: Any) -> GuardrailSubmissionItem:
+def _row_to_submission_item(row: "LiteLLM_GuardrailsTable") -> GuardrailSubmissionItem:
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 
-    guardrail_info = _parse_json_field(row.guardrail_info) or {}
-    team_guardrail = row.team_id is not None
-    raw_params = _parse_json_field(row.litellm_params) or {}
-    masked_params = _get_masked_values(raw_params, unmasked_length=4, number_of_asterisks=4)
+    guardrail_info: Final = _parse_json_field(row.guardrail_info) or {}
+    team_guardrail: Final = row.team_id is not None
+    raw_params: Final = _parse_json_field(row.litellm_params) or {}
+    masked_params: Final = _get_masked_values(raw_params, unmasked_length=4, number_of_asterisks=4)
     return GuardrailSubmissionItem(
         guardrail_id=row.guardrail_id,
         guardrail_name=row.guardrail_name,
@@ -796,9 +839,9 @@ def _row_to_submission_item(row: Any) -> GuardrailSubmissionItem:
     response_model=ListGuardrailSubmissionsResponse,
 )
 async def list_guardrail_submissions(
-    status: Optional[str] = None,
-    team_id: Optional[str] = None,
-    search: Optional[str] = None,
+    status: str | None = None,
+    team_id: str | None = None,
+    search: str | None = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -822,8 +865,8 @@ async def list_guardrail_submissions(
     # Admin Viewer follows the read-parity rule: see all submissions like a
     # Proxy Admin would (no writes — registration / approval still gated
     # elsewhere by their own per-action checks).
-    is_admin = _user_has_admin_view(user_api_key_dict)
-    visible_team_ids: Optional[List[str]] = None
+    is_admin: Final = _user_has_admin_view(user_api_key_dict)
+    visible_team_ids: list[str] | None = None
     if not is_admin:
         visible_team_ids = await _get_user_team_ids(user_api_key_dict)
         if team_id is not None and team_id not in visible_team_ids:
@@ -833,7 +876,7 @@ async def list_guardrail_submissions(
             )
 
     try:
-        where_clause: Dict[str, Any] = {"team_id": {"not": None}}
+        where_clause: Final[dict[str, object]] = {"team_id": {"not": None}}
         if visible_team_ids is not None:
             if not visible_team_ids:
                 # Non-admin with no team memberships: nothing visible.
@@ -844,16 +887,13 @@ async def list_guardrail_submissions(
             where_clause["team_id"] = {"in": visible_team_ids}
 
         # Single query: fetch team guardrails visible to the caller
-        all_team_rows = await GuardrailsRepository(prisma_client).table.find_many(
-            where=where_clause,
-            order={"created_at": "desc"},
-        )
+        all_team_rows: Final = await _find_team_guardrail_rows(prisma_client, where_clause)
 
         # Derive summary counts from the full result set
-        total = len(all_team_rows)
-        pending_review = sum(1 for r in all_team_rows if (r.status or "active") == "pending_review")
-        active_count = sum(1 for r in all_team_rows if (r.status or "active") == "active")
-        rejected = sum(1 for r in all_team_rows if (r.status or "active") == "rejected")
+        total: Final = len(all_team_rows)
+        pending_review: Final = sum(1 for r in all_team_rows if (r.status or "active") == "pending_review")
+        active_count: Final = sum(1 for r in all_team_rows if (r.status or "active") == "active")
+        rejected: Final = sum(1 for r in all_team_rows if (r.status or "active") == "rejected")
 
         # Apply filters to get the submissions list
         rows = all_team_rows
@@ -862,7 +902,7 @@ async def list_guardrail_submissions(
         if team_id:
             rows = [r for r in rows if r.team_id == team_id]
         if search:
-            search_lower = search.lower()
+            search_lower: Final = search.lower()
             rows = [
                 r
                 for r in rows
@@ -874,7 +914,7 @@ async def list_guardrail_submissions(
                 or (isinstance(r.guardrail_info, str) and search_lower in r.guardrail_info.lower())
             ]
 
-        items = [_row_to_submission_item(r) for r in rows]
+        items: Final = [_row_to_submission_item(r) for r in rows]
         return ListGuardrailSubmissionsResponse(
             submissions=items,
             summary=GuardrailSubmissionSummary(
@@ -904,14 +944,14 @@ async def get_guardrail_submission(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
-    is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    is_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
     try:
-        row = await GuardrailsRepository(prisma_client).table.find_unique(where={"guardrail_id": guardrail_id})
+        row: Final = await _guardrails_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
         if row is None:
             raise HTTPException(status_code=404, detail="Guardrail submission not found")
         if not is_admin:
-            visible_team_ids = await _get_user_team_ids(user_api_key_dict)
+            visible_team_ids: Final = await _get_user_team_ids(user_api_key_dict)
             if row.team_id is None or row.team_id not in visible_team_ids:
                 raise HTTPException(
                     status_code=403,
@@ -944,7 +984,7 @@ async def approve_guardrail_submission(
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        row = await GuardrailsRepository(prisma_client).table.find_unique(where={"guardrail_id": guardrail_id})
+        row: Final = await _guardrails_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
         if row is None:
             raise HTTPException(status_code=404, detail="Guardrail submission not found")
         if row.status != "pending_review":
@@ -953,20 +993,20 @@ async def approve_guardrail_submission(
                 detail=f"Guardrail is not pending review (status={row.status})",
             )
 
-        now = datetime.now(timezone.utc)
-        await GuardrailsRepository(prisma_client).table.update(
+        now: Final = datetime.now(timezone.utc)
+        await _guardrails_table(prisma_client).update(
             where={"guardrail_id": guardrail_id},
             data={"status": "active", "reviewed_at": now, "updated_at": now},
         )
 
-        litellm_params = _parse_json_field(row.litellm_params)
-        guardrail_info = _parse_json_field(row.guardrail_info)
+        litellm_params: Final = _parse_json_field(row.litellm_params)
+        guardrail_info: Final = _parse_json_field(row.guardrail_info)
         if not litellm_params:
             raise HTTPException(
                 status_code=500,
                 detail="Guardrail litellm_params is missing or invalid",
             )
-        guardrail_dict = {
+        guardrail_dict: Final = {
             "guardrail_id": row.guardrail_id,
             "guardrail_name": row.guardrail_name,
             "litellm_params": litellm_params,
@@ -1024,7 +1064,7 @@ async def reject_guardrail_submission(
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        row = await GuardrailsRepository(prisma_client).table.find_unique(where={"guardrail_id": guardrail_id})
+        row: Final = await _guardrails_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
         if row is None:
             raise HTTPException(status_code=404, detail="Guardrail submission not found")
         if row.status != "pending_review":
@@ -1033,8 +1073,8 @@ async def reject_guardrail_submission(
                 detail=f"Guardrail is not pending review (status={row.status})",
             )
 
-        now = datetime.now(timezone.utc)
-        await GuardrailsRepository(prisma_client).table.update(
+        now: Final = datetime.now(timezone.utc)
+        await _guardrails_table(prisma_client).update(
             where={"guardrail_id": guardrail_id},
             data={"status": "rejected", "reviewed_at": now, "updated_at": now},
         )
@@ -1118,7 +1158,7 @@ async def patch_guardrail(
 
     try:
         # Check if guardrail exists and get current data
-        existing_guardrail = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
+        existing_guardrail: Final = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
 
@@ -1133,26 +1173,26 @@ async def patch_guardrail(
         # Update litellm_params if default_on is provided or pii_entities_config is provided
         litellm_params = LitellmParams(**dict(existing_guardrail.get("litellm_params", {})))
         if request.litellm_params is not None:
-            requested_litellm_params = request.litellm_params.model_dump(exclude_unset=True)
-            litellm_params_dict = litellm_params.model_dump(exclude_unset=True)
+            requested_litellm_params: Final = request.litellm_params.model_dump(exclude_unset=True)
+            litellm_params_dict: Final = litellm_params.model_dump(exclude_unset=True)
             litellm_params_dict.update(requested_litellm_params)
             litellm_params = LitellmParams(**litellm_params_dict)
 
         # Update guardrail_info if provided
-        guardrail_info = (
+        guardrail_info: Final = (
             request.guardrail_info
             if request.guardrail_info is not None
             else existing_guardrail.get("guardrail_info", {})
         )
 
         # Create the guardrail object
-        guardrail = Guardrail(
+        guardrail: Final = Guardrail(
             guardrail_id=guardrail_id,
             guardrail_name=guardrail_name or "",
             litellm_params=litellm_params,
             guardrail_info=guardrail_info,
         )
-        result = await GUARDRAIL_REGISTRY.update_guardrail_in_db(
+        result: Final = await GUARDRAIL_REGISTRY.update_guardrail_in_db(
             guardrail_id=guardrail_id,
             guardrail=guardrail,
             prisma_client=prisma_client,
@@ -1165,18 +1205,21 @@ async def patch_guardrail(
                 guardrail=guardrail,
             )
             verbose_proxy_logger.info(
-                f"Immediate sync: Successfully updated guardrail '{guardrail_name}' (ID: {guardrail_id})"
+                "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
         except Exception as update_error:
             verbose_proxy_logger.warning(
-                f"Immediate sync: Failed to update '{guardrail_name}' (ID: {guardrail_id}) in memory: {update_error}"
+                "Immediate sync: Failed to update '%s' (ID: %s) in memory: %s",
+                guardrail_name,
+                guardrail_id,
+                update_error,
             )
 
         return result
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating guardrail: {e}")
+        verbose_proxy_logger.exception("Error updating guardrail: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1228,16 +1271,15 @@ async def get_guardrail_info(guardrail_id: str):
     from litellm.proxy.proxy_server import prisma_client
     from litellm.types.guardrails import GUARDRAIL_DEFINITION_LOCATION
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Prisma client not initialized")
-
     try:
         guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.DB
-        result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
-            guardrail_id=guardrail_id, prisma_client=prisma_client
+        result = (
+            await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(guardrail_id=guardrail_id, prisma_client=prisma_client)
+            if prisma_client is not None
+            else None
         )
         if result is None:
-            in_memory = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(guardrail_id=guardrail_id)
+            in_memory: Final = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(guardrail_id=guardrail_id)
             # Only return config-loaded entries here. A DB-backed entry that's
             # missing from the DB is stale (deleted on another pod, awaiting
             # reconciliation on this one) and must surface as 404.
@@ -1248,13 +1290,13 @@ async def get_guardrail_info(guardrail_id: str):
         if result is None:
             raise HTTPException(status_code=404, detail=f"Guardrail with ID {guardrail_id} not found")
 
-        litellm_params: Optional[Union[LitellmParams, dict]] = result.get("litellm_params")
-        result_litellm_params_dict = (
+        litellm_params: Final[LitellmParams | dict | None] = result.get("litellm_params")
+        result_litellm_params_dict: Final = (
             litellm_params.model_dump(exclude_none=True)
             if isinstance(litellm_params, LitellmParams)
             else litellm_params
         ) or {}
-        masked_litellm_params_dict = _get_masked_values(
+        masked_litellm_params_dict: Final = _get_masked_values(
             result_litellm_params_dict,
             unmasked_length=4,
             number_of_asterisks=4,
@@ -1296,21 +1338,27 @@ async def get_guardrail_ui_settings():
         get_available_content_categories,
         get_pattern_metadata,
     )
+    from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 
-    # Convert the PII_ENTITY_CATEGORIES_MAP to the format expected by the UI
-    category_maps = []
-    for category, entities in PII_ENTITY_CATEGORIES_MAP.items():
-        category_maps.append(
-            {
-                "category": category.value,
-                "entities": [entity.value for entity in entities],
-            }
-        )
+    category_maps: Final = [
+        {
+            "category": category.value,
+            "entities": [entity.value for entity in entities],
+        }
+        for category, entities in PII_ENTITY_CATEGORIES_MAP.items()
+    ]
+
+    supported_modes_by_provider: Final = {
+        provider: [hook.value for hook in hooks]
+        for provider, guardrail_class in guardrail_class_registry.items()
+        if (hooks := guardrail_class.get_supported_event_hooks()) is not None
+    }
 
     return GuardrailUIAddGuardrailSettings(
         supported_entities=[entity.value for entity in PiiEntityType],
         supported_actions=[action.value for action in PiiAction],
         supported_modes=[mode.value for mode in GuardrailEventHooks],
+        supported_modes_by_provider=supported_modes_by_provider,
         pii_entity_categories=category_maps,
         content_filter_settings={
             "prebuilt_patterns": get_pattern_metadata(),
@@ -1337,7 +1385,7 @@ async def get_category_yaml(category_name: str):
         The raw YAML or JSON content of the category file with file type indicator
     """
     # Get the categories directory path
-    categories_dir = os.path.join(
+    categories_dir: Final = os.path.join(
         os.path.dirname(__file__),
         "guardrail_hooks",
         "litellm_content_filter",
@@ -1346,8 +1394,8 @@ async def get_category_yaml(category_name: str):
 
     # Try to find the file with either .yaml or .json extension
     try:
-        yaml_path = safe_join(categories_dir, f"{category_name}.yaml")
-        json_path = safe_join(categories_dir, f"{category_name}.json")
+        yaml_path: Final = safe_join(categories_dir, f"{category_name}.yaml")
+        json_path: Final = safe_join(categories_dir, f"{category_name}.json")
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid category name")
 
@@ -1369,7 +1417,7 @@ async def get_category_yaml(category_name: str):
     try:
         # Read and return the raw content
         with open(category_file_path, "r") as f:
-            content = f.read()
+            content: Final = f.read()
 
         return {
             "category_name": category_name,
@@ -1377,7 +1425,7 @@ async def get_category_yaml(category_name: str):
             "file_type": file_type,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading category file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error reading category file: {e}")
 
 
 @router.get(
@@ -1390,7 +1438,7 @@ async def get_major_airlines():
     Get the major airlines list from IATA (competitor intent, airline type).
     Returns airline id, match variants (pipe-separated), and tags.
     """
-    airlines_path = os.path.join(
+    airlines_path: Final = os.path.join(
         os.path.dirname(__file__),
         "guardrail_hooks",
         "litellm_content_filter",
@@ -1406,10 +1454,10 @@ async def get_major_airlines():
         with open(airlines_path, "r", encoding="utf-8") as f:
             import json
 
-            airlines = json.load(f)
+            airlines: Final = json.load(f)
         return {"airlines": airlines}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading major_airlines.json: {str(e)}") from e
+        raise HTTPException(status_code=500, detail=f"Error reading major_airlines.json: {e}") from e
 
 
 @router.post(
@@ -1417,7 +1465,7 @@ async def get_major_airlines():
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def validate_blocked_words_file(request: Dict[str, str]):
+async def validate_blocked_words_file(request: dict[str, str]):
     """
     Validate a blocked_words YAML file content.
 
@@ -1453,11 +1501,11 @@ async def validate_blocked_words_file(request: Dict[str, str]):
     import yaml
 
     try:
-        file_content = request.get("file_content", "")
+        file_content: Final = request.get("file_content", "")
         if not file_content:
             return {"valid": False, "error": "No file content provided"}
 
-        data = yaml.safe_load(file_content)
+        data: Final = yaml.safe_load(file_content)
 
         if not isinstance(data, dict) or "blocked_words" not in data:
             return {
@@ -1465,12 +1513,12 @@ async def validate_blocked_words_file(request: Dict[str, str]):
                 "error": "Invalid format: file must contain 'blocked_words' key with a list",
             }
 
-        blocked_words_list = data["blocked_words"]
+        blocked_words_list: Final = data["blocked_words"]
         if not isinstance(blocked_words_list, list):
             return {"valid": False, "error": "'blocked_words' must be a list"}
 
         # Validate each entry
-        errors = []
+        errors: Final = []
         for idx, word_data in enumerate(blocked_words_list):
             if not isinstance(word_data, dict):
                 errors.append(f"Entry {idx}: must be an object")
@@ -1497,10 +1545,10 @@ async def validate_blocked_words_file(request: Dict[str, str]):
             "message": f"Valid YAML file with {len(blocked_words_list)} blocked word(s)",
         }
     except yaml.YAMLError as e:
-        return {"valid": False, "error": f"Invalid YAML syntax: {str(e)}"}
+        return {"valid": False, "error": f"Invalid YAML syntax: {e}"}
     except Exception as e:
         verbose_proxy_logger.exception("Error validating blocked words file")
-        return {"valid": False, "error": f"Validation error: {str(e)}"}
+        return {"valid": False, "error": f"Validation error: {e}"}
 
 
 def _get_field_type_from_annotation(field_annotation: Any) -> str:
@@ -1514,8 +1562,8 @@ def _get_field_type_from_annotation(field_annotation: Any) -> str:
         and hasattr(field_annotation, "__args__")
     ):
         # For Optional[T], get the non-None type
-        args = field_annotation.__args__
-        non_none_args = [arg for arg in args if arg is not type(None)]
+        args: Final = field_annotation.__args__
+        non_none_args: Final = [arg for arg in args if arg is not type(None)]
         if non_none_args:
             field_annotation = non_none_args[0]
 
@@ -1530,16 +1578,14 @@ def _get_field_type_from_annotation(field_annotation: Any) -> str:
     # Handle Literal types
     if hasattr(field_annotation, "__origin__") and hasattr(field_annotation, "__args__"):
         # Check for Literal types (Python 3.8+)
-        origin = field_annotation.__origin__
+        origin: Final = field_annotation.__origin__
         if hasattr(origin, "__name__") and origin.__name__ == "Literal":
             return "select"  # For dropdown/select inputs
 
     # Handle basic types
     if field_annotation is str:
         return "string"
-    elif field_annotation is int:
-        return "number"
-    elif field_annotation is float:
+    elif field_annotation is int or field_annotation is float:
         return "number"
     elif field_annotation is bool:
         return "boolean"
@@ -1552,18 +1598,18 @@ def _get_field_type_from_annotation(field_annotation: Any) -> str:
     return "string"
 
 
-def _extract_literal_values(annotation: Any) -> List[str]:
+def _extract_literal_values(annotation: Any) -> list[str]:
     """
     Extract literal values from a Literal type annotation
     """
     if hasattr(annotation, "__origin__") and hasattr(annotation, "__args__"):
-        origin = annotation.__origin__
+        origin: Final = annotation.__origin__
         if hasattr(origin, "__name__") and origin.__name__ == "Literal":
             return list(annotation.__args__)
     return []
 
 
-def _get_dict_key_options(field_annotation: Any) -> Optional[List[str]]:
+def _get_dict_key_options(field_annotation: Any) -> list[str] | None:
     """
     Extract key options from Dict[Literal[...], T] types
     """
@@ -1572,9 +1618,9 @@ def _get_dict_key_options(field_annotation: Any) -> Optional[List[str]]:
         and field_annotation.__origin__ is dict
         and hasattr(field_annotation, "__args__")
     ):
-        args = field_annotation.__args__
+        args: Final = field_annotation.__args__
         if len(args) >= 2:
-            key_type = args[0]
+            key_type: Final = args[0]
             return _extract_literal_values(key_type)
     return None
 
@@ -1588,14 +1634,14 @@ def _get_dict_value_type(field_annotation: Any) -> str:
         and field_annotation.__origin__ is dict
         and hasattr(field_annotation, "__args__")
     ):
-        args = field_annotation.__args__
+        args: Final = field_annotation.__args__
         if len(args) >= 2:
-            value_type = args[1]
+            value_type: Final = args[1]
             return _get_field_type_from_annotation(value_type)
     return "string"
 
 
-def _get_list_element_options(field_annotation: Any) -> Optional[List[str]]:
+def _get_list_element_options(field_annotation: Any) -> list[str] | None:
     """
     Extract element options from List[Literal[...]] types
     """
@@ -1604,9 +1650,9 @@ def _get_list_element_options(field_annotation: Any) -> Optional[List[str]]:
         and field_annotation.__origin__ is list
         and hasattr(field_annotation, "__args__")
     ):
-        args = field_annotation.__args__
+        args: Final = field_annotation.__args__
         if len(args) >= 1:
-            element_type = args[0]
+            element_type: Final = args[0]
             return _extract_literal_values(element_type)
     return None
 
@@ -1634,7 +1680,7 @@ def _should_skip_optional_params(field_name: str, field_annotation: Any) -> bool
 
     # Handle Optional[T] where T is still a TypeVar
     if hasattr(field_annotation, "__args__"):
-        non_none_args = [arg for arg in field_annotation.__args__ if arg is not type(None)]
+        non_none_args: Final = [arg for arg in field_annotation.__args__ if arg is not type(None)]
         if non_none_args and isinstance(non_none_args[0], TypeVar):
             return True
 
@@ -1649,8 +1695,8 @@ def _unwrap_optional_type(field_annotation: Any) -> Any:
         and hasattr(field_annotation, "__args__")
     ):
         # For Optional[BaseModel], get the non-None type
-        args = field_annotation.__args__
-        non_none_args = [arg for arg in args if arg is not type(None)]
+        args: Final = field_annotation.__args__
+        non_none_args: Final = [arg for arg in args if arg is not type(None)]
         if non_none_args:
             return non_none_args[0]
     return field_annotation
@@ -1661,21 +1707,21 @@ def _build_field_dict(
     field_annotation: Any,
     description: str,
     required: bool,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build field dictionary for non-nested fields."""
     # Determine the field type from annotation
     field_type = _get_field_type_from_annotation(field_annotation)
 
     # Check for custom UI type override
-    field_json_schema_extra = getattr(field, "json_schema_extra", {})
+    field_json_schema_extra: Final = getattr(field, "json_schema_extra", {})
     if field_json_schema_extra and "ui_type" in field_json_schema_extra:
-        ui_type = field_json_schema_extra["ui_type"]
+        ui_type: Final = field_json_schema_extra["ui_type"]
         field_type = ui_type.value if hasattr(ui_type, "value") else ui_type
     elif field_json_schema_extra and "type" in field_json_schema_extra:
         field_type = field_json_schema_extra["type"]
 
     # Add the field to the dictionary
-    field_dict = {
+    field_dict: Final = {
         "description": description,
         "required": required,
         "type": field_type,
@@ -1684,17 +1730,17 @@ def _build_field_dict(
     # Extract options from type annotations
     if field_type == "dict":
         # For Dict[Literal[...], T] types, extract key options
-        dict_key_options = _get_dict_key_options(field_annotation)
+        dict_key_options: Final = _get_dict_key_options(field_annotation)
         if dict_key_options:
             field_dict["dict_key_options"] = dict_key_options
 
         # Extract value type for the dict values
-        dict_value_type = _get_dict_value_type(field_annotation)
+        dict_value_type: Final = _get_dict_value_type(field_annotation)
         field_dict["dict_value_type"] = dict_value_type
 
     elif field_type == "array":
         # For List[Literal[...]] types, extract element options
-        list_element_options = _get_list_element_options(field_annotation)
+        list_element_options: Final = _get_list_element_options(field_annotation)
         if list_element_options:
             field_dict["options"] = list_element_options
             field_dict["type"] = "multiselect"
@@ -1704,7 +1750,7 @@ def _build_field_dict(
         field_dict["options"] = field_json_schema_extra["options"]
     elif field_type == "select":
         # For Literal types, populate options so the UI can render a dropdown
-        literal_options = _extract_literal_values(field_annotation)
+        literal_options: Final = _extract_literal_values(field_annotation)
         if literal_options:
             field_dict["options"] = literal_options
 
@@ -1722,9 +1768,9 @@ def _build_field_dict(
 
 
 def _extract_fields_recursive(
-    model: Type[BaseModel],
+    model: type[BaseModel],
     depth: int = 0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     # Check if we've exceeded the maximum recursion depth
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise HTTPException(
@@ -1732,7 +1778,7 @@ def _extract_fields_recursive(
             detail=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing model fields. Please check the model structure for excessive nesting.",
         )
 
-    fields = {}
+    fields: Final = {}
 
     for field_name, field in model.model_fields.items():
         field_annotation = field.annotation
@@ -1760,7 +1806,7 @@ def _extract_fields_recursive(
 
         if is_basemodel_subclass:
             # Recursively get fields from the nested model
-            nested_fields = _extract_fields_recursive(cast(Type[BaseModel], field_annotation), depth + 1)
+            nested_fields = _extract_fields_recursive(cast(type[BaseModel], field_annotation), depth + 1)
             fields[field_name] = {
                 "description": description,
                 "required": required,
@@ -1778,7 +1824,7 @@ def _extract_fields_recursive(
     return fields
 
 
-def _get_fields_from_model(model_class: Type[BaseModel]) -> Dict[str, Any]:
+def _get_fields_from_model(model_class: type[BaseModel]) -> dict[str, Any]:
     """
     Get the fields from a Pydantic model as a nested dictionary structure
     """
@@ -1843,15 +1889,15 @@ async def get_provider_specific_params():
     ```
     """
     # Get fields from the models
-    bedrock_fields = _get_fields_from_model(BedrockGuardrailConfigModel)
-    presidio_fields = _get_fields_from_model(PresidioPresidioConfigModelUserInterface)
-    lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
-    tool_permission_fields = _get_fields_from_model(ToolPermissionGuardrailConfigModel)
+    bedrock_fields: Final = _get_fields_from_model(BedrockGuardrailConfigModel)
+    presidio_fields: Final = _get_fields_from_model(PresidioPresidioConfigModelUserInterface)
+    lakera_v2_fields: Final = _get_fields_from_model(LakeraV2GuardrailConfigModel)
+    tool_permission_fields: Final = _get_fields_from_model(ToolPermissionGuardrailConfigModel)
 
     tool_permission_fields["ui_friendly_name"] = ToolPermissionGuardrailConfigModel.ui_friendly_name()
 
     # Return the provider-specific parameters
-    provider_params = {
+    provider_params: Final = {
         SupportedGuardrailIntegrations.BEDROCK.value: bedrock_fields,
         SupportedGuardrailIntegrations.PRESIDIO.value: presidio_fields,
         SupportedGuardrailIntegrations.LAKERA_V2.value: lakera_v2_fields,
@@ -1879,13 +1925,13 @@ class TestCustomCodeGuardrailRequest(BaseModel):
     custom_code: str
     """The Python-like code containing the apply_guardrail function."""
 
-    test_input: Dict[str, Any]
+    test_input: dict[str, object]
     """The test input to pass to the guardrail. Should contain 'texts', optionally 'images', 'tools', etc."""
 
     input_type: str = "request"
     """Whether this is a 'request' or 'response' input type."""
 
-    request_data: Optional[Dict[str, Any]] = None
+    request_data: dict[str, object] | None = None
     """Optional mock request_data (model, user_id, team_id, metadata, etc.)."""
 
 
@@ -1895,13 +1941,13 @@ class TestCustomCodeGuardrailResponse(BaseModel):
     success: bool
     """Whether the test executed successfully (no errors)."""
 
-    result: Optional[Dict[str, Any]] = None
+    result: dict[str, object] | None = None
     """The guardrail result: action (allow/block/modify), reason, modified_texts, etc."""
 
-    error: Optional[str] = None
+    error: str | None = None
     """Error message if execution failed."""
 
-    error_type: Optional[str] = None
+    error_type: str | None = None
     """Type of error: 'compilation' or 'execution'."""
 
 
@@ -1993,13 +2039,13 @@ async def test_custom_code_guardrail(
             detail="Admin access required to test custom code guardrails",
         )
 
-    EXECUTION_TIMEOUT_SECONDS = 5
+    EXECUTION_TIMEOUT_SECONDS: Final = 5
 
     try:
-        exec_globals = build_sandbox_globals()
+        exec_globals: Final = build_sandbox_globals()
 
         try:
-            compiled = compile_sandboxed(request.custom_code)
+            compiled: Final[CodeType] = compile_sandboxed(request.custom_code)
             exec(compiled, exec_globals)  # noqa: S102
         except SyntaxError as e:
             return TestCustomCodeGuardrailResponse(
@@ -2023,7 +2069,7 @@ async def test_custom_code_guardrail(
                 error_type="compilation",
             )
 
-        apply_fn = exec_globals["apply_guardrail"]
+        apply_fn: Final[object] = exec_globals["apply_guardrail"]
         if not callable(apply_fn):
             return TestCustomCodeGuardrailResponse(
                 success=False,
@@ -2032,13 +2078,13 @@ async def test_custom_code_guardrail(
             )
 
         # Step 3: Prepare test inputs
-        test_inputs = request.test_input
+        test_inputs: Final = request.test_input
         if "texts" not in test_inputs:
             test_inputs["texts"] = []
 
         # Prepare mock request_data
-        mock_request_data = request.request_data or {}
-        safe_request_data = {
+        mock_request_data: Final = request.request_data or {}
+        safe_request_data: Final = {
             "model": mock_request_data.get("model", "test-model"),
             "user_id": mock_request_data.get("user_id"),
             "team_id": mock_request_data.get("team_id"),
@@ -2048,14 +2094,14 @@ async def test_custom_code_guardrail(
 
         # Step 4: Execute the function with timeout protection
 
-        def execute_guardrail():
+        def execute_guardrail() -> object:
             return apply_fn(test_inputs, safe_request_data, request.input_type)
 
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(execute_guardrail)
+                future: Final = executor.submit(execute_guardrail)
                 try:
-                    result = future.result(timeout=EXECUTION_TIMEOUT_SECONDS)
+                    result: Final = future.result(timeout=EXECUTION_TIMEOUT_SECONDS)
                 except concurrent.futures.TimeoutError:
                     return TestCustomCodeGuardrailResponse(
                         success=False,
@@ -2085,7 +2131,7 @@ async def test_custom_code_guardrail(
         )
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error testing custom code guardrail: {e}")
+        verbose_proxy_logger.exception("Error testing custom code guardrail: %s", e)
         return TestCustomCodeGuardrailResponse(
             success=False,
             error=f"Unexpected error: {e}",
@@ -2096,7 +2142,7 @@ async def test_custom_code_guardrail(
 def _resolve_guardrail_input_type(active_guardrail: CustomGuardrail, input_type: str) -> Literal["request", "response"]:
     """Return the effective input_type, auto-upgrading to 'response' for post_call guardrails."""
     if input_type == "request":
-        hook = getattr(active_guardrail, "event_hook", None)
+        hook: Final = getattr(active_guardrail, "event_hook", None)
         if hook == GuardrailEventHooks.post_call or hook == "post_call":
             return "response"
     return "response" if input_type == "response" else "request"
@@ -2130,7 +2176,7 @@ async def _emit_guardrail_success_logs(
     )
 
     try:
-        modified = await proxy_logging_obj.post_call_success_hook(
+        modified: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -2143,10 +2189,10 @@ async def _emit_guardrail_success_logs(
     # Build the logging payload after post_call_success_hook so that logged
     # data matches what the caller actually receives if the hook modified
     # the response.
-    response_for_logging = {"response": response.model_dump(exclude_none=True)}
+    response_for_logging: Final = {"response": response.model_dump(exclude_none=True)}
 
     if litellm_logging_obj is not None:
-        end_time = datetime.now(timezone.utc)
+        end_time: Final = datetime.now(timezone.utc)
         try:
             await litellm_logging_obj.async_success_handler(
                 result=response_for_logging,
@@ -2203,10 +2249,10 @@ async def apply_guardrail(
         "metadata": {"route": "/apply_guardrail"},
     }
     litellm_logging_obj = None
-    start_time = datetime.now(timezone.utc)
+    start_time: Final = datetime.now(timezone.utc)
 
     try:
-        active_guardrail: Optional[CustomGuardrail] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+        active_guardrail: Final[CustomGuardrail | None] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
             guardrail_name=request.guardrail_name
         )
         if active_guardrail is None:
@@ -2215,7 +2261,7 @@ async def apply_guardrail(
                 detail=f"Guardrail '{request.guardrail_name}' not found. Please ensure the guardrail is configured in your LiteLLM proxy.",
             )
 
-        request_processor = ProxyBaseLLMRequestProcessing(data=data)
+        request_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
             data,
             litellm_logging_obj,
@@ -2232,14 +2278,17 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
-        request_data: dict = {"messages": request.messages} if request.messages else {}
-        _input_type = _resolve_guardrail_input_type(active_guardrail, request.input_type)
-        guardrailed_inputs = await active_guardrail.apply_guardrail(
+        request_data: Final[dict] = {
+            **({"messages": request.messages} if request.messages is not None else {}),
+            **({"metadata": request.metadata} if request.metadata is not None else {}),
+        }
+        _input_type: Final = _resolve_guardrail_input_type(active_guardrail, request.input_type)
+        guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
             request_data=request_data,
             input_type=_input_type,
         )
-        response_text = guardrailed_inputs.get("texts", [])
+        response_text: Final = guardrailed_inputs.get("texts", [])
         response = ApplyGuardrailResponse(response_text=response_text[0] if response_text else request.text)
     except Exception as e:
         if litellm_logging_obj is not None and not isinstance(e, HTTPException):
@@ -2259,7 +2308,7 @@ async def apply_guardrail(
             except Exception:
                 verbose_proxy_logger.exception("apply_guardrail: failure_handler submit failed")
         try:
-            transformed_exception = await proxy_logging_obj.post_call_failure_hook(
+            transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
                 request_data=data,

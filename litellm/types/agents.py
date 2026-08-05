@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, TYPE_CHECKING, Union
 
 from pydantic import BaseModel, PrivateAttr
 from typing_extensions import Required, TypedDict
@@ -45,26 +45,26 @@ class SecuritySchemeBase(TypedDict, total=False):
     description: Optional[str]
 
 
-class APIKeySecurityScheme(SecuritySchemeBase):
+class APIKeySecurityScheme(SecuritySchemeBase, total=False):
     """Defines a security scheme using an API key."""
 
-    type: Literal["apiKey"]
-    in_: Literal["query", "header", "cookie"]  # using in_ to avoid Python keyword
-    name: str
+    type: Required[Literal["apiKey"]]
+    in_: Required[Literal["query", "header", "cookie"]]  # using in_ to avoid Python keyword
+    name: Required[str]
 
 
-class HTTPAuthSecurityScheme(SecuritySchemeBase):
+class HTTPAuthSecurityScheme(SecuritySchemeBase, total=False):
     """Defines a security scheme using HTTP authentication."""
 
-    type: Literal["http"]
-    scheme: str
+    type: Required[Literal["http"]]
+    scheme: Required[str]
     bearerFormat: Optional[str]
 
 
-class MutualTLSSecurityScheme(SecuritySchemeBase):
+class MutualTLSSecurityScheme(SecuritySchemeBase, total=False):
     """Defines a security scheme using mTLS authentication."""
 
-    type: Literal["mutualTLS"]
+    type: Required[Literal["mutualTLS"]]
 
 
 class OAuthFlows(TypedDict, total=False):
@@ -76,19 +76,19 @@ class OAuthFlows(TypedDict, total=False):
     password: Optional[Dict[str, Any]]
 
 
-class OAuth2SecurityScheme(SecuritySchemeBase):
+class OAuth2SecurityScheme(SecuritySchemeBase, total=False):
     """Defines a security scheme using OAuth 2.0."""
 
-    type: Literal["oauth2"]
-    flows: OAuthFlows
+    type: Required[Literal["oauth2"]]
+    flows: Required[OAuthFlows]
     oauth2MetadataUrl: Optional[str]
 
 
-class OpenIdConnectSecurityScheme(SecuritySchemeBase):
+class OpenIdConnectSecurityScheme(SecuritySchemeBase, total=False):
     """Defines a security scheme using OpenID Connect."""
 
-    type: Literal["openIdConnect"]
-    openIdConnectUrl: str
+    type: Required[Literal["openIdConnect"]]
+    openIdConnectUrl: Required[str]
 
 
 # Union of all security schemes
@@ -316,7 +316,7 @@ def _normalize_a2a_jsonrpc_response(
     returned it. Backfill from the outbound request id so LiteLLM can surface the
     agent error instead of failing Pydantic validation.
     """
-    normalized = dict(response_dict)
+    normalized: Final = dict(response_dict)
     if normalized.get("id") is None and request_id is not None:
         normalized["id"] = str(request_id)
     return normalized

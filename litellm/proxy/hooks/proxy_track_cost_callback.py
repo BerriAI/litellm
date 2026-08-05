@@ -1,7 +1,7 @@
 import asyncio
 import traceback
 from datetime import datetime
-from typing import Any, List, Optional, Union, cast
+from typing import Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -28,10 +28,19 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
 )
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
+    CallTypes,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
+
+_PASS_THROUGH_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    {
+        CallTypes.pass_through.value,
+        CallTypes.llm_passthrough_route.value,
+        CallTypes.allm_passthrough_route.value,
+    }
+)
 
 
 class _ProxyDBLogger(CustomLogger):
@@ -43,7 +52,7 @@ class _ProxyDBLogger(CustomLogger):
         request_data: dict,
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
-        traceback_str: Optional[str] = None,
+        traceback_str: str | None = None,
     ):
         try:
             await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
@@ -58,11 +67,13 @@ class _ProxyDBLogger(CustomLogger):
                     "Failed to invalidate budget reservation counters after failure release failed"
                 )
 
-        request_route = user_api_key_dict.request_route
-        if _ProxyDBLogger._should_track_errors_in_db() is False:
-            return
-        elif request_route is not None and not (
-            RouteChecks.is_llm_api_route(route=request_route) or RouteChecks.is_info_route(route=request_route)
+        request_route: Final = user_api_key_dict.request_route
+        if (
+            _ProxyDBLogger._should_track_errors_in_db() is False
+            or request_route is not None
+            and not (
+                RouteChecks.is_llm_api_route(route=request_route) or RouteChecks.is_info_route(route=request_route)
+            )
         ):
             return
 
@@ -97,14 +108,14 @@ class _ProxyDBLogger(CustomLogger):
             metadata=_metadata,
         )
 
-        existing_metadata: dict = request_data.get("metadata", None) or {}
+        existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
         existing_metadata.update(_metadata)
 
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}
 
-        existing_litellm_params = request_data.get("litellm_params", {})
-        existing_litellm_metadata = existing_litellm_params.get("metadata", {}) or {}
+        existing_litellm_params: Final = request_data.get("litellm_params", {})
+        existing_litellm_metadata: Final = existing_litellm_params.get("metadata", {}) or {}
 
         # Preserve tags from existing metadata
         if existing_litellm_metadata.get("tags"):
@@ -128,7 +139,7 @@ class _ProxyDBLogger(CustomLogger):
         # trace_id that Langfuse received (via async_failure_handler).
         # Without this, the DB session_id would be a random UUID that doesn't
         # match the Langfuse trace_id, making failed requests unsearchable.
-        _litellm_logging_obj = request_data.get("litellm_logging_obj")
+        _litellm_logging_obj: Final = request_data.get("litellm_logging_obj")
         if _litellm_logging_obj is not None:
             if not request_data.get("standard_logging_object"):
                 request_data["standard_logging_object"] = getattr(_litellm_logging_obj, "model_call_details", {}).get(
@@ -141,7 +152,7 @@ class _ProxyDBLogger(CustomLogger):
         # failed requests record the real duration instead of 0.
         actual_start_time = datetime.now()
         if _litellm_logging_obj is not None:
-            obj_start = getattr(_litellm_logging_obj, "start_time", None)
+            obj_start: Final = getattr(_litellm_logging_obj, "start_time", None)
             if obj_start is not None:
                 actual_start_time = obj_start
 
@@ -171,7 +182,7 @@ class _ProxyDBLogger(CustomLogger):
     async def _PROXY_track_cost_callback(
         self,
         kwargs,  # kwargs to completion
-        completion_response: Optional[Union[litellm.ModelResponse, Any]],  # response from completion
+        completion_response: litellm.ModelResponse | Any | None,  # response from completion
         start_time=None,
         end_time=None,  # start/end time for completion
     ):
@@ -184,41 +195,54 @@ class _ProxyDBLogger(CustomLogger):
         verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
         try:
             verbose_proxy_logger.debug(
-                f"kwargs stream: {kwargs.get('stream', None)} + complete streaming response: {kwargs.get('complete_streaming_response', None)}"
+                "kwargs stream: %s + complete streaming response: %s",
+                kwargs.get("stream", None),
+                kwargs.get("complete_streaming_response", None),
             )
-            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs=kwargs)
-            litellm_params = kwargs.get("litellm_params", {}) or {}
-            end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
+            parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs=kwargs)
+            litellm_params: Final = kwargs.get("litellm_params", {}) or {}
+            end_user_id: Final = get_end_user_id_for_cost_tracking(litellm_params)
             metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
-            budget_reservation = _get_budget_reservation_from_metadata(metadata=metadata)
-            user_id = cast(Optional[str], metadata.get("user_api_key_user_id", None))
-            team_id = cast(Optional[str], metadata.get("user_api_key_team_id", None))
-            org_id = cast(Optional[str], metadata.get("user_api_key_org_id", None))
-            key_alias = cast(Optional[str], metadata.get("user_api_key_alias", None))
-            end_user_max_budget = metadata.get("user_api_end_user_max_budget", None)
-            sl_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
+            # Only fetch key details when user_id wasn't already populated (e.g. direct MCP REST calls).
+            # Avoids a cache/DB lookup on every normal LLM request.
+            if metadata.get("user_api_key") and not metadata.get("user_api_key_user_id"):
+                metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)
+                _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
+            budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)
+            user_id: Final = cast(str | None, metadata.get("user_api_key_user_id", None))
+            team_id: Final = cast(str | None, metadata.get("user_api_key_team_id", None))
+            org_id: Final = cast(str | None, metadata.get("user_api_key_org_id", None))
+            key_alias: Final = cast(str | None, metadata.get("user_api_key_alias", None))
+            end_user_max_budget: Final = metadata.get("user_api_end_user_max_budget", None)
+            sl_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
             response_cost = (
                 sl_object.get("response_cost", None) if sl_object is not None else kwargs.get("response_cost", None)
             )
-            tags = _get_request_tags_for_cost_tracking(
+            tags: Final = _get_request_tags_for_cost_tracking(
                 sl_object=sl_object,
                 metadata=metadata,
             )
 
             if response_cost is not None:
-                user_api_key = metadata.get("user_api_key", None)
+                user_api_key: Final = metadata.get("user_api_key", None)
                 if kwargs.get("cache_hit", False) is True:
                     response_cost = 0.0
-                    verbose_proxy_logger.debug(f"Cache Hit: response_cost {response_cost}, for user_id {user_id}")
+                    verbose_proxy_logger.debug("Cache Hit: response_cost %s, for user_id %s", response_cost, user_id)
 
                 verbose_proxy_logger.debug(
-                    f"user_api_key {user_api_key}, user_id {user_id}, team_id {team_id}, end_user_id {end_user_id}"
+                    "user_api_key %s, user_id %s, team_id %s, end_user_id %s",
+                    user_api_key,
+                    user_id,
+                    team_id,
+                    end_user_id,
                 )
+                call_type: str | None = kwargs.get("call_type")
                 if _should_track_cost_callback(
                     user_api_key=user_api_key,
                     user_id=user_id,
                     team_id=team_id,
                     end_user_id=end_user_id,
+                    call_type=call_type,
                 ):
                     ## UPDATE DATABASE
                     await _update_database_and_spend_counters(
@@ -279,7 +303,7 @@ class _ProxyDBLogger(CustomLogger):
                     kwargs.get("stream") is True and "complete_streaming_response" in kwargs
                 ):
                     if sl_object is not None:
-                        cost_tracking_failure_debug_info: Union[dict, str] = (
+                        cost_tracking_failure_debug_info: dict | str = (
                             sl_object["response_cost_failure_debug_info"]  # type: ignore
                             or "response_cost_failure_debug_info is None in standard_logging_object"
                         )
@@ -290,11 +314,11 @@ class _ProxyDBLogger(CustomLogger):
                         f"Cost tracking failed for model={model}.\nDebug info - {cost_tracking_failure_debug_info}\nAdd custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
                     )
         except Exception as e:
-            error_msg = f"Error in tracking cost callback - {str(e)}\n Traceback:{traceback.format_exc()}"
+            error_msg = f"Error in tracking cost callback - {e}\n Traceback:{traceback.format_exc()}"
             model = kwargs.get("model", "")
             metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
-            litellm_metadata = kwargs.get("litellm_params", {}).get("litellm_metadata", {})
-            old_metadata = kwargs.get("litellm_params", {}).get("metadata", {})
+            litellm_metadata: Final = kwargs.get("litellm_params", {}).get("litellm_metadata", {})
+            old_metadata: Final = kwargs.get("litellm_params", {}).get("metadata", {})
             call_type = kwargs.get("call_type", "")
             error_msg += f"\n Args to _PROXY_track_cost_callback\n model: {model}\n chosen_metadata: {metadata}\n litellm_metadata: {litellm_metadata}\n old_metadata: {old_metadata}\n call_type: {call_type}\n"
             asyncio.create_task(
@@ -320,7 +344,7 @@ class _ProxyDBLogger(CustomLogger):
            but team_alias is missing because LiteLLM_VerificationTokenView SQL view
            doesn't include it. We look up the team object to fill in team_alias.
         """
-        api_key_hash = metadata.get("user_api_key")
+        api_key_hash: Final = metadata.get("user_api_key")
         if not api_key_hash:
             return metadata
 
@@ -333,7 +357,7 @@ class _ProxyDBLogger(CustomLogger):
         # Step 1: If key fields are missing, look up the full key object
         if metadata.get("user_api_key_alias") is None:
             try:
-                key_obj = await get_key_object(
+                key_obj: Final = await get_key_object(
                     hashed_token=api_key_hash,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
@@ -354,10 +378,10 @@ class _ProxyDBLogger(CustomLogger):
                 )
 
         # Step 2: If team_id is known but team_alias is missing, look up the team object
-        team_id = metadata.get("user_api_key_team_id")
+        team_id: Final = metadata.get("user_api_key_team_id")
         if team_id and metadata.get("user_api_key_team_alias") is None:
             try:
-                team_obj = await get_team_object(
+                team_obj: Final = await get_team_object(
                     team_id=team_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
@@ -388,14 +412,34 @@ class _ProxyDBLogger(CustomLogger):
         return
 
 
+def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
+    patch = {k: v for k, v in metadata.items() if (k.startswith("user_api_key") or k == "tags") and v is not None}
+    if not patch:
+        return
+
+    litellm_params: Final = kwargs.setdefault("litellm_params", {})
+    for bucket_name in ("litellm_metadata", "metadata"):
+        bucket = litellm_params.get(bucket_name)
+        if isinstance(bucket, dict):
+            for key, value in patch.items():
+                if bucket.get(key) is None:
+                    bucket[key] = value
+
+
 def _should_track_cost_callback(
-    user_api_key: Optional[str],
-    user_id: Optional[str],
-    team_id: Optional[str],
-    end_user_id: Optional[str],
+    user_api_key: str | None,
+    user_id: str | None,
+    team_id: str | None,
+    end_user_id: str | None,
+    call_type: str | None = None,
 ) -> bool:
     """
     Determine if the cost callback should be tracked based on the kwargs
+
+    Pass-through endpoints can be configured with ``auth=false``, which leaves
+    the request with no key/user/team/end-user to attribute spend to. Those
+    requests still forward real provider traffic that operators expect to see
+    in request/usage logs, so they are tracked even when unauthenticated.
     """
 
     # don't run track cost callback if user opted into disabling spend
@@ -404,33 +448,33 @@ def _should_track_cost_callback(
 
     if user_api_key is not None or user_id is not None or team_id is not None or end_user_id is not None:
         return True
-    return False
+    return call_type in _PASS_THROUGH_CALL_TYPES
 
 
-def _get_budget_reservation_from_metadata(metadata: dict) -> Optional[dict]:
-    metadata_budget_reservation = metadata.get("user_api_key_budget_reservation")
+def _get_budget_reservation_from_metadata(metadata: dict) -> dict | None:
+    metadata_budget_reservation: Final = metadata.get("user_api_key_budget_reservation")
     if isinstance(metadata_budget_reservation, dict):
         return metadata_budget_reservation
 
-    user_api_key_auth_obj = metadata.get("user_api_key_auth")
+    user_api_key_auth_obj: Final = metadata.get("user_api_key_auth")
     if user_api_key_auth_obj is None:
         return None
     if isinstance(user_api_key_auth_obj, dict):
-        budget_reservation = user_api_key_auth_obj.get("budget_reservation")
+        budget_reservation: Final = user_api_key_auth_obj.get("budget_reservation")
         return budget_reservation if isinstance(budget_reservation, dict) else None
     return getattr(user_api_key_auth_obj, "budget_reservation", None)
 
 
 def _get_request_tags_for_cost_tracking(
-    sl_object: Optional[StandardLoggingPayload],
+    sl_object: StandardLoggingPayload | None,
     metadata: dict,
-) -> Optional[List[str]]:
+) -> list[str] | None:
     if sl_object is not None:
-        request_tags = sl_object.get("request_tags", None)
+        request_tags: Final = sl_object.get("request_tags", None)
         if isinstance(request_tags, list):
             return request_tags
 
-    metadata_tags = metadata.get("tags", None)
+    metadata_tags: Final = metadata.get("tags", None)
     if isinstance(metadata_tags, list):
         return metadata_tags
 
@@ -440,18 +484,18 @@ def _get_request_tags_for_cost_tracking(
 async def _update_database_and_spend_counters(
     proxy_logging_obj: Any,
     increment_spend_counters: Any,
-    user_api_key: Optional[str],
-    user_id: Optional[str],
-    end_user_id: Optional[str],
-    team_id: Optional[str],
-    org_id: Optional[str],
+    user_api_key: str | None,
+    user_id: str | None,
+    end_user_id: str | None,
+    team_id: str | None,
+    org_id: str | None,
     kwargs: dict,
-    completion_response: Optional[Union[litellm.ModelResponse, Any]],
+    completion_response: litellm.ModelResponse | Any | None,
     start_time: Any,
     end_time: Any,
     response_cost: float,
-    budget_reservation: Optional[dict],
-    request_tags: Optional[List[str]] = None,
+    budget_reservation: dict | None,
+    request_tags: list[str] | None = None,
 ) -> None:
     try:
         await proxy_logging_obj.db_spend_update_writer.update_database(
@@ -504,7 +548,7 @@ async def _update_database_and_spend_counters(
         raise
 
 
-async def _release_budget_reservation(budget_reservation: Optional[dict]) -> None:
+async def _release_budget_reservation(budget_reservation: dict | None) -> None:
     if budget_reservation is None:
         return
 
@@ -518,7 +562,7 @@ async def _release_budget_reservation(budget_reservation: Optional[dict]) -> Non
 
 
 async def _invalidate_budget_reservation_counters(
-    budget_reservation: Optional[dict],
+    budget_reservation: dict | None,
 ) -> None:
     if budget_reservation is None:
         return

@@ -298,7 +298,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                 href={`${getProxyBaseUrl()}/ui/model_hub_table`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded hover:bg-blue-100 flex items-center"
+                className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-sm hover:bg-blue-100 flex items-center"
                 title="Open Public Model Hub"
               >
                 Public Model Hub
@@ -307,7 +307,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
               {!isRearranging ? (
                 <button
                   onClick={handleStartRearranging}
-                  className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded hover:bg-purple-100 flex items-center"
+                  className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-sm hover:bg-purple-100 flex items-center"
                 >
                   Rearrange Order
                 </button>
@@ -315,13 +315,13 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                 <div className="flex space-x-2">
                   <button
                     onClick={handleSaveRearranging}
-                    className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700"
+                    className="text-xs bg-green-600 text-white px-3 py-1.5 rounded-sm hover:bg-green-700"
                   >
                     Save Order
                   </button>
                   <button
                     onClick={handleCancelRearranging}
-                    className="text-xs bg-gray-50 text-gray-600 px-3 py-1.5 rounded hover:bg-gray-100"
+                    className="text-xs bg-gray-50 text-gray-600 px-3 py-1.5 rounded-sm hover:bg-gray-100"
                   >
                     Cancel
                   </button>
@@ -374,13 +374,13 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                             <div className="flex space-x-2">
                               <button
                                 onClick={handleUpdateLink}
-                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
+                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-sm hover:bg-blue-100"
                               >
                                 Save
                               </button>
                               <button
                                 onClick={handleCancelEdit}
-                                className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100"
+                                className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded-sm hover:bg-gray-100"
                               >
                                 Cancel
                               </button>

@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional, Union
+from typing import Final, List, Literal, Optional, Union
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from pydantic import PrivateAttr
@@ -76,13 +76,29 @@ def build_code_interpreter_log_outputs(
     """
     if not isinstance(content, dict):
         return None
-    parts = []
+    parts: Final = []
     if content.get("stdout"):
         parts.append(content["stdout"])
     if content.get("stderr"):
         parts.append(f"STDERR: {content['stderr']}")
-    logs = "".join(parts)
+    logs: Final = "".join(parts)
     return [OutputCodeInterpreterCallLog(type="logs", logs=logs)] if logs else None
+
+
+class CustomToolCallOutputItem(BaseLiteLLMOpenAIResponseObject):
+    """A custom/freeform tool call output item (e.g. apply_patch).
+
+    Mirrors the ``custom_tool_call`` variant of OpenAI's Responses API output.
+    Unlike ``OutputFunctionToolCall`` which uses ``arguments`` (JSON string),
+    this uses ``input`` (raw string) for the tool payload.
+    """
+
+    type: Literal["custom_tool_call"]
+    call_id: str
+    id: Optional[str] = None
+    name: str
+    input: str
+    status: Optional[Literal["in_progress", "completed", "incomplete"]] = None
 
 
 class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):

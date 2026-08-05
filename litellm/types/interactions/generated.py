@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 from pydantic import AwareDatetime, Base64Str, BaseModel, Field, RootModel
 
@@ -173,6 +173,7 @@ class Status1(Enum):
     cancelled = "cancelled"
     incomplete = "incomplete"
     budget_exceeded = "budget_exceeded"
+    queued = "queued"
 
 
 class InteractionStatusUpdate(BaseModel):
@@ -341,6 +342,7 @@ class Status3(Enum):
     CANCELLED = "cancelled"
     INCOMPLETE = "incomplete"
     BUDGET_EXCEEDED = "budget_exceeded"
+    QUEUED = "queued"
 
 
 class ModelOption(RootModel[str]):
@@ -1173,7 +1175,7 @@ class CancelInteractionResult(BaseLiteLLMOpenAIResponseObject):
 
 # Backwards compatibility aliases
 InteractionTool = Tool
-InteractionToolChoiceConfig = ToolChoiceConfig
+InteractionToolChoiceConfig: Final = ToolChoiceConfig
 InteractionsAPIOptionalRequestParams = Dict[str, Any]
 
 # Agent interaction execution environment

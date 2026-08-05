@@ -27,18 +27,19 @@ if os.getenv("LITELLM_MODE", "DEV") == "DEV":
     _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
 
 from typing import (
-    Callable,
-    List,
-    Optional,
-    Dict,
-    Union,
     Any,
-    Literal,
+    Callable,
+    Dict,
+    Final,
     get_args,
-    TYPE_CHECKING,
-    Tuple,
+    List,
+    Literal,
+    Optional,
     overload,
+    Tuple,
     Type,
+    TYPE_CHECKING,
+    Union,
 )
 from litellm.types.integrations.datadog import DatadogInitParams
 from litellm.types.integrations.newrelic import NewRelicInitParams
@@ -211,6 +212,9 @@ filter_invalid_headers: Optional[bool] = False
 add_user_information_to_llm_headers: Optional[bool] = (
     None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
 )
+overwrite_user_with_key_hash: bool = (
+    False  # force the outgoing `user` param to the hashed api key, so providers see a stable, tamper-proof id
+)
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 skip_system_message_in_guardrail: bool = False
 skip_tool_message_in_guardrail: bool = False
@@ -261,8 +265,11 @@ databricks_key: Optional[str] = None
 openai_like_key: Optional[str] = None
 azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
+autorouter_savings_baseline_model: Optional[str] = None
 replicate_key: Optional[str] = None
 bytez_key: Optional[str] = None
+gdc_key: Optional[str] = None
+gdc_api_base: Optional[str] = None
 cohere_key: Optional[str] = None
 infinity_key: Optional[str] = None
 clarifai_key: Optional[str] = None
@@ -313,6 +320,11 @@ disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
 disable_anthropic_gemini_context_caching_transform: bool = False
+enable_anthropic_prompt_caching: bool = os.getenv("LITELLM_ENABLE_ANTHROPIC_PROMPT_CACHING", "false").lower() == "true"
+_anthropic_prompt_caching_ttl_env: Optional[str] = os.getenv("LITELLM_ANTHROPIC_PROMPT_CACHING_TTL")
+anthropic_prompt_caching_ttl: Optional[Literal["5m", "1h"]] = (
+    "1h" if _anthropic_prompt_caching_ttl_env == "1h" else "5m" if _anthropic_prompt_caching_ttl_env == "5m" else None
+)
 disable_vertex_batch_output_transformation: bool = False
 extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
@@ -377,6 +389,7 @@ budget_duration: Optional[str] = (
     None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 )
 default_soft_budget: float = DEFAULT_SOFT_BUDGET  # by default all litellm proxy keys have a soft budget of 50.0
+budget_exceeded_throttle_percentage: Optional[float] = None
 forward_traceparent_to_llm_provider: bool = False
 
 
@@ -419,7 +432,9 @@ default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
-max_ui_session_budget: Optional[float] = 0.25  # $0.25 USD budgets for UI Chat sessions
+max_ui_session_budget: Optional[float] = (
+    1.0  # USD budget for each dashboard login session (playground, test connection)
+)
 internal_user_budget_duration: Optional[str] = None
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
@@ -436,6 +451,8 @@ enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
+prometheus_exclude_metrics: Optional[List[str]] = None
+prometheus_exclude_labels: Optional[List[str]] = None
 prometheus_emit_stream_label: bool = False
 # Opt-in: emit `rate_limit_category` and `rate_limit_type` labels on
 # `litellm_proxy_failed_requests_metric`. Off by default to preserve the
@@ -586,6 +603,7 @@ gemini_models: Set = set()
 xai_models: Set = set()
 zai_models: Set = set()
 deepseek_models: Set = set()
+tencent_models: Set = set()
 runwayml_models: Set = set()
 azure_ai_models: Set = set()
 jina_ai_models: Set = set()
@@ -664,12 +682,12 @@ def is_bedrock_pricing_only_model(key: str) -> bool:
         bool: True if the key matches the Bedrock pattern, False otherwise.
     """
     # Regex to match 'bedrock/<region>/<model>'
-    bedrock_pattern = re.compile(r"^bedrock/[a-zA-Z0-9_-]+/.+$")
+    bedrock_pattern: Final = re.compile(r"^bedrock/[a-zA-Z0-9_-]+/.+$")
 
     if "month-commitment" in key:
         return True
 
-    is_match = bedrock_pattern.match(key)
+    is_match: Final = bedrock_pattern.match(key)
     return is_match is not None
 
 
@@ -687,7 +705,7 @@ def is_openai_finetune_model(key: str) -> bool:
 
 
 def add_known_models(model_cost_map: Optional[Dict] = None):
-    _map = model_cost_map if model_cost_map is not None else model_cost
+    _map: Final = model_cost_map if model_cost_map is not None else model_cost
     for key, value in _map.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
             open_ai_chat_completion_models.add(key)
@@ -799,6 +817,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             fal_ai_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
             deepseek_models.add(key)
+        elif value.get("litellm_provider") == "tencent":
+            tencent_models.add(key)
         elif value.get("litellm_provider") == "runwayml":
             runwayml_models.add(key)
         elif value.get("litellm_provider") == "meta_llama":
@@ -1091,6 +1111,7 @@ models_by_provider: dict = {
     "zai": zai_models,
     "fal_ai": fal_ai_models,
     "deepseek": deepseek_models,
+    "tencent": tencent_models,
     "runwayml": runwayml_models,
     "mistral": mistral_chat_models,
     "azure_ai": azure_ai_models,
@@ -1787,6 +1808,7 @@ if TYPE_CHECKING:
     from .llms.nvidia_nim.embed import (
         NvidiaNimEmbeddingConfig as NvidiaNimEmbeddingConfig,
     )
+    from .llms.gdc.chat.transformation import GDCGeminiConfig as GDCGeminiConfig
 
     # Type stubs for lazy-loaded config instances
     openaiOSeriesConfig: OpenAIOSeriesConfig
@@ -1800,6 +1822,9 @@ if TYPE_CHECKING:
     from .llms.vllm.completion.transformation import VLLMConfig as _VLLMConfig
     from .llms.deepseek.chat.transformation import (
         DeepSeekChatConfig as _DeepSeekChatConfig,
+    )
+    from .llms.tencent.chat.transformation import (
+        TencentChatConfig as _TencentChatConfig,
     )
     from .llms.sap.chat.transformation import (
         GenAIHubOrchestrationConfig as _GenAIHubOrchestrationConfig,
@@ -1843,6 +1868,7 @@ if TYPE_CHECKING:
     # Type stubs for lazy-loaded config classes (to help mypy understand types)
     VLLMConfig: Type[_VLLMConfig]
     DeepSeekChatConfig: Type[_DeepSeekChatConfig]
+    TencentChatConfig: Type[_TencentChatConfig]
     GenAIHubOrchestrationConfig: Type[_GenAIHubOrchestrationConfig]
     GenAIHubEmbeddingConfig: Type[_GenAIHubEmbeddingConfig]
     AzureOpenAIO1Config: Type[_AzureOpenAIO1Config]
@@ -2115,11 +2141,11 @@ def __getattr__(name: str) -> Any:
     # Use cached registry from _lazy_imports instead of importing tuples every time
     from ._lazy_imports import _get_lazy_import_registry
 
-    registry = _get_lazy_import_registry()
+    registry: Final = _get_lazy_import_registry()
 
     # Check if name is in registry and call the cached handler function
     if name in registry:
-        handler_func = registry[name]
+        handler_func: Final = registry[name]
         return handler_func(name)
 
     # Lazy load encoding from main.py to avoid heavy tiktoken import
@@ -2172,7 +2198,7 @@ def __getattr__(name: str) -> Any:
         return _globals["openaiOSeriesConfig"]
 
     # Lazy load other config instances
-    _config_instances = {
+    _config_instances: Final = {
         "openAIGPTConfig": "OpenAIGPTConfig",
         "openAIGPTAudioConfig": "OpenAIGPTAudioConfig",
         "openAIGPT5Config": "OpenAIGPT5Config",
@@ -2214,7 +2240,7 @@ def __getattr__(name: str) -> Any:
         # Check if already cached
         if "priority_reservation_settings" not in _globals:
             # Import the class and instantiate it
-            PriorityReservationSettings = __getattr__("PriorityReservationSettings")
+            PriorityReservationSettings: Final = __getattr__("PriorityReservationSettings")
             _globals["priority_reservation_settings"] = PriorityReservationSettings()
         return _globals["priority_reservation_settings"]
 
@@ -2226,7 +2252,7 @@ def __getattr__(name: str) -> Any:
         # Check if already cached
         if "logging_callback_manager" not in _globals:
             # Import the class and instantiate it
-            LoggingCallbackManager = __getattr__("LoggingCallbackManager")
+            LoggingCallbackManager: Final = __getattr__("LoggingCallbackManager")
             _globals["logging_callback_manager"] = LoggingCallbackManager()
         return _globals["logging_callback_manager"]
 

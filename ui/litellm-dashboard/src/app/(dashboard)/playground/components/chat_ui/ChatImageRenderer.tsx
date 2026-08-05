@@ -27,7 +27,7 @@ const ChatImageRenderer: React.FC<ChatImageRendererProps> = ({ message }) => {
           alt="User uploaded image"
           width={256}
           height={200}
-          className="max-w-64 rounded-md border border-gray-200 shadow-sm"
+          className="max-w-64 rounded-md border border-gray-200 shadow-xs"
           style={{ maxHeight: "200px", width: "auto", height: "auto" }}
         />
       )}
