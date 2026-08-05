@@ -2106,6 +2106,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
     return LiteLLM_TeamTableCachedObj(
         team_id=valid_token.team_id,
         max_budget=valid_token.team_max_budget,
+        model_max_budget=valid_token.team_model_max_budget,
         soft_budget=valid_token.team_soft_budget,
         spend=valid_token.team_spend,
         tpm_limit=valid_token.team_tpm_limit,
@@ -2335,6 +2336,8 @@ async def _run_centralized_common_checks(
 
     if user_api_key_auth_obj.org_id is None and team_object is not None and team_object.organization_id is not None:
         user_api_key_auth_obj.org_id = team_object.organization_id
+
+    user_api_key_auth_obj.team_model_max_budget = team_object.model_max_budget if team_object is not None else None
 
     # common_checks identifies admin via user_object, not the token
     # (non_proxy_admin_allowed_routes_check). JWT admin shortcut and

@@ -1,7 +1,7 @@
 import enum
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Union
 
@@ -1798,6 +1798,7 @@ from litellm.models.team import TeamBase as TeamBase  # noqa: E402
 
 class NewTeamRequest(TeamBase):
     model_aliases: dict | None = None
+    model_max_budget: Mapping[str, Mapping[str, str | float]] | None = None
     tags: list | None = None
     guardrails: list[str] | None = None
     policies: list[str] | None = None
@@ -1860,6 +1861,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     rpm_limit: int | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
+    model_max_budget: Mapping[str, Mapping[str, str | float]] | None = None
     models: list | None = None
     blocked: bool | None = None
     budget_duration: str | None = None
@@ -2553,6 +2555,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_blocked: bool = False
     soft_budget: float | None = None
     team_model_aliases: dict | None = None
+    team_model_max_budget: Mapping[str, Mapping[str, str | float]] | None = None
     team_member: Member | None = None
     team_metadata: dict | None = None
     team_object_permission_id: str | None = None
@@ -4532,10 +4535,10 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
 
     user_role: (
         Literal[
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ]
         | None
     ) = Field(

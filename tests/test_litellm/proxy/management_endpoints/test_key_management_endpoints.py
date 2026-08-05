@@ -15323,3 +15323,153 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
         prisma_client=mock_prisma_client,
         new_master_key="sk-new-master-key",
     )
+
+
+class TestTeamKeyModelMaxBudgetGate:
+    """Only a proxy admin or the team's admin may attach a key-level
+    model_max_budget to a team key, since it overrides the team's per-model cap."""
+
+    def _team(self):
+        from litellm.proxy._types import Member
+
+        return LiteLLM_TeamTableCachedObj(
+            team_id="team-1",
+            members_with_roles=[
+                Member(role="user", user_id="member-1"),
+                Member(role="admin", user_id="team-admin-1"),
+            ],
+        )
+
+    def _mmb(self):
+        return {"gpt-4o": {"budget_limit": 1000000.0, "time_period": "1d"}}
+
+    def test_regular_member_blocked(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _team_key_model_max_budget_check,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _team_key_model_max_budget_check(
+                team_table=self._team(),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER, user_id="member-1"
+                ),
+                model_max_budget=self._mmb(),
+            )
+        assert exc_info.value.status_code == 403
+
+    def test_team_admin_allowed(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _team_key_model_max_budget_check,
+        )
+
+        _team_key_model_max_budget_check(
+            team_table=self._team(),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin-1"
+            ),
+            model_max_budget=self._mmb(),
+        )
+
+    def test_proxy_admin_allowed(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _team_key_model_max_budget_check,
+        )
+
+        _team_key_model_max_budget_check(
+            team_table=self._team(),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, user_id="root"
+            ),
+            model_max_budget=self._mmb(),
+        )
+
+    def test_member_without_model_max_budget_allowed(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _team_key_model_max_budget_check,
+        )
+
+        _team_key_model_max_budget_check(
+            team_table=self._team(),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER, user_id="member-1"
+            ),
+            model_max_budget=None,
+        )
+
+
+class TestIsModelMaxBudgetChange:
+    """model_max_budget updates gate on the admin check only when the VALUE
+    changes, so UI flows that re-send the unchanged mapping keep working."""
+
+    def _row(self, mmb):
+        return LiteLLM_VerificationToken(token="hashed", model_max_budget=mmb)
+
+    def test_field_absent_is_not_a_change(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _is_model_max_budget_change,
+        )
+
+        assert (
+            _is_model_max_budget_change(
+                data=UpdateKeyRequest(key="sk-1"),
+                existing_key_row=self._row({"gpt-4o": {"budget_limit": 5.0}}),
+            )
+            is False
+        )
+
+    def test_same_value_is_not_a_change(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _is_model_max_budget_change,
+        )
+
+        mmb = {"gpt-4o": {"budget_limit": 5.0, "time_period": "1d"}}
+        assert (
+            _is_model_max_budget_change(
+                data=UpdateKeyRequest(key="sk-1", model_max_budget=mmb),
+                existing_key_row=self._row(mmb),
+            )
+            is False
+        )
+
+    def test_new_value_is_a_change(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _is_model_max_budget_change,
+        )
+
+        assert (
+            _is_model_max_budget_change(
+                data=UpdateKeyRequest(
+                    key="sk-1",
+                    model_max_budget={"gpt-4o": {"budget_limit": 999999.0, "time_period": "1d"}},
+                ),
+                existing_key_row=self._row({"gpt-4o": {"budget_limit": 5.0, "time_period": "1d"}}),
+            )
+            is True
+        )
+
+    def test_clearing_existing_value_is_a_change(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _is_model_max_budget_change,
+        )
+
+        assert (
+            _is_model_max_budget_change(
+                data=UpdateKeyRequest(key="sk-1", model_max_budget={}),
+                existing_key_row=self._row({"gpt-4o": {"budget_limit": 5.0, "time_period": "1d"}}),
+            )
+            is True
+        )
+
+    def test_empty_to_empty_is_not_a_change(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _is_model_max_budget_change,
+        )
+
+        assert (
+            _is_model_max_budget_change(
+                data=UpdateKeyRequest(key="sk-1", model_max_budget={}),
+                existing_key_row=self._row({}),
+            )
+            is False
+        )

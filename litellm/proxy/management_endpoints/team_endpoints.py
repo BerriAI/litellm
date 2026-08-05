@@ -1032,6 +1032,109 @@ def _check_team_budget_update_authority(
         )
 
 
+def _check_team_model_max_budget_update_authority(
+    data: UpdateTeamRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_model_max_budget: Mapping[str, Mapping[str, str | float]] | None,
+) -> None:
+    """
+    Restrict who can loosen a team's per-model caps on /team/update.
+
+    Mirrors _check_team_budget_update_authority: a team admin may add new model
+    caps or lower existing ones, but only a proxy admin may raise a cap, change
+    its window, or remove an entry (including clearing the whole mapping), since
+    that undoes a ceiling a proxy admin imposed.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    if "model_max_budget" not in (getattr(data, "model_fields_set", None) or frozenset()):
+        return
+    if not existing_model_max_budget:
+        return
+
+    from types import MappingProxyType
+
+    from litellm.types.utils import BudgetConfig
+
+    existing_configs = MappingProxyType(
+        {_model: BudgetConfig(**_info) for _model, _info in existing_model_max_budget.items()}
+    )
+    requested_items = data.model_max_budget.items() if data.model_max_budget else ()
+    requested_configs = MappingProxyType({_model: BudgetConfig(**_info) for _model, _info in requested_items})
+    for model_name, existing_config in existing_configs.items():
+        requested_config = requested_configs.get(model_name)
+        if requested_config is None:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only a proxy admin can remove a team's model_max_budget entry. Entry for model={model_name} is missing from the request.",
+            )
+        if requested_config.budget_duration != existing_config.budget_duration:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only a proxy admin can change a team model_max_budget window. model={model_name} current={existing_config.budget_duration}, requested={requested_config.budget_duration}.",
+            )
+        if existing_config.max_budget is not None and (
+            requested_config.max_budget is None or requested_config.max_budget > existing_config.max_budget
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only a proxy admin can raise a team's model_max_budget. model={model_name} current={existing_config.max_budget}, requested={requested_config.max_budget}.",
+            )
+
+
+def _validate_team_model_max_budget(
+    model_max_budget: Mapping[str, Mapping[str, str | float]] | None,
+) -> None:
+    """
+    Shared /team/new + /team/update validation: budget shapes must parse, and no
+    two entries may refer to the same model once the provider prefix is stripped,
+    since the entry name is the canonical spend-counter key and duplicates would
+    split one model's spend across counters.
+    """
+    if model_max_budget is None:
+        return
+
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        validate_model_max_budget,
+    )
+
+    try:
+        validate_model_max_budget(model_max_budget)
+    except ValueError as e:
+        raise ProxyException(
+            message=str(e),
+            type=ProxyErrorTypes.bad_request_error,
+            param="model_max_budget",
+            code="400",
+        )
+
+    normalized_names = tuple(
+        _PROXY_VirtualKeyModelMaxBudgetLimiter._get_model_without_custom_llm_provider(entry_name)
+        for entry_name in model_max_budget
+    )
+    colliding_entries = tuple(
+        sorted(
+            entry_name
+            for entry_name, normalized_name in zip(model_max_budget, normalized_names)
+            if normalized_names.count(normalized_name) > 1
+        )
+    )
+    if colliding_entries:
+        raise ProxyException(
+            message=(
+                f"model_max_budget entries {colliding_entries} refer to the same model "
+                "after the provider prefix is stripped; keep one entry per model so spend "
+                "accrues to a single counter"
+            ),
+            type=ProxyErrorTypes.bad_request_error,
+            param="model_max_budget",
+            code="400",
+        )
+
+
 def _should_auto_add_team_creator(
     user_api_key_dict: UserAPIKeyAuth,
     general_settings: Mapping[str, object],
@@ -1081,6 +1184,7 @@ async def new_team(
     - tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of TPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating TPM, or "best_effort_throughput" for best effort enforcement.
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set, soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
+    - model_max_budget: Optional[dict] - Per-model max budgets shared by every key on the team, e.g. {"gpt-4o": {"budget_limit": 100.0, "time_period": "1d"}}. A key's own model_max_budget entry for a model takes precedence; the team entry is the default cap for keys without one.
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
@@ -1186,6 +1290,8 @@ async def new_team(
                             "error": f"soft_budget ({data.soft_budget}) must be strictly lower than max_budget ({data.max_budget})"
                         },
                     )
+
+        _validate_team_model_max_budget(data.model_max_budget)
 
         # Check if license is over limit
         total_teams: Final = await _team_db(prisma_client).count()
@@ -1764,6 +1870,7 @@ async def update_team(
     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set (either in the request or existing), soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
+    - model_max_budget: Optional[dict] - Per-model max budgets shared by every key on the team, e.g. {"gpt-4o": {"budget_limit": 100.0, "time_period": "1d"}}. A key's own model_max_budget entry for a model takes precedence; the team entry is the default cap for keys without one.
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
@@ -1966,6 +2073,14 @@ async def update_team(
                 user_api_key_dict=user_api_key_dict,
                 existing_team_max_budget=existing_team_row.max_budget,
             )
+
+        _check_team_model_max_budget_update_authority(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            existing_model_max_budget=existing_team_row.model_max_budget,
+        )
+
+        _validate_team_model_max_budget(data.model_max_budget)
 
         updated_kv = data.json(exclude_unset=True)
 

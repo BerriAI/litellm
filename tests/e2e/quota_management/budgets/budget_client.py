@@ -97,6 +97,7 @@ class TeamNewBody(BaseModel):
     budget_duration: str | None = None
     organization_id: str | None = None
     budget_limits: list[BudgetWindow] | None = None
+    model_max_budget: dict[str, ModelBudgetEntry] | None = None
 
 
 class TeamNewResponse(BaseModel):
@@ -385,6 +386,7 @@ class BudgetClient:
         budget_duration: str | None = None,
         organization_id: str | None = None,
         budget_limits: list[BudgetWindow] | None = None,
+        model_max_budget: dict[str, ModelBudgetEntry] | None = None,
     ) -> str:
         team_id = unwrap(
             self.proxy.transport.post(
@@ -396,6 +398,7 @@ class BudgetClient:
                     budget_duration=budget_duration,
                     organization_id=organization_id,
                     budget_limits=budget_limits,
+                    model_max_budget=model_max_budget,
                 ),
                 response_type=TeamNewResponse,
             )

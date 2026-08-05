@@ -13,6 +13,7 @@ import asyncio
 import math
 import re
 import time
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
 
 from fastapi import HTTPException, Request, status
@@ -685,6 +686,11 @@ async def common_checks(
                     valid_token=valid_token,
                 ),
                 _team_multi_budget_check(team_object=team_object),
+                _team_model_max_budget_check(
+                    team_object=team_object,
+                    valid_token=valid_token,
+                    model=_model,
+                ),
                 _virtual_key_multi_budget_check(valid_token=valid_token) if valid_token is not None else None,
                 _team_soft_budget_check(
                     team_object=team_object,
@@ -4057,6 +4063,39 @@ async def _team_max_budget_check(
                 entity_type=Litellm_EntityType.TEAM.value,
                 entity_id=team_object.team_id,
             )
+
+
+async def _team_model_max_budget_check(
+    team_object: LiteLLM_TeamTable | None,
+    valid_token: UserAPIKeyAuth | None,
+    model: str | Sequence[str] | None,
+) -> None:
+    """
+    Enforce team-level per-model max budgets (team_object.model_max_budget).
+
+    Every key on the team shares one spend counter per (model, duration) window.
+    A key whose own model_max_budget covers the request model is exempt — the
+    key-level check in user_api_key_auth already enforced its private cap.
+
+    Raises BudgetExceededError when the shared team counter is over the cap.
+    """
+    if team_object is None or team_object.team_id is None or model is None:
+        return
+    team_model_max_budget = team_object.model_max_budget
+    if not isinstance(team_model_max_budget, dict) or len(team_model_max_budget) == 0:
+        return
+
+    from litellm.proxy.proxy_server import model_max_budget_limiter
+
+    models = (model,) if isinstance(model, str) else tuple(model)
+    key_model_max_budget = valid_token.model_max_budget if valid_token is not None else None
+    for model_name in models:
+        await model_max_budget_limiter.is_team_within_model_budget(
+            team_id=team_object.team_id,
+            team_model_max_budget=team_model_max_budget,
+            model=model_name,
+            key_model_max_budget=key_model_max_budget,
+        )
 
 
 async def _team_multi_budget_check(

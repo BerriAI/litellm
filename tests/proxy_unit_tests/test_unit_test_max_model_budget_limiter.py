@@ -558,3 +558,469 @@ async def test_async_log_success_event_skips_redis_push_without_redis(budget_lim
                 kwargs, response_obj=None, start_time=None, end_time=None
             )
             mock_push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_is_team_within_model_budget_under_budget(budget_limiter):
+    """Team-level cap admits requests while the shared counter is below the limit."""
+    with patch.object(
+        budget_limiter, "_get_team_spend_for_model", AsyncMock(return_value=10.0)
+    ):
+        assert (
+            await budget_limiter.is_team_within_model_budget(
+                team_id="team-1",
+                team_model_max_budget={
+                    "gpt-4": {"budget_limit": 100.0, "time_period": "1d"}
+                },
+                model="gpt-4",
+            )
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_is_team_within_model_budget_exceeded_raises(budget_limiter):
+    """Exceeding the team cap raises BudgetExceededError attributed to the TEAM entity."""
+    from litellm.proxy._types import Litellm_EntityType
+
+    with patch.object(
+        budget_limiter, "_get_team_spend_for_model", AsyncMock(return_value=150.0)
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await budget_limiter.is_team_within_model_budget(
+                team_id="team-finance",
+                team_model_max_budget={
+                    "gpt-4": {"budget_limit": 100.0, "time_period": "1d"}
+                },
+                model="gpt-4",
+            )
+    assert "team-finance" in str(exc_info.value)
+    assert "gpt-4" in str(exc_info.value)
+    assert exc_info.value.entity_type == Litellm_EntityType.TEAM.value
+    assert exc_info.value.entity_id == "team-finance"
+
+
+@pytest.mark.asyncio
+async def test_is_team_within_model_budget_model_not_configured(budget_limiter):
+    """Models absent from team_model_max_budget stay uncapped: no spend lookup, no error."""
+    with patch.object(
+        budget_limiter, "_get_team_spend_for_model", AsyncMock(return_value=999.0)
+    ) as mock_get_spend:
+        assert (
+            await budget_limiter.is_team_within_model_budget(
+                team_id="team-1",
+                team_model_max_budget={
+                    "gpt-4": {"budget_limit": 100.0, "time_period": "1d"}
+                },
+                model="claude-3",
+            )
+            is True
+        )
+    mock_get_spend.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_team_check_skipped_when_key_covers_model(budget_limiter):
+    """A key with its own entry for the model is exempt from the team cap, so an
+    over-budget team counter must not reject it (the key check already ran)."""
+    with patch.object(
+        budget_limiter, "_get_team_spend_for_model", AsyncMock(return_value=10_000.0)
+    ) as mock_team_spend:
+        assert (
+            await budget_limiter.is_team_within_model_budget(
+                team_id="team-1",
+                team_model_max_budget={
+                    "gpt-4": {"budget_limit": 100.0, "time_period": "1d"}
+                },
+                model="gpt-4",
+                key_model_max_budget={
+                    "gpt-4": {"budget_limit": 50.0, "time_period": "1d"}
+                },
+            )
+            is True
+        )
+    mock_team_spend.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_team_check_runs_when_key_covers_different_model(budget_limiter):
+    """A key entry for another model does not exempt the requested model from the team cap."""
+    with patch.object(
+        budget_limiter, "_get_team_spend_for_model", AsyncMock(return_value=10.0)
+    ) as mock_team_spend:
+        assert (
+            await budget_limiter.is_team_within_model_budget(
+                team_id="team-1",
+                team_model_max_budget={
+                    "gpt-4": {"budget_limit": 100.0, "time_period": "1d"}
+                },
+                model="gpt-4",
+                key_model_max_budget={
+                    "claude-3": {"budget_limit": 50.0, "time_period": "1d"}
+                },
+            )
+            is True
+        )
+    mock_team_spend.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_team_check_skipped_for_provider_prefixed_key_match(budget_limiter):
+    """Key precedence must apply through {provider}/{model} normalization, matching
+    how is_key_within_model_budget resolves the key's own entries."""
+    with patch.object(
+        budget_limiter, "_get_team_spend_for_model", AsyncMock(return_value=10_000.0)
+    ) as mock_team_spend:
+        assert (
+            await budget_limiter.is_team_within_model_budget(
+                team_id="team-1",
+                team_model_max_budget={
+                    "gpt-4": {"budget_limit": 100.0, "time_period": "1d"}
+                },
+                model="openai/gpt-4",
+                key_model_max_budget={
+                    "gpt-4": {"budget_limit": 50.0, "time_period": "1d"}
+                },
+            )
+            is True
+        )
+    mock_team_spend.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_team_spend_cache_key_format(budget_limiter):
+    """The shared counter must be keyed by team_id (not key hash) so every key on
+    the team reads and writes the same window."""
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        TEAM_MODEL_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    budget_cfg = GenericBudgetInfo(budget_limit=10.0, time_period="1d")
+    captured = {}
+
+    async def fake_get(key):
+        captured["key"] = key
+        return 0.0
+
+    with patch.object(
+        budget_limiter.dual_cache, "async_get_cache", side_effect=fake_get
+    ):
+        await budget_limiter._get_team_spend_for_model(
+            team_id="team-xyz", matched_model="gpt-4", budget_config=budget_cfg
+        )
+
+    assert captured["key"] == f"{TEAM_MODEL_SPEND_CACHE_KEY_PREFIX}:team-xyz:gpt-4:1d"
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_increments_team_spend(budget_limiter):
+    """Successful calls under a team cap must drive the team-scoped counter."""
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        TEAM_MODEL_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    incremented = {}
+
+    async def fake_increment(budget_config, spend_key, start_time_key, response_cost):
+        incremented[spend_key] = response_cost
+
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 7.5,
+            "model_group": "gpt-4",
+            "model": "openai/gpt-4",
+            "metadata": {"user_api_key_hash": "hash-1"},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_team_id": "team-tracking",
+                "user_api_key_team_model_max_budget": {
+                    "gpt-4": {"budget_limit": 100.0, "time_period": "1d"}
+                },
+            }
+        },
+    }
+
+    with patch.object(
+        budget_limiter, "_increment_spend_for_key", side_effect=fake_increment
+    ):
+        await budget_limiter.async_log_success_event(kwargs, None, 0, 0)
+
+    assert (
+        incremented.get(f"{TEAM_MODEL_SPEND_CACHE_KEY_PREFIX}:team-tracking:gpt-4:1d")
+        == 7.5
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_skips_team_increment_when_key_covers_model(
+    budget_limiter,
+):
+    """Keys with their own entry must not drive the shared team counter (mirror of
+    the enforcement-side precedence), while their key counter still increments."""
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        TEAM_MODEL_SPEND_CACHE_KEY_PREFIX,
+        VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    incremented = {}
+
+    async def fake_increment(budget_config, spend_key, start_time_key, response_cost):
+        incremented[spend_key] = response_cost
+
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 5.0,
+            "model_group": "gpt-4",
+            "model": "openai/gpt-4",
+            "metadata": {"user_api_key_hash": "hash-1"},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_team_id": "team-1",
+                "user_api_key_team_model_max_budget": {
+                    "gpt-4": {"budget_limit": 100.0, "time_period": "1d"}
+                },
+                "user_api_key_model_max_budget": {
+                    "gpt-4": {"budget_limit": 50.0, "time_period": "1d"}
+                },
+            }
+        },
+    }
+
+    with patch.object(
+        budget_limiter, "_increment_spend_for_key", side_effect=fake_increment
+    ):
+        await budget_limiter.async_log_success_event(kwargs, None, 0, 0)
+
+    assert not any(
+        k.startswith(TEAM_MODEL_SPEND_CACHE_KEY_PREFIX) for k in incremented
+    )
+    assert any(k.startswith(VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX) for k in incremented)
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_skips_team_without_team_id(budget_limiter):
+    """No team_id in request metadata means no team counter write, even when a
+    team budget dict is present."""
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        TEAM_MODEL_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    incremented = {}
+
+    async def fake_increment(budget_config, spend_key, start_time_key, response_cost):
+        incremented[spend_key] = response_cost
+
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 3.0,
+            "model_group": "gpt-4",
+            "model": "openai/gpt-4",
+            "metadata": {"user_api_key_hash": "hash-1"},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_team_model_max_budget": {
+                    "gpt-4": {"budget_limit": 100.0, "time_period": "1d"}
+                },
+            }
+        },
+    }
+
+    with patch.object(
+        budget_limiter, "_increment_spend_for_key", side_effect=fake_increment
+    ):
+        await budget_limiter.async_log_success_event(kwargs, None, 0, 0)
+
+    assert not any(
+        k.startswith(TEAM_MODEL_SPEND_CACHE_KEY_PREFIX) for k in incremented
+    )
+
+
+@pytest.mark.asyncio
+async def test_zero_limit_key_entry_does_not_bypass_team_budget(budget_limiter):
+    """A key entry with budget_limit 0 is never enforced key-side, so it must NOT
+    count as covering the model; the team cap still applies (Veria finding)."""
+    with patch.object(
+        budget_limiter, "_get_team_spend_for_model", AsyncMock(return_value=150.0)
+    ):
+        with pytest.raises(litellm.BudgetExceededError):
+            await budget_limiter.is_team_within_model_budget(
+                team_id="team-1",
+                team_model_max_budget={
+                    "gpt-4": {"budget_limit": 100.0, "time_period": "1d"}
+                },
+                model="gpt-4",
+                key_model_max_budget={
+                    "gpt-4": {"budget_limit": 0, "time_period": "1d"}
+                },
+            )
+
+
+@pytest.mark.asyncio
+async def test_zero_limit_key_entry_still_tracks_team_spend(budget_limiter):
+    """Spend from a zero-limit key entry must still drive the shared team counter,
+    otherwise the bypass extends to accounting as well."""
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        TEAM_MODEL_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    incremented = {}
+
+    async def fake_increment(budget_config, spend_key, start_time_key, response_cost):
+        incremented[spend_key] = response_cost
+
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 4.0,
+            "model_group": "gpt-4",
+            "model": "openai/gpt-4",
+            "metadata": {"user_api_key_hash": "hash-1"},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_team_id": "team-1",
+                "user_api_key_team_model_max_budget": {
+                    "gpt-4": {"budget_limit": 100.0, "time_period": "1d"}
+                },
+                "user_api_key_model_max_budget": {
+                    "gpt-4": {"budget_limit": 0, "time_period": "1d"}
+                },
+            }
+        },
+    }
+    with patch.object(
+        budget_limiter, "_increment_spend_for_key", side_effect=fake_increment
+    ):
+        await budget_limiter.async_log_success_event(kwargs, None, 0, 0)
+
+    assert any(k.startswith(TEAM_MODEL_SPEND_CACHE_KEY_PREFIX) for k in incremented)
+
+
+@pytest.mark.asyncio
+async def test_team_counter_shared_across_model_spellings(budget_limiter):
+    """Spend tracked under openai/gpt-4 and enforcement for gpt-4 (and vice versa)
+    must hit ONE canonical counter, or alternating spellings doubles the cap
+    (Greptile fragmentation finding). Uses the real DualCache, no spend-read mocks."""
+    team_budget = {"gpt-4": {"budget_limit": 5.0, "time_period": "1d"}}
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 6.0,
+            "model_group": "openai/gpt-4",
+            "model": "openai/gpt-4",
+            "metadata": {"user_api_key_hash": "hash-1"},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_team_id": "team-frag",
+                "user_api_key_team_model_max_budget": team_budget,
+            }
+        },
+    }
+    await budget_limiter.async_log_success_event(kwargs, None, 0, 0)
+
+    for request_model in ("gpt-4", "openai/gpt-4"):
+        with pytest.raises(litellm.BudgetExceededError):
+            await budget_limiter.is_team_within_model_budget(
+                team_id="team-frag",
+                team_model_max_budget=team_budget,
+                model=request_model,
+            )
+
+
+@pytest.mark.asyncio
+async def test_team_window_start_key_is_per_model_and_duration(budget_limiter):
+    """Each (model, duration) window needs its own start-time key; a shared per-team
+    key lets a short window's reset restart a longer window early (Greptile finding)."""
+    captured = []
+
+    async def fake_increment(budget_config, spend_key, start_time_key, response_cost):
+        captured.append(start_time_key)
+
+    team_budget = {
+        "gpt-4": {"budget_limit": 100.0, "time_period": "1d"},
+        "claude-3": {"budget_limit": 500.0, "time_period": "7d"},
+    }
+    for model_group in ("gpt-4", "claude-3"):
+        kwargs = {
+            "standard_logging_object": {
+                "response_cost": 1.0,
+                "model_group": model_group,
+                "model": model_group,
+                "metadata": {"user_api_key_hash": "hash-1"},
+            },
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_team_id": "team-windows",
+                    "user_api_key_team_model_max_budget": team_budget,
+                }
+            },
+        }
+        with patch.object(
+            budget_limiter, "_increment_spend_for_key", side_effect=fake_increment
+        ):
+            await budget_limiter.async_log_success_event(kwargs, None, 0, 0)
+
+    assert captured == [
+        "team_model_budget_start_time:team-windows:gpt-4:1d",
+        "team_model_budget_start_time:team-windows:claude-3:7d",
+    ]
+
+
+def test_get_matched_budget_model_name_strips_entry_prefix(budget_limiter):
+    """Config entries keyed provider/model must bind bare (and differently prefixed)
+    requests; before the fix only the request side was normalized, so an
+    openai/gpt-4 entry never matched a gpt-4 request (Greptile finding)."""
+    configs = budget_limiter._coerce_budget_configs(
+        {"openai/gpt-4": {"budget_limit": 5.0, "time_period": "1d"}}
+    )
+    assert (
+        budget_limiter._get_matched_budget_model_name(
+            model="gpt-4", internal_model_max_budget=configs
+        )
+        == "openai/gpt-4"
+    )
+    assert (
+        budget_limiter._get_matched_budget_model_name(
+            model="azure/gpt-4", internal_model_max_budget=configs
+        )
+        == "openai/gpt-4"
+    )
+    assert (
+        budget_limiter._get_matched_budget_model_name(
+            model="claude-3", internal_model_max_budget=configs
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_prefixed_team_budget_entry_matches_bare_request(budget_limiter):
+    """A team cap keyed openai/gpt-4 must govern a bare gpt-4 request end to end:
+    spend recorded under the canonical entry name, then enforcement raising for
+    either spelling. Uses the real DualCache, no spend-read mocks."""
+    team_budget = {"openai/gpt-4": {"budget_limit": 5.0, "time_period": "1d"}}
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 6.0,
+            "model_group": "gpt-4",
+            "model": "gpt-4",
+            "metadata": {"user_api_key_hash": "hash-1"},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_team_id": "team-prefixed",
+                "user_api_key_team_model_max_budget": team_budget,
+            }
+        },
+    }
+    await budget_limiter.async_log_success_event(kwargs, None, 0, 0)
+
+    for request_model in ("gpt-4", "openai/gpt-4"):
+        with pytest.raises(litellm.BudgetExceededError):
+            await budget_limiter.is_team_within_model_budget(
+                team_id="team-prefixed",
+                team_model_max_budget=team_budget,
+                model=request_model,
+            )

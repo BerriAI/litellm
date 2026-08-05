@@ -1014,8 +1014,7 @@ def run_server(
                 # user is missing a proxy dependency, ask them to pip install litellm[proxy]
                 raise e
             else:
-                # this is just a local/relative import error, user git cloned litellm
-                from proxy_server import (
+                from litellm.proxy.proxy_server import (
                     KeyManagementSettings,
                     ProxyConfig,
                     app,
