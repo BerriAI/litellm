@@ -5,6 +5,11 @@ Logs to separate GCS buckets for success/error events with custom folder structu
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
+from litellm.integrations.gcs_bucket.redaction import (
+    redact_messages,
+    redact_text,
+    redact_dict_values,
+)
 from litellm._logging import verbose_logger
 import litellm
 import json
@@ -13,7 +18,28 @@ import uuid
 import os
 from datetime import datetime
 from typing import Optional
-from urllib.parse import quote
+
+
+def _sanitize_for_json(obj, seen=None):
+    if isinstance(obj, (str, int, float, bool, type(None))):
+        return obj
+    if seen is None:
+        seen = set()
+    if id(obj) in seen:
+        return None
+    seen.add(id(obj))
+    if isinstance(obj, dict):
+        return {str(k): _sanitize_for_json(v, seen) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_json(item, seen) for item in obj]
+    if isinstance(obj, tuple):
+        return [_sanitize_for_json(item, seen) for item in obj]
+    if hasattr(obj, "model_dump"):
+        try:
+            return _sanitize_for_json(obj.model_dump(), seen)
+        except Exception:
+            return str(obj)
+    return str(obj)
 
 
 class ProductionGCSLogger(CustomLogger):
@@ -179,7 +205,9 @@ class ProductionGCSLogger(CustomLogger):
                     "mode": metadata.get("model_info", {}).get("mode"),
                 },
                 "conversation": {
-                    "messages": kwargs.get("input", kwargs.get("messages", [])),
+                    "messages": redact_messages(
+                        kwargs.get("input", kwargs.get("messages", []))
+                    ),
                     "temperature": kwargs.get("temperature"),
                     "max_tokens": kwargs.get("max_tokens"),
                     "top_p": kwargs.get("top_p"),
@@ -204,6 +232,14 @@ class ProductionGCSLogger(CustomLogger):
                 "headers": metadata.get("headers"),
             }
 
+            
+            if not success_log["user"]["email"]:
+                try:
+                    success_log["litellm_kwargs"] = redact_dict_values(
+                        _sanitize_for_json(kwargs)
+                    )
+                except Exception as e:
+                    verbose_logger.info(f"Failed to serialize litellm_kwargs: {e}")
             if hasattr(response_obj, "choices") and response_obj.choices:
                 choice = response_obj.choices[0]
                 success_log["response"] = {
@@ -212,21 +248,39 @@ class ProductionGCSLogger(CustomLogger):
                     "tool_calls": None,
                     "function_call": None,
                     "reasoning_content": None,
+                    "thinking_blocks": None,
+                    "reasoning_items": None,
                 }
 
                 if hasattr(choice, "message"):
                     message = choice.message
-                    success_log["response"]["content"] = getattr(
-                        message, "content", None
+                    success_log["response"]["content"] = redact_text(
+                        getattr(message, "content", None)
                     )
-                    success_log["response"]["reasoning_content"] = getattr(
+                    reasoning = getattr(
                         message, "reasoning_content", None
+                    ) or getattr(
+                        message, "reasoning", None
                     )
-                    success_log["response"]["tool_calls"] = getattr(
-                        message, "tool_calls", None
+                    success_log["response"]["reasoning_content"] = redact_text(
+                        reasoning
                     )
-                    success_log["response"]["function_call"] = getattr(
-                        message, "function_call", None
+                    success_log["response"]["tool_calls"] = _sanitize_for_json(
+                        getattr(message, "tool_calls", None)
+                    )
+                    success_log["response"]["function_call"] = _sanitize_for_json(
+                        getattr(message, "function_call", None)
+                    )
+                    thinking_blocks = _sanitize_for_json(
+                        getattr(message, "thinking_blocks", None)
+                    )
+                    if isinstance(thinking_blocks, list):
+                        for block in thinking_blocks:
+                            if isinstance(block, dict) and "thinking" in block:
+                                block["thinking"] = redact_text(block["thinking"])
+                    success_log["response"]["thinking_blocks"] = thinking_blocks
+                    success_log["response"]["reasoning_items"] = _sanitize_for_json(
+                        getattr(message, "reasoning_items", None)
                     )
 
                 # --- RL training fields: logprobs + token_ids ---
@@ -318,7 +372,7 @@ class ProductionGCSLogger(CustomLogger):
                 "request": {
                     "messages_count": len(kwargs.get("messages", [])),
                     "first_message": json.dumps(
-                        kwargs.get("messages", []), default=str
+                        redact_messages(kwargs.get("messages", [])), default=str
                     ),
                     "max_tokens": kwargs.get("max_tokens"),
                     "route": metadata.get("user_api_key_request_route"),
