@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 
@@ -171,7 +171,7 @@ class CustomOpenAPISpec:
             Schema with rewritten references
         """
         if isinstance(schema, dict):
-            result = {}
+            result: Final = {}
             for key, value in schema.items():
                 if key == "$ref" and isinstance(value, str) and value.startswith("#/$defs/"):
                     # Rewrite the reference to use components/schemas
@@ -206,7 +206,7 @@ class CustomOpenAPISpec:
 
         # Handle anyOf (Optional fields in Pydantic v2)
         if "anyOf" in field_def:
-            any_of = field_def["anyOf"]
+            any_of: Final = field_def["anyOf"]
             # Find the non-null type
             for option in any_of:
                 if option.get("type") != "null":
@@ -255,7 +255,7 @@ class CustomOpenAPISpec:
         """
         try:
             # Get the schema for the model class
-            request_schema = CustomOpenAPISpec.get_pydantic_schema(model_class)
+            request_schema: Final = CustomOpenAPISpec.get_pydantic_schema(model_class)
 
             # Only proceed if we successfully got the schema
             if request_schema is not None:

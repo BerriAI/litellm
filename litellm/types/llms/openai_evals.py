@@ -2,7 +2,7 @@
 Type definitions for OpenAI Evals API
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 from typing_extensions import Required, TypedDict

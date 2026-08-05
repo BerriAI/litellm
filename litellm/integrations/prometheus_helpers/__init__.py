@@ -6,7 +6,7 @@ Helpers for the Prometheus integration (extracted to keep ``prometheus.py`` smal
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from litellm.types.integrations.prometheus import (
     UserAPIKeyLabelValues,
@@ -49,7 +49,7 @@ class PrometheusLabelFactoryContext:
 
     def __init__(self, enum_values: UserAPIKeyLabelValues) -> None:
         self.enum_values = enum_values
-        enum_dict = enum_values.model_dump()
+        enum_dict: Final = enum_values.model_dump()
         self._sanitized_enum: dict[str, str | None] = {
             k: _sanitize_prometheus_label_value(v) for k, v in enum_dict.items()
         }
@@ -70,7 +70,7 @@ class PrometheusLabelFactoryContext:
 
     def get_resolved_end_user(self) -> str | None:
         if self._resolved_end_user is self._END_USER_NOT_COMPUTED:
-            fn = _get_cached_end_user_id_for_cost_tracking()
+            fn: Final = _get_cached_end_user_id_for_cost_tracking()
             self._resolved_end_user = fn(
                 litellm_params={"user_api_key_end_user_id": self.enum_values.end_user},
                 service_type="prometheus",
