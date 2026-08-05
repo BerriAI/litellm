@@ -74,6 +74,14 @@ class JSONProviderRegistry:
         return "/v1/responses" in provider.supported_endpoints
 
     @classmethod
+    def supports_anthropic_messages_api(cls, slug: str) -> bool:
+        """Check if a JSON provider supports the Anthropic Messages API"""
+        provider = cls._providers.get(slug)
+        if provider is None:
+            return False
+        return "/v1/messages" in provider.supported_endpoints
+
+    @classmethod
     def list_providers(cls) -> list:
         """List all registered provider slugs"""
         return list(cls._providers.keys())
