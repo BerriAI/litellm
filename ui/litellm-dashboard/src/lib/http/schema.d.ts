@@ -32482,6 +32482,8 @@ export interface components {
              * @enum {string}
              */
             cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            /** Classifier Cost */
+            classifier_cost?: number;
             /** Classifier Model */
             classifier_model?: string;
             /** Conversation Continuing */

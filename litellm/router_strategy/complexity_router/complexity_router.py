@@ -211,6 +211,16 @@ def _parent_session_kwargs(request_kwargs: Mapping[str, Any] | None) -> Mapping[
     return {k: kwargs[k] for k in ("litellm_session_id", "litellm_trace_id") if kwargs.get(k) is not None}
 
 
+def _response_cost_or_none(response: ModelResponse) -> float | None:
+    hidden_params: Final = response._hidden_params
+    if not isinstance(hidden_params, dict):
+        return None
+    cost: Final = hidden_params.get("response_cost")
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+        return None
+    return float(cost)
+
+
 def _effective_turn_off_message_logging(request_kwargs: Mapping[str, Any] | None) -> bool | None:
     from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
         initialize_standard_callback_dynamic_params,
@@ -470,6 +480,7 @@ class ClassificationOutcome(NamedTuple):
     score: float | None
     signals: tuple[str, ...]
     cause: Literal["heuristic_scorer", "reasoning_override", "llm_classifier", "default_model_fallback"]
+    classifier_cost: float | None = None
 
 
 class ComplexityRouter(CustomLogger):
@@ -830,6 +841,7 @@ class ComplexityRouter(CustomLogger):
         escalation_keyword: str | None = None,
         escalated: bool = False,
         classifier_model: str | None = None,
+        classifier_cost: float | None = None,
         conversation_continuing: bool = True,
     ) -> StandardLoggingRoutingDecision:
         """Assemble the per-request provenance record for this router's decision.
@@ -875,6 +887,8 @@ class ComplexityRouter(CustomLogger):
             decision["escalated"] = escalated
         if classifier_model is not None:
             decision["classifier_model"] = classifier_model
+        if classifier_cost is not None:
+            decision["classifier_cost"] = classifier_cost
         return decision
 
     async def aclassify(
@@ -896,9 +910,13 @@ class ComplexityRouter(CustomLogger):
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
 
         try:
-            tier = await self._classify_with_llm(prompt, system_prompt, request_kwargs, messages)
+            tier, classifier_cost = await self._classify_with_llm(prompt, system_prompt, request_kwargs, messages)
             return ClassificationOutcome(
-                tier=tier, score=None, signals=(f"llm-classifier:{tier.value}",), cause="llm_classifier"
+                tier=tier,
+                score=None,
+                signals=(f"llm-classifier:{tier.value}",),
+                cause="llm_classifier",
+                classifier_cost=classifier_cost,
             )
         except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the configured fallback path
             verbose_router_logger.warning(
@@ -944,7 +962,7 @@ class ComplexityRouter(CustomLogger):
         system_prompt: str | None = None,
         request_kwargs: dict[str, Any] | None = None,
         messages: Sequence[Mapping[str, object]] | None = None,
-    ) -> ComplexityTier:
+    ) -> tuple[ComplexityTier, float | None]:
         """
         Call the configured classifier model with a system/user role split and prior-turn context.
 
@@ -1044,7 +1062,7 @@ class ComplexityRouter(CustomLogger):
         tier: Final = self.config.tier_for_label(raw_tier)
         if tier is None:
             raise ValueError(f"LLM classifier returned an unrecognized tier: {raw_tier!r}")
-        return tier
+        return tier, _response_cost_or_none(response)
 
     @staticmethod
     def _build_classifier_user_payload(
@@ -1902,5 +1920,6 @@ class ComplexityRouter(CustomLogger):
                 escalation_keyword=escalation_keyword,
                 escalated=escalated,
                 classifier_model=classifier_model,
+                classifier_cost=outcome.classifier_cost,
             ),
         )
