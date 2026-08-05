@@ -26561,6 +26561,10 @@ export interface components {
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
             output_cost_per_reasoning_token?: number | null;
+            /** Output Cost Per Reasoning Token Flex */
+            output_cost_per_reasoning_token_flex?: number | null;
+            /** Output Cost Per Reasoning Token Priority */
+            output_cost_per_reasoning_token_priority?: number | null;
             /** Output Cost Per Second */
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
@@ -35120,6 +35124,10 @@ export interface components {
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
             output_cost_per_reasoning_token?: number | null;
+            /** Output Cost Per Reasoning Token Flex */
+            output_cost_per_reasoning_token_flex?: number | null;
+            /** Output Cost Per Reasoning Token Priority */
+            output_cost_per_reasoning_token_priority?: number | null;
             /** Output Cost Per Second */
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
