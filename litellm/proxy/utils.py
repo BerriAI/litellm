@@ -63,6 +63,8 @@ except ImportError:
     raise ImportError("backoff is not installed. Please install it via 'pip install backoff'")
 
 from fastapi import HTTPException, status
+from pydantic import BaseModel
+
 
 import litellm
 import litellm.litellm_core_utils
@@ -3754,13 +3756,15 @@ class PrismaClient:
                             return deprecated_response
 
                     if response is not None:
-                        if response["team_models"] is None:
+                        if isinstance(response, BaseModel):
+                            response = response.model_dump()
+                        if response.get("team_models") is None:
                             response["team_models"] = []
-                        if response["team_blocked"] is None:
+                        if response.get("team_blocked") is None:
                             response["team_blocked"] = False
 
                         team_member: Member | None = None
-                        if response["team_members_with_roles"] is not None and response["user_id"] is not None:
+                        if response.get("team_members_with_roles") is not None and response.get("user_id") is not None:
                             ## find the team member corresponding to user id
                             """
                             [
@@ -3780,6 +3784,7 @@ class PrismaClient:
                                 if tm.get("user_id") is not None and response["user_id"] == tm.get("user_id"):
                                     team_member = Member(**tm)
                         response["team_member"] = team_member
+                        response.pop("last_refreshed_at", None)
                         response = LiteLLM_VerificationTokenView(**response, last_refreshed_at=time.time())
                         # for prisma we need to cast the expires time to str
                         if response.expires is not None and isinstance(response.expires, datetime):
