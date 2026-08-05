@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Final, List, Literal, Optional
 
 from typing_extensions import Required, TypedDict
 

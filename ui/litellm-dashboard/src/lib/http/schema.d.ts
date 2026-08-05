@@ -2621,10 +2621,20 @@ export interface paths {
         put?: never;
         /**
          * Cursor Chat Completions
-         * @description Cursor-specific endpoint that accepts Responses API input format but returns chat completions format.
+         * @description Cursor BYOK endpoint. Accepts both request shapes Cursor sends to its OpenAI-compatible
+         *     base URL and always answers in chat completions format.
          *
-         *     This endpoint handles requests from Cursor IDE which sends Responses API format (`input` field)
-         *     but expects chat completions format response (`choices`, `messages`, etc.).
+         *     Cursor agent mode sends Responses API format bodies (`input`, flat tool defs, `reasoning`,
+         *     custom tools) to the chat/completions path while expecting chat completions responses;
+         *     those are routed through the Responses API pipeline and converted back. Genuine chat
+         *     completions bodies (`messages` present) are routed through the standard chat completions
+         *     pipeline, after normalizing each level of the `tools` array and `tool_choice` to the chat
+         *     completions shapes OpenAI requires. Cursor mixes Responses API shapes into chat bodies
+         *     per level, independently: a flat tool def (`{"type": "custom", "name": "ApplyPatch", ...}`)
+         *     gets nested under `custom`, and a flat grammar format
+         *     (`{"type": "grammar", "definition", "syntax"}`) gets wrapped as
+         *     `{"type": "grammar", "grammar": {...}}` wherever it appears, including inside tool defs
+         *     Cursor already sent pre-nested.
          *
          *     ```bash
          *     curl -X POST http://localhost:4000/cursor/chat/completions     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
@@ -2635,6 +2645,58 @@ export interface paths {
          *     ```
          */
         post: operations["cursor_chat_completions_cursor_chat_completions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cursor/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cursor Model List
+         * @description OpenAI-compatible model listing for the Cursor BYOK base URL.
+         *
+         *     Clients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and
+         *     verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
+         *     route those requests fall through to the Cursor Cloud Agents passthrough, which
+         *     demands a Cursor API key and 401s, so key verification silently fails before any
+         *     chat request is ever sent. Delegates to the standard `/v1/models` handler.
+         */
+        get: operations["cursor_model_list_cursor_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cursor/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cursor Model List
+         * @description OpenAI-compatible model listing for the Cursor BYOK base URL.
+         *
+         *     Clients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and
+         *     verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
+         *     route those requests fall through to the Cursor Cloud Agents passthrough, which
+         *     demands a Cursor API key and 401s, so key verification silently fails before any
+         *     chat request is ever sent. Delegates to the standard `/v1/models` handler.
+         */
+        get: operations["cursor_model_list_cursor_v1_models_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4233,6 +4295,27 @@ export interface paths {
          *     Only the /update/ui_theme_settings endpoint requires authentication for admins to change settings.
          */
         get: operations["get_ui_theme_settings_get_ui_theme_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/get/user_banner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get User Banner
+         * @description Get the admin-published dashboard banner.
+         *     Readable by any authenticated user; rendered on every dashboard page.
+         */
+        get: operations["get_user_banner_get_user_banner_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6873,6 +6956,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/key/spend/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Key Spend Report
+         * @description Get spend for the calling api_key over a date range, with a per-model breakdown.
+         *
+         *     Same row shape as `/global/spend/report?api_key=...`, but callable by any key:
+         *     non-admin callers are always scoped to their own api_key, while proxy admins
+         *     may pass `?api_key=` to view any key.
+         */
+        get: operations["get_key_spend_report_key_spend_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/key/unblock": {
         parameters: {
             query?: never;
@@ -9128,6 +9235,31 @@ export interface paths {
          *     ```
          */
         post: operations["new_organization_organization_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organization/spend/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Organization Spend Report
+         * @description Get spend for an organization over a date range, grouped by api_key with a per-model and per-team breakdown.
+         *
+         *     Covers spend logged against the organization directly and against any of its
+         *     teams. Callable by proxy admins (any organization) and org admins (their own
+         *     organizations). Defaults to the calling key's organization_id when
+         *     `?organization_id=` is omitted.
+         */
+        get: operations["get_organization_spend_report_organization_spend_report_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -13640,6 +13772,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/metadata_schema": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Metadata Schema
+         * @description Get the team metadata fields declared in ``general_settings.team_metadata_schema``.
+         *
+         *     The UI uses this to prepopulate the team metadata form with the declared
+         *     keys. Returns an empty ``fields`` list when no schema is configured. This
+         *     schema is advisory; server-side enforcement stays with
+         *     ``custom_team_metadata_validate``.
+         */
+        get: operations["get_team_metadata_schema_team_metadata_schema_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/model/add": {
         parameters: {
             query?: never;
@@ -13853,6 +14010,30 @@ export interface paths {
          * @description Update the team member permissions for a team
          */
         post: operations["update_team_member_permissions_team_permissions_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team/spend/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Spend Report
+         * @description Get spend for the calling key's team over a date range, grouped by api_key with a per-model breakdown.
+         *
+         *     Callable by any key that belongs to a team: non-admin callers are always
+         *     scoped to their key's team_id, while proxy admins may pass `?team_id=` to
+         *     view any team.
+         */
+        get: operations["get_team_spend_report_team_spend_report_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -14467,6 +14648,27 @@ export interface paths {
         patch: operations["update_ui_theme_settings_update_ui_theme_settings_patch"];
         trace?: never;
     };
+    "/update/user_banner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update User Banner
+         * @description Publish, edit, or unpublish the dashboard banner.
+         *     Only proxy admins are allowed to modify it.
+         */
+        patch: operations["update_user_banner_update_user_banner_patch"];
+        trace?: never;
+    };
     "/upload/logo": {
         parameters: {
             query?: never;
@@ -14879,6 +15081,30 @@ export interface paths {
          *     ```
          */
         post: operations["new_user_user_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user/spend/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get User Spend Report
+         * @description Get spend for the calling user over a date range, grouped by api_key with a per-model breakdown.
+         *
+         *     Same row shape as `/global/spend/report?internal_user_id=...`, but callable by
+         *     any key with a user: non-admin callers are always scoped to their own user_id,
+         *     while proxy admins may pass `?internal_user_id=` to view any user.
+         */
+        get: operations["get_user_spend_report_user_spend_report_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -22148,6 +22374,15 @@ export interface components {
              */
             type: "ephemeral";
         };
+        /** ChatCompletionCustomToolCallPayload */
+        ChatCompletionCustomToolCallPayload: {
+            /** Input */
+            input: string;
+            /** Name */
+            name: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** ChatCompletionDeveloperMessage */
         ChatCompletionDeveloperMessage: {
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
@@ -22233,6 +22468,20 @@ export interface components {
             format?: string;
             /** Url */
             url: string;
+        };
+        /** ChatCompletionMessageCustomToolCall */
+        ChatCompletionMessageCustomToolCall: {
+            custom: components["schemas"]["ChatCompletionCustomToolCallPayload"];
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @default custom
+             * @constant
+             */
+            type: "custom";
+        } & {
+            [key: string]: unknown;
         };
         /** ChatCompletionMessageToolCall */
         ChatCompletionMessageToolCall: {
@@ -23496,6 +23745,11 @@ export interface components {
              * @default 0
              */
             total_api_requests: number;
+            /**
+             * Total Autorouter Savings Spend
+             * @default 0
+             */
+            total_autorouter_savings_spend: number;
             /**
              * Total Cache Creation Input Tokens
              * @default 0
@@ -27867,7 +28121,7 @@ export interface components {
             /** Thinking Blocks */
             thinking_blocks?: (components["schemas"]["ChatCompletionThinkingBlock"] | components["schemas"]["ChatCompletionRedactedThinkingBlock"])[] | null;
             /** Tool Calls */
-            tool_calls: components["schemas"]["ChatCompletionMessageToolCall"][] | null;
+            tool_calls: (components["schemas"]["ChatCompletionMessageToolCall"] | components["schemas"]["ChatCompletionMessageCustomToolCall"])[] | null;
         } & {
             [key: string]: unknown;
         };
@@ -31403,6 +31657,11 @@ export interface components {
              */
             api_requests: number;
             /**
+             * Autorouter Savings Spend
+             * @default 0
+             */
+            autorouter_savings_spend: number;
+            /**
              * Cache Creation Input Tokens
              * @default 0
              */
@@ -32023,6 +32282,27 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * TeamMetadataFieldSchema
+         * @description One declared team metadata field from ``general_settings.team_metadata_schema``.
+         *
+         *     Advisory only: the UI uses it to prepopulate the team metadata form.
+         *     Enforcement stays with ``custom_team_metadata_validate``.
+         */
+        TeamMetadataFieldSchema: {
+            /** Key */
+            key: string;
+            /** Label */
+            label?: string | null;
+        };
+        /**
+         * TeamMetadataSchemaResponse
+         * @description Response for GET /team/metadata_schema; ``fields`` is empty when no schema is configured.
+         */
+        TeamMetadataSchemaResponse: {
+            /** Fields */
+            fields: components["schemas"]["TeamMetadataFieldSchema"][];
         };
         /**
          * TeamModelAddRequest
@@ -33048,6 +33328,12 @@ export interface components {
                 };
             };
         };
+        /** UpdateUserBannerResponse */
+        UpdateUserBannerResponse: {
+            banner: components["schemas"]["UserBanner"];
+            /** Message */
+            message: string;
+        };
         /** UpdateUserRequest */
         UpdateUserRequest: {
             /** Agent Id */
@@ -33654,6 +33940,56 @@ export interface components {
             user_spend?: number | null;
             /** User Tpm Limit */
             user_tpm_limit?: number | null;
+        };
+        /** UserBanner */
+        UserBanner: {
+            /**
+             * Enabled
+             * @description If true, the banner is shown to all authenticated dashboard users.
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Message
+             * @description Banner text shown to dashboard users. Markdown is supported.
+             * @default
+             */
+            message: string;
+            /**
+             * Revision
+             * @description Server-stamped opaque publish identity; a fresh value is generated on every update so clients re-surface dismissed banners on republish.
+             * @default
+             */
+            revision: string;
+            /**
+             * Severity
+             * @description Visual style of the banner.
+             * @default info
+             * @enum {string}
+             */
+            severity: "info" | "warning" | "error";
+        };
+        /** UserBannerUpdate */
+        UserBannerUpdate: {
+            /**
+             * Enabled
+             * @description If true, the banner is shown to all authenticated dashboard users.
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Message
+             * @description Banner text shown to dashboard users. Markdown is supported.
+             * @default
+             */
+            message: string;
+            /**
+             * Severity
+             * @description Visual style of the banner.
+             * @default info
+             * @enum {string}
+             */
+            severity: "info" | "warning" | "error";
         };
         /**
          * UserHeaderMapping
@@ -38516,6 +38852,46 @@ export interface operations {
             };
         };
     };
+    cursor_model_list_cursor_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    cursor_model_list_cursor_v1_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     cursor_proxy_route_cursor__endpoint__get: {
         parameters: {
             query?: never;
@@ -40721,6 +41097,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UIThemeSettingsResponse"];
+                };
+            };
+        };
+    };
+    get_user_banner_get_user_banner_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserBanner"];
                 };
             };
         };
@@ -43213,6 +43609,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_key_spend_report_key_spend_report_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend (YYYY-MM-DD) */
+                start_date?: string | null;
+                /** @description Time till which to view spend (YYYY-MM-DD) */
+                end_date?: string | null;
+                /** @description View spend for a specific api_key. Proxy admin only; other callers are scoped to their own key. */
+                api_key?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -46219,6 +46653,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NewOrganizationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_organization_spend_report_organization_spend_report_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend (YYYY-MM-DD) */
+                start_date?: string | null;
+                /** @description Time till which to view spend (YYYY-MM-DD) */
+                end_date?: string | null;
+                /** @description View spend for a specific organization_id. Proxy admins may pass any organization; org admins are scoped to organizations they administer. */
+                organization_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -51069,6 +51541,26 @@ export interface operations {
             };
         };
     };
+    get_team_metadata_schema_team_metadata_schema_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamMetadataSchemaResponse"];
+                };
+            };
+        };
+    };
     team_model_add_team_model_add_post: {
         parameters: {
             query?: never;
@@ -51256,6 +51748,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LiteLLM_TeamTable"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_team_spend_report_team_spend_report_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend (YYYY-MM-DD) */
+                start_date?: string | null;
+                /** @description Time till which to view spend (YYYY-MM-DD) */
+                end_date?: string | null;
+                /** @description View spend for a specific team_id. Proxy admin only; other callers are scoped to their key's team. */
+                team_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -52091,6 +52621,39 @@ export interface operations {
             };
         };
     };
+    update_user_banner_update_user_banner_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserBannerUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateUserBannerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     upload_logo_upload_logo_post: {
         parameters: {
             query?: never;
@@ -52499,6 +53062,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NewUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_spend_report_user_spend_report_get: {
+        parameters: {
+            query?: {
+                /** @description Time from which to start viewing spend (YYYY-MM-DD) */
+                start_date?: string | null;
+                /** @description Time till which to view spend (YYYY-MM-DD) */
+                end_date?: string | null;
+                /** @description View spend for a specific internal_user_id. Proxy admin only; other callers are scoped to their own user_id. */
+                internal_user_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */

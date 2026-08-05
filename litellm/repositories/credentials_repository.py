@@ -6,7 +6,7 @@ credential values is the caller's responsibility (see ``CredentialHelperUtils``)
 so reads return the stored values verbatim.
 """
 
-from typing import Any
+from typing import Any, Final
 
 from litellm.models.credentials import CredentialItem
 from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
@@ -35,7 +35,7 @@ class CredentialsRepository:
     def _to_model(record: Any) -> CredentialItem | None:
         if record is None:
             return None
-        data = record.dict() if hasattr(record, "dict") else dict(record)
+        data: Final = record.dict() if hasattr(record, "dict") else dict(record)
         return CredentialItem(
             credential_name=data["credential_name"],
             credential_values=data.get("credential_values") or {},
@@ -49,7 +49,7 @@ class CredentialsRepository:
         return await self.table.create(data=data)
 
     async def find_by_name(self, credential_name: str) -> CredentialItem | None:
-        record = await self.table.find_unique(where={"credential_name": credential_name})
+        record: Final = await self.table.find_unique(where={"credential_name": credential_name})
         return self._to_model(record)
 
     async def update_by_name(self, credential_name: str, data: dict[str, Any]) -> Any:

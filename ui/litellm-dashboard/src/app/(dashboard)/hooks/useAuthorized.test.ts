@@ -130,7 +130,7 @@ describe("useAuthorized", () => {
       key: "api-key-123",
       user_id: "user-1",
       user_email: "user@example.com",
-      user_role: "app_admin",
+      user_role: "proxy_admin",
       premium_user: true,
       disabled_non_admin_personal_key_creation: false,
       login_method: "username_password",
@@ -197,7 +197,7 @@ describe("useAuthorized", () => {
       key: "api-key-123",
       user_id: "user-1",
       user_email: "user@example.com",
-      user_role: "app_admin",
+      user_role: "proxy_admin",
       premium_user: true,
       disabled_non_admin_personal_key_creation: false,
       login_method: "username_password",
@@ -256,7 +256,7 @@ describe("useAuthorized", () => {
       key: "api-key-123",
       user_id: "user-1",
       user_email: "user@example.com",
-      user_role: "app_admin",
+      user_role: "proxy_admin",
     };
 
     decodeTokenMock.mockReturnValue(decodedPayload);
