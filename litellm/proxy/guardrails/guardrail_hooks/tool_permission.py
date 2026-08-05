@@ -1,6 +1,6 @@
 import json
 import re
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from typing import Any, Final, Literal
 
 from fastapi import HTTPException
@@ -29,7 +29,6 @@ from litellm.types.utils import (
     Choices,
     LLMResponseTypes,
     ModelResponse,
-    ModelResponseStream,
 )
 
 GUARDRAIL_NAME: Final = "tool_permission"
@@ -723,16 +722,99 @@ class ToolPermissionGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Tool Permission Guardrail: Skipping check (not enabled)")
             return response
 
-        # Extract tool_calls from the response
-        tool_calls: Final = self._extract_tool_calls_from_response(response)
+        self._enforce_tool_permissions(response)
 
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+        return response
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[Any, None]:
+        """
+        Check tool usage permissions after the LLM stream call
+
+        Args:
+            user_api_key_dict: User API key information (unused but required by interface)
+            response: The model response to check
+            request_data: The model request (unused but required by interface)
+        """
+
+        # Import here to avoid circular imports
+        from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+        from litellm.main import stream_chunk_builder
+        from litellm.types.utils import TextCompletionResponse
+
+        # Collect all chunks to process them together
+        all_chunks: Final[tuple[Any, ...]] = tuple([chunk async for chunk in response])
+
+        provider_frames: Final = tuple([chunk for chunk in all_chunks if isinstance(chunk, (bytes, str))])
+        if provider_frames:
+            self._check_provider_frame_stream(frames=provider_frames, request_data=request_data)
+            for chunk in all_chunks:
+                yield chunk
+            return
+
+        assembled_model_response: Final[ModelResponse | TextCompletionResponse | None] = stream_chunk_builder(
+            chunks=all_chunks,
+        )
+        if isinstance(assembled_model_response, ModelResponse):
+            self._enforce_tool_permissions(assembled_model_response)
+            mock_response: Final = MockResponseIterator(model_response=assembled_model_response)
+            # Return the reconstructed stream
+            async for chunk in mock_response:
+                yield chunk
+        else:
+            for chunk in all_chunks:
+                yield chunk
+
+    def _check_provider_frame_stream(self, frames: Sequence[bytes | str], request_data: Mapping[str, Any]) -> None:
+        """
+        Enforce permissions on a stream of raw provider SSE frames.
+
+        The /v1/messages passthrough hands this hook Anthropic wire frames rather than
+        ModelResponseStream objects. They cannot go through stream_chunk_builder (it
+        indexes them like dicts and 500s the request), so they are reassembled with the
+        same Anthropic handler the unified guardrail translation uses.
+
+        The frames themselves are replayed untouched, so a denied tool always blocks
+        here: rewriting a tool call into an error result is not expressible against
+        already-encoded provider frames.
+        """
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+            AnthropicPassthroughLoggingHandler,
+        )
+
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        assembled: Final = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(  # pyright: ignore[reportPrivateUsage]  # only public entry points log; this one just reassembles frames
+            all_chunks=frames,
+            litellm_logging_obj=logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None,
+            model=str(request_data.get("model") or ""),
+        )
+        if not isinstance(assembled, ModelResponse):
+            verbose_proxy_logger.warning(
+                "Tool Permission Guardrail: could not reassemble the streamed response, skipping tool checks"
+            )
+            return
+
+        for tool_call in self._extract_tool_calls_from_response(assembled):
+            is_allowed, _, message = self._get_permission_for_tool_call(tool_call)
+            if not is_allowed and message is not None:
+                verbose_proxy_logger.warning("Tool Permission Guardrail: %s", message)
+                raise GuardrailRaisedException(guardrail_name=self.guardrail_name, message=message)
+
+    def _enforce_tool_permissions(self, model_response: ModelResponse) -> None:
+        """Block on the first denied tool call, or annotate the response when rewriting."""
+        tool_calls: Final = self._extract_tool_calls_from_response(model_response)
         if not tool_calls:
             verbose_proxy_logger.debug("Tool Permission Guardrail: No tool uses found")
-            return response
+            return
 
         verbose_proxy_logger.debug("Tool Permission Guardrail: Found %s tool calls", len(tool_calls))
 
-        # Check permissions for each tool use
         denied_tools: Final = []
         for tool_call in tool_calls:
             is_allowed, rule_id, message = self._get_permission_for_tool_call(tool_call)
@@ -761,93 +843,6 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 )
 
         if denied_tools:
-            self._modify_response_with_permission_errors(response, denied_tools)
+            self._modify_response_with_permission_errors(model_response, denied_tools)
         else:
             verbose_proxy_logger.debug("Tool Permission Guardrail Post-Call Hook: All tools allowed")
-
-        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
-        return response
-
-    async def async_post_call_streaming_iterator_hook(
-        self,
-        user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
-        request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
-        """
-        Check tool usage permissions after the LLM stream call
-
-        Args:
-            user_api_key_dict: User API key information (unused but required by interface)
-            response: The model response to check
-            request_data: The model request (unused but required by interface)
-        """
-
-        # Import here to avoid circular imports
-        from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
-        from litellm.main import stream_chunk_builder
-        from litellm.types.utils import TextCompletionResponse
-
-        # Collect all chunks to process them together
-        all_chunks: Final[list[ModelResponseStream]] = []
-        async for chunk in response:
-            all_chunks.append(chunk)
-
-        assembled_model_response: Final[ModelResponse | TextCompletionResponse | None] = stream_chunk_builder(
-            chunks=all_chunks,
-        )
-        if isinstance(assembled_model_response, ModelResponse):
-            verbose_proxy_logger.debug("Tool Permission Guardrail: Checking response")
-
-            # Extract tool_calls from the response
-            tool_calls: Final = self._extract_tool_calls_from_response(assembled_model_response)
-
-            if not tool_calls:
-                verbose_proxy_logger.debug("Tool Permission Guardrail: No tool uses found")
-                mock_response = MockResponseIterator(model_response=assembled_model_response)
-                async for chunk in mock_response:
-                    yield chunk
-                return
-
-            verbose_proxy_logger.debug("Tool Permission Guardrail: Found %s tool calls", len(tool_calls))
-
-            # Check permissions for each tool use
-            denied_tools: Final = []
-            for tool_call in tool_calls:
-                is_allowed, rule_id, message = self._get_permission_for_tool_call(tool_call)
-
-                if not is_allowed and message is not None:
-                    verbose_proxy_logger.warning("Tool Permission Guardrail: %s", message)
-
-                    if self.on_disallowed_action == "block":
-                        raise GuardrailRaisedException(
-                            guardrail_name=self.guardrail_name,
-                            message=message,
-                        )
-                    denied_tools.append(
-                        (
-                            tool_call,
-                            PermissionError(
-                                tool_name=(
-                                    tool_call.function.name
-                                    if tool_call.function and tool_call.function.name
-                                    else "unknown_tool"
-                                ),
-                                rule_id=rule_id,
-                                message=message,
-                            ),
-                        )
-                    )
-
-            if denied_tools:
-                self._modify_response_with_permission_errors(assembled_model_response, denied_tools)
-            else:
-                verbose_proxy_logger.debug("Tool Permission Guardrail Post-Call Hook: All tools allowed")
-
-            mock_response = MockResponseIterator(model_response=assembled_model_response)
-            # Return the reconstructed stream
-            async for chunk in mock_response:
-                yield chunk
-        else:
-            for chunk in all_chunks:
-                yield chunk

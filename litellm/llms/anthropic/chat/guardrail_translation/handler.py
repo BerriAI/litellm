@@ -13,7 +13,10 @@ Pattern Overview:
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
+
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -22,10 +25,11 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
-    openai_messages_without_system,
-    openai_messages_without_tool,
+    filtered_structured_messages,
+    role_out_of_guardrail_scope,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -56,6 +60,18 @@ if TYPE_CHECKING:
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
     )
+
+
+InputTextKind = Literal["message_string", "text_block", "tool_result_string", "tool_result_block"]
+
+
+class InputTextLocation(NamedTuple):
+    """Where one scanned text lives inside an Anthropic request, so masked text can be written back."""
+
+    kind: InputTextKind
+    msg_idx: int
+    content_idx: int = 0
+    block_idx: int = 0
 
 
 class AnthropicMessagesHandler(BaseTranslation):
@@ -278,22 +294,23 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
 
         chat_completion_compatible_request: Final = self._translate_to_openai(data)
 
-        structured_messages = cast(
-            list[AllMessageValues],
-            chat_completion_compatible_request.get("messages", []),
+        structured_messages: Final = filtered_structured_messages(
+            cast(list[AllMessageValues], chat_completion_compatible_request.get("messages", [])),
+            scan_only_tool_results=scan_only_tool_results,
+            skip_system=skip_system,
+            skip_tool=skip_tool,
         )
-        if skip_system:
-            structured_messages = openai_messages_without_system(structured_messages)
-        if skip_tool:
-            structured_messages = openai_messages_without_tool(structured_messages)
 
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
-        tools_to_check: Final[list[ChatCompletionToolParam]] = chat_completion_compatible_request.get("tools", [])
-        task_mappings: Final[list[tuple[int, int | None]]] = []
+        tools_to_check: Final[list[ChatCompletionToolParam]] = (
+            [] if scan_only_tool_results else chat_completion_compatible_request.get("tools", [])
+        )
+        task_mappings: Final[list[InputTextLocation]] = []
 
         # Step 1: Extract all text content and images
         for msg_idx, message in enumerate(messages):
@@ -305,6 +322,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 task_mappings=task_mappings,
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
+                scan_only_tool_results=scan_only_tool_results,
             )
 
         # Step 2: Apply guardrail to all texts in batch
@@ -314,9 +332,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tools_to_check:
                 inputs["tools"] = tools_to_check
-            original_structured_messages: Final = structured_messages
-            if structured_messages:
-                inputs["structured_messages"] = structured_messages
+            original_structured_messages: Final = list(structured_messages)
+            if original_structured_messages:
+                inputs["structured_messages"] = original_structured_messages
             # Include model information if available
             model: Final = data.get("model")
             if model:
@@ -411,19 +429,21 @@ class AnthropicMessagesHandler(BaseTranslation):
         msg_idx: int,
         texts_to_check: list[str],
         images_to_check: list[str],
-        task_mappings: list[tuple[int, int | None]],
+        task_mappings: list[InputTextLocation],
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
+        scan_only_tool_results: bool = False,
     ) -> None:
         """
         Extract text content and images from a message.
 
         Override this method to customize text/image extraction logic.
         """
-        role: Final = str(message.get("role") or "").lower()
-        if skip_system_message and role == "system":
-            return
-        if skip_tool_message and role == "tool":
+        if role_out_of_guardrail_scope(
+            str(message.get("role") or "").lower(),
+            skip_system_message=skip_system_message,
+            skip_tool_message=skip_tool_message,
+        ):
             return
 
         content: Final = message.get("content", None)
@@ -434,17 +454,34 @@ class AnthropicMessagesHandler(BaseTranslation):
         ## CHECK FOR TEXT + IMAGES
         if content is not None and isinstance(content, str):
             # Simple string content
+            if scan_only_tool_results:
+                return
             texts_to_check.append(content)
-            task_mappings.append((msg_idx, None))
+            task_mappings.append(InputTextLocation(kind="message_string", msg_idx=msg_idx))
 
         elif content is not None and isinstance(content, list):
             # List content (e.g., multimodal with text and images)
             for content_idx, content_item in enumerate(content):
+                if content_item.get("type") == "tool_result":
+                    for tool_result_text, location in self._extract_tool_result_text(
+                        tool_result=content_item,
+                        msg_idx=msg_idx,
+                        content_idx=int(content_idx),
+                    ):
+                        texts_to_check.append(tool_result_text)
+                        task_mappings.append(location)
+                    continue
+
+                if scan_only_tool_results:
+                    continue
+
                 # Extract text
                 text_str = content_item.get("text", None)
                 if text_str is not None:
                     texts_to_check.append(text_str)
-                    task_mappings.append((msg_idx, int(content_idx)))
+                    task_mappings.append(
+                        InputTextLocation(kind="text_block", msg_idx=msg_idx, content_idx=int(content_idx))
+                    )
 
                 # Extract images
                 if content_item.get("type") == "image":
@@ -454,6 +491,40 @@ class AnthropicMessagesHandler(BaseTranslation):
                         data = source.get("data")
                         if data:
                             images_to_check.append(data)
+
+    @staticmethod
+    def _extract_tool_result_text(
+        tool_result: Mapping[str, Any],
+        msg_idx: int,
+        content_idx: int,
+    ) -> tuple[tuple[str, InputTextLocation], ...]:
+        """
+        Extract the text a tool returned to the model, paired with where it came from.
+
+        Anthropic tool_result blocks carry their payload under ``content`` (a string or a list of
+        blocks), never under ``text``, so tool output reaches the model unscanned unless it is
+        pulled out here. It is the least trusted content in an agent request.
+        """
+        payload: Final = tool_result.get("content")
+        if isinstance(payload, str):
+            return ((payload, InputTextLocation(kind="tool_result_string", msg_idx=msg_idx, content_idx=content_idx)),)
+
+        if not isinstance(payload, list):
+            return ()
+
+        return tuple(
+            (
+                block["text"],
+                InputTextLocation(
+                    kind="tool_result_block",
+                    msg_idx=msg_idx,
+                    content_idx=content_idx,
+                    block_idx=int(block_idx),
+                ),
+            )
+            for block_idx, block in enumerate(payload)
+            if isinstance(block, dict) and block.get("text") is not None
+        )
 
     def _extract_input_tools(
         self,
@@ -475,7 +546,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         self,
         messages: list[dict[str, Any]],
         responses: list[str],
-        task_mappings: list[tuple[int, int | None]],
+        task_mappings: list[InputTextLocation],
     ) -> None:
         """
         Apply guardrail responses back to input messages.
@@ -483,21 +554,26 @@ class AnthropicMessagesHandler(BaseTranslation):
         Override this method to customize how responses are applied.
         """
         for task_idx, guardrail_response in enumerate(responses):
-            mapping = task_mappings[task_idx]
-            msg_idx = cast(int, mapping[0])
-            content_idx_optional = cast(int | None, mapping[1])
-
-            content = messages[msg_idx].get("content", None)
+            location = task_mappings[task_idx]
+            content = messages[location.msg_idx].get("content", None)
             if content is None:
                 continue
 
-            if isinstance(content, str) and content_idx_optional is None:
-                # Replace string content with guardrail response
-                messages[msg_idx]["content"] = guardrail_response
-
-            elif isinstance(content, list) and content_idx_optional is not None:
-                # Replace specific text item in list content
-                messages[msg_idx]["content"][content_idx_optional]["text"] = guardrail_response
+            match location.kind:
+                case "message_string":
+                    if isinstance(content, str):
+                        messages[location.msg_idx]["content"] = guardrail_response
+                case "text_block":
+                    if isinstance(content, list):
+                        content[location.content_idx]["text"] = guardrail_response
+                case "tool_result_string":
+                    if isinstance(content, list):
+                        content[location.content_idx]["content"] = guardrail_response
+                case "tool_result_block":
+                    if isinstance(content, list):
+                        content[location.content_idx]["content"][location.block_idx]["text"] = guardrail_response
+                case _:
+                    assert_never(location.kind)
 
     async def process_output_response(
         self,

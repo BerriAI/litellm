@@ -418,7 +418,7 @@ class AnthropicPassthroughLoggingHandler:
     @staticmethod
     def _build_complete_streaming_response(
         all_chunks: Sequence[str | bytes],
-        litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_logging_obj: LiteLLMLoggingObj | None,
         model: str,
     ) -> ModelResponse | TextCompletionResponse | None:
         """
@@ -574,7 +574,7 @@ class AnthropicPassthroughLoggingHandler:
     @staticmethod
     def _build_complete_streaming_response_legacy(
         all_chunks: Sequence[str | bytes],
-        litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_logging_obj: LiteLLMLoggingObj | None,
         model: str,
     ) -> ModelResponse | TextCompletionResponse | None:
         """

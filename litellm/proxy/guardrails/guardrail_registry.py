@@ -487,16 +487,12 @@ class InMemoryGuardrailHandler:
             raise ValueError(f"Unsupported guardrail: {guardrail_type}")
 
         if custom_guardrail_callback is not None:
-            setattr(
-                custom_guardrail_callback,
+            for scoping_param in (
                 "skip_system_message_in_guardrail",
-                getattr(litellm_params, "skip_system_message_in_guardrail", None),
-            )
-            setattr(
-                custom_guardrail_callback,
                 "skip_tool_message_in_guardrail",
-                getattr(litellm_params, "skip_tool_message_in_guardrail", None),
-            )
+                "scan_only_tool_results",
+            ):
+                setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
             configured_run_in_parallel: Final = getattr(litellm_params, "run_in_parallel", None)
             if configured_run_in_parallel is not None:
                 custom_guardrail_callback.run_in_parallel = bool(configured_run_in_parallel)

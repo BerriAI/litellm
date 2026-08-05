@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any, Final
 
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
@@ -113,13 +114,55 @@ def effective_skip_tool_message_for_guardrail(guardrail_to_apply: Any) -> bool:
     return bool(getattr(litellm, "skip_tool_message_in_guardrail", False))
 
 
+def _message_role(message: AllMessageValues) -> str:
+    return str((message or {}).get("role") or "").lower()
+
+
 def openai_messages_without_system(
-    messages: list[AllMessageValues],
-) -> list[AllMessageValues]:
-    return [m for m in messages if str((m or {}).get("role") or "").lower() != "system"]
+    messages: Sequence[AllMessageValues],
+) -> tuple[AllMessageValues, ...]:
+    return tuple(m for m in messages if _message_role(m) != "system")
 
 
 def openai_messages_without_tool(
-    messages: list[AllMessageValues],
-) -> list[AllMessageValues]:
-    return [m for m in messages if str((m or {}).get("role") or "").lower() != "tool"]
+    messages: Sequence[AllMessageValues],
+) -> tuple[AllMessageValues, ...]:
+    return tuple(m for m in messages if _message_role(m) != "tool")
+
+
+def openai_messages_only_tool(
+    messages: Sequence[AllMessageValues],
+) -> tuple[AllMessageValues, ...]:
+    return tuple(m for m in messages if _message_role(m) == "tool")
+
+
+def effective_scan_only_tool_results_for_guardrail(guardrail_to_apply: Any) -> bool:
+    return getattr(guardrail_to_apply, "scan_only_tool_results", None) is True
+
+
+def role_out_of_guardrail_scope(
+    role: str,
+    *,
+    skip_system_message: bool,
+    skip_tool_message: bool,
+    scan_only_tool_results: bool = False,
+) -> bool:
+    """Whether a message role falls outside what this guardrail is configured to scan."""
+    if skip_system_message and role == "system":
+        return True
+    if skip_tool_message and role == "tool":
+        return True
+    return scan_only_tool_results and role != "tool"
+
+
+def filtered_structured_messages(
+    messages: Sequence[AllMessageValues],
+    *,
+    scan_only_tool_results: bool,
+    skip_system: bool,
+    skip_tool: bool,
+) -> tuple[AllMessageValues, ...]:
+    """Narrow the structured messages a guardrail sees, per its skip/scope settings."""
+    scoped: Final = openai_messages_only_tool(messages) if scan_only_tool_results else tuple(messages)
+    without_system: Final = openai_messages_without_system(scoped) if skip_system else scoped
+    return openai_messages_without_tool(without_system) if skip_tool else without_system
