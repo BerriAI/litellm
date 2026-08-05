@@ -5,6 +5,7 @@ import os
 import socket
 import ssl
 import sys
+import threading
 import time
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional
@@ -1092,6 +1093,7 @@ class HTTPHandler:
         self.ssl_verify = ssl_verify
         self.disable_default_headers = disable_default_headers
         self._owns_client = client is None
+        self._heal_lock = threading.Lock()
         self._client = self.create_client() if client is None else client
 
     def create_client(self) -> httpx.Client:
@@ -1118,7 +1120,9 @@ class HTTPHandler:
     @property
     def client(self) -> httpx.Client:
         if self._owns_client and self._client.is_closed:
-            self._client = self.create_client()
+            with self._heal_lock:
+                if self._owns_client and self._client.is_closed:
+                    self._client = self.create_client()
         return self._client
 
     @client.setter
