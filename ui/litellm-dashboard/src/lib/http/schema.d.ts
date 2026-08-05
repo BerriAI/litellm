@@ -4180,6 +4180,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/gateway/daily/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Gateway Daily Activity
+         * @description Successful and failed gateway requests, counted at the ASGI edge.
+         *
+         *     Deployment-wide: the underlying table has no per-key or per-user dimension,
+         *     so this is admin-only.
+         */
+        get: operations["get_gateway_daily_activity_gateway_daily_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/gemini/{endpoint}": {
         parameters: {
             query?: never;
@@ -24543,6 +24566,64 @@ export interface components {
          * @enum {string}
          */
         GUARDRAIL_DEFINITION_LOCATION: "db" | "config";
+        /**
+         * GatewayRequestActivityResponse
+         * @description Response for GET /gateway/daily/activity.
+         */
+        GatewayRequestActivityResponse: {
+            /**
+             * By Date
+             * @default []
+             */
+            by_date: components["schemas"]["GatewayRequestDailyEntry"][];
+            /**
+             * By Route
+             * @default []
+             */
+            by_route: components["schemas"]["GatewayRequestBreakdownEntry"][];
+            /**
+             * Total Failed Requests
+             * @default 0
+             */
+            total_failed_requests: number;
+            /**
+             * Total Successful Requests
+             * @default 0
+             */
+            total_successful_requests: number;
+        };
+        /** GatewayRequestBreakdownEntry */
+        GatewayRequestBreakdownEntry: {
+            /** Category */
+            category: string;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /** Route */
+            route: string;
+            /**
+             * Successful Requests
+             * @default 0
+             */
+            successful_requests: number;
+        };
+        /** GatewayRequestDailyEntry */
+        GatewayRequestDailyEntry: {
+            /** Date */
+            date: string;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /**
+             * Successful Requests
+             * @default 0
+             */
+            successful_requests: number;
+        };
         /** GenerateKeyRequest */
         GenerateKeyRequest: {
             /** Access Group Ids */
@@ -41371,6 +41452,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_gateway_daily_activity_gateway_daily_activity_get: {
+        parameters: {
+            query?: {
+                /** @description Start date in YYYY-MM-DD format */
+                start_date?: string | null;
+                /** @description End date in YYYY-MM-DD format */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayRequestActivityResponse"];
                 };
             };
             /** @description Validation Error */
