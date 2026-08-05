@@ -2,6 +2,8 @@
 ## Checks if key is allowed to use the cache controls passed in to the completion() call
 
 
+from typing import Final
+
 from fastapi import HTTPException
 
 from litellm import verbose_logger
@@ -25,12 +27,12 @@ class _PROXY_CacheControlCheck(CustomLogger):
     ):
         try:
             verbose_proxy_logger.debug("Inside Cache Control Check Pre-Call Hook")
-            allowed_cache_controls = user_api_key_dict.allowed_cache_controls
+            allowed_cache_controls: Final = user_api_key_dict.allowed_cache_controls
 
             if data.get("cache", None) is None:
                 return
 
-            cache_args = data.get("cache", None)
+            cache_args: Final = data.get("cache", None)
             if isinstance(cache_args, dict):
                 for k, v in cache_args.items():
                     if (
@@ -52,7 +54,5 @@ class _PROXY_CacheControlCheck(CustomLogger):
             raise e
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.cache_control_check.py::async_pre_call_hook(): Exception occured - {}".format(
-                    str(e)
-                )
+                "litellm.proxy.hooks.cache_control_check.py::async_pre_call_hook(): Exception occured - %s", e
             )

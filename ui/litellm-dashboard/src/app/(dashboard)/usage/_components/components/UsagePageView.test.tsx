@@ -30,8 +30,10 @@ vi.mock("@/components/networking", () => ({
 
 // Mock child components to simplify testing
 vi.mock("@/components/activity_metrics", () => ({
-  ActivityMetrics: () => <div>Activity Metrics</div>,
-  processActivityData: () => ({ data: [], metadata: {} }),
+  ActivityMetrics: ({ modelMetrics }: { modelMetrics?: { __source?: string } }) => (
+    <div>{`activity-source:${modelMetrics?.__source ?? "none"}`}</div>
+  ),
+  processActivityData: (_data: unknown, key: string) => ({ __source: key }),
 }));
 
 vi.mock("@/components/view_user_spend", () => ({
@@ -1043,8 +1045,8 @@ describe("UsagePage", () => {
 
       // Default should be "groups" view showing "Top Public Model Names"
       expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
-      expect(screen.getByText("Public Model Name")).toBeInTheDocument();
-      expect(screen.getByText("Litellm Model Name")).toBeInTheDocument();
+      expect(screen.getAllByText("Public Model Name").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Litellm Model Name").length).toBeGreaterThan(0);
     });
 
     it("should switch to Litellm Model Name view on toggle click", async () => {
@@ -1055,7 +1057,7 @@ describe("UsagePage", () => {
       });
 
       // Click the "Litellm Model Name" toggle
-      const litellmToggle = screen.getByText("Litellm Model Name");
+      const litellmToggle = screen.getAllByText("Litellm Model Name")[0];
       act(() => {
         fireEvent.click(litellmToggle);
       });
@@ -1074,7 +1076,7 @@ describe("UsagePage", () => {
       });
 
       // Switch to individual first
-      const litellmToggle = screen.getByText("Litellm Model Name");
+      const litellmToggle = screen.getAllByText("Litellm Model Name")[0];
       act(() => {
         fireEvent.click(litellmToggle);
       });
@@ -1084,7 +1086,7 @@ describe("UsagePage", () => {
       });
 
       // Switch back to groups
-      const publicToggle = screen.getByText("Public Model Name");
+      const publicToggle = screen.getAllByText("Public Model Name")[0];
       act(() => {
         fireEvent.click(publicToggle);
       });
@@ -1092,6 +1094,34 @@ describe("UsagePage", () => {
       await waitFor(() => {
         expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
       });
+    });
+
+    it("should feed the Model Activity tab from the model_groups breakdown by default", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      expect(screen.getByText("activity-source:model_groups")).toBeInTheDocument();
+      expect(screen.queryByText("activity-source:models")).not.toBeInTheDocument();
+    });
+
+    it("should switch the Model Activity tab to the litellm models breakdown on toggle click", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      act(() => {
+        fireEvent.click(screen.getAllByText("Litellm Model Name")[0]);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("activity-source:models")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("activity-source:model_groups")).not.toBeInTheDocument();
     });
   });
 
