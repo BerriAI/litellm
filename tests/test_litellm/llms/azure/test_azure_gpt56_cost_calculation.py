@@ -7,7 +7,7 @@ from litellm.types.utils import Choices, Message, ModelResponse, Usage
 def test_completion_cost_supports_luna_dated_snapshot(monkeypatch):
     """Azure response model snapshots should resolve to canonical pricing."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
     response = ModelResponse(
         model="gpt-5.6-luna-2026-07-09",
@@ -22,5 +22,14 @@ def test_completion_cost_supports_luna_dated_snapshot(monkeypatch):
     )
     response._hidden_params = {"custom_llm_provider": "azure"}
 
-    assert "azure/gpt-5.6-luna-2026-07-09" in litellm.model_cost
-    assert litellm.completion_cost(completion_response=response) == pytest.approx(0.0004)
+    snapshot = "azure/gpt-5.6-luna-2026-07-09"
+    canonical_cost = litellm.model_cost["azure/gpt-5.6-luna"]
+    expected_cost = (
+        100 * canonical_cost["input_cost_per_token"]
+        + 50 * canonical_cost["output_cost_per_token"]
+    )
+
+    assert litellm.model_cost[snapshot] == canonical_cost
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        expected_cost
+    )
