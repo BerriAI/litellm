@@ -46,6 +46,10 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.router_utils.clientside_credential_handler import (
+    _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
+    clientside_credential_keys,
+)
 
 #### Health ENDPOINTS ####
 
@@ -83,25 +87,25 @@ def _reject_os_environ_references(params: dict) -> None:
                 stack.append(value)
 
 
-def _reject_banned_param_overrides(request_params: Mapping[str, object]) -> None:
-    """Reject request params that would replace a configured deployment's routing or credentials.
+_CONFIG_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset(
+    (*_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE, *clientside_credential_keys)
+)
 
-    Applied only when a configured deployment supplies the base parameters. The
-    request may still adjust benign fields; routing and credential fields come
-    from the configuration. A caller who wants a fully custom connection supplies
-    the complete parameter set instead of naming a configured model.
+
+def _config_base_for_health_check(
+    config_params: Mapping[str, object], request_params: Mapping[str, object]
+) -> dict[str, object]:
+    """Return the configured parameters to merge under a connection-test request.
+
+    A request that sets its own connection fields describes a connection of its
+    own, so the configuration's credentials are not carried into it: they belong
+    to the endpoint the configuration names. Anything the request does not set
+    still comes from the configuration, which is what lets a request name a
+    configured model and test it as configured.
     """
-    for param in _BANNED_REQUEST_BODY_PARAMS:
-        if param in request_params:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": (
-                        f"{param} cannot be overridden when testing a configured model. "
-                        "Provide the full connection parameters instead of naming a configured model."
-                    )
-                },
-            )
+    if not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS):
+        return dict(config_params)
+    return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
 
 
 def get_callback_identifier(callback):
@@ -1878,7 +1882,10 @@ async def test_model_connection(
                 )
 
         # Merge: config params (from proxy config) as base, request params override
-        litellm_params = {**config_litellm_params, **request_litellm_params}
+        litellm_params = {
+            **_config_base_for_health_check(config_litellm_params, request_litellm_params),
+            **request_litellm_params,
+        }
 
         ## Auth check
         auth_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
@@ -1892,8 +1899,6 @@ async def test_model_connection(
             prisma_client=prisma_client,
             premium_user=premium_user,
         )
-        if config_litellm_params:
-            _reject_banned_param_overrides(request_litellm_params)
         # Include health_check_params if provided
         litellm_params = _update_litellm_params_for_health_check(
             model_info={},
