@@ -45823,7 +45823,8 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_reasoning": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_sampling_params": false
     },
     "snowflake/claude-haiku-4-5": {
         "max_tokens": 16384,
