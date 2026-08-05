@@ -122,6 +122,7 @@ from litellm.types.utils import (
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     load_credentials_from_list,
+    reapply_runtime_model_cost_registrations,
 )
 
 if TYPE_CHECKING:
@@ -130,7 +131,7 @@ if TYPE_CHECKING:
 
     from litellm.integrations.opentelemetry import OpenTelemetry
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
     OpenTelemetry = Any
@@ -353,6 +354,10 @@ from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
 )
+from litellm.proxy.db.gateway_request_tracking import (
+    GatewayRequestAccumulator,
+    flush_gateway_requests,
+)
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
@@ -410,6 +415,9 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 )
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     router as fallback_management_router,
+)
+from litellm.proxy.management_endpoints.gateway_request_endpoints import (
+    router as gateway_request_router,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
@@ -640,7 +648,6 @@ except Exception:
     version = "0.0.0"
 litellm.suppress_debug_info = True
 import json
-from typing import Union
 
 from fastapi import (
     Depends,
@@ -821,6 +828,11 @@ async def proxy_shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if prisma_client:
+        # Drain the SGR fold first: it lives in memory, so an un-drained interval
+        # is lost, and a write attempted after disconnect raises
+        # ClientNotConnectedError rather than persisting anything. Ordering this
+        # inside the same guard is what keeps the two from drifting apart.
+        await flush_gateway_requests(prisma_client, gateway_request_accumulator)
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
 
@@ -1902,6 +1914,11 @@ app.add_middleware(
         if build_billing_metrics_recorder is not None
         else None
     ),
+    # Unlike the billing recorder this is not license-gated: the admin UI must
+    # report SGR on any deployment. Gated only on a database being configured,
+    # since without one the fold would never be drained. Read at call time, so
+    # it sees prisma_client as of the first request rather than import time.
+    sink_factory=lambda: gateway_request_accumulator if prisma_client is not None else None,
 )
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
@@ -2069,6 +2086,10 @@ jwt_handler: Final = JWTHandler()
 prompt_injection_detection_obj: _OPTIONAL_PromptInjectionDetection | None = None
 store_model_in_db: bool = False
 open_telemetry_logger: OpenTelemetry | None = None
+### GATEWAY REQUEST COUNTS (SGR) ###
+# Folded in memory by BillableRequestMetricsMiddleware, drained to
+# LiteLLM_DailyGatewayRequests by the update_gateway_requests scheduler job.
+gateway_request_accumulator: Final = GatewayRequestAccumulator()
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj: ProxyLogging = ProxyLogging(user_api_key_cache=user_api_key_cache, premium_user=premium_user)
 ### REDIS QUEUE ###
@@ -3859,7 +3880,13 @@ def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:
     # Repopulate provider model sets (e.g. litellm.anthropic_models) so that
     # wildcard patterns like "anthropic/*" include any newly added models.
     litellm.add_known_models(model_cost_map=new_model_cost_map)
-    return len(new_model_cost_map) if new_model_cost_map else 0
+    # Counted before the re-apply below, which writes into this same dict, so the
+    # number reported describes the fetched price data alone.
+    fetched_model_count: Final = len(new_model_cost_map) if new_model_cost_map else 0
+    # The swap discards everything registered at runtime (deployment model_info,
+    # register_model overrides), so put it back on top of the fresh catalog.
+    reapply_runtime_model_cost_registrations()
+    return fetched_model_count
 
 
 class ProxyConfig:
@@ -5942,7 +5969,8 @@ class ProxyConfig:
 
         # Schedule new job if retention period is set (not None)
         retention_period: Final = general_settings.get("maximum_spend_logs_retention_period")
-        if retention_period is not None:
+        autorouter_retention: Final = general_settings.get("maximum_autorouter_session_retention_period")
+        if retention_period is not None or autorouter_retention is not None:
             from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
                 SpendLogCleanup,
             )
@@ -6061,6 +6089,13 @@ class ProxyConfig:
             general_settings["maximum_spend_logs_retention_period"] = new_value
             # Reschedule cleanup job if value changed (including when set to None)
             if old_value != new_value:
+                await self._reschedule_spend_log_cleanup_job()
+
+        if "maximum_autorouter_session_retention_period" in _general_settings:
+            old_session_value: Final = general_settings.get("maximum_autorouter_session_retention_period")
+            new_session_value: Final = _general_settings["maximum_autorouter_session_retention_period"]
+            general_settings["maximum_autorouter_session_retention_period"] = new_session_value
+            if old_session_value != new_session_value:
                 await self._reschedule_spend_log_cleanup_job()
 
         for key in (
@@ -6679,7 +6714,7 @@ class ProxyConfig:
                 await evict_config_param("anthropic_beta_headers_reload_config")
 
                 # Count providers in config
-                provider_count = sum(1 for k in new_config.keys() if k != "provider_aliases" and k != "description")
+                provider_count = sum(1 for k in new_config if k != "provider_aliases" and k != "description")
                 verbose_proxy_logger.info(
                     "Anthropic beta headers config reloaded successfully. Providers: %s", provider_count
                 )
@@ -8199,6 +8234,17 @@ class ProxyStartupEvent:
             f"({tag_spend_update_interval / batch_writing_interval:.1f}x main job interval)"
         )
 
+        ### UPDATE GATEWAY REQUEST COUNTS (SGR) ###
+        scheduler.add_job(
+            flush_gateway_requests,
+            "interval",
+            seconds=batch_writing_interval,
+            args=(prisma_client, gateway_request_accumulator),
+            id="update_gateway_requests_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
         ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
         if general_settings.get("disable_spend_logs", False) is False:
             from litellm.proxy.utils import _monitor_spend_logs_queue
@@ -8251,6 +8297,19 @@ class ProxyStartupEvent:
         )
 
         if store_model_in_db is True:
+            ### GET STORED CREDENTIALS ###
+            scheduler.add_job(
+                proxy_config.get_credentials,
+                "interval",
+                seconds=config_reload_interval_seconds,
+                # REMOVED jitter parameter - major cause of memory leak
+                args=[prisma_client],
+                id="get_credentials_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            )
+            await proxy_config.get_credentials(prisma_client=prisma_client)
+
             # MEMORY LEAK FIX: Increase interval from 10s to 30s minimum
             # Frequent polling was causing excessive memory allocations
             scheduler.add_job(
@@ -8266,19 +8325,6 @@ class ProxyStartupEvent:
 
             # this will load all existing models on proxy startup
             await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
-
-            ### GET STORED CREDENTIALS ###
-            scheduler.add_job(
-                proxy_config.get_credentials,
-                "interval",
-                seconds=config_reload_interval_seconds,
-                # REMOVED jitter parameter - major cause of memory leak
-                args=[prisma_client],
-                id="get_credentials_job",
-                replace_existing=True,
-                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-            )
-            await proxy_config.get_credentials(prisma_client=prisma_client)
 
             proxy_config.start_config_sync_subscriber(
                 prisma_client=prisma_client,
@@ -8315,7 +8361,10 @@ class ProxyStartupEvent:
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
         ### SPEND LOG CLEANUP ###
-        if general_settings.get("maximum_spend_logs_retention_period") is not None:
+        if (
+            general_settings.get("maximum_spend_logs_retention_period") is not None
+            or general_settings.get("maximum_autorouter_session_retention_period") is not None
+        ):
             spend_log_cleanup: Final = SpendLogCleanup()
             cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
 
@@ -8664,48 +8713,56 @@ class ProxyStartupEvent:
         - Sets up prisma client
         - Adds necessary views to proxy
         """
+        connected_client: PrismaClient | None = None
         try:
-            prisma_client: PrismaClient | None = None
-            if database_url is not None:
-                try:
-                    prisma_client = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)
-                except Exception as e:
-                    raise e
+            if database_url is None:
+                return None
 
-                try:
-                    await prisma_client.connect()
-                except Exception as e:
-                    if "P3018" in str(e) or "P3009" in str(e):
-                        verbose_proxy_logger.debug("CRITICAL: DATABASE MIGRATION FAILED")
-                        verbose_proxy_logger.debug("Your database is in a 'dirty' state.")
-                        verbose_proxy_logger.debug("FIX: Run 'prisma migrate resolve --applied <migration_name>'")
-                    raise e
+            prisma_client = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)
 
-                ## Start RDS IAM token refresh background task if enabled ##
-                # This proactively refreshes IAM tokens before they expire,
-                # preventing the 15-minute connection failure bug (#16220)
-                if hasattr(prisma_client, "db") and hasattr(prisma_client.db, "start_token_refresh_task"):
-                    await prisma_client.db.start_token_refresh_task()
+            try:
+                await prisma_client.connect()
+            except Exception as e:
+                if "P3018" in str(e) or "P3009" in str(e):
+                    verbose_proxy_logger.debug("CRITICAL: DATABASE MIGRATION FAILED")
+                    verbose_proxy_logger.debug("Your database is in a 'dirty' state.")
+                    verbose_proxy_logger.debug("FIX: Run 'prisma migrate resolve --applied <migration_name>'")
+                raise e
 
-                ## Add necessary views to proxy ##
-                asyncio.create_task(
-                    prisma_client.check_view_exists()
-                )  # check if all necessary views exist. Don't block execution
+            connected_client = prisma_client
 
-                asyncio.create_task(
-                    prisma_client._set_spend_logs_row_count_in_proxy_state()
-                )  # set the spend logs row count in proxy state. Don't block execution
+            ## Start RDS IAM token refresh background task if enabled ##
+            # This proactively refreshes IAM tokens before they expire,
+            # preventing the 15-minute connection failure bug (#16220)
+            if hasattr(prisma_client, "db") and hasattr(prisma_client.db, "start_token_refresh_task"):
+                await prisma_client.db.start_token_refresh_task()
 
-                # run a health check to ensure the DB is ready
-                if get_secret_bool("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", False) is not True:
-                    await prisma_client.health_check()
+            ## Add necessary views to proxy ##
+            asyncio.create_task(
+                prisma_client.check_view_exists()
+            )  # check if all necessary views exist. Don't block execution
 
-                if hasattr(prisma_client, "start_db_health_watchdog_task"):
-                    await prisma_client.start_db_health_watchdog_task()
+            asyncio.create_task(
+                prisma_client._set_spend_logs_row_count_in_proxy_state()
+            )  # set the spend logs row count in proxy state. Don't block execution
+
+            if hasattr(prisma_client, "start_db_health_watchdog_task"):
+                await prisma_client.start_db_health_watchdog_task()
+
+            # run a health check to ensure the DB is ready
+            if get_secret_bool("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", False) is not True:
+                await prisma_client.health_check()
+
             return prisma_client
         except Exception as e:
             PrismaDBExceptionHandler.handle_db_exception(e)
-            return None
+            if connected_client is not None:
+                verbose_proxy_logger.warning(
+                    "Retaining the connected Prisma client after a post-connect startup step failed: %s. "
+                    "The DB health watchdog keeps probing and reconnects once the database recovers.",
+                    e,
+                )
+            return connected_client
 
     @classmethod
     def _init_dd_tracer(cls):
@@ -15188,7 +15245,7 @@ async def get_config_general_settings(
             )
 
 
-GeneralSettingsUILiteLLMValue = Union[float, bool, str, None]
+GeneralSettingsUILiteLLMValue = float | bool | str | None
 
 
 class GeneralSettingsUILiteLLMFieldSpec(TypedDict):
@@ -16122,7 +16179,7 @@ async def reload_anthropic_beta_headers(
         )
         await invalidate_config_param("anthropic_beta_headers_reload_config")
 
-        provider_count: Final = sum(1 for k in new_config.keys() if k not in ["provider_aliases", "description"])
+        provider_count: Final = sum(1 for k in new_config if k not in ["provider_aliases", "description"])
         verbose_proxy_logger.info(
             "Anthropic beta headers config reloaded successfully in current pod. Providers: %s", provider_count
         )
@@ -16471,6 +16528,7 @@ app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
+app.include_router(gateway_request_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 # Eager: /models/{name}:method overlaps with the OpenAI /models endpoint.

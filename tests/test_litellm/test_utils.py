@@ -5015,3 +5015,96 @@ async def test_builtin_string_callback_registers_when_subclass_already_active(
     )
 
     assert any(type(cb) is S3Logger for cb in litellm._async_success_callback)
+
+
+def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypatch):
+    """
+    register_model is the documented way to override pricing for a model. A
+    price-data reload swaps litellm.model_cost for a freshly fetched catalog,
+    so without replaying those registrations the override is silently lost and
+    the model reverts to upstream pricing.
+    """
+    from litellm import utils as litellm_utils
+    from litellm.utils import (
+        _invalidate_model_cost_lowercase_map,
+        reapply_runtime_model_cost_registrations,
+    )
+
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+
+    saved_model_cost = litellm.model_cost
+    try:
+        litellm.register_model(
+            model_cost={
+                "openai/gpt-4o": {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.000123,
+                }
+            }
+        )
+
+        litellm.model_cost = {
+            "openai/gpt-4o": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.000999,
+                "max_input_tokens": 4242,
+            }
+        }
+        _invalidate_model_cost_lowercase_map()
+        reapply_runtime_model_cost_registrations()
+
+        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.000123
+        assert litellm.model_cost["openai/gpt-4o"]["max_input_tokens"] == 4242
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkeypatch):
+    """
+    Per-request custom pricing describes one call, so it must not be re-asserted
+    over every future catalog. Replaying it would let a one-off price outlive
+    the catalog generation it was applied to and silently beat fresh upstream
+    pricing forever, while a durable override registered alongside it survives.
+    """
+    from litellm import utils as litellm_utils
+    from litellm.utils import (
+        _invalidate_model_cost_lowercase_map,
+        reapply_runtime_model_cost_registrations,
+    )
+
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+
+    saved_model_cost = litellm.model_cost
+    try:
+        litellm.register_model(
+            model_cost={"openai/gpt-4o": {"litellm_provider": "openai", "input_cost_per_token": 0.000111}},
+            persist_across_reloads=True,
+        )
+        litellm.register_model(
+            model_cost={"openai/gpt-4o-mini": {"litellm_provider": "openai", "input_cost_per_token": 0.000222}},
+            persist_across_reloads=False,
+        )
+
+        litellm.model_cost = {
+            "openai/gpt-4o": {"litellm_provider": "openai", "input_cost_per_token": 0.000999},
+            "openai/gpt-4o-mini": {"litellm_provider": "openai", "input_cost_per_token": 0.000888},
+        }
+        _invalidate_model_cost_lowercase_map()
+        reapply_runtime_model_cost_registrations()
+
+        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.000111
+        assert litellm.model_cost["openai/gpt-4o-mini"]["input_cost_per_token"] == 0.000888
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()
