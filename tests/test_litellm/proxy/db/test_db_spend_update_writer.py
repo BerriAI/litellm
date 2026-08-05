@@ -9,6 +9,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -18,6 +19,9 @@ from redis.exceptions import DataError
 import litellm
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+    build_window_spend_transaction,
+)
 
 
 @pytest.mark.asyncio
@@ -2236,3 +2240,258 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
     assert transaction["compression_saved_tokens"] == 0
     assert transaction["compression_savings_spend"] == 0
     assert transaction["prompt_caching_savings_spend"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Budget window spend flush (LiteLLM_BudgetWindowSpend)
+# ---------------------------------------------------------------------------
+
+
+class _WindowSpendFakeBatcher:
+    def __init__(self):
+        self.calls = []
+
+    def execute_raw(self, query, *args):
+        self.calls.append((query, args))
+
+
+class _WindowSpendFakeDB:
+    """Minimal prisma_client.db that records the raw statements it is handed."""
+
+    def __init__(self, existing_rows=None):
+        self.existing_rows = existing_rows or []
+        self.query_raw_calls = []
+        self.batcher = _WindowSpendFakeBatcher()
+
+    async def query_raw(self, query, *args):
+        self.query_raw_calls.append((query, args))
+        if "LiteLLM_BudgetWindowSpend" in query:
+            return self.existing_rows
+        return []
+
+    @asynccontextmanager
+    async def _tx(self):
+        yield self
+
+    def tx(self, timeout=None):
+        return self._tx()
+
+    @asynccontextmanager
+    async def _batch(self):
+        yield self.batcher
+
+    def batch_(self):
+        return self._batch()
+
+
+class _WindowSpendFakePrisma:
+    def __init__(self, db):
+        self.db = db
+
+
+def _window_spend_upserts(db):
+    return [
+        params for query, params in db.batcher.calls if "LiteLLM_BudgetWindowSpend" in query
+    ]
+
+
+@pytest.mark.asyncio
+async def test_window_spend_queue_is_flushed_without_redis_buffer():
+    """The in-memory window queue must reach the DB on the same scheduler tick
+    as the other spend queues when the Redis buffer is off."""
+    db_writer = DBSpendUpdateWriter()
+    await db_writer.window_spend_update_queue.add_update(
+        build_window_spend_transaction(
+            entity_type="key",
+            entity_id="hashed-token",
+            window_duration="30d",
+            window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            spend=0.5,
+        )
+    )
+    db = _WindowSpendFakeDB(
+        existing_rows=[
+            {"entity_type": "key", "entity_id": "hashed-token", "window_duration": "30d"}
+        ]
+    )
+
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    upserts = _window_spend_upserts(db)
+    assert len(upserts) == 1
+    assert upserts[0][0] == "key"
+    assert upserts[0][1] == "hashed-token"
+    assert upserts[0][2] == "30d"
+    assert upserts[0][5] == pytest.approx(0.5)
+    assert db_writer.window_spend_update_queue.update_queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_window_spend_queue_is_handed_to_the_redis_buffer():
+    """Multi-pod deployments buffer through Redis, so the window queue has to
+    ride the same rpush path as the daily queues."""
+    db_writer = DBSpendUpdateWriter()
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(None, None, None, None, None, None, None)
+    )
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+    db_writer.pod_lock_manager = AsyncMock()
+    db_writer.pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=MagicMock(),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    stored = mock_redis_update_buffer.store_in_memory_spend_updates_in_redis.call_args[1]
+    assert stored["window_spend_update_queue"] is db_writer.window_spend_update_queue
+
+
+@pytest.mark.asyncio
+async def test_window_spend_transactions_from_redis_are_committed_by_the_lock_winner():
+    db_writer = DBSpendUpdateWriter()
+    window_transactions = (
+        build_window_spend_transaction(
+            entity_type="team",
+            entity_id="team-1",
+            window_duration="7d",
+            window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            spend=2.0,
+        ),
+    )
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(None, None, None, None, None, None, window_transactions)
+    )
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+    db_writer.pod_lock_manager = AsyncMock()
+    db_writer.pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    db = _WindowSpendFakeDB(
+        existing_rows=[{"entity_type": "team", "entity_id": "team-1", "window_duration": "7d"}]
+    )
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=_WindowSpendFakePrisma(db),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    upserts = _window_spend_upserts(db)
+    assert len(upserts) == 1
+    assert upserts[0][:3] == ("team", "team-1", "7d")
+    assert upserts[0][5] == pytest.approx(2.0)
+
+
+@pytest.mark.asyncio
+async def test_window_spend_transactions_are_not_committed_without_the_pod_lock():
+    """Every pod buffers to Redis but only the lock winner may drain it."""
+    db_writer = DBSpendUpdateWriter()
+    mock_redis_update_buffer = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+    db_writer.pod_lock_manager = AsyncMock()
+    db_writer.pod_lock_manager.acquire_lock = AsyncMock(return_value=False)
+    db = _WindowSpendFakeDB()
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=_WindowSpendFakePrisma(db),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline.assert_not_called()
+    assert _window_spend_upserts(db) == []
+
+
+@pytest.mark.asyncio
+async def test_failed_window_spend_commit_does_not_abort_the_rest_of_the_flush():
+    """Window rows are an optimization over aggregating LiteLLM_SpendLogs, so a
+    failure must not take the tool registry flush down with it."""
+    db_writer = DBSpendUpdateWriter()
+    await db_writer.window_spend_update_queue.add_update(
+        build_window_spend_transaction(
+            entity_type="key",
+            entity_id="hashed-token",
+            window_duration="30d",
+            window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            spend=0.5,
+        )
+    )
+    db = _WindowSpendFakeDB()
+    db.query_raw = AsyncMock(side_effect=Exception("connection reset"))
+    db_writer._flush_tool_discovery_queue = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    db_writer._flush_tool_discovery_queue.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_update_database_returns_the_spend_log_request_id():
+    """The budget-window seed excludes the log rows its increments already
+    cover, so the caller needs the id this call was recorded under. It cannot
+    be re-derived: cache hits append time.time() to the id."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    db_writer._enqueue_tool_usage_transaction = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", False),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+    ):
+        request_id = await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id="test-team",
+            org_id=None,
+            kwargs={"model": "gpt-4", "custom_llm_provider": "openai", "litellm_call_id": "call-xyz"},
+            completion_response=MagicMock(),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.1,
+        )
+        await asyncio.sleep(0)
+
+    assert request_id is not None
+    # Same id the spend log row was queued under.
+    assert request_id == db_writer._insert_spend_log_to_db.call_args[1]["payload"]["request_id"]
+
+
+@pytest.mark.asyncio
+async def test_update_database_returns_none_when_the_payload_cannot_be_built():
+    db_writer = DBSpendUpdateWriter()
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", False),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            side_effect=Exception("payload boom"),
+        ),
+    ):
+        request_id = await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id="test-team",
+            org_id=None,
+            kwargs={"model": "gpt-4"},
+            completion_response=MagicMock(),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.1,
+        )
+
+    assert request_id is None

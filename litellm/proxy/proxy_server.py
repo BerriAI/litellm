@@ -349,6 +349,9 @@ from litellm.proxy.config_resolvers.alerting import (
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
+from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+    build_window_spend_transaction,
+)
 from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
@@ -2392,6 +2395,7 @@ async def increment_spend_counters(
     budget_reservation: dict | None = None,
     end_user_id: str | None = None,
     tags: list[str] | None = None,
+    request_id: str | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -2446,14 +2450,24 @@ async def increment_spend_counters(
         for window in key_budget_limits:
             duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
             key_window_counter = f"spend:key:{hashed_token}:window:{duration}"
+            key_window_start = get_budget_window_start(window)
             if key_window_counter not in reserved_counter_keys:
                 await _init_and_increment_window_spend_counter(
                     counter_key=key_window_counter,
                     entity_type="Key",
                     entity_id=hashed_token,
-                    window_start=get_budget_window_start(window),
+                    window_start=key_window_start,
                     increment=cost,
                 )
+            await _enqueue_window_spend_row_update(
+                entity_type=Litellm_EntityType.KEY,
+                entity_id=hashed_token,
+                window=window,
+                window_duration=duration,
+                window_start=key_window_start,
+                increment=cost,
+                request_id=request_id,
+            )
 
     async def _team_scope(scope_team_id: str) -> None:
         team_counter_key: Final = f"spend:team:{scope_team_id}"
@@ -2477,14 +2491,24 @@ async def increment_spend_counters(
         for window in team_budget_limits:
             duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
             team_window_counter = f"spend:team:{scope_team_id}:window:{duration}"
+            team_window_start = get_budget_window_start(window)
             if team_window_counter not in reserved_counter_keys:
                 await _init_and_increment_window_spend_counter(
                     counter_key=team_window_counter,
                     entity_type="Team",
                     entity_id=scope_team_id,
-                    window_start=get_budget_window_start(window),
+                    window_start=team_window_start,
                     increment=cost,
                 )
+            await _enqueue_window_spend_row_update(
+                entity_type=Litellm_EntityType.TEAM,
+                entity_id=scope_team_id,
+                window=window,
+                window_duration=duration,
+                window_start=team_window_start,
+                increment=cost,
+                request_id=request_id,
+            )
 
     async def _team_member_scope(scope_user_id: str, scope_team_id: str) -> None:
         team_member_counter_key: Final = f"spend:team_member:{scope_user_id}:{scope_team_id}"
@@ -2667,6 +2691,58 @@ async def _init_and_increment_spend_counter(
         source_cache_key=source_cache_key,
     )
     await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
+
+
+async def _enqueue_window_spend_row_update(
+    entity_type: Litellm_EntityType,
+    entity_id: str,
+    window: Any,
+    window_duration: str,
+    window_start: datetime | None,
+    increment: float,
+    request_id: str | None,
+) -> None:
+    """Queue this request's cost against the LiteLLM_BudgetWindowSpend row for
+    the window, so enforcement can read a maintained total instead of
+    aggregating LiteLLM_SpendLogs.
+
+    request_id is the LiteLLM_SpendLogs id this cost was recorded under; the
+    flush uses it to keep the one-time seed from counting a request that its
+    increment already covers.
+
+    Enqueued even when the cache increment was skipped for a reserved counter:
+    the reservation only pre-charged the counter, and the row still owes the
+    actual cost.
+
+    Windows with no reset_at slide with wall clock, so their window_start moves
+    on every request and no single row can represent them. Those are left to
+    the read path's LiteLLM_SpendLogs fallback rather than rewritten per
+    request.
+    """
+    if window_start is None:
+        return
+    reset_at: Final = window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
+    if not reset_at:
+        return
+    try:
+        await proxy_logging_obj.db_spend_update_writer.window_spend_update_queue.add_update(
+            build_window_spend_transaction(
+                entity_type=entity_type.value,
+                entity_id=entity_id,
+                window_duration=window_duration,
+                window_start=window_start,
+                spend=increment,
+                request_id=request_id,
+            )
+        )
+    except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback
+        verbose_proxy_logger.debug(
+            "Unable to enqueue budget window spend update for %s=%s window=%s: %s",
+            entity_type.value,
+            entity_id,
+            window_duration,
+            e,
+        )
 
 
 async def _init_and_increment_window_spend_counter(
