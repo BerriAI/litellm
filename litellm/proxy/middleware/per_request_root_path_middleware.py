@@ -29,7 +29,8 @@ scalar ``SERVER_ROOT_PATH`` / path-carrying ``PROXY_BASE_URL``.
 """
 
 import os
-from typing import Final, Sequence
+from collections.abc import Sequence
+from typing import Final
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
