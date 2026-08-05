@@ -1832,6 +1832,13 @@ class Router:
                         llm_provider="",
                     )
 
+            if (
+                isinstance(response, CustomStreamWrapper)
+                and response.completion_stream is None
+                and response.make_call is not None
+            ):
+                response.fetch_sync_stream()
+
             # Wrap streaming responses so MidStreamFallbackError (raised
             # during iteration) triggers the Router's fallback chain.
             if isinstance(response, CustomStreamWrapper):
@@ -6120,7 +6127,8 @@ class Router:
         """
         Common utilities for async_function_with_fallbacks
         """
-        verbose_router_logger.debug("Traceback", exc_info=True)
+        if verbose_router_logger.isEnabledFor(logging.DEBUG):
+            verbose_router_logger.debug("Traceback%s", redact_string(traceback.format_exc()))
         original_exception: Final = e
         fallback_model_group = None
         original_model_group: Final[str | None] = kwargs.get("model")
@@ -6336,17 +6344,17 @@ class Router:
         except Exception as new_exception:
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
             fallback_failure_exception_str = redact_string(str(new_exception))
-            cooldown_info = await _async_get_cooldown_deployments_with_debug_info(
+            cooldown_info: Final = await _async_get_cooldown_deployments_with_debug_info(
                 litellm_router_instance=self,
                 parent_otel_span=parent_otel_span,
             )
             verbose_router_logger.error(
                 "litellm.router.py::async_function_with_fallbacks() - "
-                "Error occurred while trying to do fallbacks - %s\n"
+                "Error occurred while trying to do fallbacks - %s\n%s\n"
                 "Debug Information:\nCooldown Deployments=%s",
                 fallback_failure_exception_str,
+                redact_string(traceback.format_exc()),
                 cooldown_info,
-                exc_info=True,
             )
 
         if hasattr(original_exception, "message") and litellm.expose_router_debug_in_errors:
