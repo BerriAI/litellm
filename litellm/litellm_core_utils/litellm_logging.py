@@ -4202,11 +4202,19 @@ def otel_v2_owned_backends() -> frozenset[str]:
     An owning logger fans its gen-AI span out to the request's destinations for its own
     backend, so the destination sink must not emit for these or the destination receives
     the same call twice as two sibling spans.
+
+    Keyed on actual dispatch, not construction. A logger can be built and land in
+    ``_in_memory_loggers`` while never reaching the success-callback list, and treating
+    that as owned made the sink stand down for a backend nobody delivers, turning a
+    duplicate into a silent total loss of the tenant's traces.
     """
+    dispatched = litellm._async_success_callback
     return frozenset(
         name
         for logger in _in_memory_loggers
-        if isinstance(logger, OpenTelemetryV2) and (name := getattr(logger, "callback_name", None))
+        if isinstance(logger, OpenTelemetryV2)
+        and (name := getattr(logger, "callback_name", None))
+        and any(cb is logger for cb in dispatched)
     )
 
 

@@ -201,9 +201,21 @@ class OpenTelemetryV2(CustomLogger):
     #  Proxy global registration
     # ====================================================================== #
 
-    def _register_in_callback_list(self, callbacks: list) -> None:
+    def _register_in_callback_list(self, callbacks: list, per_backend: bool = False) -> None:
+        """Add this logger to a proxy-global callback list, once.
+
+        ``per_backend`` distinguishes the two kinds of list. ``service_callback`` wants a
+        single OTel owner, so any OTel-module callback already there wins. The event lists
+        are per-backend: v2 collapsed every backend onto this one class parameterised by
+        ``callback_name``, so a module-wide test let the first registrant lock out every
+        other backend, and each one's own exporter went dark. Matching the name as well
+        lets each backend register itself while still de-duplicating a repeat of itself.
+        """
         already_otel = any(
-            cb.__class__.__module__.startswith(_OTEL_MODULES) for cb in callbacks if hasattr(cb, "__class__")
+            cb.__class__.__module__.startswith(_OTEL_MODULES)
+            and (not per_backend or getattr(cb, "callback_name", None) == self.callback_name)
+            for cb in callbacks
+            if hasattr(cb, "__class__")
         )
         if not already_otel:
             callbacks.append(self)
@@ -215,9 +227,9 @@ class OpenTelemetryV2(CustomLogger):
             return
         try:
             self._register_in_callback_list(litellm.service_callback)
-            self._register_in_callback_list(litellm.input_callback)
-            self._register_in_callback_list(litellm._async_success_callback)
-            self._register_in_callback_list(litellm._async_failure_callback)
+            self._register_in_callback_list(litellm.input_callback, per_backend=True)
+            self._register_in_callback_list(litellm._async_success_callback, per_backend=True)
+            self._register_in_callback_list(litellm._async_failure_callback, per_backend=True)
         except Exception:
             pass
         if getattr(proxy_server, "open_telemetry_logger", None) is None:
