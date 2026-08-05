@@ -1609,6 +1609,7 @@ class NewUserRequest(GenerateRequestBase):
     max_budget: float | None = None
     user_email: str | None = None
     user_alias: str | None = None
+    password: str | None = None
     user_role: (
         Literal[
             LitellmUserRoles.PROXY_ADMIN,

@@ -15323,3 +15323,71 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
         prisma_client=mock_prisma_client,
         new_master_key="sk-new-master-key",
     )
+
+
+@pytest.mark.asyncio
+async def test_generate_key_helper_fn_persists_password_in_user_row(monkeypatch):
+    """Regression: /user/new forwards the hashed `password` as a kwarg, so
+    generate_key_helper_fn must accept it and write it into the user row.
+    Before this field existed the kwarg would raise "unexpected keyword
+    argument" and the password could never reach the database."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data  # type: ignore
+
+    captured_user_data = {}
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        if kwargs.get("table_name") == "user":
+            captured_user_data.update(kwargs.get("data", {}))
+            return MagicMock(models=[], spend=0)
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+
+    await generate_key_helper_fn(
+        request_type="user",
+        table_name="user",
+        user_id="password-user",
+        user_email="password-user@example.com",
+        password="scrypt:stored-hash",
+    )
+
+    assert captured_user_data.get("password") == "scrypt:stored-hash"
+
+
+@pytest.mark.asyncio
+async def test_generate_key_helper_fn_defaults_password_to_none_in_user_row(monkeypatch):
+    """A caller that does not pass `password` must create the user row with
+    password NULL, exactly like before the parameter existed, so no
+    non-password caller starts writing a value into the column."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data  # type: ignore
+
+    captured_user_data = {}
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        if kwargs.get("table_name") == "user":
+            captured_user_data.update(kwargs.get("data", {}))
+            return MagicMock(models=[], spend=0)
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+
+    await generate_key_helper_fn(
+        request_type="user",
+        table_name="user",
+        user_id="no-password-user",
+        user_email="no-password-user@example.com",
+    )
+
+    assert captured_user_data.get("password") is None

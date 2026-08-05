@@ -4032,3 +4032,64 @@ async def test_user_info_v2_returns_the_mcp_entitlement(mocker):
     assert response.object_permission.mcp_tool_permissions == {
         "github": ["list_issues"]
     }
+
+
+@pytest.mark.asyncio
+async def test_new_user_password_hashed_before_user_row_write(mocker):
+    """/user/new with `password` must hand generate_key_helper_fn a scrypt
+    hash the login flow can verify, never the plaintext. Before the model
+    carried the field, pydantic silently dropped it and the user was created
+    with no password at all, so username/password login 401'd."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+    from litellm.proxy.utils import verify_password
+
+    mock_prisma_client = mocker.MagicMock()
+
+    async def mock_count(*args, **kwargs):
+        return 5
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    async def mock_check(*_args, **_kwargs):
+        return None
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mock_check,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mock_check,
+    )
+    mock_license_check = mocker.MagicMock()
+    mock_license_check.is_over_limit.return_value = False
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
+
+    captured_kwargs = {}
+
+    async def stub_helper(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {"user_id": "password-user", "key": "sk-new", "expires": None}
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        stub_helper,
+    )
+
+    data = NewUserRequest(
+        user_email="password-user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        password="super-secret-pw",
+        auto_create_key=False,
+    )
+    caller = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    response = await new_user(data=data, user_api_key_dict=caller)
+
+    stored = captured_kwargs["password"]
+    assert stored != "super-secret-pw"
+    assert stored.startswith("scrypt:")
+    assert verify_password("super-secret-pw", stored)
+    assert "super-secret-pw" not in json.dumps(captured_kwargs, default=str)
+    assert "password" not in response.model_dump()
