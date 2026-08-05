@@ -352,6 +352,31 @@ describe("AddAutoRouterTab", () => {
       expect(await screen.findByTestId("auto-router-routing-test-routed-model")).toHaveTextContent("claude-opus-5");
       expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
     });
+
+    it("forgets the last prompt and result when the modal is reopened", async () => {
+      const user = userEvent.setup();
+      vi.mocked(getMissingTiersError).mockReturnValue(null);
+      vi.mocked(testAutoRouterRouting).mockResolvedValue({
+        status: "success",
+        result: {
+          routed_model: "claude-opus-5",
+          routed_model_configured: true,
+          routing_decision: { routed_model: "claude-opus-5", tier: "COMPLEX", cause: "heuristic_scorer" },
+        },
+      });
+
+      renderWithProviders(<Harness />);
+      await user.click(screen.getByTestId("auto-router-test-routing-btn"));
+      await user.type(await screen.findByTestId("auto-router-routing-test-prompt"), "reconcile this invoice");
+      await user.click(screen.getByTestId("auto-router-routing-test-send"));
+      expect(await screen.findByTestId("auto-router-routing-test-result")).toBeInTheDocument();
+
+      await user.click(screen.getAllByRole("button", { name: /^close$/i }).at(-1)!);
+      await user.click(screen.getByTestId("auto-router-test-routing-btn"));
+
+      expect(await screen.findByTestId("auto-router-routing-test-prompt")).toHaveValue("");
+      expect(screen.queryByTestId("auto-router-routing-test-result")).not.toBeInTheDocument();
+    });
   });
 
   describe("template presets", () => {

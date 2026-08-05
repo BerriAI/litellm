@@ -54,7 +54,7 @@ const AutoRouterRoutingTest: React.FC<AutoRouterRoutingTestProps> = ({
       <Textarea
         value={prompt}
         onChange={(event) => setPrompt(event.target.value)}
-        placeholder="e.g., think step by step about how to shard this table"
+        placeholder="Paste a prompt an end user would send"
         rows={4}
         data-testid="auto-router-routing-test-prompt"
       />

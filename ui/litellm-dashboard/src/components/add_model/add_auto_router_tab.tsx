@@ -545,6 +545,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       <Modal
         title="Test Routing"
         open={isRoutingTestVisible}
+        destroyOnHidden
         onCancel={() => setIsRoutingTestVisible(false)}
         footer={[
           <Button key="close" onClick={() => setIsRoutingTestVisible(false)}>
