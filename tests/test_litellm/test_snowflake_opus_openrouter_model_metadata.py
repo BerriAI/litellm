@@ -67,6 +67,14 @@ EXPECTED = {
         "cache_read_input_token_cost": 5e-07,
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
+        # gpt-5.5's window runs to 1.05M, and OpenAI charges a higher rate past 272k.
+        # `_get_token_base_cost` only applies those rates when these fields exist, so
+        # omitting them silently UNDERCHARGES every long-context request - the same
+        # silent under-recording this file exists to prevent, one tier down. 5.1 and the
+        # existing 5.2 entry cap at 272k and are correctly untiered.
+        "input_cost_per_token_above_272k_tokens": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 4.5e-05,
+        "cache_read_input_token_cost_above_272k_tokens": 1e-06,
     },
 }
 
@@ -114,6 +122,24 @@ def test_model_pricing_metadata(model):
         assert info.get("supports_sampling_params") is False, (
             f"{model} must declare supports_sampling_params=false"
         )
+
+
+@pytest.mark.parametrize("model", sorted(EXPECTED))
+def test_long_context_entries_declare_tiered_pricing(model):
+    """A >272k window with no `*_above_272k_tokens` rates undercharges long prompts.
+
+    Generalised rather than pinned to gpt-5.5 alone, so adding another long-context route
+    here without its tiered rates fails instead of silently under-recording spend.
+    """
+    info = _load(MAIN_PATH)[model]
+    if info["max_input_tokens"] <= 272000:
+        pytest.skip(f"{model} caps at {info['max_input_tokens']}; no tier applies")
+    for field in (
+        "input_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens",
+    ):
+        assert info.get(field), f"{model} exceeds 272k tokens but has no {field}"
 
 
 @pytest.mark.parametrize("model", sorted(EXPECTED))
