@@ -111,10 +111,6 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        # Prompt Shield is detect-only and has no post_call hook, but the
-        # ad-hoc /apply_guardrail endpoint may pass input_type="response".
-        # The Azure text:shieldPrompt API accepts any text, so we scan
-        # regardless of direction rather than silently skipping.
         for text in inputs.get("texts") or []:
             if text:
                 await self.async_make_request(user_prompt=text)
