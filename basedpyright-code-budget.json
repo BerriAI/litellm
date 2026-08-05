@@ -18,7 +18,7 @@
     "limit": 40
   },
   "reportDeprecated": {
-    "limit": 220
+    "limit": 215
   },
   "reportDuplicateImport": {
     "limit": 24
@@ -84,7 +84,7 @@
     "limit": 56
   },
   "reportPrivateUsage": {
-    "limit": 1830
+    "limit": 1825
   },
   "reportRedeclaration": {
     "limit": 8
