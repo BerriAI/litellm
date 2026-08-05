@@ -46963,15 +46963,6 @@
         ],
         "source": "https://quicksilverpro.io/docs/models/"
     },
-    "quicksilverpro/flux.2-pro": {
-        "litellm_provider": "quicksilverpro",
-        "mode": "image_generation",
-        "input_cost_per_image": 0.027,
-        "supported_endpoints": [
-            "/v1/images/generations"
-        ],
-        "source": "https://quicksilverpro.io/docs/models/"
-    },
     "fallback_generalizations": {
         "rules": [
             {

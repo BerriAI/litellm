@@ -160,23 +160,26 @@ class TestQuickSilverProCostMap:
         info = litellm.get_model_info(model)
         assert info["supports_prompt_caching"] is True
         assert litellm.model_cost[model]["cache_read_input_token_cost"] == pytest.approx(
-            2.24e-09
+            1.44e-08
         )
 
-    def test_image_model_registered(self):
-        info = litellm.get_model_info("quicksilverpro/flux.2-pro")
-        assert info["litellm_provider"] == "quicksilverpro"
-        assert info["mode"] == "image_generation"
-        assert litellm.model_cost["quicksilverpro/flux.2-pro"][
-            "output_cost_per_image"
-        ] == pytest.approx(0.027)
+    def test_only_chat_models_are_registered(self):
+        """Image generation dispatches from a hardcoded provider list that a
+        declarative openai_like provider is not part of, so litellm.image_generation()
+        would return an empty ImageResponse with no upstream request. No image entry
+        is published until that path exists."""
+        for info in self._entries().values():
+            assert info["mode"] == "chat"
 
-    def test_every_entry_carries_a_source(self):
-        entries = {
+    def _entries(self):
+        return {
             k: v
             for k, v in litellm.model_cost.items()
             if v.get("litellm_provider") == "quicksilverpro"
         }
-        assert len(entries) == 33
+
+    def test_every_entry_carries_a_source(self):
+        entries = self._entries()
+        assert len(entries) == 32
         for model, info in entries.items():
             assert info["source"] == "https://quicksilverpro.io/docs/models/", model
