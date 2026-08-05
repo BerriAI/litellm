@@ -5501,6 +5501,45 @@ class TestClassifierFallbackChoice:
         )
         assert response is not None
         assert response.model == "gpt-4o-nano"
+        # The plugin path needs a pool to filter, but no tier was ever classified: the
+        # classifier failed. Recording MEDIUM as the request's tier would attribute a
+        # classification that never happened, so the pool is reported as a signal instead.
+        assert response.routing_decision is not None
+        assert response.routing_decision["cause"] == "default_model_fallback"
+        assert "tier" not in response.routing_decision
+        assert "plugin-filtered-pool:MEDIUM" in response.routing_decision["signals"]
+
+    @pytest.mark.asyncio
+    async def test_default_model_fallback_with_plugins_reports_the_empty_tier_not_the_plugins(
+        self, mock_router_instance
+    ):
+        """default_model in no tier pool resolves to MEDIUM, so an empty MEDIUM pool used to raise
+        'No candidate models left for tier MEDIUM after routing-plugin filtering' and send the
+        operator hunting for a policy plugin that never narrowed anything. Flagged by Greptile."""
+
+        class AllowAll:
+            async def run(self, context):
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"COMPLEX": ["o1-preview"]},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o-default",
+                "plugins": [AllowAll()],
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        with pytest.raises(ValueError, match="No models configured for tier MEDIUM"):
+            await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "hello"}],
+            )
 
     @pytest.mark.asyncio
     async def test_successful_classification_ignores_the_fallback_setting(

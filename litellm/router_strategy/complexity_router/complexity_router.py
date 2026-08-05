@@ -791,16 +791,17 @@ class ComplexityRouter(CustomLogger):
 
         The outcome still carries a tier because ClassificationOutcome requires one, so it reports
         the tier whose pool holds default_model, and MEDIUM when no pool does. Nothing about the
-        request produced that tier, so the pre-routing hook drops it from the logged routing
-        decision: it routes this cause straight to default_model rather than picking from the
-        tier's pool, since a pool with several models would otherwise land somewhere else and the
-        point of this fallback is a known destination when classification failed.
+        request produced that tier, so the pre-routing hook never logs it as the request's tier: it
+        routes this cause straight to default_model rather than picking from the tier's pool, since
+        a pool with several models would otherwise land somewhere else and the point of this
+        fallback is a known destination when classification failed.
 
         On a router with routing plugins the hook does not short-circuit, because default_model was
         never checked against the plugin pipeline and routing to it directly would let a failed
-        classifier bypass a policy plugin. There the tier is load-bearing, and resolving it to
-        default_model's own pool keeps the destination as close to the configured one as a
-        plugin-filtered pick allows.
+        classifier bypass a policy plugin. There the tier is load-bearing, but only as the pool the
+        plugins filter: resolving it to default_model's own pool keeps the destination as close to
+        the configured one as a plugin-filtered pick allows, and the hook records it as a
+        plugin-filtered-pool signal rather than as a classification the request never received.
         """
         default_model: Final = self.config.default_model
         pools: Final = self._tier_pools()
@@ -1016,10 +1017,16 @@ class ComplexityRouter(CustomLogger):
 
         tier_key: Final = tier.value
         metadata_key: Final = "litellm_metadata" if "litellm_metadata" in request_kwargs else "metadata"
+        pool: Final = tuple(self._tier_pools().get(tier_key, ()))
+        if not pool:
+            # Nothing for the plugins to filter. Falling through would raise the
+            # plugin-filtering error below and send the operator hunting for a policy
+            # plugin that never ran, so name the real problem: the tier has no models.
+            raise ValueError(f"No models configured for tier {tier_key}")
         context = RoutingContext(
             raw_messages=raw_messages or [],
             structured_messages=resolved_messages or [],
-            candidate_models=list(self._tier_pools().get(tier_key, [])),
+            candidate_models=list(pool),
             metadata=request_kwargs.get(metadata_key) or {},
         )
         for plugin in self.config.plugins:
@@ -1731,6 +1738,15 @@ class ComplexityRouter(CustomLogger):
             if outcome.cause == "llm_classifier" and self.config.classifier_llm_config is not None
             else None
         )
+        # cause=default_model_fallback means no tier was decided: the classifier failed and the
+        # operator asked for default_model. Only the plugin path reaches here (the non-plugin one
+        # short-circuited above), and there `tier` exists solely to name a pool for the plugins to
+        # filter. Reporting it as the request's tier would attribute a classification to a request
+        # that never got one, so the record names the pool in its signals instead.
+        classified_pool_tier: Final = None if outcome.cause == "default_model_fallback" else tier
+        decision_signals: Final = (
+            (*signals, f"plugin-filtered-pool:{tier.value}") if outcome.cause == "default_model_fallback" else signals
+        )
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages if has_original_messages else None,
@@ -1738,9 +1754,9 @@ class ComplexityRouter(CustomLogger):
                 routed_model=routed_model,
                 conversation_continuing=conversation_continuing,
                 cause=outcome.cause,
-                tier=tier,
+                tier=classified_pool_tier,
                 score=score,
-                signals=signals,
+                signals=decision_signals,
                 escalation_keyword=escalation_keyword,
                 escalated=escalated,
                 classifier_model=classifier_model,
