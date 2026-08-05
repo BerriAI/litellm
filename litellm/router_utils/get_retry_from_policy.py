@@ -4,8 +4,6 @@ Get num retries for an exception.
 - Account for retry policy by exception type.
 """
 
-from typing import Dict, Optional, Union
-
 from litellm.exceptions import (
     AuthenticationError,
     BadRequestError,
@@ -18,9 +16,9 @@ from litellm.types.router import RetryPolicy
 
 def get_num_retries_from_retry_policy(
     exception: Exception,
-    retry_policy: Optional[Union[RetryPolicy, dict]] = None,
-    model_group: Optional[str] = None,
-    model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = None,
+    retry_policy: RetryPolicy | dict | None = None,
+    model_group: str | None = None,
+    model_group_retry_policy: dict[str, RetryPolicy] | None = None,
 ):
     """
     BadRequestErrorRetries: Optional[int] = None

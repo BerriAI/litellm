@@ -2992,6 +2992,58 @@ def test_function_setup_litellm_metadata_populates_metadata():
     ), "litellm_params['metadata'] should be a copy, not the same object"
 
 
+def test_function_setup_litellm_metadata_guardrail_writes_visible_after_setup():
+    """
+    Regression test for LIT-4512: guardrail writes into the request's
+    "litellm_metadata" bucket that happen AFTER function_setup (the proxy
+    initializes the logging object before pre-call guardrails run) must be
+    visible to the logging object and survive merge_litellm_metadata, so
+    /v1/messages spend logs carry guardrail_information and
+    applied_guardrails just like /v1/chat/completions.
+    """
+    import litellm
+    from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    kwargs = {
+        "model": "claude-3-5-sonnet",
+        "messages": [{"role": "user", "content": "hello"}],
+        "litellm_call_id": "test-call-id-lit4512",
+        "litellm_metadata": {
+            "user_api_key_hash": "sk-hashed-lit4512",
+            "guardrails": ["pam-ethical-request"],
+        },
+    }
+
+    logging_obj, returned_kwargs = litellm.utils.function_setup(
+        original_function="anthropic_messages",
+        rules_obj=litellm.utils.Rules(),
+        start_time=time.time(),
+        **kwargs,
+    )
+
+    guardrail_entry = {
+        "guardrail_name": "pam-ethical-request",
+        "guardrail_mode": "pre_call",
+        "guardrail_status": "success",
+    }
+    _, metadata_bucket = get_or_create_metadata_bucket(returned_kwargs)
+    metadata_bucket["standard_logging_guardrail_information"] = [guardrail_entry]
+    metadata_bucket["applied_guardrails"] = ["pam-ethical-request"]
+
+    litellm_params = logging_obj.model_call_details.get("litellm_params", {})
+    litellm_metadata = litellm_params.get("litellm_metadata")
+    assert litellm_metadata is not None
+    assert litellm_metadata.get("standard_logging_guardrail_information") == [
+        guardrail_entry
+    ], "guardrail writes after function_setup must be visible to the logging object"
+    assert litellm_metadata.get("applied_guardrails") == ["pam-ethical-request"]
+
+    merged = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+    assert merged.get("standard_logging_guardrail_information") == [guardrail_entry]
+    assert merged.get("applied_guardrails") == ["pam-ethical-request"]
+
+
 def test_function_setup_metadata_takes_precedence_over_litellm_metadata():
     """
     Test that when BOTH metadata and litellm_metadata are present (e.g., user sets

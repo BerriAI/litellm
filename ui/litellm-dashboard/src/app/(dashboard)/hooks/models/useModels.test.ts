@@ -7,6 +7,7 @@ import {
   selectAutoRouterModelGroups,
   useAllProxyModels,
   useAutoRouterModelGroups,
+  useAutoRouters,
   useInfiniteModelInfo,
   useModelHub,
   useModelsInfo,
@@ -113,6 +114,9 @@ describe("useModelsInfo", () => {
       undefined,
       undefined,
       undefined,
+      // exclude_auto_routers defaults off: only the Models + Endpoints table opts in, so
+      // every other consumer of this hook keeps seeing auto-routers.
+      false,
     );
     expect(modelInfoCall).toHaveBeenCalledTimes(1);
   });
@@ -137,6 +141,9 @@ describe("useModelsInfo", () => {
       undefined,
       undefined,
       undefined,
+      // exclude_auto_routers defaults off: only the Models + Endpoints table opts in, so
+      // every other consumer of this hook keeps seeing auto-routers.
+      false,
     );
   });
 
@@ -1078,5 +1085,25 @@ describe("useAutoRouterModelGroups", () => {
 
     await waitFor(() => expect(modelInfoCall).toHaveBeenCalled());
     expect(result.current.size).toBe(0);
+  });
+
+  // The Auto-Routers tab and the models table read the same /v2/model/info data. Six call
+  // sites across the app invalidate ["models","list"] after a write; if the auto-router query
+  // sits in its own namespace, an edit through ModelInfoView leaves the tab stale until a full
+  // reload, and every future writer has to remember a second key.
+  describe("auto-router cache namespace", () => {
+    it("keys the auto-router list under models/list so existing invalidations reach it", async () => {
+      (modelInfoCall as any).mockResolvedValue(mockPaginatedModelInfoResponse);
+      const { result } = renderHook(() => useAutoRouters(), { wrapper });
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+      const keys = queryClient
+        .getQueryCache()
+        .findAll({ queryKey: ["models", "list"] })
+        .map((query) => query.queryKey);
+
+      expect(keys.some((key) => JSON.stringify(key).includes("autoRouters"))).toBe(true);
+    });
   });
 });

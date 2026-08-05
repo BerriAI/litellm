@@ -3197,3 +3197,75 @@ def test_get_tool_calls_from_response_include_all_choices_reads_every_choice():
 
     names = [tc["name"] for tc in get_tool_calls_from_response(response, include_all_choices=True)]
     assert names == ["tool_alpha", "tool_beta"]
+
+
+def test_group_tool_exchanges_pairs_assistant_with_its_tool_rows():
+    from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
+
+    messages = [
+        {"role": "user", "content": "first turn"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "tu_1", "type": "function", "function": {"name": "Read", "arguments": "{}"}},
+                {"id": "tu_2", "type": "function", "function": {"name": "Grep", "arguments": "{}"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "tu_1", "content": "file body"},
+        {"role": "tool", "tool_call_id": "tu_2", "content": "matches"},
+        {"role": "user", "content": "live instruction"},
+    ]
+
+    assert group_tool_exchanges(messages) == ((0,), (1, 2, 3), (4,))
+
+
+def test_group_tool_exchanges_uses_ownership_not_adjacency():
+    """A tool row answering some other call must not be swept into the exchange
+    it happens to sit next to."""
+    from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "tu_1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "unrelated", "content": "not an answer to tu_1"},
+        {"role": "tool", "tool_call_id": "tu_1", "content": "file body"},
+    ]
+
+    assert group_tool_exchanges(messages) == ((0,), (1,), (2,))
+
+
+def test_group_tool_exchanges_assistant_without_tool_calls_stands_alone():
+    from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
+
+    messages = [
+        {"role": "assistant", "content": "no tools here"},
+        {"role": "user", "content": "next"},
+    ]
+
+    assert group_tool_exchanges(messages) == ((0,), (1,))
+    assert group_tool_exchanges([]) == ()
+
+
+def test_group_tool_exchanges_is_linear_in_message_count():
+    """Grouping runs on every guardrail write-back, over a message array the
+    caller controls, so it has to stay linear. Accumulating groups by rebuilding
+    a tuple each iteration made this O(n^2): 20k standalone messages took 312ms
+    and 100k would take minutes. Linear finishes in single-digit ms, so this
+    ceiling has ~200x headroom while a quadratic rewrite blows straight past it.
+    """
+    import time
+
+    from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
+
+    messages = [{"role": "user", "content": "x"} for _ in range(100_000)]
+
+    started = time.perf_counter()
+    groups = group_tool_exchanges(messages)
+    elapsed = time.perf_counter() - started
+
+    assert len(groups) == 100_000
+    assert elapsed < 3.0, f"grouping 100k messages took {elapsed:.2f}s; suspect superlinear accumulation"
