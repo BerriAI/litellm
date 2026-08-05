@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 _MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "type_check_gate.py"
@@ -287,3 +288,61 @@ def test_an_empty_base_pass_is_never_cached(tmp_path):
     assert gate.base_counts_cached("abc123", cache_dir=tmp_path, compute=crashed) == {}
     assert calls == ["abc123", "abc123"]
     assert list(tmp_path.iterdir()) == []
+
+
+def _git(cwd, *args):
+    proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
+
+
+def _commit(cwd, name):
+    (cwd / name).write_text(name)
+    _git(cwd, "add", "-A")
+    _git(cwd, "commit", "-q", "-m", name)
+    return _git(cwd, "rev-parse", "HEAD")
+
+
+def _init_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "gate@example.com")
+    _git(repo, "config", "user.name", "gate")
+    _git(repo, "config", "commit.gpgsign", "false")
+    return repo
+
+
+def _branched_repo(tmp_path):
+    repo = _init_repo(tmp_path)
+    branch_point = _commit(repo, "shared.txt")
+    _git(repo, "checkout", "-q", "-b", "feature")
+    _commit(repo, "feature.txt")
+    _git(repo, "checkout", "-q", "main")
+    base_tip = _commit(repo, "drift.txt")
+    _git(repo, "checkout", "-q", "feature")
+    return repo, branch_point, base_tip
+
+
+def test_base_point_is_the_branch_point_when_no_merge_is_in_progress(tmp_path):
+    repo, branch_point, _ = _branched_repo(tmp_path)
+    assert gate.resolve_base_point("main", cwd=repo) == branch_point
+
+
+def test_base_point_mid_merge_advances_to_the_merged_in_base_tip(tmp_path):
+    repo, _, base_tip = _branched_repo(tmp_path)
+    _git(repo, "merge", "--no-commit", "--no-ff", "main")
+    assert gate.resolve_base_point("main", cwd=repo) == base_tip
+
+
+def test_base_point_mid_merge_of_an_older_side_branch_keeps_the_newer_branch_point(tmp_path):
+    repo = _init_repo(tmp_path)
+    _commit(repo, "shared.txt")
+    _git(repo, "checkout", "-q", "-b", "old-side")
+    _commit(repo, "old.txt")
+    _git(repo, "checkout", "-q", "main")
+    newer_point = _commit(repo, "drift.txt")
+    _git(repo, "checkout", "-q", "-b", "feature")
+    _commit(repo, "feature.txt")
+    _git(repo, "merge", "--no-commit", "--no-ff", "old-side")
+    assert gate.resolve_base_point("main", cwd=repo) == newer_point
