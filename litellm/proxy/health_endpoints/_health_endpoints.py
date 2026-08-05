@@ -88,7 +88,11 @@ def _reject_os_environ_references(params: dict) -> None:
 
 
 _CONFIG_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset(
-    (*_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE, *clientside_credential_keys)
+    (
+        *_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,
+        *clientside_credential_keys,
+        "litellm_credential_name",
+    )
 )
 
 
@@ -104,6 +108,11 @@ def _config_base_for_health_check(
     to the endpoint the configuration names. Anything the request does not set
     still comes from the configuration, which is what lets a request name a
     configured model and test it as configured.
+
+    ``litellm_credential_name`` is dropped alongside the literal credential
+    fields: it names a stored credential that ``load_credentials_from_list``
+    resolves into the same secrets further down the call, so leaving it in place
+    would reintroduce them by reference.
 
     ``general_settings.allow_client_side_credentials`` is the existing proxy-wide
     opt-in for callers supplying their own connection parameters. Where an admin
