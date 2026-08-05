@@ -10,10 +10,10 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime as dt_object
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast
 
 from httpx import Response
 from pydantic import BaseModel
@@ -169,41 +169,73 @@ from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 if TYPE_CHECKING:
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
-try:
-    from litellm_enterprise.enterprise_callbacks.callback_controls import (
-        EnterpriseCallbackControls,
-    )
-    from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (
-        PagerDutyAlerting,
-    )
-    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
-        ResendEmailLogger,
-    )
-    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
-        SendGridEmailLogger,
-    )
-    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
-        SMTPEmailLogger,
-    )
-    from litellm_enterprise.litellm_core_utils.litellm_logging import (
-        StandardLoggingPayloadSetup as EnterpriseStandardLoggingPayloadSetup,
-    )
 
-    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+    class _EnterpriseCallbackControlsProtocol(Protocol):
+        @staticmethod
+        def is_callback_disabled_dynamically(
+            callback: object,
+            litellm_params: Mapping[str, object],
+            standard_callback_dynamic_params: StandardCallbackDynamicParams,
+        ) -> bool: ...
 
-    EnterpriseStandardLoggingPayloadSetupVAR: type[EnterpriseStandardLoggingPayloadSetup] | None = (
-        EnterpriseStandardLoggingPayloadSetup
-    )
-except Exception as e:
-    verbose_logger.debug("[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - %s", e)
-    GenericAPILogger = CustomLogger  # type: ignore
-    ResendEmailLogger = CustomLogger  # type: ignore
-    SendGridEmailLogger = CustomLogger  # type: ignore
-    SMTPEmailLogger = CustomLogger  # type: ignore
-    PagerDutyAlerting = CustomLogger  # type: ignore
-    EnterpriseCallbackControls = None  # type: ignore
-    EnterpriseStandardLoggingPayloadSetupVAR = None
-_in_memory_loggers: Final[list[Any]] = []
+    class _EnterpriseStandardLoggingPayloadSetupProtocol(Protocol):
+        @staticmethod
+        def apply_enterprise_specific_metadata(
+            standard_logging_metadata: StandardLoggingMetadata,
+            proxy_server_request: Mapping[str, object],
+        ) -> StandardLoggingMetadata: ...
+
+    EnterpriseCallbackControls: type[_EnterpriseCallbackControlsProtocol] | None
+    EnterpriseStandardLoggingPayloadSetupVAR: type[_EnterpriseStandardLoggingPayloadSetupProtocol] | None
+else:
+    try:
+        from litellm_enterprise.enterprise_callbacks.callback_controls import (
+            EnterpriseCallbackControls,
+        )
+        from litellm_enterprise.litellm_core_utils.litellm_logging import (
+            StandardLoggingPayloadSetup as EnterpriseStandardLoggingPayloadSetup,
+        )
+
+        EnterpriseStandardLoggingPayloadSetupVAR = EnterpriseStandardLoggingPayloadSetup
+    except Exception as e:
+        verbose_logger.debug(
+            "[Non-Blocking] Unable to import EnterpriseCallbackControls - LiteLLM Enterprise Feature - %s", e
+        )
+        EnterpriseCallbackControls = None
+        EnterpriseStandardLoggingPayloadSetupVAR = None
+
+if TYPE_CHECKING:
+    GenericAPILogger: type[CustomLogger]
+    ResendEmailLogger: type[CustomLogger]
+    SendGridEmailLogger: type[CustomLogger]
+    SMTPEmailLogger: type[CustomLogger]
+    PagerDutyAlerting: type[CustomLogger]
+else:
+    try:
+        from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (
+            PagerDutyAlerting,
+        )
+        from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
+            ResendEmailLogger,
+        )
+        from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
+            SendGridEmailLogger,
+        )
+        from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
+            SMTPEmailLogger,
+        )
+
+        from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+    except Exception as e:
+        verbose_logger.debug("[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - %s", e)
+        GenericAPILogger = CustomLogger  # type: ignore
+        ResendEmailLogger = CustomLogger  # type: ignore
+        SendGridEmailLogger = CustomLogger  # type: ignore
+        SMTPEmailLogger = CustomLogger  # type: ignore
+        PagerDutyAlerting = CustomLogger  # type: ignore
+_in_memory_loggers: Final[
+    list[CustomLogger]
+] = []  # mutable-ok: module-level registry appended to from many call sites at runtime
 
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset] = frozenset(StandardLoggingMetadata.__annotations__.keys())
 
@@ -1131,21 +1163,16 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["additional_args"] = additional_args
             self.model_call_details["log_event_type"] = "post_api_call"
 
-            if self.litellm_request_debug:
-                attr = "warning"
-            else:
-                attr = "debug"
+            log_fn = verbose_logger.warning if self.litellm_request_debug else verbose_logger.debug
 
             if json_logs:
-                callattr = getattr(verbose_logger, attr)
-                callattr(
+                log_fn(
                     "RAW RESPONSE:\n{}\n\n".format(
                         self.model_call_details.get("original_response", self.model_call_details)
                     ),
                 )
             else:
-                callattr = getattr(verbose_logger, attr)
-                callattr(
+                log_fn(
                     "RAW RESPONSE:\n{}\n\n".format(
                         self.model_call_details.get("original_response", self.model_call_details)
                     )
@@ -1652,7 +1679,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details[f"has_logged_{event_type}"] = True
         return
 
-    def should_run_callback(self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str) -> bool:
+    def should_run_callback(
+        self, callback: litellm.CALLBACK_TYPES, litellm_params: Mapping[str, object], event_hook: str
+    ) -> bool:
         if litellm.global_disable_no_log_param:
             return True
 
@@ -1664,8 +1693,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 return False
 
         # Check for dynamically disabled callbacks via headers
+        _callback_for_disable_check: Final[str | Callable[..., object] | CustomLogger] = callback
         if EnterpriseCallbackControls is not None and EnterpriseCallbackControls.is_callback_disabled_dynamically(
-            callback=callback,
+            callback=_callback_for_disable_check,
             litellm_params=litellm_params,
             standard_callback_dynamic_params=self.standard_callback_dynamic_params,
         ):
@@ -4115,7 +4145,7 @@ def _init_custom_logger_compatible_class(
                     return callback
 
             # Get global BitBucket config
-            bitbucket_config: Final = getattr(litellm, "global_bitbucket_config", None)
+            bitbucket_config: Final = litellm.global_bitbucket_config
             if bitbucket_config is None:
                 raise ValueError("BitBucket configuration not found. Please set litellm.global_bitbucket_config first.")
 
@@ -4132,7 +4162,7 @@ def _init_custom_logger_compatible_class(
                     return callback
 
             # Get global BitBucket config
-            gitlab_config: Final = getattr(litellm, "global_gitlab_config", None)
+            gitlab_config: Final = litellm.global_gitlab_config
             if gitlab_config is None:
                 raise ValueError("Gitlab configuration not found. Please set litellm.global_gitlab_config first.")
 
@@ -4153,7 +4183,10 @@ def _init_custom_logger_compatible_class(
     return None
 
 
-def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Any | None:
+def _maybe_construct_otel_v2(
+    callback_name: str,
+    _in_memory_loggers: list[CustomLogger],  # mutable-ok: caller's registry, appended to below
+) -> CustomLogger | None:
     """If ``LITELLM_OTEL_V2`` is on, build (or reuse) a single ``OpenTelemetryV2``
     instance configured via the preset for ``callback_name``.
 
@@ -4184,7 +4217,9 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> An
     return v2_logger
 
 
-def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list) -> None:
+def _maybe_auto_initialize_arize_phoenix(
+    _in_memory_loggers: list[CustomLogger],  # mutable-ok: caller's registry, appended to below
+) -> None:
     """
     Auto-initialize ArizePhoenixLogger when Phoenix env vars are detected.
 
@@ -4594,7 +4629,7 @@ class StandardLoggingPayloadSetup:
         mcp_tool_call_metadata: StandardLoggingMCPToolCall | None = None,
         vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None = None,
         usage_object: dict | None = None,
-        proxy_server_request: dict | None = None,
+        proxy_server_request: Mapping[str, object] | None = None,
         start_time: dt_object | None = None,
         response_id: str | None = None,
     ) -> StandardLoggingMetadata:

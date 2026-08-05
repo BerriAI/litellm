@@ -1,6 +1,6 @@
 {
   "ANN001": {
-    "limit": 3097
+    "limit": 3087
   },
   "ANN002": {
     "limit": 69
@@ -9,10 +9,10 @@
     "limit": 831
   },
   "ANN201": {
-    "limit": 2137
+    "limit": 2121
   },
   "ANN202": {
-    "limit": 941
+    "limit": 939
   },
   "ANN204": {
     "limit": 724
@@ -24,7 +24,7 @@
     "limit": 130
   },
   "ANN401": {
-    "limit": 1848
+    "limit": 1792
   },
   "ASYNC230": {
     "limit": 14

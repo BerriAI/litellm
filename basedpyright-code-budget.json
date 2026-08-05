@@ -1,6 +1,6 @@
 {
   "reportAny": {
-    "limit": 29809
+    "limit": 29255
   },
   "reportArgumentType": {
     "limit": 2645
@@ -24,7 +24,7 @@
     "limit": 24
   },
   "reportExplicitAny": {
-    "limit": 9473
+    "limit": 9319
   },
   "reportFunctionMemberAccess": {
     "limit": 11
@@ -54,13 +54,13 @@
     "limit": 0
   },
   "reportMissingParameterType": {
-    "limit": 5855
+    "limit": 5845
   },
   "reportMissingTypeArgument": {
-    "limit": 15849
+    "limit": 15837
   },
   "reportMissingTypeStubs": {
-    "limit": 40
+    "limit": 31
   },
   "reportOperatorIssue": {
     "limit": 0
@@ -105,13 +105,13 @@
     "limit": 113
   },
   "reportUnknownMemberType": {
-    "limit": 40452
+    "limit": 40396
   },
   "reportUnknownParameterType": {
-    "limit": 20309
+    "limit": 20285
   },
   "reportUnknownVariableType": {
-    "limit": 31978
+    "limit": 31955
   },
   "reportUnnecessaryCast": {
     "limit": 124
