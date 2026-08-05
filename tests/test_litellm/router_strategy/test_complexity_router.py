@@ -2405,6 +2405,84 @@ class TestLexicalKeywordTierRules:
         assert router._lexical_tier_override("what is a k8scluster thing") is None
 
 
+class TestCjkKeywordTierRules:
+    """CJK keyword_tier_rules must fire mid-sentence, where regex word boundaries cannot."""
+
+    def _router(self, mock_router_instance, basic_config, keywords: List[str]) -> ComplexityRouter:
+        return ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "keyword_tier_rules": [{"keywords": keywords, "tier": "REASONING"}],
+            },
+        )
+
+    @pytest.mark.parametrize(
+        "keyword, prompt",
+        [
+            ("发票", "我需要开发票"),
+            ("退款", "我要退款，谢谢"),
+            ("账单查询", "我的账单查询怎么做"),
+            ("API文档", "请问在哪里看API文档"),
+            ("請求", "這個請求要怎麼處理"),
+            ("見積", "見積をお願いします"),
+            ("キャンセル", "注文をキャンセルしたい"),
+            ("\U00030000", "这个\U00030000很少见"),
+        ],
+    )
+    def test_cjk_keyword_matches_without_surrounding_whitespace(
+        self, mock_router_instance, basic_config, keyword, prompt
+    ):
+        """CJK is written without spaces, so `\\b<kw>\\b` never fires between two CJK characters."""
+        router = self._router(mock_router_instance, basic_config, [keyword])
+        assert router._lexical_tier_override(prompt) == KeywordOverride(
+            tier=ComplexityTier.REASONING, matched_keyword=keyword
+        )
+
+    def test_cjk_keyword_does_not_match_unrelated_prompt(self, mock_router_instance, basic_config):
+        """Substring matching must still be a real test, not a match-all."""
+        router = self._router(mock_router_instance, basic_config, ["发票"])
+        assert router._lexical_tier_override("我想查一下订单状态") is None
+
+    @pytest.mark.asyncio
+    async def test_cjk_keyword_overrides_scoring_end_to_end(self, mock_router_instance, basic_config):
+        """The whole hook, not just the matcher: a Chinese prompt reaches the tier it was mapped to."""
+        prompt = "我需要开发票"
+        router = self._router(mock_router_instance, basic_config, ["发票"])
+        scored_tier, _, _ = router.classify(prompt)
+        assert scored_tier != ComplexityTier.REASONING
+
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        assert result is not None
+        assert result.model == "o1-preview"
+
+    def test_latin_keywords_keep_word_boundary_matching(self, mock_router_instance, basic_config):
+        """The CJK gate reads the keyword, so a Latin keyword is unaffected by the prompt's script."""
+        router = self._router(mock_router_instance, basic_config, ["k8s"])
+        assert router._lexical_tier_override("what is a k8scluster thing") is None
+        assert router._lexical_tier_override("running my k8s cluster") == KeywordOverride(
+            tier=ComplexityTier.REASONING, matched_keyword="k8s"
+        )
+
+    def test_latin_keyword_against_cjk_prompt_still_needs_a_boundary(self, mock_router_instance, basic_config):
+        """A Latin keyword glued to CJK characters is still a substring false positive."""
+        router = self._router(mock_router_instance, basic_config, ["api"])
+        assert router._lexical_tier_override("请解释一下rapid这个词") is None
+        assert router._lexical_tier_override("请问 api 怎么调用") == KeywordOverride(
+            tier=ComplexityTier.REASONING, matched_keyword="api"
+        )
+
+    def test_accented_latin_keeps_word_boundary_semantics(self, complexity_router):
+        """Guards the alternative fix (ASCII-only lookarounds), which would break diacritics."""
+        assert complexity_router._keyword_matches("un café apiculteur", "api") is False
+        assert complexity_router._keyword_matches("appelle l' api maintenant", "api") is True
+
+
 def _make_embedding_response(vectors: List[List[float]]) -> "litellm.EmbeddingResponse":
     return litellm.EmbeddingResponse(
         model="fake-embed",
