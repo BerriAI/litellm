@@ -1334,7 +1334,7 @@ def test_map_extra_body_params_chat_template_kwargs_enable_thinking():
         {"extra_body": {"chat_template_kwargs": {"enable_thinking": True}}},
         _REASONING_MODEL,
     )
-    assert enabled == {"reasoning_effort": "medium"}
+    assert enabled == {}
 
 
 def test_map_extra_body_params_chat_template_kwargs_conflicts_with_reasoning_effort():
@@ -1425,7 +1425,6 @@ def test_map_extra_body_params_multiple_guided_params_rejected():
 @pytest.mark.parametrize(
     "param,value",
     [
-        ("min_tokens", 10),
         ("stop_token_ids", [1, 2]),
         ("include_stop_str_in_output", True),
         ("skip_special_tokens", False),
@@ -1440,6 +1439,8 @@ def test_map_extra_body_params_multiple_guided_params_rejected():
         ("detokenize", True),
         ("allowed_token_ids", [1]),
         ("bad_words", ["foo"]),
+        ("include_reasoning", False),
+        ("nvext", {"verbosity": 1}),
     ],
 )
 def test_map_extra_body_params_strips_unsupported_nim_vllm_params(param, value, caplog):
@@ -1478,9 +1479,10 @@ def test_nim_vllm_extras_translated_end_to_end_in_request_body():
     Passing NIM/vLLM extras to litellm.completion must reach the Fireworks
     request body translated, not verbatim: truncate_prompt_tokens becomes
     prompt_truncate_len, chat_template_kwargs.enable_thinking becomes
-    reasoning_effort, min_tokens is dropped, and fireworks-native top_k still
-    passes through. Asserts on the actual JSON posted to the API, so a revert
-    of the _complete_fireworks_ai wiring fails this test.
+    reasoning_effort, include_reasoning is dropped, and min_tokens and
+    fireworks-native top_k still pass through. Asserts on the actual JSON
+    posted to the API, so a revert of the _complete_fireworks_ai wiring
+    fails this test.
     """
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -1515,6 +1517,7 @@ def test_nim_vllm_extras_translated_end_to_end_in_request_body():
             truncate_prompt_tokens=4096,
             chat_template_kwargs={"enable_thinking": False},
             min_tokens=10,
+            include_reasoning=False,
             top_k=40,
         )
 
@@ -1523,7 +1526,8 @@ def test_nim_vllm_extras_translated_end_to_end_in_request_body():
     assert "truncate_prompt_tokens" not in request_body
     assert request_body["reasoning_effort"] == "none"
     assert "chat_template_kwargs" not in request_body
-    assert "min_tokens" not in request_body
+    assert "include_reasoning" not in request_body
+    assert request_body["min_tokens"] == 10
     assert request_body["top_k"] == 40
 
 
