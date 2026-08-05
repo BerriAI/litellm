@@ -2364,3 +2364,32 @@ def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
     assert "aws_access_key_id" not in cleaned
     assert cleaned.get("api_base") == "https://example.test/v1"
     assert cleaned.get("api_version") == "2024-10-21"
+
+
+class TestRejectBannedParamOverrides:
+    """Routing and credential fields come from the deployment configuration when a
+    request names a configured model; a request that wants its own connection
+    supplies the whole parameter set instead."""
+
+    def test_banned_param_is_refused(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.health_endpoints._health_endpoints import (
+            _reject_banned_param_overrides,
+        )
+
+        for param in ("api_base", "base_url", "vertex_credentials", "aws_web_identity_token"):
+            with pytest.raises(HTTPException) as exc_info:
+                _reject_banned_param_overrides({"model": "gpt-4o", param: "caller-supplied"})
+            assert exc_info.value.status_code == 400
+            assert param in str(exc_info.value.detail)
+
+    def test_benign_params_are_allowed(self):
+        from litellm.proxy.health_endpoints._health_endpoints import (
+            _reject_banned_param_overrides,
+        )
+
+        _reject_banned_param_overrides({})
+        _reject_banned_param_overrides({"model": "gpt-4o"})
+        _reject_banned_param_overrides({"model": "gpt-4o", "api_key": "sk-caller-owned"})
+        _reject_banned_param_overrides({"mode": "chat", "timeout": 30})
