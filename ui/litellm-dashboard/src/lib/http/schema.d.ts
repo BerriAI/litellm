@@ -760,6 +760,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/classifier/default_prompt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Auto Router Classifier Default Prompt
+         * @description Get the built-in system prompt used by an auto-router's LLM classifier
+         */
+        get: operations["get_auto_router_classifier_default_prompt_auto_router_classifier_default_prompt_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/test_routing": {
         parameters: {
             query?: never;
@@ -21276,6 +21296,17 @@ export interface components {
             } | null;
         };
         /**
+         * AutoRouterClassifierDefaultPromptResponse
+         * @description The built-in system prompt an auto-router's LLM classifier uses when none is configured.
+         *
+         *     Served so the dashboard's prompt editor prefills the rubric the proxy actually sends, rather than
+         *     a copy in the frontend that drifts the moment the rubric is edited.
+         */
+        AutoRouterClassifierDefaultPromptResponse: {
+            /** System Prompt */
+            system_prompt: string;
+        };
+        /**
          * AutoRouterRoutingTestRequest
          * @description A single prompt to classify against a complexity-router config that need not be saved yet.
          */
@@ -22879,6 +22910,11 @@ export interface components {
              * @description Model name (from the router's model_list) to call for classification
              */
             model: string;
+            /**
+             * System Prompt
+             * @description Replaces the built-in complexity rubric as the classifier's entire system role. When set, neither the default rubric nor the context-window closing line is appended, so the prompt owns the whole taxonomy and the tier names SIMPLE/MEDIUM/COMPLEX/REASONING become whatever buckets it defines: a prompt that classifies data sensitivity routes on that instead of on difficulty. Two consequences of full replacement. The default rubric's closing paragraph is the classifier's prompt-injection defense, telling it that the caller's quoted system prompt and prior turns are material to judge and never instructions; a replacement that omits it lets a caller ask for a tier and get it. And the heuristic fallback still scores complexity, so a router on some other taxonomy wants classifier_fallback='default_model'. Leave unset for the built-in rubric. Only applies when classifier_type is 'llm'.
+             */
+            system_prompt?: string | null;
             /**
              * Timeout Ms
              * @description Timeout budget for the classification call, in milliseconds
@@ -31348,6 +31384,13 @@ export interface components {
              * @default 3
              */
             classifier_context_window_size: number;
+            /**
+             * Classifier Fallback
+             * @description What classifies the request when the LLM classifier errors, times out, or returns an unparseable response. 'heuristic' runs the local complexity scorer, which is right when the classifier grades complexity too. 'default_model' skips scoring and routes to default_model, which is what a classifier on some other taxonomy wants: a prompt that grades data sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to what the operator configured. Requires default_model when set to 'default_model'. Only applies when classifier_type is 'llm'.
+             * @default heuristic
+             * @enum {string}
+             */
+            classifier_fallback: "heuristic" | "default_model";
             /** @description Configuration for the LLM classifier; required when classifier_type is 'llm' */
             classifier_llm_config?: components["schemas"]["ClassifierLLMConfig"] | null;
             /**
@@ -32221,7 +32264,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "literal_keyword_match" | "semantic_keyword_match" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Model */
             classifier_model?: string;
             /** Conversation Continuing */
@@ -36403,6 +36446,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_auto_router_classifier_default_prompt_auto_router_classifier_default_prompt_get: {
+        parameters: {
+            query?: {
+                context_window_size?: number;
+                tier_labels?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterClassifierDefaultPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
