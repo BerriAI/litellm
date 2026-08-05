@@ -21,11 +21,11 @@ use prepare::prepare_messages_call;
 use types::{AnthropicMessagesResponse, MessagesRequest, MessagesStreamResponse};
 
 pub async fn messages(request: MessagesRequest<'_>) -> CoreResult<AnthropicMessagesResponse> {
-    execute_messages_provider_call(prepare_messages_call(request)?).await
+    execute_messages_provider_call(prepare_messages_call(request, false)?).await
 }
 
 pub async fn messages_stream(request: MessagesRequest<'_>) -> CoreResult<MessagesStreamResponse> {
-    execute_messages_provider_stream(prepare_messages_call(request)?).await
+    execute_messages_provider_stream(prepare_messages_call(request, true)?).await
 }
 
 #[cfg(test)]

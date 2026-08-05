@@ -2,7 +2,8 @@
 
 mod service;
 
-use aws_smithy_eventstream::frame::MessageFrameDecoder;
+use aws_smithy_eventstream::frame::{DecodedFrame, MessageFrameDecoder};
+use aws_smithy_types::event_stream::Message;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Json, State};
@@ -19,7 +20,10 @@ use litellm_core::logging::stream::count_forwarded_stream;
 use serde_json::{Map, Value};
 
 use crate::auth::RequireMasterKey;
-use crate::constants::{MESSAGES_HEADERS_NOT_FORWARDED, MESSAGES_ROUTE_PATH};
+use crate::constants::{
+    EVENT_STREAM_ERROR_MESSAGE_TYPES, EVENT_STREAM_MESSAGE_TYPE_HEADER,
+    MESSAGES_HEADERS_NOT_FORWARDED, MESSAGES_ROUTE_PATH,
+};
 use crate::state::AppState;
 
 /// This route's contribution to the app router.
@@ -89,7 +93,6 @@ fn stream_response(
     })
 }
 
-#[allow(dead_code)]
 struct EventStreamState {
     upstream: BoxStream<'static, Result<Bytes, reqwest::Error>>,
     buffer: bytes::BytesMut,
@@ -107,14 +110,53 @@ fn bedrock_sse_stream(
             decoder: MessageFrameDecoder::new(),
             terminated: false,
         },
-        |_state| async move {
-            todo!("decode Bedrock EventStream frames and emit normalized Anthropic SSE")
+        |mut state| async move {
+            if state.terminated {
+                return None;
+            }
+            loop {
+                let frame = state.decoder.decode_frame(&mut state.buffer);
+                match frame {
+                    Ok(DecodedFrame::Complete(message)) => {
+                        let is_error = is_error_frame(&message);
+                        let rendered = if is_error {
+                            sse_error(message.payload())
+                        } else {
+                            sse_data(message.payload())
+                        };
+                        state.terminated = is_error;
+                        return Some((Ok(Bytes::from(rendered)), state));
+                    }
+                    Ok(DecodedFrame::Incomplete) => match state.upstream.next().await {
+                        Some(Ok(chunk)) => state.buffer.extend_from_slice(&chunk),
+                        Some(Err(error)) => {
+                            state.terminated = true;
+                            let rendered = sse_error(error.to_string().as_bytes());
+                            return Some((Ok(Bytes::from(rendered)), state));
+                        }
+                        None => return None,
+                    },
+                    Err(error) => {
+                        state.terminated = true;
+                        let rendered = sse_error(error.to_string().as_bytes());
+                        return Some((Ok(Bytes::from(rendered)), state));
+                    }
+                }
+            }
         },
     )
     .boxed()
 }
 
-#[allow(dead_code)]
+fn is_error_frame(message: &Message) -> bool {
+    message
+        .headers()
+        .iter()
+        .find(|header| header.name().as_str() == EVENT_STREAM_MESSAGE_TYPE_HEADER)
+        .and_then(|header| header.value().as_string().ok())
+        .is_some_and(|value| EVENT_STREAM_ERROR_MESSAGE_TYPES.contains(&value.as_str()))
+}
+
 fn sse_data(payload: &[u8]) -> String {
     let value = serde_json::from_slice::<serde_json::Value>(payload)
         .ok()
@@ -131,7 +173,6 @@ fn sse_data(payload: &[u8]) -> String {
     format!("event: {event}\ndata: {value}\n\n")
 }
 
-#[allow(dead_code)]
 fn sse_error(payload: &[u8]) -> String {
     let message = String::from_utf8_lossy(payload);
     format!(
@@ -264,6 +305,7 @@ mod tests {
             master_key: master_key.map(Arc::from),
             loggers: Arc::new(Vec::new()),
             realtime_pool: RealtimePool::disabled(),
+            logging_sink: None,
         }
     }
 
@@ -797,7 +839,8 @@ mod tests {
         assert!(body.contains("input_json_delta"));
         assert!(body.contains("event: message_stop"));
         let request = server.await.expect("server task completes");
-        let (_, request_body) = request.split_once("\r\n\r\n").expect("request body");
+        let (head, request_body) = request.split_once("\r\n\r\n").expect("request body");
+        assert!(head.starts_with("POST /model/claude-test/invoke-with-response-stream "));
         let request_body: serde_json::Value =
             serde_json::from_str(request_body).expect("request json");
         assert_eq!(request_body["tools"][0]["name"], "get_weather");

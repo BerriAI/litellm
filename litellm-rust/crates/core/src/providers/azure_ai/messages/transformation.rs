@@ -146,6 +146,7 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
         &self,
         api_base: Option<&str>,
         _model: &str,
+        _stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> CoreResult<String> {
         complete_azure_anthropic_url(api_base, env_lookup)

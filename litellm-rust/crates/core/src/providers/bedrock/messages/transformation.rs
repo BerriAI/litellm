@@ -142,9 +142,10 @@ impl AnthropicMessagesProviderConfig for BedrockMessagesConfig {
         &self,
         api_base: Option<&str>,
         model: &str,
+        stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> CoreResult<String> {
-        complete_bedrock_url(api_base, model, false, env_lookup)
+        complete_bedrock_url(api_base, model, stream, env_lookup)
     }
 
     fn signing_region(

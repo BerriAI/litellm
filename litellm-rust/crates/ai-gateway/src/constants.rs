@@ -40,3 +40,9 @@ pub(crate) const MESSAGES_ROUTE_PATH: &str = "/v1/messages";
 #[cfg(feature = "server")]
 pub(crate) const MESSAGES_HEADERS_NOT_FORWARDED: &[&str] =
     &["authorization", "connection", "content-length", "host"];
+
+#[cfg(feature = "server")]
+pub(crate) const EVENT_STREAM_MESSAGE_TYPE_HEADER: &str = ":message-type";
+
+#[cfg(feature = "server")]
+pub(crate) const EVENT_STREAM_ERROR_MESSAGE_TYPES: &[&str] = &["exception", "error"];

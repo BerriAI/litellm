@@ -24,6 +24,7 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         &self,
         api_base: Option<&str>,
         model: &str,
+        stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> CoreResult<String>;
 
