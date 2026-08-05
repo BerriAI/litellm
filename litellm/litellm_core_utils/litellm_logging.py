@@ -59,7 +59,6 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
-from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.core_helpers import reconstruct_model_name
@@ -4207,7 +4206,13 @@ def otel_v2_owned_backends() -> frozenset[str]:
     ``_in_memory_loggers`` while never reaching the success-callback list, and treating
     that as owned made the sink stand down for a backend nobody delivers, turning a
     duplicate into a silent total loss of the tenant's traces.
+
+    ``OpenTelemetryV2`` is imported here rather than at module scope because it pulls
+    ``opentelemetry``, which ships only in the proxy extras: importing it eagerly makes
+    ``import litellm`` fail for an SDK install that never asked for OTEL.
     """
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+
     dispatched = litellm._async_success_callback
     return frozenset(
         name

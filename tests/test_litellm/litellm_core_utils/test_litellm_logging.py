@@ -4565,3 +4565,37 @@ def test_sink_never_layers_a_tenant_credential_tracer_over_the_fan_out():
 
     assert owning._tracer_dynamic_params(call) is call.dynamic_params
     assert sink._tracer_dynamic_params(call) is None
+
+
+def test_importing_litellm_does_not_require_opentelemetry():
+    """``opentelemetry`` ships only in the proxy extras, so a plain SDK install does not
+    have it. Importing the OTEL v2 logger at module scope made ``import litellm`` raise
+    ModuleNotFoundError for every one of those users; CI never sees it because the install
+    jobs sync all extras. Run in a child process with the package blocked at import time."""
+    import subprocess
+    import textwrap
+
+    program = textwrap.dedent(
+        """
+        import sys
+
+        class _Blocker:
+            def find_spec(self, name, path=None, target=None):
+                if name == "opentelemetry" or name.startswith("opentelemetry."):
+                    raise ModuleNotFoundError(f"No module named '{name}'")
+                return None
+
+        sys.meta_path.insert(0, _Blocker())
+        import litellm  # noqa: F401
+        print("IMPORT_OK")
+        """
+    )
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    result = subprocess.run(
+        [sys.executable, "-c", program],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        env={**os.environ, "PYTHONPATH": repo_root},
+    )
+    assert "IMPORT_OK" in result.stdout, f"import litellm failed without opentelemetry:\n{result.stderr[-3000:]}"
