@@ -369,6 +369,32 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details.image_tokens == 272
         assert result.completion_tokens_details.text_tokens == 100
 
+    def test_transform_response_api_usage_maps_cache_write_tokens(self):
+        """Responses API (/v1/responses) cache-write tokens must survive the usage transform.
+
+        gpt-5.6 returns usage.input_tokens_details.cache_write_tokens (an extra field
+        not typed on InputTokensDetails). Before the fix the transform rebuilt the token
+        details and dropped it, leaving the cache-creation metric empty (LIT-4633).
+        """
+        usage = {
+            "input_tokens": 10062,
+            "output_tokens": 16,
+            "total_tokens": 10078,
+            "input_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 10059,
+            },
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cache_write_tokens == 10059
+        assert result.prompt_tokens_details.cache_creation_tokens == 10059
+        assert result.prompt_tokens_details.cached_tokens == 0
+
     def test_transform_response_api_usage_mixed_details(self):
         """Test transformation handles mixed token details (cached + image + audio)."""
         # Setup - hypothetical usage with mixed token types

@@ -1,24 +1,32 @@
 import React, { useState } from "react";
-import { Card, Select, Typography } from "antd";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "@/components/ui/combobox";
 import { VectorStoreTester } from "./VectorStoreTester";
 import { VectorStore } from "@/components/vector_store_management/types";
-
-const { Text, Title } = Typography;
 
 interface TestVectorStoreTabProps {
   accessToken: string | null;
   vectorStores: VectorStore[];
 }
 
+const storeLabel = (store: VectorStore) => store.vector_store_name || store.vector_store_id;
+
 const TestVectorStoreTab: React.FC<TestVectorStoreTabProps> = ({ accessToken, vectorStores }) => {
-  const [selectedVectorStoreId, setSelectedVectorStoreId] = useState<string | undefined>(
-    vectorStores.length > 0 ? vectorStores[0].vector_store_id : undefined,
-  );
+  const [selectedVectorStore, setSelectedVectorStore] = useState<VectorStore | null>(vectorStores[0] ?? null);
 
   if (!accessToken) {
     return (
       <Card>
-        <Text type="secondary">Access token is required to test vector stores.</Text>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">Access token is required to test vector stores.</p>
+        </CardContent>
       </Card>
     );
   }
@@ -26,9 +34,11 @@ const TestVectorStoreTab: React.FC<TestVectorStoreTabProps> = ({ accessToken, ve
   if (vectorStores.length === 0) {
     return (
       <Card>
-        <div className="text-center py-8">
-          <Text type="secondary">No vector stores available. Create one first to test it.</Text>
-        </div>
+        <CardContent>
+          <div className="py-8 text-center">
+            <p className="text-sm text-muted-foreground">No vector stores available. Create one first to test it.</p>
+          </div>
+        </CardContent>
       </Card>
     );
   }
@@ -36,36 +46,41 @@ const TestVectorStoreTab: React.FC<TestVectorStoreTabProps> = ({ accessToken, ve
   return (
     <div className="space-y-4">
       <Card>
-        <div className="space-y-4">
+        <CardContent className="space-y-4">
           <div>
-            <Title level={5}>Select Vector Store</Title>
-            <Text type="secondary">Choose a vector store to test search queries against</Text>
+            <h5 className="text-base font-medium text-foreground">Select Vector Store</h5>
+            <p className="text-sm text-muted-foreground">Choose a vector store to test search queries against</p>
           </div>
 
-          <Select
-            value={selectedVectorStoreId}
-            onChange={setSelectedVectorStoreId}
-            placeholder="Select a vector store"
-            size="large"
-            style={{ width: "100%" }}
-            showSearch
-            optionFilterProp="children"
+          <Combobox
+            items={vectorStores}
+            value={selectedVectorStore}
+            onValueChange={setSelectedVectorStore}
+            itemToStringLabel={storeLabel}
           >
-            {vectorStores.map((vs) => (
-              <Select.Option key={vs.vector_store_id} value={vs.vector_store_id}>
-                <div className="flex flex-col">
-                  <span className="font-medium">{vs.vector_store_name || vs.vector_store_id}</span>
-                  {vs.vector_store_name && (
-                    <span className="text-xs text-gray-500 font-mono">{vs.vector_store_id}</span>
-                  )}
-                </div>
-              </Select.Option>
-            ))}
-          </Select>
-        </div>
+            <ComboboxInput className="w-full" placeholder="Select a vector store" />
+            <ComboboxContent>
+              <ComboboxEmpty>No matching vector stores</ComboboxEmpty>
+              <ComboboxList>
+                {(store: VectorStore) => (
+                  <ComboboxItem key={store.vector_store_id} value={store}>
+                    <div className="flex flex-col">
+                      <span className="font-medium">{storeLabel(store)}</span>
+                      {store.vector_store_name && (
+                        <span className="font-mono text-xs text-muted-foreground">{store.vector_store_id}</span>
+                      )}
+                    </div>
+                  </ComboboxItem>
+                )}
+              </ComboboxList>
+            </ComboboxContent>
+          </Combobox>
+        </CardContent>
       </Card>
 
-      {selectedVectorStoreId && <VectorStoreTester vectorStoreId={selectedVectorStoreId} accessToken={accessToken} />}
+      {selectedVectorStore && (
+        <VectorStoreTester vectorStoreId={selectedVectorStore.vector_store_id} accessToken={accessToken} />
+      )}
     </div>
   );
 };

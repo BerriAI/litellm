@@ -28,11 +28,13 @@ class MockPrismaClient:
         # Initialize transaction lists
         self.spend_log_transactions = []
         self.daily_user_spend_transactions = {}
+        self.tool_usage_transactions = []
 
-        # Add lock for spend_log_transactions (matches real PrismaClient)
+        # Add locks for the transaction queues (matches real PrismaClient)
         import asyncio
 
         self._spend_log_transactions_lock = asyncio.Lock()
+        self._tool_usage_transactions_lock = asyncio.Lock()
 
     def jsonify_object(self, obj):
         return obj

@@ -6,12 +6,12 @@ When a policy has a `pipeline`, its guardrails run in the defined step order
 with configurable actions on pass/fail, rather than independently.
 """
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Final, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-VALID_PIPELINE_ACTIONS = {"allow", "block", "next", "modify_response"}
-VALID_PIPELINE_MODES = {"pre_call", "post_call"}
+VALID_PIPELINE_ACTIONS: Final = {"allow", "block", "next", "modify_response"}
+VALID_PIPELINE_MODES: Final = {"pre_call", "post_call"}
 
 
 class PipelineStep(BaseModel):

@@ -30,7 +30,7 @@ import {
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { modelAvailableCall, userDeleteCall } from "@/components/networking";
-import DefaultUserSettings from "./DefaultUserSettings";
+import { DefaultUserSettingsForm } from "./default-user-settings/DefaultUserSettingsForm";
 import { UsersTable } from "./view_users/UsersTable";
 import UserInfoView from "./view_users/user_info_view";
 import { UserInfo } from "@/components/networking";
@@ -412,12 +412,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   <Skeleton active paragraph={{ rows: 4 }} />
                 </div>
               ) : (
-                <DefaultUserSettings
-                  accessToken={accessToken}
-                  possibleUIRoles={possibleUIRoles}
-                  userID={userID}
-                  userRole={userRole}
-                />
+                <DefaultUserSettingsForm possibleUIRoles={possibleUIRoles} />
               )}
             </TabPanel>
           </TabPanels>

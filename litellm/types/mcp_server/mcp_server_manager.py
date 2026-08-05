@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Final, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -75,6 +75,11 @@ class MCPServer(BaseModel):
     # "client_secret_basic" the credentials go in an HTTP Basic Authorization
     # header (omitted from the body); None defaults to "client_secret_post".
     token_endpoint_auth_method: Optional[MCPTokenEndpointAuthMethod] = None
+    # RFC 8707 resource indicator sent on this server's upstream oauth2 legs (authorize, both
+    # token grants, and the client_credentials fetch). None omits it, which is the default and
+    # today's behavior; "auto" derives the canonical URI from ``url``; any other value is sent
+    # verbatim. Resolved by ``oauth_utils.resolve_upstream_resource``.
+    upstream_resource: str | None = None
     # AWS SigV4 fields
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
@@ -163,6 +168,15 @@ class MCPServer(BaseModel):
     allow_elicitation: bool = False
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    def __repr__(self) -> str:
+        return (
+            f"MCPServer(server_id={self.server_id!r}, name={self.name!r}, "
+            f"transport={self.transport!r}, auth_type={self.auth_type!r})"
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
     @property
     def has_client_credentials(self) -> bool:
         """True if this server should use the OAuth2 client_credentials (M2M) flow.
@@ -179,6 +193,18 @@ class MCPServer(BaseModel):
     def needs_user_oauth_token(self) -> bool:
         """True if this is an OAuth2 server that relies on per-user tokens (no client_credentials)."""
         return self.auth_type == MCPAuth.oauth2 and not self.has_client_credentials
+
+    @property
+    def is_gateway_managed_oauth2(self) -> bool:
+        """True when the gateway itself owns this server's OAuth custody: an ``oauth2`` server
+        (interactive authorization_code with gateway-vaulted per-user tokens, or M2M
+        client_credentials minted at egress) that has NOT opted into upstream-delegated auth.
+        These are the servers the keyless gateway-DCR flow can serve end to end, so the
+        per-server 401 challenge and protected-resource metadata advertise the gateway as the
+        authorization server for exactly this set. ``true_passthrough``, ``oauth_delegate``,
+        DCR-bridge, and token-exchange servers are their own auth types and client-forwarded,
+        so they are excluded by construction."""
+        return self.auth_type == MCPAuth.oauth2 and not self.delegate_auth_to_upstream
 
     @property
     def is_true_passthrough(self) -> bool:
@@ -221,7 +247,7 @@ class MCPServer(BaseModel):
 
         # PAT passthrough: auth_type is none but extra_headers includes auth headers
         if self.auth_type == MCPAuth.none and self.extra_headers:
-            auth_header_names = {"authorization", "x-api-key", "api-key", "apikey"}
+            auth_header_names: Final = {"authorization", "x-api-key", "api-key", "apikey"}
             return any(h.lower() in auth_header_names for h in self.extra_headers)
 
         return False
@@ -261,12 +287,3 @@ class MCPServer(BaseModel):
         if self.oauth_passthrough is not True:
             return False
         return any(h.lower() == "authorization" for h in self.extra_headers)
-
-    @property
-    def has_token_exchange_config(self) -> bool:
-        """True if this server is configured for OAuth2 token exchange (OBO / RFC 8693)."""
-        return (
-            self.auth_type == MCPAuth.oauth2_token_exchange
-            and bool(self.client_id and self.client_secret)
-            and bool(self.token_exchange_endpoint or self.token_url)
-        )

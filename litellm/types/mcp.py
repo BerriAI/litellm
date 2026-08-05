@@ -1,5 +1,5 @@
 import enum
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, TYPE_CHECKING, Union
 
 from pydantic import BaseModel
 from typing_extensions import TypedDict
@@ -47,7 +47,7 @@ class MCPAuth(str, enum.Enum):
 # "use this default"; it is applied at every egress build site via this single
 # constant rather than a DB-level DEFAULT (Prisma writes explicit values on
 # insert, so a column default would rarely apply anyway).
-DEFAULT_SUBJECT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
+DEFAULT_SUBJECT_TOKEN_TYPE: Final = "urn:ietf:params:oauth:token-type:access_token"
 
 # MCP Literals
 MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.stdio]
@@ -171,6 +171,15 @@ class MCPCredentials(TypedDict, total=False):
     Optional RFC 8707 resource indicator sent on ID-JAG leg 1
     """
 
+    upstream_resource: str | None
+    """
+    Optional RFC 8707 resource indicator sent on the upstream oauth2 legs (authorize, both token
+    grants, and the client_credentials fetch). Omitted when unset, which is the default; "auto"
+    derives the canonical URI from the server's url; any other value is sent verbatim.
+    Distinct from ``id_jag_resource``, which is the same parameter on the ID-JAG exchange, and from
+    ``audience``, which is the RFC 8693 token-exchange parameter.
+    """
+
     client_private_key: Optional[str]
     """
     PEM private key used to sign the private-key-JWT client_assertion (RFC 7523)
@@ -211,6 +220,11 @@ class MCPCredentials(TypedDict, total=False):
     write and stripped from the stored blob; the column is authoritative. Prefer the
     top-level request field.
     """
+
+
+MCP_ADMIN_CONFIG_CREDENTIAL_KEYS: Final[tuple[str, ...]] = ("upstream_resource",)
+"""Non-secret credential keys returned on read so the admin form can show and clear them. Mirrors
+``ADMIN_CONFIG_CREDENTIAL_KEYS`` in ``ui/litellm-dashboard/src/components/mcp_tools/types.tsx``."""
 
 
 class MCPServerCostInfo(TypedDict, total=False):
