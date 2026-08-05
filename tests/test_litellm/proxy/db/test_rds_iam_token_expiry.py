@@ -14,12 +14,118 @@ Run these tests:
 """
 
 import asyncio
+import builtins
 import os
+import sys
+import types
 import urllib.parse
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+def test_init_rds_client_does_not_import_secret_manager(monkeypatch):
+    from litellm.proxy.auth.rds_iam_token import init_rds_client
+
+    fake_boto3 = types.SimpleNamespace(
+        session=types.SimpleNamespace(Config=MagicMock()),
+        client=MagicMock(return_value="rds-client"),
+    )
+    real_import = builtins.__import__
+
+    def fail_on_secret_manager_import(name, *args, **kwargs):
+        if name == "litellm.secret_managers.main":
+            raise AssertionError("rds_iam_token must not import secret_managers.main")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setattr(builtins, "__import__", fail_on_secret_manager_import)
+
+    assert init_rds_client() == "rds-client"
+
+
+def test_init_rds_client_resolves_region_and_oidc_with_get_secret(monkeypatch):
+    import litellm
+    from litellm.proxy.auth.rds_iam_token import init_rds_client
+
+    fake_sts = MagicMock()
+    fake_sts.assume_role_with_web_identity.return_value = {
+        "Credentials": {
+            "AccessKeyId": "access-key",
+            "SecretAccessKey": "secret-key",
+            "SessionToken": "session-token",
+        }
+    }
+    rds_client = object()
+
+    def fake_boto_client(service_name, **kwargs):
+        if service_name == "sts":
+            return fake_sts
+        if service_name == "rds":
+            fake_boto_client.rds_kwargs = kwargs
+            return rds_client
+        raise AssertionError(service_name)
+
+    fake_boto_client.rds_kwargs = {}
+    fake_boto3 = types.SimpleNamespace(
+        session=types.SimpleNamespace(Config=MagicMock()),
+        client=MagicMock(side_effect=fake_boto_client),
+    )
+
+    def fake_get_secret(secret_name, default_value=None):
+        return {
+            "AWS_REGION_NAME": "us-east-1",
+            "AWS_REGION": None,
+            "oidc/google/audience": "oidc-token",
+        }.get(secret_name, default_value)
+
+    monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.setattr(litellm, "get_secret", fake_get_secret)
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+
+    assert (
+        init_rds_client(
+            aws_role_name="arn:aws:iam::123:role/rds",
+            aws_session_name="litellm",
+            aws_web_identity_token="oidc/google/audience",
+        )
+        is rds_client
+    )
+    fake_sts.assume_role_with_web_identity.assert_called_once_with(
+        RoleArn="arn:aws:iam::123:role/rds",
+        RoleSessionName="litellm",
+        WebIdentityToken="oidc-token",
+        DurationSeconds=3600,
+    )
+    assert fake_boto_client.rds_kwargs["region_name"] == "us-east-1"
+
+
+def test_init_rds_client_resolves_os_environ_parameter(monkeypatch):
+    from litellm.proxy.auth.rds_iam_token import init_rds_client
+
+    rds_client = object()
+    fake_boto3 = types.SimpleNamespace(
+        session=types.SimpleNamespace(Config=MagicMock()),
+        client=MagicMock(return_value=rds_client),
+    )
+
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "env-access-key")
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+
+    assert (
+        init_rds_client(aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID") is rds_client
+    )
+    fake_boto3.client.assert_called_once_with(
+        service_name="rds",
+        region_name="us-east-1",
+        aws_access_key_id="env-access-key",
+        aws_secret_access_key=None,
+        config=fake_boto3.session.Config.return_value,
+    )
 
 
 class TestPrismaWrapperTokenRefresh:
