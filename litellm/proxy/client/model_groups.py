@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 import requests
 
@@ -24,7 +24,7 @@ class ModelGroupsManagementClient:
         Returns:
             Dict[str, str]: Headers to use for API requests
         """
-        headers = {}
+        headers: Final = {}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
@@ -44,16 +44,16 @@ class ModelGroupsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/model_group/info"
-        request = requests.Request("GET", url, headers=self._get_headers())
+        url: Final = f"{self._base_url}/model_group/info"
+        request: Final = requests.Request("GET", url, headers=self._get_headers())
 
         if return_request:
             return request
 
         # Prepare and send the request
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()["data"]
         except requests.exceptions.HTTPError as e:

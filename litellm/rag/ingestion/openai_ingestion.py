@@ -7,7 +7,7 @@ so this implementation skips the embedding step and directly uploads files.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
@@ -80,19 +80,19 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
             Tuple of (vector_store_id, file_id)
         """
         vector_store_id = self.vector_store_config.get("vector_store_id")
-        ttl_days = self.vector_store_config.get("ttl_days")
+        ttl_days: Final = self.vector_store_config.get("ttl_days")
 
         # Get credentials from vector_store_config (loaded from litellm_credential_name if provided)
-        api_key = self.vector_store_config.get("api_key")
-        api_base = self.vector_store_config.get("api_base")
+        api_key: Final = self.vector_store_config.get("api_key")
+        api_base: Final = self.vector_store_config.get("api_base")
 
         if existing_file_id and not vector_store_id:
             raise ValueError("vector_store_id is required when ingesting an existing file_id")
 
         # Create vector store if not provided
         if not vector_store_id:
-            expires_after = {"anchor": "last_active_at", "days": ttl_days} if ttl_days else None
-            create_response = await vector_store_acreate(
+            expires_after: Final = {"anchor": "last_active_at", "days": ttl_days} if ttl_days else None
+            create_response: Final = await vector_store_acreate(
                 name=self.ingest_name or "litellm-rag-ingest",
                 custom_llm_provider="openai",
                 expires_after=expires_after,
@@ -116,7 +116,7 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
         result_file_id = None
         if file_content is not None and filename and vector_store_id:
             # Upload file to OpenAI
-            file_response = await litellm.acreate_file(
+            file_response: Final = await litellm.acreate_file(
                 file=(
                     filename,
                     file_content,

@@ -15,6 +15,8 @@ import { teamsTableKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useTeamDetailRouting } from "@/app/(dashboard)/teams/detailNavigation";
 import { TeamsTable } from "./TeamsPage/TeamsTable";
 import AccessGroupSelector from "./common_components/AccessGroupSelector";
+import MetadataKeyValueFields, { metadataPairsToObject } from "./common_components/MetadataKeyValueFields";
+import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import PassThroughRoutesSelector from "./common_components/PassThroughRoutesSelector";
 import AgentSelector from "./agent_management/AgentSelector";
 import ModelAliasManager from "./common_components/ModelAliasManager";
@@ -28,6 +30,7 @@ import type { Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "./molecules/notifications_manager";
+import { extractProxyErrorMessage } from "@/lib/http/client";
 import { Organization, fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
@@ -125,6 +128,7 @@ const getOrganizationAlias = (
 const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser = false }) => {
   const { data: organizationsData } = useOrganizations();
   const organizations = organizationsData ?? null;
+  const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
   const queryClient = useQueryClient();
   const refreshTeams = () => queryClient.invalidateQueries({ queryKey: teamsTableKeys.all });
   const [currentOrg] = useState<Organization | null>(null);
@@ -322,25 +326,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
 
         NotificationsManager.info("Creating Team");
 
-        // Handle logging settings in metadata
-        if (loggingSettings.length > 0) {
-          let metadata = {};
-          if (formValues.metadata) {
-            try {
-              metadata = JSON.parse(formValues.metadata);
-            } catch (e) {
-              console.warn("Invalid JSON in metadata field, starting with empty object");
-            }
-          }
-
-          // Add logging settings to metadata
-          metadata = {
-            ...metadata,
-            logging: loggingSettings.filter((config) => config.callback_name), // Only include configs with callback_name
-          };
-
-          formValues.metadata = JSON.stringify(metadata);
-        }
+        const metadataObject = {
+          ...metadataPairsToObject(formValues.metadata),
+          ...(loggingSettings.length > 0 ? { logging: loggingSettings.filter((config) => config.callback_name) } : {}),
+        };
+        formValues.metadata = Object.keys(metadataObject).length > 0 ? JSON.stringify(metadataObject) : undefined;
 
         if (formValues.secret_manager_settings) {
           if (typeof formValues.secret_manager_settings === "string") {
@@ -451,7 +441,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
       }
     } catch (error) {
       console.error("Error creating the team:", error);
-      NotificationsManager.fromBackend("Error creating the team: " + error);
+      NotificationsManager.fromBackend("Error creating the team: " + extractProxyErrorMessage(error));
     }
   };
 
@@ -593,6 +583,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           footer={null}
           onOk={handleOk}
           onCancel={handleCancel}
+          destroyOnHidden
         >
           <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
             <>
@@ -747,6 +738,16 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
               <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
                 <NumericalInput step={1} width={400} />
               </Form.Item>
+              <Form.Item
+                label="Metadata"
+                help='Values are saved as text. Enter JSON for typed values, e.g. 3, true, or {"region": "us"}.'
+              >
+                <MetadataKeyValueFields
+                  form={form}
+                  schemaFields={teamMetadataSchemaFields}
+                  schemaLoading={isTeamMetadataSchemaLoading}
+                />
+              </Form.Item>
 
               <Accordion
                 className="mt-20 mb-8"
@@ -800,13 +801,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                     tooltip="The TPM (Tokens Per Minute) limit for individual team members"
                   >
                     <NumericalInput step={1} width={400} />
-                  </Form.Item>
-                  <Form.Item
-                    label="Metadata"
-                    name="metadata"
-                    help="Additional team metadata. Enter metadata as JSON object."
-                  >
-                    <Input.TextArea rows={4} />
                   </Form.Item>
                   <Form.Item
                     label="Secret Manager Settings"

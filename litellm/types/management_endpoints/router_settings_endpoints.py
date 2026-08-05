@@ -2,7 +2,7 @@
 Types and field definitions for router settings management endpoints
 """
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Final, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -79,7 +79,7 @@ class RouterSettingsField(BaseModel):
 
 
 # Routing strategy descriptions
-ROUTING_STRATEGY_DESCRIPTIONS: Dict[str, str] = {
+ROUTING_STRATEGY_DESCRIPTIONS: Final[Dict[str, str]] = {
     "simple-shuffle": "Randomly picks a deployment from the list. Simple and fast.",
     "least-busy": "Routes to the deployment with the lowest number of ongoing requests.",
     "latency-based-routing": "Routes to the deployment with the lowest latency over a sliding window.",
@@ -90,7 +90,7 @@ ROUTING_STRATEGY_DESCRIPTIONS: Dict[str, str] = {
 
 
 # Define all available router settings fields
-ROUTER_SETTINGS_FIELDS: List[RouterSettingsField] = [
+ROUTER_SETTINGS_FIELDS: Final[List[RouterSettingsField]] = [
     RouterSettingsField(
         field_name="routing_strategy",
         field_type="String",

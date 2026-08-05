@@ -310,6 +310,26 @@ describe("ComplexityRouterConfig", () => {
     expect(newRules[0]).toMatchObject({ keywords: [], tier: "COMPLEX" });
   });
 
+  // The dropdown is closed, so antd has nothing for Enter to select and the word would only land
+  // on blur. Submitting used to provide that blur; it no longer can while the row reads as empty.
+  it("commits a typed keyword on Enter, with the dropdown closed", async () => {
+    const user = userEvent.setup();
+    const onKeywordTierRulesChange = vi.fn();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        keywordTierRules={[{ id: "rule-1", keywords: [], tier: "COMPLEX" }]}
+        onKeywordTierRulesChange={onKeywordTierRulesChange}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+
+    const field = screen.getByText("Keywords 1").closest("div") as HTMLElement;
+    await user.type(within(field).getByRole("combobox"), "invoice{enter}");
+
+    expect(onKeywordTierRulesChange).toHaveBeenCalledWith([{ id: "rule-1", keywords: ["invoice"], tier: "COMPLEX" }]);
+  });
+
   it("should render an existing keyword tier rule and remove it when the delete button is clicked", async () => {
     const user = userEvent.setup();
     const onKeywordTierRulesChange = vi.fn();

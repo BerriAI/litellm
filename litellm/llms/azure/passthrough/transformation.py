@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 import httpx
 from httpx import Response
@@ -29,17 +29,17 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         request_query_params: dict | None,
         litellm_params: dict,
     ) -> tuple["URL", str]:
-        base_target_url = self.get_api_base(api_base)
+        base_target_url: Final = self.get_api_base(api_base)
 
         if base_target_url is None:
             raise Exception("Azure api base not found")
 
-        litellm_metadata = litellm_params.get("litellm_metadata") or {}
-        model_group = litellm_metadata.get("model_group")
+        litellm_metadata: Final = litellm_params.get("litellm_metadata") or {}
+        model_group: Final = litellm_metadata.get("model_group")
         if model_group and model_group in endpoint:
             endpoint = endpoint.replace(model_group, model)
 
-        complete_url = BaseAzureLLM._get_base_azure_url(
+        complete_url: Final = BaseAzureLLM._get_base_azure_url(
             api_base=base_target_url,
             litellm_params=litellm_params,
             route=endpoint,
@@ -100,9 +100,9 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         if "chat/completions" not in endpoint:
             return None
 
-        openai_chat_config = OpenAIGPTConfig()
+        openai_chat_config: Final = OpenAIGPTConfig()
 
-        litellm_model_response: ModelResponse = openai_chat_config.transform_response(
+        litellm_model_response: Final[ModelResponse] = openai_chat_config.transform_response(
             model=model,
             messages=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
             raw_response=httpx_response,

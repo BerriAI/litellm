@@ -5,12 +5,7 @@ import json
 import traceback
 from collections import deque
 from collections.abc import AsyncIterator, Iterator
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Literal,
-    get_args,
-)
+from typing import TYPE_CHECKING, Any, Final, Literal, get_args
 
 from typing_extensions import assert_never
 
@@ -30,7 +25,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelResponseStream
 
 
-_STREAMING_DELTA_TYPES = frozenset(get_args(StreamingContentBlockDeltaType))
+_STREAMING_DELTA_TYPES: Final = frozenset(get_args(StreamingContentBlockDeltaType))
 
 
 def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:
@@ -76,13 +71,13 @@ class _CombinedChunkSplitter:
     @staticmethod
     def _is_combined(chunk: Any) -> bool:
         """True if ``chunk`` carries response content AND a finish_reason."""
-        choices = getattr(chunk, "choices", None)
+        choices: Final = getattr(chunk, "choices", None)
         if not choices:
             return False
-        choice = choices[0]
+        choice: Final = choices[0]
         if getattr(choice, "finish_reason", None) is None:
             return False
-        delta = getattr(choice, "delta", None)
+        delta: Final = getattr(choice, "delta", None)
         if delta is None:
             return False
         return bool(
@@ -102,7 +97,7 @@ class _CombinedChunkSplitter:
     def _clear_usage(chunk: "ModelResponseStream") -> None:
         if hasattr(chunk, "usage"):
             chunk.usage = None
-        hidden_params = getattr(chunk, "_hidden_params", None)
+        hidden_params: Final = getattr(chunk, "_hidden_params", None)
         if isinstance(hidden_params, dict) and "usage" in hidden_params:
             chunk._hidden_params = {key: value for key, value in hidden_params.items() if key != "usage"}
 
@@ -124,18 +119,18 @@ class _CombinedChunkSplitter:
         normalized to ``reasoning_content`` so the synthesized block start
         stays empty and the thinking text is emitted exactly once.
         """
-        choices = getattr(chunk, "choices", None)
+        choices: Final = getattr(chunk, "choices", None)
         if not choices or len(choices) != 1:
             return (chunk,)
-        delta = getattr(choices[0], "delta", None)
+        delta: Final = getattr(choices[0], "delta", None)
         if delta is None:
             return (chunk,)
-        tool_calls = getattr(delta, "tool_calls", None)
+        tool_calls: Final = getattr(delta, "tool_calls", None)
         if tool_calls and not any(
             getattr(getattr(tool_call, "function", None), "name", None) for tool_call in tool_calls
         ):
             return (chunk,)
-        present_groups = tuple(
+        present_groups: Final = tuple(
             group
             for group in _CombinedChunkSplitter._PAYLOAD_FIELD_GROUPS
             if any(getattr(delta, field, None) for field in group)
@@ -143,7 +138,7 @@ class _CombinedChunkSplitter:
         if len(present_groups) <= 1:
             return (chunk,)
 
-        pieces = tuple(copy.deepcopy(chunk) for _ in present_groups)
+        pieces: Final = tuple(copy.deepcopy(chunk) for _ in present_groups)
         for index, (piece, group) in enumerate(zip(pieces, present_groups)):
             copied_delta = piece.choices[0].delta
             fields = {field: value for field in group if (value := getattr(copied_delta, field, None))}
@@ -162,12 +157,12 @@ class _CombinedChunkSplitter:
         Signature-carrying blocks are kept intact so ``signature_delta``
         suppression of the full-text snapshot still applies.
         """
-        thinking_blocks = fields.get("thinking_blocks")
+        thinking_blocks: Final = fields.get("thinking_blocks")
         if not thinking_blocks:
             return fields
         if any(block.get("signature") for block in thinking_blocks if isinstance(block, dict)):
             return fields
-        thinking_text = "".join(
+        thinking_text: Final = "".join(
             block.get("thinking") or ""
             for block in thinking_blocks
             if isinstance(block, dict) and block.get("type") == "thinking"
@@ -183,13 +178,13 @@ class _CombinedChunkSplitter:
             return [chunk]
 
         # Content chunk: keep the delta payload, clear the finish_reason.
-        content_chunk = copy.deepcopy(chunk)
+        content_chunk: Final = copy.deepcopy(chunk)
         content_chunk.choices[0].finish_reason = None
         _CombinedChunkSplitter._clear_usage(content_chunk)
 
         # Finish chunk: keep finish_reason (and usage), clear the delta payload.
-        finish_chunk = copy.deepcopy(chunk)
-        finish_delta = finish_chunk.choices[0].delta
+        finish_chunk: Final = copy.deepcopy(chunk)
+        finish_delta: Final = finish_chunk.choices[0].delta
         finish_delta.content = None
         if hasattr(finish_delta, "tool_calls"):
             finish_delta.tool_calls = None
@@ -207,7 +202,7 @@ class _CombinedChunkSplitter:
             return self._buffer.popleft()
         if self._sync_iter is None:
             self._sync_iter = iter(self._stream)
-        chunk = next(self._sync_iter)  # propagates StopIteration when exhausted
+        chunk: Final = next(self._sync_iter)  # propagates StopIteration when exhausted
         self._buffer.extend(
             split_chunk
             for combined_chunk in self._split(chunk)
@@ -223,7 +218,7 @@ class _CombinedChunkSplitter:
             return self._buffer.popleft()
         if self._async_iter is None:
             self._async_iter = self._stream.__aiter__()
-        chunk = await self._async_iter.__anext__()  # propagates StopAsyncIteration
+        chunk: Final = await self._async_iter.__anext__()  # propagates StopAsyncIteration
         self._buffer.extend(
             split_chunk
             for combined_chunk in self._split(chunk)
@@ -311,7 +306,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         merged chunk.
         """
         assert self.holding_stop_reason_chunk is not None
-        merged_chunk = self.holding_stop_reason_chunk.copy()
+        merged_chunk: Final = self.holding_stop_reason_chunk.copy()
         if "delta" not in merged_chunk:
             merged_chunk["delta"] = {}
 
@@ -336,7 +331,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         """
         if not self.applied_edits or "context_management" in message_delta_chunk:
             return message_delta_chunk
-        augmented = message_delta_chunk.copy()
+        augmented: Final = message_delta_chunk.copy()
         augmented["context_management"] = ContextManagementResponse(applied_edits=list(self.applied_edits))
         return augmented
 
@@ -350,22 +345,22 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         message_delta_chunk = self._ensure_context_management_attached(message_delta_chunk)
         if self.iterations_usage is None:
             return message_delta_chunk
-        usage = message_delta_chunk.get("usage")
+        usage: Final = message_delta_chunk.get("usage")
         if not isinstance(usage, dict) or "iterations" in usage:
             return message_delta_chunk
 
-        input_tokens = usage.get("input_tokens", 0) or 0
-        output_tokens = usage.get("output_tokens", 0) or 0
-        augmented = message_delta_chunk.copy()
-        augmented_usage = dict(usage)
-        iterations: list[UsageIteration] = list(self.iterations_usage)
+        input_tokens: Final = usage.get("input_tokens", 0) or 0
+        output_tokens: Final = usage.get("output_tokens", 0) or 0
+        augmented: Final = message_delta_chunk.copy()
+        augmented_usage: Final = dict(usage)
+        iterations: Final[list[UsageIteration]] = list(self.iterations_usage)
         # Only emit a ``message`` iteration when we have real token data.
         # Without a separate usage chunk (e.g. provider sent finish_reason
         # alone), the held ``message_delta`` carries placeholder zeros from
         # the translate step; reporting a zero-token iteration would be
         # misleading and inconsistent with the non-streaming path.
         if input_tokens > 0 or output_tokens > 0:
-            message_iteration: UsageIteration = {
+            message_iteration: Final[UsageIteration] = {
                 "type": "message",
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
@@ -390,7 +385,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         if self.compaction_block is None or self.sent_compaction_block:
             return None
 
-        compaction_index = self.current_content_block_index
+        compaction_index: Final = self.current_content_block_index
 
         if not self.sent_compaction_block_start:
             self.sent_compaction_block_start = True
@@ -407,14 +402,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         if not self.sent_compaction_block_delta:
             self.sent_compaction_block_delta = True
-            summary_content = self.compaction_block.get("content") or ""
+            summary_content: Final = self.compaction_block.get("content") or ""
             return {
                 "type": "content_block_delta",
                 "index": compaction_index,
                 "delta": {"type": "compaction_delta", "content": summary_content},
             }
 
-        stop_event = {
+        stop_event: Final = {
             "type": "content_block_stop",
             "index": compaction_index,
         }
@@ -478,7 +473,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return self.chunk_queue.popleft()
 
             if self.sent_compaction_block is False and self.compaction_block is not None:
-                compaction_event = self._next_compaction_event()
+                compaction_event: Final = self._next_compaction_event()
                 if compaction_event is not None:
                     return compaction_event
 
@@ -661,7 +656,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         "type": "content_block_stop",
                         "index": self.current_content_block_index,
                     }
-                held = self._augment_message_delta_usage(self.holding_stop_reason_chunk)
+                held: Final = self._augment_message_delta_usage(self.holding_stop_reason_chunk)
                 self.holding_stop_reason_chunk = None
                 return held
             if self.sent_last_message is False:
@@ -669,7 +664,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return {"type": "message_stop"}
             raise StopIteration
         except Exception as e:
-            verbose_logger.error(f"Anthropic Adapter - {e}\n{traceback.format_exc()}")
+            verbose_logger.error("Anthropic Adapter - %s\n%s", e, traceback.format_exc())
             raise StopIteration
 
     async def __anext__(self):
@@ -701,7 +696,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return self.chunk_queue.popleft()
 
             if self.sent_compaction_block is False and self.compaction_block is not None:
-                compaction_event = self._next_compaction_event()
+                compaction_event: Final = self._next_compaction_event()
                 if compaction_event is not None:
                     return compaction_event
 
@@ -885,7 +880,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         "type": "content_block_stop",
                         "index": self.current_content_block_index,
                     }
-                held = self._augment_message_delta_usage(self.holding_stop_reason_chunk)
+                held: Final = self._augment_message_delta_usage(self.holding_stop_reason_chunk)
                 self.holding_stop_reason_chunk = None
                 return held
             if not self.sent_last_message:
@@ -957,20 +952,20 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         """
         if processed_chunk.get("type") != "content_block_delta":
             return False
-        delta = processed_chunk.get("delta")
+        delta: Final = processed_chunk.get("delta")
         if not isinstance(delta, dict):
             return False
-        delta_type = delta.get("type")
+        delta_type: Final = delta.get("type")
         if delta_type not in _STREAMING_DELTA_TYPES:
             return False
         return bool(delta.get(_delta_payload_field(delta_type)))
 
     @staticmethod
     def _is_blank_delta(chunk: "ModelResponseStream") -> bool:
-        choice = chunk.choices[0]
+        choice: Final = chunk.choices[0]
         if choice.finish_reason is not None:
             return False
-        delta = choice.delta
+        delta: Final = choice.delta
         if getattr(delta, "tool_calls", None):
             return False
         if getattr(delta, "content", None):
@@ -1015,8 +1010,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             tool_block = cast(ToolUseBlock, content_block_start)
 
             if tool_block.get("name"):
-                truncated_name = tool_block["name"]
-                original_name = self.tool_name_mapping.get(truncated_name, truncated_name)
+                truncated_name: Final = tool_block["name"]
+                original_name: Final = self.tool_name_mapping.get(truncated_name, truncated_name)
                 tool_block["name"] = original_name
 
         if block_type != self.current_content_block_type:

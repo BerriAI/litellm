@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
 )
@@ -30,7 +32,7 @@ class OpenAIGPTAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         """
         Transform the audio transcription request
         """
-        data = {"model": model, "file": audio_file, **optional_params}
+        data: Final = {"model": model, "file": audio_file, **optional_params}
 
         return AudioTranscriptionRequestData(
             data=data,

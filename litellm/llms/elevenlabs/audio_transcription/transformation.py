@@ -2,6 +2,8 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-to-text`
 """
 
+from typing import Final
+
 from httpx import Headers, Response
 
 import litellm
@@ -36,7 +38,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
                 if k == "language":
@@ -66,10 +68,10 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         """
 
         # Use common utility to process the audio file
-        processed_audio = process_audio_file(audio_file)
+        processed_audio: Final = process_audio_file(audio_file)
 
         # Prepare form data
-        form_data = {"model_id": model}
+        form_data: Final = {"model_id": model}
 
         #########################################################
         # Add OpenAI Compatible Parameters
@@ -82,7 +84,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         #########################################################
         # Add Provider Specific Parameters
         #########################################################
-        provider_specific_params = self.get_provider_specific_params(
+        provider_specific_params: Final = self.get_provider_specific_params(
             model=model,
             optional_params=optional_params,
             openai_params=self.get_supported_openai_params(model),
@@ -94,7 +96,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         #########################################################
 
         # Prepare files
-        files = {
+        files: Final = {
             "file": (
                 processed_audio.filename,
                 processed_audio.file_content,
@@ -112,13 +114,13 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Transforms the raw response from ElevenLabs to the TranscriptionResponse format
         """
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
 
             # Extract the main transcript text
-            text = response_json.get("text", "")
+            text: Final = response_json.get("text", "")
 
             # Create TranscriptionResponse object
-            response = TranscriptionResponse(text=text)
+            response: Final = TranscriptionResponse(text=text)
 
             # Add additional metadata matching OpenAI format
             response["task"] = "transcribe"
@@ -160,7 +162,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_base = api_base.rstrip("/")  # Remove trailing slash if present
 
         # ElevenLabs speech-to-text endpoint
-        url = f"{api_base}/v1/speech-to-text"
+        url: Final = f"{api_base}/v1/speech-to-text"
 
         return url
 
@@ -178,7 +180,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if api_key is None:
             raise ValueError("ElevenLabs API key is required. Set ELEVENLABS_API_KEY environment variable.")
 
-        auth_header = {
+        auth_header: Final = {
             "xi-api-key": api_key,
         }
 

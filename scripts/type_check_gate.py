@@ -12,12 +12,16 @@ a red once two PRs each land near the limit and their sum crosses it: the
 bystander's count equals its base, so it is spared, while any PR that actually
 grows the rule past its limit still fails.
 
-Head counts are read from stdin (the caller runs basedpyright once and pipes
-``--outputjson`` in). The base count only matters once some rule is over its
-limit, so when none is the base pass is skipped outright. When it is needed, it
-is a second basedpyright pass over a detached worktree at the merge-base, run
-under the same environment so import resolution matches, and its per-rule
-counts are cached under the repo's git common dir keyed by merge-base commit,
+The gate runs basedpyright itself, for both the head and the base pass, with
+``NODE_OPTIONS`` raised to the heap this repo needs: basedpyright's node
+process OOMs at the ~4 GB default, and when callers had to remember the flag,
+every hand-copied pipeline (Makefile, CI, a dev running the recipe by hand)
+was one forgotten env line away from an 80-second crash. The base count only
+matters once some rule is over its limit, so when none is the base pass is
+skipped outright. When it is needed, it is a second basedpyright pass over a
+detached worktree at the merge-base, run under the same environment so import
+resolution matches, and its per-rule counts are cached under the repo's git
+common dir keyed by merge-base commit,
 ``pyrightconfig.json``, and ``uv.lock``, so re-runs against the same branch
 point pay for it once. ``--update`` ratchets each rule's ``limit`` down by the
 number of errors this branch fixed relative to its branch point (the merge-base),
@@ -42,7 +46,7 @@ import tempfile
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUDGET_PATH = REPO_ROOT / "basedpyright-code-budget.json"
@@ -50,6 +54,11 @@ PYRIGHT_CONFIG = REPO_ROOT / "pyrightconfig.json"
 UV_LOCK = REPO_ROOT / "uv.lock"
 DEFAULT_BASE = "origin/litellm_internal_staging"
 CACHE_FILE_PREFIX = "basedpyright-base-"
+
+# basedpyright's node process needs more than the ~4 GB default heap on this
+# repo; appended last so it wins node's last-flag-wins resolution over any
+# caller-set value while preserving the caller's other NODE_OPTIONS flags.
+NODE_HEAP_OPTION = "--max-old-space-size=12288"
 
 # Bucket for a basedpyright diagnostic with no `rule`. Counted so it's gated.
 UNCODED = "<uncoded>"
@@ -107,6 +116,48 @@ def _run(cmd: list[str], cwd: Path = REPO_ROOT) -> str:
     return proc.stdout
 
 
+def node_options_with_heap(base_env: Mapping[str, str]) -> str:
+    return f"{base_env.get('NODE_OPTIONS', '')} {NODE_HEAP_OPTION}".strip()
+
+
+def run_basedpyright(cwd: Path = REPO_ROOT) -> str:
+    """One basedpyright pass over `cwd` with the raised node heap exported.
+
+    Exit 0 (clean) and 1 (errors found) are both output-bearing runs; anything
+    else is a crash and fails loudly instead of reading as zero errors."""
+    exe = shutil.which("basedpyright") or "basedpyright"
+    proc = subprocess.run(
+        [exe, "--outputjson"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "NODE_OPTIONS": node_options_with_heap(os.environ)},
+    )
+    if proc.returncode not in (0, 1):
+        sys.stderr.write(proc.stderr)
+        raise SystemExit(f"basedpyright exited {proc.returncode}")
+    return proc.stdout
+
+
+def resolve_base_point(base_ref: str, cwd: Path = REPO_ROOT) -> str:
+    """The snapshot commit base counts are measured at: merge-base(base_ref, HEAD),
+    made aware of an in-progress merge. Mid-merge, HEAD is still the pre-merge tip,
+    so its merge-base is the old branch point and every violation the base gained
+    since then would be blamed on this change. While MERGE_HEAD exists, prefer
+    merge-base(base_ref, MERGE_HEAD) whenever it is the newer of the two."""
+    head_point: Final = _run(["git", "merge-base", base_ref, "HEAD"], cwd=cwd).strip()
+    if not head_point:
+        return base_ref
+    merge_head: Final = _run(["git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD"], cwd=cwd).strip()
+    if not merge_head:
+        return head_point
+    merge_point: Final = _run(["git", "merge-base", base_ref, merge_head], cwd=cwd).strip()
+    if not merge_point:
+        return head_point
+    older: Final = _run(["git", "merge-base", head_point, merge_point], cwd=cwd).strip()
+    return merge_point if older == head_point else head_point
+
+
 @contextlib.contextmanager
 def _temp_worktree(ref: str) -> Iterator[Path]:
     parent = Path(tempfile.mkdtemp(prefix="bpr_base_"))
@@ -128,13 +179,9 @@ def base_counts(ref: str) -> dict[str, int]:
     """basedpyright error counts per rule for the merge-base tree. The head
     config is copied in so the base is judged by today's rules, and the run uses
     the head environment's basedpyright (on PATH) so imports resolve the same."""
-    exe = shutil.which("basedpyright") or "basedpyright"
     with _temp_worktree(ref) as worktree:
         shutil.copy(PYRIGHT_CONFIG, worktree / "pyrightconfig.json")
-        proc = subprocess.run(
-            [exe, "--outputjson"], cwd=worktree, capture_output=True, text=True
-        )
-        return count_basedpyright(proc.stdout, root=worktree)
+        return count_basedpyright(run_basedpyright(worktree), root=worktree)
 
 
 def over_ceiling(
@@ -259,9 +306,10 @@ def is_vacuous_run(
     counts: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]
 ) -> bool:
     """True when nothing was parsed but the budget expects errors -- the
-    signature of a type checker that crashed or produced no output. The CI pipe
-    swallows the tool's exit code (`tool || true`), so without this guard an
-    empty run would clear every limit and pass silently."""
+    signature of a type checker that produced no output. `run_basedpyright`
+    already fails crash exit codes, so this guards the remaining case: a run
+    that exits cleanly while emitting nothing, which would otherwise clear
+    every limit and pass silently."""
     return not counts and any(spec["limit"] for spec in budget.values())
 
 
@@ -289,13 +337,13 @@ def ratcheted_budget(
 def cmd_update(current: Mapping[str, int], base_ref: str = DEFAULT_BASE) -> None:
     """Ratchet each rule's limit down by the errors this branch fixed.
 
-    `current` is the working-tree count (piped in); the reference count comes
+    `current` is the working-tree count; the reference count comes
     from a second basedpyright pass over a detached worktree at the branch point
     (the merge-base with `base_ref`), so a branch's fixes tighten its own ceilings
     by exactly what they cleared since it diverged, and limits never rise.
     """
     budget = json.loads(BUDGET_PATH.read_text()) if BUDGET_PATH.exists() else {}
-    base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
+    base_point = resolve_base_point(base_ref)
     updated = ratcheted_budget(budget, current, base_counts_cached(base_point))
     BUDGET_PATH.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n")
     cleared = sum(budget[code]["limit"] - updated[code]["limit"] for code in updated)
@@ -305,9 +353,8 @@ def cmd_update(current: Mapping[str, int], base_ref: str = DEFAULT_BASE) -> None
     )
 
 
-def cmd_check(base_ref: str) -> None:
+def cmd_check(head: Mapping[str, int], base_ref: str) -> None:
     budget = json.loads(BUDGET_PATH.read_text())
-    head = count_basedpyright(sys.stdin.read())
     if is_vacuous_run(head, budget):
         expected = sum(spec["limit"] for spec in budget.values())
         print(
@@ -321,7 +368,7 @@ def cmd_check(base_ref: str) -> None:
             f"OK: every rule is within its basedpyright limit ({sum(head.values())} errors total)"
         )
         return
-    base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
+    base_point = resolve_base_point(base_ref)
     base = base_counts_cached(base_point)
     if is_vacuous_run(base, budget):
         print(
@@ -355,10 +402,11 @@ def main() -> None:
     parser.add_argument("--base", default=DEFAULT_BASE)
     parser.add_argument("--update", action="store_true")
     args = parser.parse_args()
+    head = count_basedpyright(run_basedpyright())
     if args.update:
-        cmd_update(count_basedpyright(sys.stdin.read()), args.base)
+        cmd_update(head, args.base)
     else:
-        cmd_check(args.base)
+        cmd_check(head, args.base)
 
 
 if __name__ == "__main__":

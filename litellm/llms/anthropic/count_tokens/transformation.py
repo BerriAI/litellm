@@ -4,7 +4,7 @@ Anthropic CountTokens API transformation logic.
 This module handles the transformation of requests to Anthropic's CountTokens API format.
 """
 
-from typing import Any
+from typing import Any, Final
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 
@@ -40,7 +40,7 @@ class AnthropicCountTokensConfig:
 
         Includes optional system and tools fields for accurate token counting.
         """
-        request: dict[str, Any] = {
+        request: Final[dict[str, Any]] = {
             "model": model,
             "messages": messages,
         }

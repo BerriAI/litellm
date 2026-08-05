@@ -9,7 +9,7 @@ The actual message transformation reuses OpenAIGPTConfig since Gemma uses OpenAI
 """
 
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import httpx
 
@@ -78,7 +78,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         in the Vertex Gemma instances format.
         """
         # Get the base OpenAI request from parent class
-        openai_request = super().transform_request(
+        openai_request: Final = super().transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -194,10 +194,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         from litellm.utils import convert_to_model_response_object
 
         # Check if streaming is requested (will be faked)
-        stream = optional_params.get("stream", False)
+        stream: Final = optional_params.get("stream", False)
 
         # Transform the request using parent class methods
-        request_data = self.transform_request(
+        request_data: Final = self.transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params.copy(),
@@ -206,7 +206,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Set up headers
-        headers = {
+        headers: Final = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
@@ -222,8 +222,8 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Make the HTTP request
-        http_handler = HTTPHandler(concurrent_limit=1)
-        response = http_handler.post(
+        http_handler: Final = HTTPHandler(concurrent_limit=1)
+        response: Final = http_handler.post(
             url=api_base,
             headers=headers,
             json=request_data,
@@ -236,10 +236,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 message=f"Request failed: {response.text}",
             )
 
-        response_json = response.json()
+        response_json: Final = response.json()
 
         # Unwrap predictions to get OpenAI-compatible response
-        openai_response = self._unwrap_predictions_response(response_json)
+        openai_response: Final = self._unwrap_predictions_response(response_json)
 
         # Use litellm's standard response converter
         model_response = cast(
@@ -285,10 +285,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         from litellm.utils import convert_to_model_response_object
 
         # Check if streaming is requested (will be faked)
-        stream = optional_params.get("stream", False)
+        stream: Final = optional_params.get("stream", False)
 
         # Transform the request using parent class async methods
-        request_data = await self.async_transform_request(
+        request_data: Final = await self.async_transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params.copy(),
@@ -297,7 +297,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Set up headers
-        headers = {
+        headers: Final = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
@@ -313,10 +313,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Make the HTTP request
-        http_handler = get_async_httpx_client(
+        http_handler: Final = get_async_httpx_client(
             llm_provider=LlmProviders.VERTEX_AI,
         )
-        response = await http_handler.post(
+        response: Final = await http_handler.post(
             url=api_base,
             headers=headers,
             json=request_data,
@@ -329,10 +329,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 message=f"Request failed: {response.text}",
             )
 
-        response_json = response.json()
+        response_json: Final = response.json()
 
         # Unwrap predictions to get OpenAI-compatible response
-        openai_response = self._unwrap_predictions_response(response_json)
+        openai_response: Final = self._unwrap_predictions_response(response_json)
 
         # Use litellm's standard response converter
         model_response = cast(
