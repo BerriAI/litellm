@@ -9248,7 +9248,7 @@ async def chat_completion(
             original_exception=e,
             request_data=_data,
         )
-        _chat_response = litellm.ModelResponse()
+        _chat_response = litellm.ModelResponse(model=_data.get("model") or e.model or "")
         _chat_response.choices[0].message.content = e.message  # type: ignore
 
         if data.get("stream", None) is not None and data["stream"] is True:
@@ -9432,7 +9432,7 @@ async def completion(
                 status_code=(e.status_code if hasattr(e, "status_code") else status.HTTP_400_BAD_REQUEST),
             )
         else:
-            _response = litellm.TextCompletionResponse()
+            _response = litellm.TextCompletionResponse(model=_data.get("model") or e.model or "")
             _response.choices[0].text = e.message
             return _response
     except Exception as e:
