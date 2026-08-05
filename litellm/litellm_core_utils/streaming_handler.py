@@ -247,8 +247,8 @@ class CustomStreamWrapper:
             restore: Final = getattr(logging_obj, method_name, None)
             if restore is not None:
                 restore()
-        except Exception:  # noqa: BLE001,S110  # best-effort cleanup; must never raise or log noise into the caller's stream handling
-            pass
+        except Exception as restore_error:  # noqa: BLE001  # best-effort cleanup; must not raise into the caller
+            verbose_logger.debug("could not restore correlation context: %s", restore_error)
 
     def __del__(self) -> None:
         """Best-effort correlation-context cleanup for an abandoned async stream.
