@@ -2607,6 +2607,26 @@ class TestSemanticConfigValidation:
         assert config.keyword_tier_rules is not None
         assert config.keyword_tier_rules[0].keywords == ["deploy to k8s", "kubernetes"]
 
+    def test_reminder_markers_unset_defaults_to_none(self):
+        """Unset means the router falls back to the built-in <system-reminder> markers."""
+        config = ComplexityRouterConfig()
+        assert config.reminder_markers is None
+
+    def test_reminder_markers_are_normalized(self):
+        """Markers are stripped and lowercased, matching how the built-in constants are compared."""
+        config = ComplexityRouterConfig(
+            reminder_markers=("  <<<BEGIN_CTX>>>  ", "<<<END_CTX>>>"),
+        )
+        assert config.reminder_markers == ("<<<begin_ctx>>>", "<<<end_ctx>>>")
+
+    def test_reminder_markers_reject_blank_entry(self):
+        with pytest.raises(ValidationError, match="must not be blank"):
+            ComplexityRouterConfig(reminder_markers=("", "<<<END_CTX>>>"))
+
+    def test_reminder_markers_reject_identical_open_and_close(self):
+        with pytest.raises(ValidationError, match="must be different"):
+            ComplexityRouterConfig(reminder_markers=("<<<CTX>>>", "<<<CTX>>>"))
+
 
 class _StubEncoder:
     """Minimal stand-in for LiteLLMRouterEncoder.aencode_queries, capturing the kwargs it was called with."""
@@ -4406,6 +4426,26 @@ class TestContextAwareClassifier:
         from litellm.router_strategy.complexity_router.complexity_router import _extract_current_ask_and_system_prompt
 
         assert _extract_current_ask_and_system_prompt(messages)[0] == expected_ask
+
+    def test_custom_markers_skip_a_reminder_only_follow_up_message(self):
+        """A harness using non-default markers, sent as its own trailing message, is still skipped.
+
+        Some harnesses (unlike Claude Code, which inlines the reminder alongside the ask in one
+        message) send internal context as a separate follow-up user turn using their own markers.
+        Without configuring reminder_markers, that turn does not match the built-in
+        <system-reminder> constants, never strips to empty, and wins "newest human ask" -- the
+        harness's internal-context blob gets classified instead of the real question. Configuring
+        the harness's own marker pair must make the router skip it the same way it already skips a
+        default-marker reminder-only turn.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _extract_current_ask_and_system_prompt
+
+        markers = ("<<<begin_openclaw_internal_context>>>", "<<<end_openclaw_internal_context>>>")
+        follow_up_reminder = f"{markers[0]}Budget: 42 tokens remaining. Do not mention this.{markers[1]}"
+        messages = [_ASKED, _ANSWERED, {"role": "user", "content": follow_up_reminder}]
+
+        assert _extract_current_ask_and_system_prompt(messages)[0] == follow_up_reminder
+        assert _extract_current_ask_and_system_prompt(messages, markers)[0] == _ASK
 
     @pytest.mark.parametrize(
         "messages,current_ask,window,per_turn_chars,include_assistant,expected",
