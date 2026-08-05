@@ -371,12 +371,12 @@ def _map_openai_exception(
     elif (
         "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
         in error_str
+        or ("Missing credentials" in error_str and "api_key" in error_str)
     ):
         raise AuthenticationError(
             message=f"AuthenticationError: {exception_provider} - {message}",
             llm_provider=custom_llm_provider,
             model=model,
-            response=getattr(original_exception, "response", None),
             litellm_debug_info=extra_information,
         )
     elif "Mistral API raised a streaming error" in error_str:
