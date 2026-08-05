@@ -2594,7 +2594,7 @@ class AdapterCompletionStreamWrapper:
         except StopIteration:
             raise StopIteration
         except Exception as e:
-            verbose_logger.debug(f"AdapterCompletionStreamWrapper - {e}")
+            verbose_logger.debug("AdapterCompletionStreamWrapper - %s", e)
 
     async def __anext__(self):
         try:
