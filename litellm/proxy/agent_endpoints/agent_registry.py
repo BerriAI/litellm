@@ -2,6 +2,7 @@ import hashlib
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Any, Final, Protocol, TypedDict
 
 import litellm
@@ -90,6 +91,7 @@ class AgentRegistry:
     def __init__(self):
         self.agent_list: list[AgentResponse] = []
         self.config_agents: tuple[AgentConfig, ...] = ()
+        self.config_agent_legacy_ids: Mapping[str, str] = MappingProxyType({})
 
     def reset_agent_list(self):
         self.agent_list = []
@@ -106,16 +108,26 @@ class AgentRegistry:
         return self.agent_list
 
     def get_public_agent_list(self) -> list[AgentResponse]:
-        public_agent_list: Final[list[AgentResponse]] = []
-        if litellm.public_agent_groups is None:
-            return public_agent_list
-        for agent in self.agent_list:
-            if agent.agent_id in litellm.public_agent_groups:
-                public_agent_list.append(agent)
-        return public_agent_list
+        public_agent_groups: Final = litellm.public_agent_groups
+        if public_agent_groups is None:
+            return []
+        return [
+            agent for agent in self.agent_list if not self.ids_for_agent(agent.agent_id).isdisjoint(public_agent_groups)
+        ]
 
     def _create_agent_id(self, agent_config: AgentConfig) -> str:
+        return hashlib.sha256(agent_config["agent_name"].encode()).hexdigest()
+
+    def _create_legacy_agent_id(self, agent_config: AgentConfig) -> str:
         return hashlib.sha256(json.dumps(agent_config, sort_keys=True).encode()).hexdigest()
+
+    def ids_for_agent(self, agent_id: str) -> frozenset[str]:
+        return frozenset(
+            {agent_id, *(legacy for legacy, stable in self.config_agent_legacy_ids.items() if stable == agent_id)}
+        )
+
+    def stable_agent_id(self, agent_id: str) -> str:
+        return self.config_agent_legacy_ids.get(agent_id, agent_id)
 
     def load_agents_from_config(self, agent_config: Sequence[AgentConfig] | None = None):
         """
@@ -132,6 +144,15 @@ class AgentRegistry:
             return
 
         self.config_agents = tuple(agent_config)
+        self.config_agent_legacy_ids = MappingProxyType(
+            {
+                self._create_legacy_agent_id(agent_config_item): self._create_agent_id(agent_config_item)
+                for agent_config_item in agent_config
+                if isinstance(agent_config_item, dict)
+                and agent_config_item.get("agent_name")
+                and agent_config_item.get("agent_card_params")
+            }
+        )
 
         for agent_config_item in agent_config:
             if not isinstance(agent_config_item, dict):
@@ -490,6 +511,14 @@ class AgentRegistry:
         try:
             for agent in self.agent_list:
                 if agent.agent_id == agent_id:
+                    return agent
+
+            translated_id: Final = self.config_agent_legacy_ids.get(agent_id)
+            if translated_id is None:
+                return None
+
+            for agent in self.agent_list:
+                if agent.agent_id == translated_id:
                     return agent
 
             return None

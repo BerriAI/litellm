@@ -42,24 +42,25 @@ class AgentRequestHandler:
             List[str]: List of allowed agent IDs. Empty list means no restrictions (allow all).
         """
         try:
-            allowed_agents: list[str] = []
-            allowed_agents_for_key: Final = await AgentRequestHandler._get_allowed_agents_for_key(user_api_key_auth)
-            allowed_agents_for_team: Final = await AgentRequestHandler._get_allowed_agents_for_team(user_api_key_auth)
+            from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+            raw_key_grants: Final = await AgentRequestHandler._get_allowed_agents_for_key(user_api_key_auth)
+            raw_team_grants: Final = await AgentRequestHandler._get_allowed_agents_for_team(user_api_key_auth)
+            allowed_agents_for_key: Final = frozenset(
+                global_agent_registry.stable_agent_id(agent_id) for agent_id in raw_key_grants
+            )
+            allowed_agents_for_team: Final = frozenset(
+                global_agent_registry.stable_agent_id(agent_id) for agent_id in raw_team_grants
+            )
 
             # If team has agent restrictions, handle inheritance and intersection logic
-            if len(allowed_agents_for_team) > 0:
-                if len(allowed_agents_for_key) > 0:
-                    # Key has its own agent permissions - use intersection with team permissions
-                    for agent_id in allowed_agents_for_key:
-                        if agent_id in allowed_agents_for_team:
-                            allowed_agents.append(agent_id)
-                else:
-                    # Key has no agent permissions - inherit from team
-                    allowed_agents = allowed_agents_for_team
-            else:
-                allowed_agents = allowed_agents_for_key
-
-            return list(set(allowed_agents))
+            if allowed_agents_for_team and allowed_agents_for_key:
+                # Key has its own agent permissions - use intersection with team permissions
+                return list(allowed_agents_for_key & allowed_agents_for_team)
+            if allowed_agents_for_team:
+                # Key has no agent permissions - inherit from team
+                return list(allowed_agents_for_team)
+            return list(allowed_agents_for_key)
         except Exception as e:
             verbose_logger.warning("Failed to get allowed agents: %s", e)
             return []
@@ -79,13 +80,16 @@ class AgentRequestHandler:
         Returns:
             bool: True if agent is allowed, False otherwise
         """
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
         allowed_agents: Final = await AgentRequestHandler.get_allowed_agents(user_api_key_auth)
 
         # Empty list means no restrictions - allow all
         if len(allowed_agents) == 0:
             return True
 
-        return agent_id in allowed_agents
+        stable_id: Final = global_agent_registry.stable_agent_id(agent_id)
+        return not global_agent_registry.ids_for_agent(stable_id).isdisjoint(allowed_agents)
 
     @staticmethod
     def _get_key_object_permission(

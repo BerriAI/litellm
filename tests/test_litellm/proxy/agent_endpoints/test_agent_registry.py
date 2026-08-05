@@ -1,5 +1,8 @@
 """Unit tests for AgentRegistry DB operations."""
 
+import hashlib
+import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -279,3 +282,88 @@ def test_load_agents_from_config_with_an_empty_list_clears_the_remembered_agents
 
     registry.load_agents_from_db_and_config(db_agents=None)
     assert registry.get_agent_list() == [], "a removed config agent must not come back on the next rebuild"
+
+
+def test_config_agent_id_survives_static_header_secret_rotation():
+    """LIT-5144: the id was a hash of the whole entry, so rotating a static_headers secret silently
+    re-identified the agent and orphaned every grant pointing at it."""
+    base_entry: Final = {
+        "agent_name": "rotating-agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "static_headers": {"x-upstream-token": "token-v1"},
+    }
+    registry_v1: Final = AgentRegistry()
+    registry_v1.load_agents_from_config([base_entry])
+    agent_v1: Final = registry_v1.get_agent_by_name("rotating-agent")
+    assert agent_v1 is not None
+
+    registry_v2: Final = AgentRegistry()
+    registry_v2.load_agents_from_config([{**base_entry, "static_headers": {"x-upstream-token": "token-v2"}}])
+    agent_v2: Final = registry_v2.get_agent_by_name("rotating-agent")
+    assert agent_v2 is not None
+
+    assert agent_v1.agent_id == agent_v2.agent_id
+
+
+def test_config_agent_ids_differ_when_only_the_agent_name_differs():
+    """Two entries identical except for agent_name must not collapse onto one id."""
+    registry: Final = AgentRegistry()
+    registry.load_agents_from_config(
+        [
+            {"agent_name": "agent-a", "agent_card_params": _sample_agent_card_params()},
+            {"agent_name": "agent-b", "agent_card_params": _sample_agent_card_params()},
+        ]
+    )
+
+    ids: Final = {agent.agent_id for agent in registry.get_agent_list()}
+    assert len(ids) == 2
+
+
+def test_legacy_full_entry_hash_still_resolves_the_config_agent():
+    """Grants and clients created before LIT-5144 hold the old full-entry hash; it must keep resolving."""
+    entry: Final = {
+        "agent_name": "legacy-agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "static_headers": {"x-upstream-token": "token-v1"},
+    }
+    registry: Final = AgentRegistry()
+    registry.load_agents_from_config([entry])
+    agent: Final = registry.get_agent_by_name("legacy-agent")
+    assert agent is not None
+
+    legacy_id: Final = hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest()
+    assert legacy_id != agent.agent_id
+    assert registry.config_agent_legacy_ids[legacy_id] == agent.agent_id
+    assert legacy_id in registry.ids_for_agent(agent.agent_id)
+    assert agent.agent_id in registry.ids_for_agent(agent.agent_id)
+
+    resolved: Final = registry.get_agent_by_id(legacy_id)
+    assert resolved is not None
+    assert resolved.agent_id == agent.agent_id
+    assert registry.get_agent_by_id("nonexistent-id") is None
+
+
+def test_public_agent_groups_holding_the_legacy_id_still_mark_the_config_agent_public(monkeypatch):
+    """LIT-5144: config.yaml written before the fix stores the full-entry hash in
+    public_agent_groups; the agent must stay public after its id became name-based."""
+    import litellm
+
+    entry: Final = {
+        "agent_name": "public-agent",
+        "agent_card_params": _sample_agent_card_params(),
+    }
+    registry: Final = AgentRegistry()
+    registry.load_agents_from_config([entry])
+    agent: Final = registry.get_agent_by_name("public-agent")
+    assert agent is not None
+    legacy_id: Final = hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest()
+    assert legacy_id != agent.agent_id
+
+    monkeypatch.setattr(litellm, "public_agent_groups", [legacy_id])
+    assert [a.agent_id for a in registry.get_public_agent_list()] == [agent.agent_id]
+
+    monkeypatch.setattr(litellm, "public_agent_groups", ["unrelated-id"])
+    assert registry.get_public_agent_list() == []
+
+    monkeypatch.setattr(litellm, "public_agent_groups", None)
+    assert registry.get_public_agent_list() == []

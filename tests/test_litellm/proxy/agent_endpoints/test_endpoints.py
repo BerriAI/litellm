@@ -503,6 +503,7 @@ class TestAgentRBACProxyAdminViewOnly:
         ]
         self.mock_registry = MagicMock()
         self.mock_registry.get_agent_list = MagicMock(return_value=self.agents)
+        self.mock_registry.ids_for_agent = MagicMock(side_effect=lambda agent_id: frozenset({agent_id}))
         monkeypatch.setattr(ar_mod, "global_agent_registry", self.mock_registry)
 
         self.allowed_agents_spy = AsyncMock(return_value=["someone-elses-agent"])
