@@ -28,6 +28,9 @@ from litellm.proxy.litellm_pre_call_utils import (
     check_if_token_is_service_account,
     clean_headers,
 )
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    TRUSTED_CALLBACK_VARS_FIELD,
+)
 from litellm.types.utils import CredentialItem
 
 sys.path.insert(
@@ -671,6 +674,8 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "applied_guardrails": ["spoofed"],
         "applied_policies": ["spoofed-policy"],
         "policy_sources": {"spoofed-policy": "request"},
+        "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
+        "internal_call_origin": "autorouter_classifier",
         "_guardrail_pipelines": [{"name": "spoofed"}],
         "_pipeline_managed_guardrails": ["evaded"],
         "safe_user_metadata": "kept",
@@ -681,6 +686,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "mock_response": "free response",
         "mock_tool_calls": [{"id": "call_1"}],
         "disable_global_guardrails": True,
+        "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
         "metadata": copy.deepcopy(malicious_metadata),
         "litellm_metadata": copy.deepcopy(malicious_metadata),
     }
@@ -697,6 +703,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "mock_response" not in updated
     assert "mock_tool_calls" not in updated
     assert "disable_global_guardrails" not in updated
+    assert "routing_decision" not in updated
 
     stripped_keys = {
         "disable_global_guardrails",
@@ -710,6 +717,8 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "applied_guardrails",
         "applied_policies",
         "policy_sources",
+        "routing_decision",
+        "internal_call_origin",
         "_guardrail_pipelines",
         "_pipeline_managed_guardrails",
     }
@@ -5457,3 +5466,407 @@ def test_get_sanitized_user_information_from_key_drops_callback_config():
     # UserAPIKeyAuth is the live auth object; the per-key callbacks are resolved
     # from it during pre-call, so it must not be mutated by building the log view
     assert "logging" in (user_api_key_dict.metadata or {})
+
+
+def test_team_alias_targeting_deleted_team_deployment_keeps_requested_model(monkeypatch):
+    """
+    Regression: a team's model_aliases can point at the internal routing key
+    (model_name_{team_id}_{uuid}) of a team deployment that was since deleted,
+    e.g. after an admin replaces per-team duplicates with one gateway-level
+    model. Rewriting to the dead internal name made every request fail with
+    "no healthy deployments for model_name_..." even though the requested
+    public name resolves at the gateway level. The rewrite must be skipped
+    when the alias target has no live deployment.
+    """
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+
+    monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
+    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
+
+    class _MockRouter:
+        model_name_to_deployment_indices = {"gpt-4": [0]}
+        team_model_to_deployment_indices = {}
+
+    test_data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_key",
+        team_id="team-1",
+        team_model_aliases={"gpt-4": "model_name_team-1_dead-uuid"},
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+        _update_model_if_team_alias_exists(
+            data=test_data, user_api_key_dict=user_api_key_dict
+        )
+
+    assert test_data.get("model") == "gpt-4"
+
+
+def test_team_alias_targeting_live_team_deployment_still_rewrites(monkeypatch):
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+
+    monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
+    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
+
+    class _MockRouter:
+        model_name_to_deployment_indices = {"model_name_team-1_live-uuid": [0]}
+        team_model_to_deployment_indices = {}
+
+    test_data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_key",
+        team_id="team-1",
+        team_model_aliases={"gpt-4": "model_name_team-1_live-uuid"},
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+        _update_model_if_team_alias_exists(
+            data=test_data, user_api_key_dict=user_api_key_dict
+        )
+
+    assert test_data.get("model") == "model_name_team-1_live-uuid"
+
+
+def test_warn_stale_team_alias_once_logs_once_per_key(monkeypatch):
+    from collections import OrderedDict
+
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+
+    monkeypatch.setattr(pre_call_utils, "_STALE_TEAM_ALIAS_WARNING_KEYS", OrderedDict())
+
+    with patch.object(pre_call_utils.verbose_proxy_logger, "warning") as mock_warning:
+        pre_call_utils._warn_stale_team_alias_once("team-1:gpt-4", "stale alias %s", "gpt-4")
+        pre_call_utils._warn_stale_team_alias_once("team-1:gpt-4", "stale alias %s", "gpt-4")
+
+    assert mock_warning.call_count == 1
+
+
+def test_warn_stale_team_alias_once_evicts_oldest_key_beyond_cap(monkeypatch):
+    from collections import OrderedDict
+
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+
+    monkeypatch.setattr(pre_call_utils, "_STALE_TEAM_ALIAS_WARNING_KEYS", OrderedDict())
+    monkeypatch.setattr(pre_call_utils, "_MAX_STALE_ALIAS_WARNING_KEYS", 2)
+
+    with patch.object(pre_call_utils.verbose_proxy_logger, "warning"):
+        pre_call_utils._warn_stale_team_alias_once("key-1", "stale alias")
+        pre_call_utils._warn_stale_team_alias_once("key-2", "stale alias")
+        pre_call_utils._warn_stale_team_alias_once("key-3", "stale alias")
+
+    assert list(pre_call_utils._STALE_TEAM_ALIAS_WARNING_KEYS) == ["key-2", "key-3"]
+
+
+_OAUTH_TOKEN = "Bearer sk-ant-oat01-regression-token-lit5108"
+
+
+def _all_header_dicts(data: dict, metadata_variable_name: str) -> list[dict]:
+    metadata = data.get(metadata_variable_name) or {}
+    proxy_server_request = data["proxy_server_request"]
+    body = proxy_server_request["body"]
+    return [
+        metadata.get("headers") or {},
+        (metadata.get("requester_metadata") or {}).get("headers") or {},
+        proxy_server_request["headers"],
+        (body.get(metadata_variable_name) or {}).get("headers") or {},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path, metadata_variable_name",
+    [
+        ("/v1/messages", "litellm_metadata"),
+        ("/v1/chat/completions", "metadata"),
+    ],
+)
+async def test_add_litellm_data_to_request_redacts_oauth_header_from_logging_copies(path, metadata_variable_name):
+    """The Anthropic subscription token is forwarded upstream but never handed to logging."""
+    request_mock = _make_request_mock(
+        path,
+        {
+            "Content-Type": "application/json",
+            "anthropic-version": "2023-06-01",
+            "Authorization": _OAUTH_TOKEN,
+            "x-litellm-api-key": "Bearer sk-virtual-key",
+        },
+    )
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "anthropic-claude", "messages": [{"role": "user", "content": "hello"}]},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"forward_client_headers_to_llm_api": True},
+        version="test-version",
+    )
+
+    for header_dict in _all_header_dicts(updated, metadata_variable_name):
+        assert header_dict.get("Authorization") != _OAUTH_TOKEN
+        assert "sk-ant-oat01" not in json.dumps(header_dict)
+
+    assert "sk-ant-oat01" not in json.dumps(updated["proxy_server_request"], default=repr)
+
+    assert updated["proxy_server_request"]["headers"] is updated[metadata_variable_name]["headers"]
+
+    assert updated["provider_specific_header"]["extra_headers"]["Authorization"] == _OAUTH_TOKEN
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_keeps_every_forwarded_credential_out_of_logging_copies():
+    """Credentials kept for transport must not survive anywhere under proxy_server_request."""
+    secrets = {
+        "x-api-key": "sk-byok-provider-key-lit5108",
+        "cookie": "litellm_jwt=session-token-lit5108",
+        "proxy-authorization": "Bearer proxy-token-lit5108",
+    }
+    request_mock = _make_request_mock(
+        "/v1/chat/completions",
+        {
+            "Content-Type": "application/json",
+            "x-litellm-api-key": "Bearer sk-virtual-key",
+            **secrets,
+        },
+    )
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={
+            "forward_llm_provider_auth_headers": True,
+            "forward_client_headers_to_llm_api": True,
+        },
+        version="test-version",
+    )
+
+    assert updated["api_key"] == secrets["x-api-key"]
+    assert updated["headers"]["x-api-key"] == secrets["x-api-key"]
+
+    logged = json.dumps(updated["proxy_server_request"], default=repr)
+    for value in secrets.values():
+        assert value not in logged
+
+
+
+@pytest.mark.parametrize(
+    "header, expected_redacted",
+    [
+        ("Authorization", True),
+        ("X-Api-Key", True),
+        ("x-goog-api-key", True),
+        ("Ocp-Apim-Subscription-Key", True),
+        ("API-Key", True),
+        ("Cookie", True),
+        ("Proxy-Authorization", True),
+        ("anthropic-version", False),
+        ("user-agent", False),
+    ],
+)
+def test_redact_credential_headers_classifies_each_header(header, expected_redacted):
+    from litellm.proxy.litellm_pre_call_utils import redact_credential_headers
+
+    headers = {header: "secret-value"}
+
+    redacted = redact_credential_headers(headers)
+
+    assert redacted[header] == ("***REDACTED***" if expected_redacted else "secret-value")
+    assert headers[header] == "secret-value"
+
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_debug_log_does_not_print_credentials():
+    """The request-header debug line carries values the stdout secret filter does not match."""
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+
+    request_mock = _make_request_mock(
+        "/v1/chat/completions",
+        {
+            "Content-Type": "application/json",
+            "Ocp-Apim-Subscription-Key": "apim-plaintext-token-lit5108",
+            "x-litellm-api-key": "Bearer sk-virtual-key",
+        },
+    )
+
+    with patch.object(pre_call_utils.verbose_proxy_logger, "debug") as mock_debug:
+        await add_litellm_data_to_request(
+            data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]},
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={"forward_llm_provider_auth_headers": True},
+            version="test-version",
+        )
+
+    logged = " ".join(str(call) for call in mock_debug.call_args_list)
+    assert "apim-plaintext-token-lit5108" not in logged
+
+
+def _callback_credential_request_mock() -> MagicMock:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    return request_mock
+
+
+_DATADOG_TEAM_KEY = UserAPIKeyAuth(
+    api_key="hashed-key",
+    team_id="team-1",
+    team_metadata={
+        "logging": [
+            {
+                "callback_name": "datadog",
+                "callback_type": "success",
+                "callback_vars": {"dd_api_key": "team-dd-key"},
+            }
+        ]
+    },
+)
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_caller_supplied_callback_credentials():
+    """
+    The team admin sets dd_api_key only; a caller pairing its own dd_site with that key
+    would ship the team's Datadog credential to a host it controls.
+    """
+    caller_destinations = {"dd_site": "attacker.example.com", "dd_agent_host": "attacker.example.com"}
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+        **caller_destinations,
+        "gcs_bucket_name": "attacker-bucket",
+        TRUSTED_CALLBACK_VARS_FIELD: {"dd_site": "smuggled.example.com"},
+        "metadata": {**caller_destinations, "safe_user_metadata": "kept"},
+        "litellm_metadata": dict(caller_destinations),
+        "litellm_params": {"metadata": dict(caller_destinations)},
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=_DATADOG_TEAM_KEY,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert "dd_site" not in updated
+    assert "dd_agent_host" not in updated
+    assert "gcs_bucket_name" not in updated
+    assert updated["dd_api_key"] == "team-dd-key"
+    assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {"dd_api_key": "team-dd-key"}
+    for metadata_key in ("metadata", "litellm_metadata"):
+        assert "dd_site" not in updated[metadata_key]
+        assert "dd_agent_host" not in updated[metadata_key]
+    assert "dd_site" not in updated["litellm_params"]["metadata"]
+    assert updated["metadata"]["safe_user_metadata"] == "kept"
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_caller_supplied_callback_credentials_with_clientside_creds_allowed():
+    """`allow_client_side_credentials` opens the auth-layer ban; the strip must still hold."""
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+        "dd_site": "attacker.example.com",
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=_DATADOG_TEAM_KEY,
+        proxy_config=MagicMock(),
+        general_settings={"allow_client_side_credentials": True},
+        version="test-version",
+    )
+
+    assert "dd_site" not in updated
+    assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {"dd_api_key": "team-dd-key"}
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_omits_trusted_callback_vars_without_team_callbacks():
+    """Without team/key callback settings the trusted field must not exist for a callback to read."""
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+        TRUSTED_CALLBACK_VARS_FIELD: {"dd_api_key": "caller-key", "dd_site": "attacker.example.com"},
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert TRUSTED_CALLBACK_VARS_FIELD not in updated
+
+
+def test_trusted_callback_vars_never_reach_the_provider():
+    """
+    The stamped field rides the request body, so it has to be a recognised litellm param;
+    otherwise the OpenAI param builder sweeps it into extra_body and the provider 400s.
+    """
+    from litellm.utils import get_non_default_completion_params
+
+    non_default = get_non_default_completion_params(
+        {
+            "model": "gpt-4",
+            TRUSTED_CALLBACK_VARS_FIELD: {"dd_api_key": "team-dd-key"},
+            "some_provider_param": "kept",
+        }
+    )
+
+    assert TRUSTED_CALLBACK_VARS_FIELD not in non_default
+    assert non_default["some_provider_param"] == "kept"
+
+
+@pytest.mark.asyncio
+async def test_key_level_callback_vars_survive_the_strip():
+    """
+    Key-level callbacks configure their own destination and credentials, and they replace
+    team settings rather than merging with them, so only the request body is untrusted.
+    """
+    key_with_datadog_callback = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "datadog",
+                    "callback_type": "success",
+                    "callback_vars": {"dd_api_key": "key-dd-key", "dd_site": "us5.datadoghq.com"},
+                }
+            ]
+        },
+    )
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+        "dd_site": "attacker.example.com",
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key_with_datadog_callback,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {"dd_api_key": "key-dd-key", "dd_site": "us5.datadoghq.com"}
+    assert updated["dd_site"] == "us5.datadoghq.com"

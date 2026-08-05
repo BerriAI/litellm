@@ -4,7 +4,7 @@ Type definitions for Stability AI API
 API Reference: https://platform.stability.ai/docs/api-reference
 """
 
-from typing import List, Literal, Optional
+from typing import Final, List, Literal, Optional
 
 from typing_extensions import TypedDict
 
@@ -174,7 +174,7 @@ class StabilityEditResponse(TypedDict, total=False):
 
 
 # Mapping of OpenAI size to Stability aspect_ratio
-OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO = {
+OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO: Final = {
     "1024x1024": "1:1",
     "1792x1024": "16:9",
     "1024x1792": "9:16",
@@ -183,7 +183,7 @@ OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO = {
 }
 
 # Stability AI supported aspect ratios
-STABILITY_ASPECT_RATIOS = [
+STABILITY_ASPECT_RATIOS: Final = [
     "1:1",
     "16:9",
     "9:16",
@@ -198,7 +198,7 @@ STABILITY_ASPECT_RATIOS = [
 ]
 
 # Stability AI model endpoints
-STABILITY_GENERATION_MODELS = {
+STABILITY_GENERATION_MODELS: Final = {
     "sd3": "/v2beta/stable-image/generate/sd3",
     "sd3.5-large": "/v2beta/stable-image/generate/sd3",
     "sd3.5-large-turbo": "/v2beta/stable-image/generate/sd3",
@@ -210,7 +210,7 @@ STABILITY_GENERATION_MODELS = {
     "stable-image-core": "/v2beta/stable-image/generate/core",
 }
 
-STABILITY_EDIT_ENDPOINTS = {
+STABILITY_EDIT_ENDPOINTS: Final = {
     "inpaint": "/v2beta/stable-image/edit/inpaint",
     "outpaint": "/v2beta/stable-image/edit/outpaint",
     "erase": "/v2beta/stable-image/edit/erase",

@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Union
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -9,7 +9,7 @@ from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_m
 from litellm.types.utils import CallTypesLiteral
 
 # Global counter for tracking which guardrail was called (for load balancing tests)
-guardrail_lb_call_count: Dict[str, int] = {"A": 0, "B": 0}
+guardrail_lb_call_count: Final[Dict[str, int]] = {"A": 0, "B": 0}
 
 
 class GuardrailForLBTestingA(CustomGuardrail):
@@ -23,7 +23,7 @@ class GuardrailForLBTestingA(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Optional[Union[Exception, str, dict]]:
         guardrail_lb_call_count["A"] += 1
-        verbose_proxy_logger.info(f"GuardrailForLBTestingA called. Total A calls: {guardrail_lb_call_count['A']}")
+        verbose_proxy_logger.info("GuardrailForLBTestingA called. Total A calls: %s", guardrail_lb_call_count["A"])
         return data
 
 
@@ -38,7 +38,7 @@ class GuardrailForLBTestingB(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Optional[Union[Exception, str, dict]]:
         guardrail_lb_call_count["B"] += 1
-        verbose_proxy_logger.info(f"GuardrailForLBTestingB called. Total B calls: {guardrail_lb_call_count['B']}")
+        verbose_proxy_logger.info("GuardrailForLBTestingB called. Total B calls: %s", guardrail_lb_call_count["B"])
         return data
 
 
@@ -66,7 +66,7 @@ class myCustomGuardrail(CustomGuardrail):
         """
 
         # In this guardrail, if a user inputs `litellm` we will mask it and then send it to the LLM
-        _messages = data.get("messages")
+        _messages: Final = data.get("messages")
         if _messages:
             for message in _messages:
                 _content = message.get("content")
@@ -94,7 +94,7 @@ class myCustomGuardrail(CustomGuardrail):
 
         # this works the same as async_pre_call_hook, but just runs in parallel as the LLM API Call
         # In this guardrail, if a user inputs `litellm` we will mask it.
-        _messages = data.get("messages")
+        _messages: Final = data.get("messages")
         if _messages:
             for message in _messages:
                 _content = message.get("content")
