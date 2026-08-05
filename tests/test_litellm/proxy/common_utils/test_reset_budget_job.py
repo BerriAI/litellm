@@ -14,6 +14,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.utils import ProxyLogging
@@ -218,6 +219,31 @@ async def run_async_test(coro):
 
 
 # Tests
+def test_write_key_reset_updates_skips_none_token_and_still_writes_the_rest(reset_budget_job, mock_prisma_client):
+    """A key with token=None must be skipped, not queued as where={"token": None}.
+
+    Queueing a None token makes the prisma batch commit raise and aborts the
+    whole batch, silently dropping every key reset that cycle (the #27730
+    blast radius this write path exists to prevent).
+    """
+    reset_at = datetime.now(timezone.utc)
+    keys = [
+        LiteLLM_VerificationToken(token=None, budget_reset_at=reset_at),
+        LiteLLM_VerificationToken(token="tok-ok", budget_reset_at=reset_at),
+    ]
+
+    asyncio.run(reset_budget_job._write_key_reset_updates(updated_keys=keys))
+
+    key_writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "key"]
+    assert key_writes == [
+        {
+            "table": "key",
+            "where": {"token": "tok-ok"},
+            "data": {"spend": 0, "budget_reset_at": reset_at},
+        }
+    ]
+
+
 def test_reset_budget_for_key(reset_budget_job, mock_prisma_client):
     # Setup test data with timezone-aware datetime
     now = datetime.now(timezone.utc)

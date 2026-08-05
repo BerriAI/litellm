@@ -485,6 +485,7 @@ def test_a_switch_onto_a_partly_cached_model_still_pays_for_the_write():
     )
     assert reported < if_treated_as_same_model / 10, "a mostly-cold switch must not be priced as a continuation"
 
+
 def test_a_baseline_that_prices_caching_implicitly_still_pays_for_its_prompt():
     """OpenAI, Azure and Gemini entries carry no `cache_creation_input_token_cost`,
     because those providers cache implicitly and charge nothing to write. Leaving this
@@ -505,9 +506,7 @@ def test_a_baseline_that_prices_caching_implicitly_still_pays_for_its_prompt():
     assert gpt5.get("cache_creation_input_token_cost") is None, "pick a baseline with no cache-write rate"
     haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
     baseline_pays_input = 20_000 * gpt5["input_cost_per_token"] + 1_000 * gpt5["output_cost_per_token"]
-    actually_paid = (
-        20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
-    )
+    actually_paid = 20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
     assert reported == pytest.approx(baseline_pays_input - actually_paid)
     assert reported > 0, "routing a cold first turn onto a cheaper model is a saving, not a loss"
 
@@ -530,9 +529,7 @@ def test_a_baseline_with_no_cache_read_rate_is_charged_its_input_rate():
     assert grok.get("cache_read_input_token_cost") is None, "pick a baseline with no cache-read rate"
     haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
     baseline_pays_input = 20_000 * grok["input_cost_per_token"] + 1_000 * grok["output_cost_per_token"]
-    actually_paid = (
-        20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
-    )
+    actually_paid = 20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
     assert reported == pytest.approx(baseline_pays_input - actually_paid)
 
 
@@ -617,3 +614,101 @@ def test_the_baseline_is_priced_on_the_basis_the_request_was_billed_at(basis, ex
 
     baseline = 20_000 * gpt["input_cost_per_token"] + 1_000 * gpt["output_cost_per_token"]
     assert reported == pytest.approx(expected_multiplier * baseline - served)
+
+
+def test_a_baseline_recorded_on_the_decision_turns_the_driver_on():
+    """An operator who configures nothing still sees the driver work."""
+    result = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        cache_read_input_tokens=0,
+        routing_decision={"conversation_continuing": True, "savings_baseline_model": "anthropic/claude-opus-5"},
+        usage_object=_cached_usage_object(),
+    )
+    assert result.autorouter != 0.0
+
+
+def test_the_configured_baseline_overrides_the_recorded_one(monkeypatch):
+    """The recorded baseline and its deployment id are both ignored under the setting."""
+    monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", "claude-sonnet-5")
+    with_override = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        cache_read_input_tokens=0,
+        routing_decision={
+            "conversation_continuing": True,
+            "savings_baseline_model": "anthropic/claude-opus-5",
+            "savings_baseline_deployment_id": "some-deployment-id",
+        },
+        usage_object=_cached_usage_object(),
+    )
+    against_sonnet = compute_autorouter_savings(
+        baseline_model="claude-sonnet-5",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=Usage(**_cached_usage_object()),
+    )
+    against_opus = compute_autorouter_savings(
+        baseline_model="anthropic/claude-opus-5",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=Usage(**_cached_usage_object()),
+    )
+    assert against_sonnet != against_opus, "the test needs baselines that price apart"
+    assert with_override.autorouter == against_sonnet
+
+
+def test_a_non_string_recorded_baseline_is_ignored():
+    result = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        cache_read_input_tokens=0,
+        routing_decision={"conversation_continuing": True, "savings_baseline_model": ["anthropic/claude-opus-5"]},
+        usage_object=_cached_usage_object(),
+    )
+    assert result.autorouter == 0.0
+
+
+def test_a_recorded_baseline_deployment_prices_at_its_configured_rate():
+    """A hardest-tier deployment with a negotiated rate is what the traffic would
+    really have cost; pricing its model publicly misstates the saving."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "top",
+                "litellm_params": {
+                    "model": "anthropic/claude-opus-5",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+            },
+        ]
+    )
+    deployment_id = router.get_model_list(model_name="top")[0]["model_info"]["id"]
+    decision = {
+        "conversation_continuing": True,
+        "savings_baseline_model": "anthropic/claude-opus-5",
+        "savings_baseline_deployment_id": deployment_id,
+    }
+    with_deployment_rate = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        cache_read_input_tokens=0,
+        routing_decision=decision,
+        usage_object=_cached_usage_object(),
+        llm_router=lambda: router,
+    )
+    at_public_rate = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        cache_read_input_tokens=0,
+        routing_decision={k: v for k, v in decision.items() if k != "savings_baseline_deployment_id"},
+        usage_object=_cached_usage_object(),
+        llm_router=lambda: router,
+    )
+    assert with_deployment_rate.autorouter > at_public_rate.autorouter

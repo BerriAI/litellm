@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from typing import Final, Literal, Protocol, TypeVar
 
@@ -23,50 +23,20 @@ from litellm.proxy.common_utils.timezone_utils import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.prisma_protocols import ReadOnlyTable, SpendLinkedTable
 from litellm.repositories.table_repositories import (
     EndUserRepository,
     TagRepository,
     TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.unit_of_work import spend_reset_unit_of_work
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.services import ServiceTypes
 
 _RowT = TypeVar("_RowT")
-_RowT_co = TypeVar("_RowT_co", covariant=True)
-
-
-class _PrismaRecord(Protocol):
-    def dict(self) -> Mapping[str, object]: ...
-
-
-class _BatchTable(Protocol):
-    def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
-
-
-class _ResetBatcher(Protocol):
-    @property
-    def litellm_verificationtoken(self) -> _BatchTable: ...
-
-    @property
-    def litellm_usertable(self) -> _BatchTable: ...
-
-    @property
-    def litellm_teamtable(self) -> _BatchTable: ...
-
-    async def commit(self) -> None: ...
-
-
-class _EndUserTable(Protocol):
-    async def find_many(self, where: Mapping[str, object]) -> Sequence[_PrismaRecord]: ...
-
-
-class _SpendLinkedTable(Protocol[_RowT_co]):
-    async def find_many(self, where: Mapping[str, object]) -> Sequence[_RowT_co]: ...
-
-    async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
 
 
 class _TeamMembershipRow(Protocol):
@@ -227,7 +197,7 @@ class ResetBudgetJob:
     async def _cascade_reset_spend_for_budget_link(
         self,
         budgets_to_reset: list[LiteLLM_BudgetTableFull],
-        table: "_SpendLinkedTable[_RowT]",
+        table: SpendLinkedTable[_RowT],
         counter_key_fn: Callable[[_RowT], str],
         log_subject: str,
         extra_where: dict[str, object] | None = None,
@@ -466,7 +436,7 @@ class ResetBudgetJob:
         rely on the default budget (litellm.max_end_user_budget_id) applied
         in-memory during auth checks.
         """
-        table: Final[_EndUserTable] = EndUserRepository(self.prisma_client).table
+        table: Final[ReadOnlyTable] = EndUserRepository(self.prisma_client).table
         rows: Final = await table.find_many(
             where={
                 "budget_id": None,
@@ -486,16 +456,11 @@ class ResetBudgetJob:
         aborts the entire batch — silently leaving spend over the cap and
         budget_reset_at unchanged forever.
         """
-        batcher: Final[_ResetBatcher] = self.prisma_client.db.batch_()
-        for k in updated_keys:
-            token = getattr(k, "token", None)
-            if token is None:
-                continue
-            batcher.litellm_verificationtoken.update(
-                where={"token": token},
-                data={"spend": 0, "budget_reset_at": k.budget_reset_at},
-            )
-        await batcher.commit()
+        async with spend_reset_unit_of_work(self.prisma_client.db.batch_) as uow:
+            for k in updated_keys:
+                if k.token is None:
+                    continue
+                uow.keys.queue_spend_reset(token=k.token, budget_reset_at=k.budget_reset_at)
 
     async def _write_user_reset_updates(self, updated_users: list[LiteLLM_UserTable]) -> None:
         """
@@ -505,16 +470,9 @@ class ResetBudgetJob:
         that trips Prisma's DataError on rows carrying unrecognised fields
         (see #27730).
         """
-        batcher: Final[_ResetBatcher] = self.prisma_client.db.batch_()
-        for u in updated_users:
-            user_id = getattr(u, "user_id", None)
-            if user_id is None:
-                continue
-            batcher.litellm_usertable.update(
-                where={"user_id": user_id},
-                data={"spend": 0, "budget_reset_at": u.budget_reset_at},
-            )
-        await batcher.commit()
+        async with spend_reset_unit_of_work(self.prisma_client.db.batch_) as uow:
+            for u in updated_users:
+                uow.users.queue_spend_reset(user_id=u.user_id, budget_reset_at=u.budget_reset_at)
 
     async def _write_team_reset_updates(self, updated_teams: list[LiteLLM_TeamTable]) -> None:
         """
@@ -524,16 +482,9 @@ class ResetBudgetJob:
         that trips Prisma's DataError on rows carrying unrecognised fields
         (see #27730).
         """
-        batcher: Final[_ResetBatcher] = self.prisma_client.db.batch_()
-        for t in updated_teams:
-            team_id = getattr(t, "team_id", None)
-            if team_id is None:
-                continue
-            batcher.litellm_teamtable.update(
-                where={"team_id": team_id},
-                data={"spend": 0, "budget_reset_at": t.budget_reset_at},
-            )
-        await batcher.commit()
+        async with spend_reset_unit_of_work(self.prisma_client.db.batch_) as uow:
+            for t in updated_teams:
+                uow.teams.queue_spend_reset(team_id=t.team_id, budget_reset_at=t.budget_reset_at)
 
     async def reset_budget_for_litellm_keys(self):
         """
