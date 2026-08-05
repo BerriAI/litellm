@@ -7110,3 +7110,51 @@ def test_model_info_is_active_for_environment_matrix(monkeypatch):
     monkeypatch.delenv("LITELLM_ENVIRONMENT")
     with pytest.raises(ValueError, match="LITELLM_ENVIRONMENT"):
         model_info_is_active_for_environment(model_info={"supported_environments": ["production"]})
+
+
+def test_count_pre_call_check_tokens_counts_embedding_batches():
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "embed-test", "litellm_params": {"model": "vertex_ai/text-embedding-005"}}
+        ]
+    )
+
+    batch = router._count_pre_call_check_tokens(messages=None, input=["hello world", "second string"])
+    single = router._count_pre_call_check_tokens(messages=None, input=["hello world"])
+    assert batch > single > 0, "a batch must cost more than one of its own entries"
+
+    assert router._count_pre_call_check_tokens(messages=None, input="single string") > 0
+    assert router._count_pre_call_check_tokens(messages=None, input=[{"role": "user", "content": "hi"}]) > 0
+    assert router._count_pre_call_check_tokens(messages=[{"role": "user", "content": "hi"}], input=None) > 0
+
+
+def test_pre_call_checks_filters_embedding_over_context_window():
+    from litellm.router import Router
+
+    over_limit = ["token " * 50, "token " * 50]
+    router = Router(
+        model_list=[
+            {
+                "model_name": "embed-test",
+                "litellm_params": {"model": "vertex_ai/text-embedding-005"},
+                "model_info": {"id": "small", "base_model": "vertex_ai/text-embedding-005", "max_input_tokens": 8},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+    deployments = router.model_list
+
+    with pytest.raises(litellm.exceptions.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="embed-test",
+            healthy_deployments=deployments,
+            messages=None,
+            input=over_limit,
+        )
+
+    kept = router._pre_call_checks(
+        model="embed-test", healthy_deployments=deployments, messages=None, input=["hi"]
+    )
+    assert len(kept) == 1, "a batch inside the limit must survive the filter"
