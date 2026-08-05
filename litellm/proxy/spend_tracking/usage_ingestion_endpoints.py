@@ -196,28 +196,20 @@ async def reserve_spend_log_atomic(
     key: KeyAttribution,
     cost: float,
 ) -> bool:
-    from litellm.proxy.proxy_server import (
-        disable_spend_logs,
-        litellm_proxy_budget_name,
-        prisma_client,
-        proxy_logging_obj,
-    )
+    from litellm.proxy.proxy_server import litellm_proxy_budget_name, prisma_client, proxy_logging_obj
     from litellm.proxy.utils import ProxyUpdateSpend
     from litellm.repositories.table_repositories import SpendLogsRepository
 
     if ProxyUpdateSpend.disable_spend_updates() is True:
         return True
 
-    if disable_spend_logs is False:
-        payload: Final = prisma_client.jsonify_object(
-            build_spend_log_payload(record, request_id, hashed_token, key, cost)
-        )
-        from prisma.errors import UniqueViolationError
+    payload: Final = prisma_client.jsonify_object(build_spend_log_payload(record, request_id, hashed_token, key, cost))
+    from prisma.errors import UniqueViolationError
 
-        try:
-            await SpendLogsRepository(prisma_client).table.create(data=payload)
-        except UniqueViolationError:
-            return False
+    try:
+        await SpendLogsRepository(prisma_client).table.create(data=payload)
+    except UniqueViolationError:
+        return False
 
     writer: Final = proxy_logging_obj.db_spend_update_writer
     counter_calls: Final = (
@@ -305,9 +297,11 @@ async def ingest_external_usage(
 
     Attribution (user/team/org) is derived from the given virtual key. Records accept an optional
     idempotency_key, stored as the spend-log request_id: the reservation insert, counter updates and
-    dedup are checked atomically at the database primary key, so overlapping retries are safe. When
-    cost is omitted it is computed from litellm pricing; records whose model cannot be priced are
-    rejected with an error instead of being booked as zero spend.
+    dedup are checked atomically at the database primary key, so overlapping retries are safe. The
+    reservation row is always written (even when disable_spend_logs is set), because it is both the
+    dedup anchor and the audit record for the booked usage. When cost is omitted it is computed from
+    litellm pricing; records whose model cannot be priced are rejected with an error instead of
+    being booked as zero spend.
     """
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
