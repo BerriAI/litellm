@@ -386,12 +386,16 @@ class LiteLLMRoutes(enum.Enum):
         # responses API
         "/responses",
         "/v1/responses",
+        "/openai/v1/responses",
         "/responses/{response_id}",
         "/v1/responses/{response_id}",
+        "/openai/v1/responses/{response_id}",
         "/responses/{response_id}/input_items",
         "/v1/responses/{response_id}/input_items",
+        "/openai/v1/responses/{response_id}/input_items",
         "/responses/{response_id}/cancel",
         "/v1/responses/{response_id}/cancel",
+        "/openai/v1/responses/{response_id}/cancel",
         # vector stores
         "/vector_stores",
         "/v1/vector_stores",
@@ -643,6 +647,10 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/logs/v2",
         "/spend/logs/ui",
         "/spend/logs/session/ui",
+        "/key/spend/report",
+        "/user/spend/report",
+        "/team/spend/report",
+        "/organization/spend/report",
         # Reads end users out of spend logs, scoped to the caller's own rows and
         # permitted teams exactly like /spend/logs/ui — it belongs to the same
         # access tier, not to customer management.

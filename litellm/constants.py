@@ -197,16 +197,6 @@ RUNWAYML_POLLING_TIMEOUT = int(os.getenv("RUNWAYML_POLLING_TIMEOUT", 600))  # 10
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS: Final = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
-# The earliest an evicted, litellm-created client may be closed. A request handed the
-# client just before eviction is still using it, so nothing is closed inside this window;
-# past it, the client is closed once it reports no connection in flight.
-EVICTED_LLM_CLIENT_CLOSE_GRACE_SECONDS: Final = 900
-
-# How many evicted clients may be queued for closing at once. Past this, an evicted client
-# is left to the collector rather than letting a cache-churning workload grow the queue
-# without bound. Each queued entry is ~100 bytes and comes due within one grace window.
-EVICTED_LLM_CLIENT_CLOSE_MAX_PENDING: Final = 10_000
-
 # Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
 # Set to 0 for unlimited (not recommended for production)
 AIOHTTP_CONNECTOR_LIMIT: Final = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 1000))
@@ -1305,6 +1295,7 @@ RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when conv
 
 ########################### Logging Callback Constants ###########################
 AZURE_STORAGE_MSFT_VERSION: Final = "2019-07-07"
+AZURE_STORAGE_DEFAULT_ENDPOINT_SUFFIX: Final = "core.windows.net"
 PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES: Final = int(
     os.getenv("PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES", 5)
 )
@@ -1676,3 +1667,40 @@ ADVISOR_TOOL_DESCRIPTION: Final[str] = (
     "want to verify your reasoning, or face a complex decision. "
     "Describe your question or challenge clearly in the 'question' field."
 )
+
+# Headers that must be stripped from a provider exception before it's forwarded as
+# the proxy's own HTTP response, or they conflict with the framing the proxy sets.
+HTTP_FRAMING_HEADERS: Final[frozenset[str]] = frozenset(
+    {
+        "content-length",
+        "transfer-encoding",
+        "content-encoding",
+        "content-type",
+        "set-cookie",
+        "cookie",
+        "proxy-authenticate",
+        "proxy-authorization",
+    }
+)
+
+# Browser-facing security headers that a malicious or misconfigured upstream
+# provider must not be able to set on the proxy's own response.
+BROWSER_SECURITY_HEADERS: Final[frozenset[str]] = frozenset(
+    {
+        "access-control-allow-origin",
+        "access-control-allow-credentials",
+        "access-control-allow-methods",
+        "access-control-allow-headers",
+        "access-control-expose-headers",
+        "content-security-policy",
+        "content-security-policy-report-only",
+        "clear-site-data",
+        "strict-transport-security",
+        "x-frame-options",
+        "cross-origin-opener-policy",
+        "cross-origin-embedder-policy",
+        "cross-origin-resource-policy",
+    }
+)
+
+UNSAFE_PROXY_RESPONSE_HEADERS: Final[frozenset[str]] = HTTP_FRAMING_HEADERS | BROWSER_SECURITY_HEADERS

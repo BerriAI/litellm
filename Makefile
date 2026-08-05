@@ -176,10 +176,8 @@ lint-ruff-FULL-dev: install-dev
 	if [ -n "$$files" ]; then echo "$$files" | xargs $(UV_RUN) ruff check; \
 	else echo "No changed .py files to check."; fi
 
-lint-basedpyright lint-basedpyright-budget-update: export NODE_OPTIONS := --max-old-space-size=12288
-
 lint-basedpyright: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --base origin/litellm_internal_staging
+	$(UV_RUN) python scripts/type_check_gate.py --base origin/litellm_internal_staging
 
 lint-e2e-basedpyright: $(LINT_E2E_DEP_INSTALL)
 	$(UV_RUN) basedpyright tests/e2e
@@ -192,7 +190,7 @@ lint-type-discipline: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 # --update lowers each limit by what this branch fixed since its branch point, so
 # it needs the base ref fetched to resolve the merge-base.
 lint-basedpyright-budget-update: install-dev lint-fetch-base
-	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --update
+	$(UV_RUN) python scripts/type_check_gate.py --update
 
 lint-format: format-check
 
