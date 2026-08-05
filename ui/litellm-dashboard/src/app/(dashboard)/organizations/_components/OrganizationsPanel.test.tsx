@@ -135,6 +135,9 @@ describe("OrganizationsPanel - org detail deep link (?org=)", () => {
     act(() => mockOrgInfoView.mock.calls.at(-1)?.[0].onClose());
 
     await expectQueryString("");
+    expect(onUrlUpdate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ options: expect.objectContaining({ history: "replace" }) }),
+    );
     expect(screen.queryByTestId("organization-info-view")).not.toBeInTheDocument();
     expect(screen.getByTestId("organizations-table")).toBeInTheDocument();
   });

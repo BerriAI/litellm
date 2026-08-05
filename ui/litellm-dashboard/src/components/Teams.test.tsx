@@ -497,6 +497,7 @@ describe("Teams - team detail deep link (?team=)", () => {
 
     await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
     expect(onUrlUpdate.mock.calls.at(-1)![0].searchParams.has("team")).toBe(false);
+    expect(onUrlUpdate.mock.calls.at(-1)![0].options.history).toBe("replace");
     await waitFor(() => expect(screen.queryByTestId("team-info-view")).not.toBeInTheDocument());
   });
 });

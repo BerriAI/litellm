@@ -44,6 +44,7 @@ describe("useModelDetailRouting", () => {
     const event = onUrlUpdate.mock.calls.at(-1)?.[0];
     expect(event?.searchParams.has("model")).toBe(false);
     expect(event?.searchParams.has("team")).toBe(false);
+    expect(event?.options.history).toBe("replace");
   });
 
   it("reads modelId and teamId from the query string", () => {

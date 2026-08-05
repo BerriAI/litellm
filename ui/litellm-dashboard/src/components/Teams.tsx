@@ -538,7 +538,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           }}
           onClose={() => {
             setSelectedTeam(null);
-            void setSelectedTeamId(null);
+            void setSelectedTeamId(null, { history: "replace" });
             setEditTeam(false);
           }}
           accessToken={accessToken}

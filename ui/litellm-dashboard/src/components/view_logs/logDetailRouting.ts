@@ -43,7 +43,7 @@ export function useLogDetailRouting(): LogDetailRouting {
   );
 
   const close = useCallback(() => {
-    void setParams({ log_id: null, session_id: null });
+    void setParams({ log_id: null, session_id: null }, { history: "replace" });
   }, [setParams]);
 
   return {

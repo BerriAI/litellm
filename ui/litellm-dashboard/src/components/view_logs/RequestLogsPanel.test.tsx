@@ -310,6 +310,7 @@ describe("RequestLogsPanel", () => {
 
       await waitFor(() => expect(urlParams().get("log_id")).toBeNull());
       await waitFor(() => expect(drawer()).toHaveTextContent("closed"));
+      expect(historyModes()).toEqual(["push", "replace"]);
     });
 
     it("switching logs inside the drawer replaces the URL, so back closes the drawer in one step", async () => {

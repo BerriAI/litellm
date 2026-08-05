@@ -161,7 +161,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
       <div className="w-full h-full overflow-hidden">
         <KeyInfoView
           keyId={selectedKeyId}
-          onClose={() => void setSelectedKeyId(null)}
+          onClose={() => void setSelectedKeyId(null, { history: "replace" })}
           keyData={selectedKey}
           teams={allTeams}
           onDelete={refetch}

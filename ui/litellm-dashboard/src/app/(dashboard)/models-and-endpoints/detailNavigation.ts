@@ -30,7 +30,7 @@ export function useModelDetailRouting(): ModelDetailRouting {
   );
 
   const close = useCallback(() => {
-    void setParams({ model: null, team: null });
+    void setParams({ model: null, team: null }, { history: "replace" });
   }, [setParams]);
 
   return {

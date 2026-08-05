@@ -109,7 +109,7 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
         <OrganizationInfoView
           organizationId={selectedOrgId}
           onClose={() => {
-            void setSelectedOrgId(null);
+            void setSelectedOrgId(null, { history: "replace" });
             setEditOrg(false);
           }}
           accessToken={accessToken}

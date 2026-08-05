@@ -388,6 +388,7 @@ it("renders KeyInfoView when the URL has ?key= for a key on the current page, wi
   await waitFor(() => {
     expect(lastKeyParam(onUrlUpdate)).toBeNull();
   });
+  expect(onUrlUpdate.mock.calls.at(-1)?.[0].options.history).toBe("replace");
   expect(screen.getByTestId("pagination-range")).toBeInTheDocument();
 });
 
