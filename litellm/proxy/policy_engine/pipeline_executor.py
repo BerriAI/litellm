@@ -6,7 +6,7 @@ pass/fail actions (allow, block, next, modify_response) and data forwarding.
 """
 
 import time
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -56,7 +56,7 @@ class PipelineExecutor:
         Returns:
             PipelineExecutionResult with terminal action and step results
         """
-        step_results: list[PipelineStepResult] = []
+        step_results: Final[list[PipelineStepResult]] = []
         working_data = data.copy()
         if "metadata" in working_data:
             working_data["metadata"] = working_data["metadata"].copy()
@@ -161,7 +161,7 @@ class PipelineExecutor:
               pipeline can re-raise it verbatim and match the direct-attachment
               response/trace, else None
         """
-        callback = PipelineExecutor.find_guardrail_callback(step.guardrail)
+        callback: Final = PipelineExecutor.find_guardrail_callback(step.guardrail)
         if callback is None:
             verbose_proxy_logger.warning("Pipeline: guardrail '%s' not found in callbacks", step.guardrail)
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
@@ -174,7 +174,7 @@ class PipelineExecutor:
 
             # Use unified_guardrail path if callback implements apply_guardrail
             target: CustomLogger = callback
-            use_unified = "apply_guardrail" in type(callback).__dict__
+            use_unified: Final = "apply_guardrail" in type(callback).__dict__
             if use_unified:
                 data["guardrail_to_apply"] = callback
                 target = UnifiedLLMGuardrails()
@@ -207,7 +207,7 @@ class PipelineExecutor:
 
         except Exception as e:
             if CustomGuardrail._is_guardrail_intervention(e):
-                error_msg = _extract_error_message(e)
+                error_msg: Final = _extract_error_message(e)
                 return ("fail", None, error_msg, e)
             else:
                 verbose_proxy_logger.error("Pipeline: unexpected error from guardrail '%s': %s", step.guardrail, e)
@@ -245,7 +245,7 @@ def _extract_error_message(e: Exception) -> str:
     if isinstance(e, ModifyResponseException):
         return str(e)
     if HTTPException is not None and isinstance(e, HTTPException):
-        detail = getattr(e, "detail", None)
+        detail: Final = getattr(e, "detail", None)
         if detail:
             return str(detail)
     return str(e)

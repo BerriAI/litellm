@@ -4,7 +4,7 @@ Humanloop integration
 https://humanloop.com/
 """
 
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import httpx
 from typing_extensions import TypedDict
@@ -48,7 +48,7 @@ class HumanLoopPromptManager(DualCache):
         Returns:
             list: A list of dictionaries with variables substituted.
         """
-        compiled_prompts: list[AllMessageValues] = []
+        compiled_prompts: Final[list[AllMessageValues]] = []
 
         for template in prompt_template:
             tc = template.get("content")
@@ -61,11 +61,11 @@ class HumanLoopPromptManager(DualCache):
         return compiled_prompts
 
     def _get_prompt_from_id_api(self, humanloop_prompt_id: str, humanloop_api_key: str) -> PromptManagementClient:
-        client = _get_httpx_client()
+        client: Final = _get_httpx_client()
 
-        base_url = f"https://api.humanloop.com/v5/prompts/{humanloop_prompt_id}"
+        base_url: Final = f"https://api.humanloop.com/v5/prompts/{humanloop_prompt_id}"
 
-        response = client.get(
+        response: Final = client.get(
             url=base_url,
             headers={
                 "X-Api-Key": humanloop_api_key,
@@ -78,16 +78,16 @@ class HumanLoopPromptManager(DualCache):
         except httpx.HTTPStatusError as e:
             raise Exception(f"Error getting prompt from Humanloop: {e.response.text}")
 
-        json_response = response.json()
-        template_message = json_response["template"]
+        json_response: Final = response.json()
+        template_message: Final = json_response["template"]
         if isinstance(template_message, dict):
             template_messages = [template_message]
         elif isinstance(template_message, list):
             template_messages = template_message
         else:
             raise ValueError(f"Invalid template message type: {type(template_message)}")
-        template_model = json_response["model"]
-        optional_params = {}
+        template_model: Final = json_response["model"]
+        optional_params: Final = {}
         for k, v in json_response.items():
             if k in litellm.OPENAI_CHAT_COMPLETION_PARAMS:
                 optional_params[k] = v
@@ -133,7 +133,7 @@ class HumanLoopPromptManager(DualCache):
             return model.replace(f"{self.integration_name}/", "")
 
 
-prompt_manager = HumanLoopPromptManager()
+prompt_manager: Final = HumanLoopPromptManager()
 
 
 class HumanloopLogger(CustomLogger):
@@ -171,18 +171,18 @@ class HumanloopLogger(CustomLogger):
                 prompt_spec=prompt_spec,
             )
 
-        prompt_template = prompt_manager._get_prompt_from_id(
+        prompt_template: Final = prompt_manager._get_prompt_from_id(
             humanloop_prompt_id=prompt_id, humanloop_api_key=humanloop_api_key
         )
 
-        updated_messages = prompt_manager.compile_prompt(
+        updated_messages: Final = prompt_manager.compile_prompt(
             prompt_template=prompt_template["prompt_template"],
             prompt_variables=prompt_variables,
         )
 
-        prompt_template_optional_params = prompt_template["optional_params"] or {}
+        prompt_template_optional_params: Final = prompt_template["optional_params"] or {}
 
-        updated_non_default_params = {
+        updated_non_default_params: Final = {
             **non_default_params,
             **prompt_template_optional_params,
         }

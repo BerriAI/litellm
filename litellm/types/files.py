@@ -1,6 +1,6 @@
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Dict, List, Literal, Mapping, Set, Union
+from typing import Any, Dict, Final, List, Literal, Mapping, Set, Union
 
 from typing_extensions import Required, TypedDict
 
@@ -54,7 +54,7 @@ class FileType(Enum):
     XLSX = "XLSX"
 
 
-FILE_EXTENSIONS: Mapping[FileType, List[str]] = MappingProxyType(
+FILE_EXTENSIONS: Final[Mapping[FileType, List[str]]] = MappingProxyType(
     {
         FileType.AAC: ["aac"],
         FileType.CSV: ["csv"],
@@ -101,7 +101,7 @@ FILE_EXTENSIONS: Mapping[FileType, List[str]] = MappingProxyType(
     }
 )
 
-FILE_MIME_TYPES: Mapping[FileType, str] = MappingProxyType(
+FILE_MIME_TYPES: Final[Mapping[FileType, str]] = MappingProxyType(
     {
         FileType.AAC: "audio/aac",
         FileType.CSV: "text/csv",
@@ -177,7 +177,7 @@ def get_file_mime_type_for_file_type(file_type: FileType) -> str:
 
 
 def get_file_mime_type_from_extension(extension: str) -> str:
-    file_type = get_file_type_from_extension(extension)
+    file_type: Final = get_file_type_from_extension(extension)
     return get_file_mime_type_for_file_type(file_type)
 
 
@@ -186,7 +186,7 @@ FileType Type Groupings (Videos, Images, etc)
 """
 
 # Images
-IMAGE_FILE_TYPES = {
+IMAGE_FILE_TYPES: Final = {
     FileType.PNG,
     FileType.JPEG,
     FileType.GIF,
@@ -201,7 +201,7 @@ def is_image_file_type(file_type):
 
 
 # Videos
-VIDEO_FILE_TYPES = {
+VIDEO_FILE_TYPES: Final = {
     FileType.MOV,
     FileType.MP4,
     FileType.MPEG,
@@ -220,7 +220,7 @@ def is_video_file_type(file_type):
 
 
 # Audio
-AUDIO_FILE_TYPES = {
+AUDIO_FILE_TYPES: Final = {
     FileType.AAC,
     FileType.FLAC,
     FileType.MP3,
@@ -237,7 +237,7 @@ def is_audio_file_type(file_type):
 
 
 # Text
-TEXT_FILE_TYPES = {FileType.CSV, FileType.HTML, FileType.RTF, FileType.TXT}
+TEXT_FILE_TYPES: Final = {FileType.CSV, FileType.HTML, FileType.RTF, FileType.TXT}
 
 
 def is_text_file_type(file_type):
@@ -249,7 +249,7 @@ Other FileType Groupings
 """
 # Accepted file types for GEMINI 1.5 through Vertex AI
 # https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/send-multimodal-prompts#gemini-send-multimodal-samples-images-nodejs
-GEMINI_1_5_ACCEPTED_FILE_TYPES: Set[FileType] = {
+GEMINI_1_5_ACCEPTED_FILE_TYPES: Final[Set[FileType]] = {
     # Image
     FileType.PNG,
     FileType.JPEG,

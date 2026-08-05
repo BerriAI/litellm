@@ -7,7 +7,7 @@ Supports Docker, Podman, and Kubernetes backends.
 
 import base64
 import os
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 
@@ -77,7 +77,7 @@ class SkillsSandboxExecutor:
 
         try:
             # Create sandbox session
-            session_kwargs: dict[str, Any] = {
+            session_kwargs: Final[dict[str, Any]] = {
                 "lang": "python",
                 "verbose": False,
             }
@@ -91,7 +91,7 @@ class SkillsSandboxExecutor:
 
                 # Create a temp directory to stage files
                 with tempfile.TemporaryDirectory() as tmpdir:
-                    tmpdir_abs = os.path.abspath(tmpdir)
+                    tmpdir_abs: Final = os.path.abspath(tmpdir)
                     for path, content in skill_files.items():
                         # Create the file in temp directory
                         local_path = os.path.abspath(os.path.join(tmpdir, path))
@@ -120,7 +120,7 @@ class SkillsSandboxExecutor:
                         delete=False,
                     ) as f:
                         f.write(requirements)
-                        local_requirements_path = f.name
+                        local_requirements_path: Final = f.name
                     session.copy_to_runtime(
                         local_requirements_path,
                         "/sandbox/.litellm_requirements.txt",
@@ -131,7 +131,7 @@ class SkillsSandboxExecutor:
                     requirements_filename = "requirements.txt"
 
                 if requirements_filename:
-                    pip_code = f"""
+                    pip_code: Final = f"""
 import subprocess
 import sys
 subprocess.run(
@@ -140,7 +140,7 @@ subprocess.run(
     cwd='/sandbox',
 )
 """
-                    install_result = session.run(pip_code)
+                    install_result: Final = session.run(pip_code)
                     if install_result.exit_code != 0:
                         verbose_logger.debug("SkillsSandboxExecutor: Requirements installation failed")
                         return {
@@ -153,7 +153,7 @@ subprocess.run(
 
                 # 3. Execute the code
                 # Wrap code to run from /sandbox directory
-                wrapped_code = f"""
+                wrapped_code: Final = f"""
 import os
 os.chdir('/sandbox')
 import sys
@@ -161,11 +161,11 @@ sys.path.insert(0, '/sandbox')
 
 {code}
 """
-                result = session.run(wrapped_code)
+                result: Final = session.run(wrapped_code)
 
-                success = result.exit_code == 0
-                output = result.stdout or ""
-                error = result.stderr or ""
+                success: Final = result.exit_code == 0
+                output: Final = result.stdout or ""
+                error: Final = result.stderr or ""
 
                 if success:
                     verbose_logger.debug("SkillsSandboxExecutor: Code execution succeeded")
@@ -177,7 +177,7 @@ sys.path.insert(0, '/sandbox')
                     verbose_logger.debug("SkillsSandboxExecutor: stdout: %s", output[:500] if output else "No stdout")
 
                 # 4. Collect generated files
-                generated_files = self._collect_generated_files(session, skill_files)
+                generated_files: Final = self._collect_generated_files(session, skill_files)
 
                 return {
                     "success": success,
@@ -213,13 +213,13 @@ sys.path.insert(0, '/sandbox')
         Returns:
             List of generated files with base64 content
         """
-        generated_files: list[dict[str, Any]] = []
+        generated_files: Final[list[dict[str, Any]]] = []
 
         try:
             import tempfile
 
             # List files in /sandbox using Python code
-            list_code = """
+            list_code: Final = """
 import os
 import json
 files = []
@@ -229,7 +229,7 @@ for root, dirs, filenames in os.walk('/sandbox'):
             files.append(os.path.join(root, f))
 print(json.dumps(files))
 """
-            result = session.run(list_code)
+            result: Final = session.run(list_code)
 
             if result.exit_code == 0 and result.stdout:
                 import json
@@ -284,7 +284,7 @@ print(json.dumps(files))
 
     def _get_mime_type(self, filename: str) -> str:
         """Get MIME type for a file based on extension."""
-        ext = filename.lower().split(".")[-1]
+        ext: Final = filename.lower().split(".")[-1]
         return {
             "gif": "image/gif",
             "png": "image/png",

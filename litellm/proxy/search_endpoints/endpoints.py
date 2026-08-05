@@ -1,5 +1,7 @@
 #### Search Endpoints #####
 
+from typing import Final
+
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
@@ -9,7 +11,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 @router.post(
@@ -125,8 +127,8 @@ async def search(
     )
 
     # Read request body
-    body = await request.body()
-    data = orjson.loads(body)
+    body: Final = await request.body()
+    data: Final = orjson.loads(body)
 
     # If search_tool_name is provided in URL path, use it (takes precedence over body)
     if search_tool_name is not None:
@@ -134,7 +136,7 @@ async def search(
 
     if "search_tool_name" in data and data["search_tool_name"]:
         data["model"] = data["search_tool_name"]
-        search_tool_name_value = data["search_tool_name"]
+        search_tool_name_value: Final = data["search_tool_name"]
 
         # Authorization check: verify key can access this search tool
         from litellm.proxy.auth.auth_checks import (
@@ -158,7 +160,7 @@ async def search(
                     user_api_key_cache,
                 )
 
-                team_object = await get_team_object(
+                team_object: Final = await get_team_object(
                     team_id=user_api_key_dict.team_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
@@ -181,13 +183,13 @@ async def search(
                 len(llm_router.search_tools),
             )
 
-            matching_tools = [
+            matching_tools: Final = [
                 tool for tool in llm_router.search_tools if tool.get("search_tool_name") == search_tool_name_value
             ]
 
             if matching_tools:
-                search_tool = matching_tools[0]
-                search_provider = search_tool.get("litellm_params", {}).get("search_provider")
+                search_tool: Final = matching_tools[0]
+                search_provider: Final = search_tool.get("litellm_params", {}).get("search_provider")
 
                 if search_provider:
                     data["custom_llm_provider"] = search_provider
@@ -207,7 +209,7 @@ async def search(
         data["metadata"]["user_api_key_team_id"] = user_api_key_dict.team_id
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -282,7 +284,7 @@ async def list_search_tools(
     from litellm.proxy.proxy_server import llm_router
 
     try:
-        search_tools_list = []
+        search_tools_list: Final = []
 
         if llm_router is not None and hasattr(llm_router, "search_tools"):
             for tool in llm_router.search_tools:
