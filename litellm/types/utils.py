@@ -1220,7 +1220,7 @@ ChatCompletionMessage(content='This is a test', role='assistant', function_call=
 def add_provider_specific_fields(object: BaseModel, provider_specific_fields: dict[str, Any] | None) -> None:
     if not provider_specific_fields:  # set if provider_specific_fields is not empty
         return
-    object.provider_specific_fields = provider_specific_fields
+    object.provider_specific_fields = provider_specific_fields  # rebind-ok: sets the field on the caller's model
 
 
 class Message(SafeAttributeModel, OpenAIObject):

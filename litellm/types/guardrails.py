@@ -171,15 +171,13 @@ class GuardrailItem(BaseModel):
         enabled_roles: list[Role] | None = default_roles,
         callback_args: dict[str, dict] | None = None,
     ) -> None:
-        if callback_args is None:
-            callback_args = {}
         super().__init__(
             callbacks=callbacks,
             default_on=default_on,
             logging_only=logging_only,
             guardrail_name=guardrail_name,
             enabled_roles=enabled_roles,
-            callback_args=callback_args,
+            callback_args=callback_args or {},
         )
 
 
