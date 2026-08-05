@@ -11,8 +11,8 @@ from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_error_info,
 )
 from litellm.router_utils.cooldown_handlers import (
-    _first_present,
-    _set_cooldown_deployments,
+    _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper, used across router_utils
+    _set_cooldown_deployments,  # pyright: ignore[reportPrivateUsage] - shared helper, used across router_utils
     is_advisor_orchestration_failure,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
@@ -75,10 +75,11 @@ def _trigger_cooldown_for_failed_deployment(
         exception_headers: Final = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
             original_exception=exception
         )
+        _get_retry_after: Final = (
+            litellm.utils._get_retry_after_from_exception_header  # pyright: ignore[reportPrivateUsage] - as router.py
+        )
         header_cooldown: Final = (
-            litellm.utils._get_retry_after_from_exception_header(response_headers=exception_headers)
-            if exception_headers is not None
-            else None
+            _get_retry_after(response_headers=exception_headers) if exception_headers is not None else None
         )
         time_to_cooldown: Final = (
             deployment_cooldown
