@@ -81,6 +81,86 @@ def test_basic_anyof_conversion():
     assert schema == expected
 
 
+def test_anyof_conversion_with_null_before_other_branches():
+    schema = {
+        "type": "object",
+        "properties": {
+            "example": {
+                "anyOf": [{"type": "null"}, {"type": "null"}, {"type": "string"}]
+            }
+        },
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "string", "nullable": True}]}},
+    }
+    assert schema == expected
+
+
+def test_build_vertex_schema_preserves_oneof_unions():
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "$defs": {
+            "Card": {
+                "type": "object",
+                "properties": {"kind": {"type": "string"}, "number": {"type": "string"}},
+                "required": ["kind", "number"],
+            },
+            "Bank": {
+                "type": "object",
+                "properties": {"kind": {"type": "string"}, "iban": {"type": "string"}},
+                "required": ["kind", "iban"],
+            },
+        },
+        "type": "object",
+        "properties": {
+            "payment": {
+                "oneOf": [{"$ref": "#/$defs/Card"}, {"$ref": "#/$defs/Bank"}],
+                "discriminator": {"propertyName": "kind"},
+            }
+        },
+        "required": ["payment"],
+    }
+
+    result = _build_vertex_schema(parameters)
+
+    assert result["properties"]["payment"] == {
+        "anyOf": [
+            {
+                "type": "object",
+                "properties": {"kind": {"type": "string"}, "number": {"type": "string"}},
+                "required": ["kind", "number"],
+            },
+            {
+                "type": "object",
+                "properties": {"kind": {"type": "string"}, "iban": {"type": "string"}},
+                "required": ["kind", "iban"],
+            },
+        ]
+    }
+
+
+def test_build_vertex_schema_converts_null_branch_inside_oneof():
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "value": {"oneOf": [{"type": "string"}, {"type": "null"}]}
+        },
+    }
+
+    result = _build_vertex_schema(parameters)
+
+    assert result["properties"]["value"] == {
+        "anyOf": [{"type": "string", "nullable": True}]
+    }
+
+
 def test_nested_anyof_conversion():
     """Test nested conversion with 'anyOf' inside properties."""
     schema = {
