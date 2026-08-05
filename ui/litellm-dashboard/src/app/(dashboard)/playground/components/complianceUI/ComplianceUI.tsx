@@ -45,6 +45,7 @@ import {
 } from "lucide-react";
 import Papa from "papaparse";
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { isImeComposing } from "../../utils/keyboard";
 
 const CATEGORY_ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   lock: Lock,
@@ -522,6 +523,7 @@ export default function ComplianceUI({
   }, [accessToken, quickTestInput, selectedPolicies, selectedGuardrails, backendMode, fixedModel, requestProxyBaseUrl]);
 
   const handleQuickTestKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isImeComposing(e)) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       runQuickTest();
