@@ -16,7 +16,7 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    name: "Build & Push to GCR (${{ matrix.environment }})"
+    name: "Build & Push to GCR (env: ${{ matrix.environment }}, project: ${{ matrix.project }})"
     strategy:
       matrix:
         include:
@@ -26,6 +26,9 @@ jobs:
           - environment: sandbox
             project: xyne-dev-461113
             secret_key: SERVICE_ACCOUNT_KEY_SANDBOX
+          - environment: prod
+            project: xyne-infra-external
+            secret_key: SERVICE_ACCOUNT_KEY_EXTERNAL
 
     steps:
       - name: Checkout
