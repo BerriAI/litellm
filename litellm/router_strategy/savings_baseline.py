@@ -27,8 +27,6 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
-# One long cached prompt with a short completion: the shape auto-routed traffic takes,
-# and the shape whose ordering a flat-rate comparison gets wrong.
 _REFERENCE_REQUEST: Final = Usage(
     prompt_tokens=20_000,
     completion_tokens=1_000,
@@ -143,10 +141,10 @@ def _most_expensive(router: "Router", candidates: Iterable[Baseline]) -> Baselin
 def resolve_baseline(router: "Router", group_names: Iterable[str]) -> Baseline | None:
     """The derived baseline for a router whose hardest tier offers ``group_names``.
 
-    Derived per call rather than cached: the parent router adds and removes deployments
-    while it runs, so a baseline pinned on first use would keep naming a model the
-    router no longer has, and a pricier one added later could never become the baseline.
-    Resolving costs tens of microseconds against a network call.
+    Holds no cache of its own; each pricing pass walks the pool, so the caller is
+    expected to bound how often it runs. The complexity router caches the result with a
+    TTL, which keeps a deployment added or removed at runtime able to change the
+    baseline while keeping this walk off the per-request hot path.
 
     Never raises. This is read on the routing path to decorate a request that is about
     to be served, and a dashboard's counterfactual is not worth failing a live request

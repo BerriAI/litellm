@@ -5235,15 +5235,12 @@ class TestConversationShapeDiscriminator:
 
 
 class TestSavingsBaselineOnDecision:
-    """The derived counterfactual rides on every routing decision.
-
-    The deciding instance records it because one model name can carry several
-    tag-scoped routers with different tier ladders, and by spend-write time which
-    of them routed the request is gone.
-    """
+    """The derived counterfactual rides on every routing decision, recorded by the
+    deciding instance because tag-scoped routers under one model name make a
+    spend-write-time lookup ambiguous."""
 
     @staticmethod
-    def _router_with_tiers(tiers: dict) -> ComplexityRouter:
+    def _router_with_tiers(tiers: dict, **kwargs) -> ComplexityRouter:
         parent = Router(
             model_list=[
                 {"model_name": "cheap", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
@@ -5255,33 +5252,109 @@ class TestSavingsBaselineOnDecision:
             model_name="savings-router",
             litellm_router_instance=parent,
             complexity_router_config={"tiers": tiers},
+            **kwargs,
         )
 
     def test_derives_the_priciest_model_of_the_reasoning_tier(self):
         router = self._router_with_tiers({"SIMPLE": "cheap", "MEDIUM": "mid", "REASONING": ["cheap", "top"]})
-        assert router.savings_baseline_model == "anthropic/claude-fable-5"
+        assert router.savings_baseline.model == "anthropic/claude-fable-5"
 
     def test_falls_back_to_the_hardest_configured_tier_when_reasoning_is_absent(self):
-        """A deployment that only defines SIMPLE and MEDIUM is still measured against
-        the best it could actually have picked, not a tier it never had."""
+        """A router defining only SIMPLE and MEDIUM is measured against the best it
+        could actually have picked, not a tier it never had."""
         router = self._router_with_tiers({"SIMPLE": "cheap", "MEDIUM": "mid"})
-        assert router.savings_baseline_model == "anthropic/claude-sonnet-5"
+        assert router.savings_baseline.model == "anthropic/claude-sonnet-5"
 
     def test_a_configured_proxy_wide_baseline_disables_derivation(self, monkeypatch):
-        """When the operator names the counterfactual, deriving one underneath would
-        price candidates per decision only to be ignored by the spend writer."""
         monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", "claude-opus-5")
         router = self._router_with_tiers({"SIMPLE": "cheap", "REASONING": "top"})
-        assert router.savings_baseline_model is None
+        assert router.savings_baseline is None
 
-    def test_the_decision_record_carries_the_derived_baseline(self):
+    def test_the_decision_record_carries_the_derived_baseline_and_its_deployment(self):
+        """The deployment id is what lets the spend writer price a baseline whose
+        deployment carries a configured rate instead of the public one."""
         router = self._router_with_tiers({"SIMPLE": "cheap", "REASONING": "top"})
+        expected_id = router.litellm_router_instance.get_model_list(model_name="top")[0]["model_info"]["id"]
         decision = router._build_routing_decision(routed_model="cheap", cause="heuristic_scorer")
         assert decision["savings_baseline_model"] == "anthropic/claude-fable-5"
+        assert decision["savings_baseline_deployment_id"] == expected_id
 
     def test_an_unresolvable_baseline_is_omitted_not_recorded_as_none(self):
-        """A key with a null value would survive JSON serialization and reach the spend
-        writer as a non-string, so nothing beats absence."""
         router = self._router_with_tiers({"SIMPLE": "utter-nonsense-no-provider-owns"})
         decision = router._build_routing_decision(routed_model="cheap", cause="heuristic_scorer")
         assert "savings_baseline_model" not in decision
+        assert "savings_baseline_deployment_id" not in decision
+
+    def test_a_router_built_without_derivation_records_nothing(self):
+        """The routing-test preview returns the decision verbatim to callers who are
+        only authorized for the classifier and embedding models, so its router must
+        not resolve tier groups into deployment mappings."""
+        router = self._router_with_tiers({"SIMPLE": "cheap", "REASONING": "top"}, derive_savings_baseline=False)
+        assert router.savings_baseline is None
+        decision = router._build_routing_decision(routed_model="cheap", cause="heuristic_scorer")
+        assert "savings_baseline_model" not in decision
+        assert "savings_baseline_deployment_id" not in decision
+
+    def test_the_routing_test_preview_builds_its_router_without_derivation(self):
+        import inspect
+
+        from litellm.proxy.management_endpoints import auto_router_endpoints
+
+        source = inspect.getsource(auto_router_endpoints.preview_auto_router_routing)
+        assert "derive_savings_baseline=False" in source
+
+
+class TestSavingsBaselineCache:
+    """Derivation walks and prices the hardest tier's pool, so the TTL bounds it to
+    one walk per window per router instead of one per request."""
+
+    @staticmethod
+    def _router_and_parent() -> tuple[ComplexityRouter, Router]:
+        parent = Router(
+            model_list=[
+                {"model_name": "cheap", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
+                {"model_name": "top", "litellm_params": {"model": "anthropic/claude-sonnet-5"}},
+            ]
+        )
+        router = ComplexityRouter(
+            model_name="savings-router",
+            litellm_router_instance=parent,
+            complexity_router_config={"tiers": {"SIMPLE": "cheap", "REASONING": ["cheap", "top"]}},
+        )
+        return router, parent
+
+    def test_a_deployment_change_inside_the_window_is_served_from_cache(self):
+        router, parent = self._router_and_parent()
+        assert router.savings_baseline.model == "anthropic/claude-sonnet-5"
+        parent.model_name_to_deployment_indices.clear()
+        assert router.savings_baseline.model == "anthropic/claude-sonnet-5"
+
+    def test_an_expired_window_re_derives_from_the_live_router(self):
+        """A cached answer must not outlive the window: once the groups no longer
+        resolve through the live router, an expired cache re-derives and reports
+        nothing rather than replaying a model the router lost."""
+        import time as time_module
+
+        from litellm.router_strategy.savings_baseline import Baseline
+
+        router, parent = self._router_and_parent()
+        parent.model_name_to_deployment_indices.clear()
+        router._savings_baseline_cache = (
+            time_module.monotonic() - 31.0,
+            Baseline("anthropic/claude-sonnet-5"),
+        )
+        assert router.savings_baseline is None
+
+    def test_the_configured_setting_bypasses_a_warm_cache(self, monkeypatch):
+        router, _ = self._router_and_parent()
+        assert router.savings_baseline.model == "anthropic/claude-sonnet-5"
+        monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", "claude-opus-5")
+        assert router.savings_baseline is None
+
+    def test_an_unresolvable_pool_is_cached_and_not_re_priced_per_request(self):
+        router, parent = self._router_and_parent()
+        parent.model_name_to_deployment_indices.clear()
+        router.config.tiers = {"SIMPLE": "utter-nonsense-no-provider-owns"}
+        assert router.savings_baseline is None
+        assert router._savings_baseline_cache is not None
+        assert router._savings_baseline_cache[1] is None

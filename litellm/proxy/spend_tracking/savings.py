@@ -298,6 +298,7 @@ def compute_autorouter_savings(
     usage: Usage,
     conversation_continuing: bool = True,
     selected_info: ModelInfo | None = None,
+    baseline_info: ModelInfo | None = None,
     cost_breakdown: Mapping[str, object] | None = None,
 ) -> float:
     """Net dollars the router saved, or cost, by serving this request on ``selected_model``.
@@ -341,9 +342,12 @@ def compute_autorouter_savings(
     if baseline == selected:
         return 0.0
     basis: Final = _pricing_basis(cost_breakdown)
-    baseline_info: Final = _model_info(baseline)
+    effective_baseline_info: Final = baseline_info if baseline_info is not None else _model_info(baseline)
     baseline_cost: Final = _cost_of_usage(
-        baseline, _baseline_usage(usage, conversation_continuing, baseline_info), baseline_info, basis
+        baseline,
+        _baseline_usage(usage, conversation_continuing, effective_baseline_info),
+        effective_baseline_info,
+        basis,
     )
     # Falls back to pricing the request only when the biller recorded nothing, which is
     # every row written before the breakdown carried its basis.
@@ -410,18 +414,14 @@ def compute_savings_spend(
     if usage is None or not model:
         return SavingsSpend(compression=compression, prompt_caching=prompt_caching)
 
-    # The counterfactual is one model an operator would have run instead of the router.
-    # `litellm_settings.autorouter_savings_baseline_model` wins when set; otherwise the
-    # baseline the deciding router derived from its hardest tier and recorded on its
-    # decision, so the driver is on by default for auto-routed traffic. Neither present
-    # means the driver is off; a routing decision is what says this request was
-    # auto-routed at all. Both are checked before anything is resolved, because every
-    # spend write reaches here and only auto-routed ones can produce a number.
+    # The configured `autorouter_savings_baseline_model` wins; otherwise the baseline
+    # the deciding router recorded on its decision; neither means the driver is off.
     decision: Final = routing_decision if isinstance(routing_decision, Mapping) else {}
     recorded: Final = decision.get("savings_baseline_model")
-    baseline_model: Final = litellm.autorouter_savings_baseline_model or (
-        recorded if isinstance(recorded, str) else None
-    )
+    recorded_id: Final = decision.get("savings_baseline_deployment_id")
+    configured: Final = litellm.autorouter_savings_baseline_model
+    baseline_model: Final = configured or (recorded if isinstance(recorded, str) else None)
+    baseline_id: Final = recorded_id if configured is None and isinstance(recorded_id, str) else None
     autorouter: Final = (
         compute_autorouter_savings(
             baseline_model=baseline_model,
@@ -431,7 +431,10 @@ def compute_savings_spend(
             # Absent means the router never recorded a shape, which is the conservative
             # reading: charge the cache write rather than claim a first turn's saving.
             conversation_continuing=decision.get("conversation_continuing") is not False,
-            selected_info=_effective_model_info(llm_router() if llm_router else None, model_id, model or ""),
+            selected_info=_effective_model_info(
+                (router_instance := llm_router() if llm_router else None), model_id, model or ""
+            ),
+            baseline_info=_effective_model_info(router_instance, baseline_id, baseline_model or ""),
             cost_breakdown=cost_breakdown,
         )
         if decision and baseline_model

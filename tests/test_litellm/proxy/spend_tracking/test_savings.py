@@ -617,8 +617,7 @@ def test_the_baseline_is_priced_on_the_basis_the_request_was_billed_at(basis, ex
 
 
 def test_a_baseline_recorded_on_the_decision_turns_the_driver_on():
-    """The router derives a default from its hardest tier and records it on the
-    decision, so an operator who configures nothing still sees the driver work."""
+    """An operator who configures nothing still sees the driver work."""
     result = compute_savings_spend(
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
@@ -631,15 +630,18 @@ def test_a_baseline_recorded_on_the_decision_turns_the_driver_on():
 
 
 def test_the_configured_baseline_overrides_the_recorded_one(monkeypatch):
-    """Config names what the operator would really have run; the derived value is only
-    a default underneath it."""
+    """The recorded baseline and its deployment id are both ignored under the setting."""
     monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", "claude-sonnet-5")
     with_override = compute_savings_spend(
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
         cache_read_input_tokens=0,
-        routing_decision={"conversation_continuing": True, "savings_baseline_model": "anthropic/claude-opus-5"},
+        routing_decision={
+            "conversation_continuing": True,
+            "savings_baseline_model": "anthropic/claude-opus-5",
+            "savings_baseline_deployment_id": "some-deployment-id",
+        },
         usage_object=_cached_usage_object(),
     )
     against_sonnet = compute_autorouter_savings(
@@ -659,7 +661,6 @@ def test_the_configured_baseline_overrides_the_recorded_one(monkeypatch):
 
 
 def test_a_non_string_recorded_baseline_is_ignored():
-    """The decision crosses a JSON boundary, so the writer must not trust its shape."""
     result = compute_savings_spend(
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
@@ -669,3 +670,45 @@ def test_a_non_string_recorded_baseline_is_ignored():
         usage_object=_cached_usage_object(),
     )
     assert result.autorouter == 0.0
+
+
+def test_a_recorded_baseline_deployment_prices_at_its_configured_rate():
+    """A hardest-tier deployment with a negotiated rate is what the traffic would
+    really have cost; pricing its model publicly misstates the saving."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "top",
+                "litellm_params": {
+                    "model": "anthropic/claude-opus-5",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+            },
+        ]
+    )
+    deployment_id = router.get_model_list(model_name="top")[0]["model_info"]["id"]
+    decision = {
+        "conversation_continuing": True,
+        "savings_baseline_model": "anthropic/claude-opus-5",
+        "savings_baseline_deployment_id": deployment_id,
+    }
+    with_deployment_rate = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        cache_read_input_tokens=0,
+        routing_decision=decision,
+        usage_object=_cached_usage_object(),
+        llm_router=lambda: router,
+    )
+    at_public_rate = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        cache_read_input_tokens=0,
+        routing_decision={k: v for k, v in decision.items() if k != "savings_baseline_deployment_id"},
+        usage_object=_cached_usage_object(),
+        llm_router=lambda: router,
+    )
+    assert with_deployment_rate.autorouter > at_public_rate.autorouter

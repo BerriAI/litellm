@@ -32155,6 +32155,8 @@ export interface components {
              * @enum {string}
              */
             router_type?: "complexity" | "adaptive" | "quality";
+            /** Savings Baseline Deployment Id */
+            savings_baseline_deployment_id?: string;
             /** Savings Baseline Model */
             savings_baseline_model?: string;
             /** Score */

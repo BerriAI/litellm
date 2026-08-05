@@ -170,7 +170,6 @@ class TestDeploymentPricingOverrides:
         )
         assert resolve_baseline(router, ["cheap", "top"]).model == "anthropic/claude-opus-5"
 
-        # haiku configured 1000x above its public rate now outprices opus
         overridden = Router(
             model_list=[
                 {

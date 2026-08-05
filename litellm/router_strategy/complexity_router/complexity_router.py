@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import random
 import re
+import time
 from collections.abc import Iterator, Mapping, Sequence
 from itertools import islice
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
 
     from litellm.router import Router
     from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
+    from litellm.router_strategy.savings_baseline import Baseline
     from litellm.types.router import PreRoutingHookResponse
 else:
     Router = Any
@@ -157,6 +159,8 @@ def _effective_turn_off_message_logging(request_kwargs: Mapping[str, Any] | None
         "turn_off_message_logging"
     )
 
+
+_SAVINGS_BASELINE_TTL_SECONDS: Final = 30.0
 
 _REMINDER_OPEN: Final = "<system-reminder>"
 _REMINDER_CLOSE: Final = "</system-reminder>"
@@ -417,6 +421,7 @@ class ComplexityRouter(CustomLogger):
         litellm_router_instance: Router,
         complexity_router_config: dict[str, Any] | None = None,
         default_model: str | None = None,
+        derive_savings_baseline: bool = True,
     ):
         """
         Initialize ComplexityRouter.
@@ -426,9 +431,13 @@ class ComplexityRouter(CustomLogger):
             litellm_router_instance: The LiteLLM Router instance.
             complexity_router_config: Optional configuration dict from proxy config.
             default_model: Optional default model to use if tier cannot be determined.
+            derive_savings_baseline: False for callers whose decisions are never spend
+                tracked, such as the routing-test preview, where the resolved baseline
+                would leak deployment mappings the caller was not authorized for.
         """
         self.model_name = model_name
         self.litellm_router_instance = litellm_router_instance
+        self._derive_savings_baseline = derive_savings_baseline
 
         # Parse config - always create a new instance to avoid singleton mutation
         if complexity_router_config:
@@ -474,6 +483,7 @@ class ComplexityRouter(CustomLogger):
         self.adaptive_router: AdaptiveRouter | None = None
         self._model_tiers: dict[str, tuple[ComplexityTier, ...]] = {}
         self._adaptive_init_attempted = False
+        self._savings_baseline_cache: tuple[float, Baseline | None] | None = None
 
         verbose_router_logger.debug("ComplexityRouter initialized for %s with tiers: %s", model_name, self.config.tiers)
 
@@ -491,22 +501,27 @@ class ComplexityRouter(CustomLogger):
         return ()
 
     @property
-    def savings_baseline_model(self) -> str | None:
-        """The derived model this router's savings are measured against, or ``None``.
+    def savings_baseline(self) -> Baseline | None:
+        """The derived counterfactual this router's savings are measured against.
 
-        ``None`` whenever `litellm_settings.autorouter_savings_baseline_model` is set:
-        the spend writer reads that setting directly and it overrides anything a router
-        would derive, so deriving underneath it would price candidates per decision
-        only to be ignored. The property re-checks the setting per call because it is a
-        module attribute an operator can flip on a running proxy.
+        ``None`` when `litellm_settings.autorouter_savings_baseline_model` is set (the
+        spend writer reads that setting directly and it wins) or when this router was
+        built with ``derive_savings_baseline=False``. TTL-cached, ``None`` results
+        included, so the pool walk stays off the per-request hot path while a
+        deployment change still lands within the window.
         """
         import litellm
         from litellm.router_strategy.savings_baseline import resolve_baseline
 
-        if litellm.autorouter_savings_baseline_model is not None:
+        if not self._derive_savings_baseline or litellm.autorouter_savings_baseline_model is not None:
             return None
+        now: Final = time.monotonic()
+        cached: Final = self._savings_baseline_cache
+        if cached is not None and now - cached[0] < _SAVINGS_BASELINE_TTL_SECONDS:
+            return cached[1]
         baseline: Final = resolve_baseline(self.litellm_router_instance, self._hardest_tier_models())
-        return baseline.model if baseline is not None else None
+        self._savings_baseline_cache = (now, baseline)
+        return baseline
 
     def _estimate_tokens(self, text: str) -> int:
         """
@@ -747,11 +762,10 @@ class ComplexityRouter(CustomLogger):
             cause=cause,
             conversation_continuing=conversation_continuing,
         )
-        # Recorded here rather than resolved at spend-write time: one model name can
-        # carry several tag-scoped routers with different tier ladders, and only the
-        # deciding instance knows which of them routed the request.
-        if (baseline := self.savings_baseline_model) is not None:
-            decision["savings_baseline_model"] = baseline
+        if (baseline := self.savings_baseline) is not None:
+            decision["savings_baseline_model"] = baseline.model
+            if baseline.deployment_id is not None:
+                decision["savings_baseline_deployment_id"] = baseline.deployment_id
         if tier is not None:
             decision["tier"] = tier.value
         if score is not None:
