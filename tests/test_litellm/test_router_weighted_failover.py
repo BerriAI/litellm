@@ -56,16 +56,12 @@ class TestGetExcludedFilteredDeployments:
         # error. Returning the original list here would re-include the
         # just-failed deployment and let weighted failover re-pick it.
         deps = [_make_dep("a"), _make_dep("b")]
-        result = _get_excluded_filtered_deployments(
-            deps, excluded_deployment_ids=["a", "b"]
-        )
+        result = _get_excluded_filtered_deployments(deps, excluded_deployment_ids=["a", "b"])
         assert result == []
 
     def test_excluded_set_with_unknown_ids(self):
         deps = [_make_dep("a"), _make_dep("b")]
-        result = _get_excluded_filtered_deployments(
-            deps, excluded_deployment_ids=["zzz"]
-        )
+        result = _get_excluded_filtered_deployments(deps, excluded_deployment_ids=["zzz"])
         assert len(result) == 2
 
     def test_handles_missing_model_info(self):
@@ -98,6 +94,38 @@ def test_set_failed_deployment_id_on_exception():
     assert getattr(exc, "failed_deployment_id", None) == "dep-a"
     router._set_failed_deployment_id_on_exception(exc, _make_dep("dep-b"))
     assert exc.failed_deployment_id == "dep-a"
+
+
+@pytest.mark.asyncio
+async def test_ageneric_api_call_with_fallbacks_helper_stamps_dynamic_id_for_clientside_credentials():
+    """A client-side-credential call (tenant-supplied api_key) generates a dynamic
+    deployment id distinct from the shared static deployment. Stamping the static id
+    instead would let one tenant's bad credentials cool down the deployment every
+    other tenant sharing this config relies on."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "test-key"},
+                "model_info": {"id": "dep-a"},
+            }
+        ],
+    )
+
+    async def _failing_original_function(**kwargs):
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await router._ageneric_api_call_with_fallbacks_helper(
+            model="test-model",
+            original_generic_function=_failing_original_function,
+            api_key="tenant-supplied-key",
+            litellm_metadata={"model_group": "test-model"},
+        )
+
+    failed_deployment_id = getattr(exc_info.value, "failed_deployment_id", None)
+    assert failed_deployment_id is not None
+    assert failed_deployment_id != "dep-a"
 
 
 @pytest.mark.asyncio
@@ -641,12 +669,8 @@ async def test_maybe_run_weighted_failover_skips_when_remaining_all_in_cooldown(
             input_kwargs={},
         )
 
-    assert (
-        result is None
-    ), "Should return None when all remaining deployments are in cooldown"
-    assert (
-        not run_async_fallback_called
-    ), "run_async_fallback must NOT be called when no healthy deployments remain"
+    assert result is None, "Should return None when all remaining deployments are in cooldown"
+    assert not run_async_fallback_called, "run_async_fallback must NOT be called when no healthy deployments remain"
 
 
 @pytest.mark.asyncio
@@ -705,9 +729,7 @@ async def test_maybe_run_weighted_failover_proceeds_when_one_healthy_remains(
         )
 
     assert result == "ok from C"
-    assert (
-        run_async_fallback_called
-    ), "run_async_fallback must be called when a healthy deployment remains"
+    assert run_async_fallback_called, "run_async_fallback must be called when a healthy deployment remains"
 
 
 @pytest.mark.asyncio
