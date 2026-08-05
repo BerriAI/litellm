@@ -631,6 +631,49 @@ class ComplexityRouterConfig(BaseModel):
             return tuple(definition.name for definition in self.tier_definitions)
         return tuple(tier.value for tier in TIER_SEVERITY_ORDER)
 
+    def _tier_definition_conflicts(self) -> tuple[str, ...]:
+        """Error messages for config features that cannot coexist with a custom tier set."""
+        order_dependent: Final = tuple(
+            label
+            for label, enabled in (
+                ("adaptive", self.adaptive),
+                ("session_affinity", self.session_affinity),
+                ("escalation_keywords", bool(self.escalation_keywords)),
+                ("plugins", bool(self.plugins)),
+            )
+            if enabled
+        )
+        wholesale_prompt: Final = self.classifier_llm_config is not None and (
+            self.classifier_llm_config.system_prompt is not None
+        )
+        return tuple(
+            message
+            for present, message in (
+                (
+                    bool(order_dependent),
+                    f"{', '.join(order_dependent)} cannot be combined with tier_definitions: these features "
+                    "rely on the built-in tier severity order, which a custom tier set does not define",
+                ),
+                (
+                    wholesale_prompt,
+                    "classifier_llm_config.system_prompt cannot be combined with tier_definitions: a wholesale "
+                    "replacement prompt drops the defined-tier bullets and the trust boundary; use "
+                    "classification_prompt, which replaces only the opening instructions and keeps both",
+                ),
+                (
+                    self.classifier_fallback == "default_model",
+                    "classifier_fallback 'default_model' cannot be combined with tier_definitions: fallback_tier "
+                    "is where a custom-tier router routes when the classifier fails",
+                ),
+                (
+                    bool(self.tier_labels),
+                    "tier_labels cannot be combined with tier_definitions: labels rename the built-in tiers, "
+                    "which a custom tier set replaces; name the tiers directly in tier_definitions",
+                ),
+            )
+            if present
+        )
+
     @model_validator(mode="after")
     def _validate_tier_definitions(self) -> "ComplexityRouterConfig":
         if self.tier_definitions is None:
@@ -652,37 +695,9 @@ class ComplexityRouterConfig(BaseModel):
             raise ValueError(
                 "tier_definitions requires classifier_type 'llm': the heuristic scorer only produces the built-in tiers"
             )
-        order_dependent: Final = tuple(
-            label
-            for label, enabled in (
-                ("adaptive", self.adaptive),
-                ("session_affinity", self.session_affinity),
-                ("escalation_keywords", bool(self.escalation_keywords)),
-                ("plugins", bool(self.plugins)),
-            )
-            if enabled
-        )
-        if order_dependent:
-            raise ValueError(
-                f"{', '.join(order_dependent)} cannot be combined with tier_definitions: these features "
-                "rely on the built-in tier severity order, which a custom tier set does not define"
-            )
-        if self.classifier_llm_config is not None and self.classifier_llm_config.system_prompt is not None:
-            raise ValueError(
-                "classifier_llm_config.system_prompt cannot be combined with tier_definitions: a wholesale "
-                "replacement prompt drops the defined-tier bullets and the trust boundary; use "
-                "classification_prompt, which replaces only the opening instructions and keeps both"
-            )
-        if self.classifier_fallback == "default_model":
-            raise ValueError(
-                "classifier_fallback 'default_model' cannot be combined with tier_definitions: fallback_tier "
-                "is where a custom-tier router routes when the classifier fails"
-            )
-        if self.tier_labels:
-            raise ValueError(
-                "tier_labels cannot be combined with tier_definitions: labels rename the built-in tiers, "
-                "which a custom tier set replaces; name the tiers directly in tier_definitions"
-            )
+        conflicts: Final = self._tier_definition_conflicts()
+        if conflicts:
+            raise ValueError(conflicts[0])
         defined: Final = frozenset(names)
         configured: Final = frozenset(self.tiers)
         missing: Final = tuple(sorted(defined - configured))
