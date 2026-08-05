@@ -5035,6 +5035,11 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypa
         "_runtime_registered_model_cost",
         dict(litellm_utils._runtime_registered_model_cost),
     )
+    # Only the recorded half is under test here; the live-router rebuild is covered
+    # in test_router_model_cost_isolation.py. Routers built by earlier tests in this
+    # process stay in the weak set until they are collected, so leaving the callback
+    # installed would make this depend on when that happens.
+    monkeypatch.setattr(litellm_utils._LiveDeploymentReplay, "callback", None)
 
     saved_model_cost = litellm.model_cost
     try:
