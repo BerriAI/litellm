@@ -50710,7 +50710,9 @@
         "mode": "chat",
         "comment": "Open multilingual MoE model for reasoning, agentic tool use, and long-context work with strong Korean capabilities",
         "deprecation_date": "2026-08-20",
-        "source": "https://api.friendli.ai/serverless/v1/models"
+        "source": "https://api.friendli.ai/serverless/v1/models",
+        "supports_vision": false,
+        "supports_image_input": false
     },
     "friendliai/MiniMaxAI/MiniMax-M2.5": {
         "litellm_provider": "friendliai",
@@ -50729,7 +50731,9 @@
         "supports_tool_choice": true,
         "mode": "chat",
         "comment": "Prior MiniMax coding model for agent workflows, office edits, and automation",
-        "source": "https://api.friendli.ai/serverless/v1/models"
+        "source": "https://api.friendli.ai/serverless/v1/models",
+        "supports_vision": false,
+        "supports_image_input": false
     },
     "friendliai/deepseek-ai/DeepSeek-V3.2": {
         "litellm_provider": "friendliai",
@@ -50750,7 +50754,9 @@
         "supports_system_messages": true,
         "mode": "chat",
         "comment": "DeepSeek chat model for instruction following, coding, and analysis",
-        "source": "https://api.friendli.ai/serverless/v1/models"
+        "source": "https://api.friendli.ai/serverless/v1/models",
+        "supports_vision": false,
+        "supports_image_input": false
     },
     "friendliai/zai-org/GLM-5.1": {
         "litellm_provider": "friendliai",
@@ -50770,7 +50776,9 @@
         "supports_system_messages": true,
         "mode": "chat",
         "comment": "Strong GLM coding model for agentic engineering, terminals, and repository generation",
-        "source": "https://api.friendli.ai/serverless/v1/models"
+        "source": "https://api.friendli.ai/serverless/v1/models",
+        "supports_vision": false,
+        "supports_image_input": false
     },
     "friendliai/google/gemma-4-31B-it": {
         "litellm_provider": "friendliai",
@@ -50810,6 +50818,8 @@
         "supports_tool_choice": true,
         "mode": "chat",
         "comment": "Open flagship GLM for long-horizon coding agents and million-token context work",
-        "source": "https://api.friendli.ai/serverless/v1/models"
+        "source": "https://api.friendli.ai/serverless/v1/models",
+        "supports_vision": false,
+        "supports_image_input": false
     }
 }
