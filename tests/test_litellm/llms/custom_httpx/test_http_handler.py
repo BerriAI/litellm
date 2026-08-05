@@ -885,3 +885,42 @@ async def test_assigned_async_client_is_not_replaced():
     replacement = MagicMock()
     handler.client = replacement
     assert handler.client is replacement
+
+
+def test_concurrent_sync_heal_creates_exactly_one_replacement():
+    class GatedHealHandler(HTTPHandler):
+        def __init__(self):
+            self.heal_started = threading.Event()
+            self.release_heal = threading.Event()
+            self.heal_calls = 0
+            super().__init__(timeout=7)
+
+        def create_client(self) -> httpx.Client:
+            if hasattr(self, "_client"):
+                self.heal_calls += 1
+                self.heal_started.set()
+                assert self.release_heal.wait(timeout=5)
+            return super().create_client()
+
+    handler = GatedHealHandler()
+    handler.client.close()
+
+    seen = []
+
+    def grab_client():
+        seen.append(handler.client)
+
+    first = threading.Thread(target=grab_client)
+    second = threading.Thread(target=grab_client)
+    first.start()
+    assert handler.heal_started.wait(timeout=5)
+    second.start()
+    second.join(timeout=0.3)
+    handler.release_heal.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert handler.heal_calls == 1
+    assert seen[0] is seen[1]
+    assert not seen[0].is_closed
+    handler.close()
