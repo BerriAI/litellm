@@ -2664,7 +2664,55 @@ def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
     return None
 
 
-def register_model(model_cost: str | dict):
+_runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
+
+
+class _LiveDeploymentReplay:
+    """Single-slot holder for the callback that rebuilds live router deployments.
+
+    A class attribute rather than a module global so there is one writer and one
+    reader, and neither needs a ``global`` statement.
+    """
+
+    callback: Callable[[], None] | None = None
+
+
+def set_live_deployment_replay(replay: Callable[[], None]) -> None:
+    """Install the callback that re-asserts live router deployments after a refresh.
+
+    ``litellm.router`` installs this at import time. The seam exists because the
+    deployment metadata a refresh has to restore belongs to whichever Router
+    objects are alive at that moment, which this module cannot see, and importing
+    the router here would be circular.
+    """
+    _LiveDeploymentReplay.callback = replay
+
+
+def reapply_runtime_model_cost_registrations() -> None:
+    """Re-apply runtime model metadata on top of a freshly adopted cost map.
+
+    Adopting a new catalog replaces ``litellm.model_cost`` wholesale, which on
+    its own discards everything registered at runtime: the deployment
+    ``model_info`` the Router registers from ``model_list``, and pricing
+    overrides passed to ``register_model``. Both are re-applied here so a price
+    data reload only updates pricing rather than erasing operator-supplied model
+    metadata.
+
+    The two are restored differently, and the difference is what keeps this
+    bounded. Deployment metadata is re-derived from the routers that are alive
+    right now, so a deployment that has been deleted or repointed, and a router
+    that has been discarded, are simply not part of the rebuild; nothing has to
+    withdraw them and nothing accumulates. Only ``register_model`` calls that
+    have no such owner are recorded and replayed, and a registration describing
+    a single request opts out of even that.
+    """
+    if _LiveDeploymentReplay.callback is not None:
+        _LiveDeploymentReplay.callback()
+    if _runtime_registered_model_cost:
+        register_model(model_cost=dict(_runtime_registered_model_cost))  # mutable-ok: snapshot, replay rewrites it
+
+
+def register_model(model_cost: str | dict, *, persist_across_reloads: bool = True):
     """
     Register new / Override existing models (and their pricing) to specific providers.
     Provide EITHER a model cost dictionary or a url to a hosted json blob
@@ -2678,6 +2726,12 @@ def register_model(model_cost: str | dict):
             "mode": "chat"
         },
     }
+
+    ``persist_across_reloads`` controls whether the registration is replayed
+    when the cost map is refreshed. It defaults to True because a caller
+    registering a model is declaring durable intent. Pass False for a
+    registration that only describes one request, so it is dropped rather than
+    re-asserted over every future catalog.
     """
 
     loaded_model_cost = {}
@@ -2686,6 +2740,11 @@ def register_model(model_cost: str | dict):
         loaded_model_cost = model_cost
     elif isinstance(model_cost, str):
         loaded_model_cost = litellm.get_model_cost_map(url=model_cost)
+
+    if persist_across_reloads:
+        _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
+        for _registered_key, _registered_value in _registrations.items():
+            _runtime_registered_model_cost[_registered_key] = dict(_registered_value)  # mutable-ok: caller-owned
 
     # Providers that trigger side effects (e.g., OAuth flows) when get_model_info is called
     # Skip get_model_info for these providers during model registration
