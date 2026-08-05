@@ -498,7 +498,7 @@ async def _update_database_and_spend_counters(
     request_tags: list[str] | None = None,
 ) -> None:
     try:
-        await proxy_logging_obj.db_spend_update_writer.update_database(
+        spend_log_request_id = await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key,
             response_cost=response_cost,
             user_id=user_id,
@@ -534,6 +534,7 @@ async def _update_database_and_spend_counters(
             budget_reservation=budget_reservation,
             end_user_id=end_user_id,
             tags=request_tags,
+            request_id=spend_log_request_id,
         )
     except Exception:
         if budget_reservation is not None:
