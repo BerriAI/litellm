@@ -1028,6 +1028,7 @@ class LiteLLMProxyRequestSetup:
         timeout: Final = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
         if timeout is not None:
             data["timeout"] = timeout
+            data["client_side_timeout"] = True
 
         stream_timeout: Final = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers)
         if stream_timeout is not None:

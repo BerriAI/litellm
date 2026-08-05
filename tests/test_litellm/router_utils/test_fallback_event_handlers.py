@@ -334,6 +334,49 @@ class TestTriggerCooldownForFailedDeployment:
 
             mock_set_cooldown.assert_called_once()
 
+    def test_skips_client_side_timeout_408(self):
+        """The proxy's x-litellm-timeout header lets a caller set an arbitrarily short
+        timeout, which litellm.Timeout reports as status 408 regardless of the
+        deployment's actual health. Without this guard, a caller could force a 408 on
+        every deployment in the fallback chain from a single request."""
+        mock_router = MagicMock()
+        mock_router.cooldown_time = 60.0
+        mock_router.get_model_info.return_value = None
+
+        exc = litellm.Timeout(message="timeout", model="gpt-4", llm_provider="openai")
+        exc.failed_deployment_id = "fallback-deployment"
+
+        with (
+            patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown,
+            patch(
+                "litellm.router_utils.fallback_event_handlers.increment_deployment_failures_for_current_minute"
+            ) as mock_increment,
+        ):
+            _trigger_cooldown_for_failed_deployment(
+                litellm_router=mock_router,
+                kwargs={"client_side_timeout": True},
+                exception=exc,
+            )
+
+            mock_set_cooldown.assert_not_called()
+            mock_increment.assert_not_called()
+
+    def test_still_cools_down_408_without_client_side_timeout_flag(self):
+        """The client-side-timeout guard is scoped to caller-supplied timeouts only: a
+        408 that did not come from x-litellm-timeout (no client_side_timeout in kwargs)
+        must still cool down the deployment as before."""
+        mock_router = MagicMock()
+        mock_router.cooldown_time = 60.0
+        mock_router.get_model_info.return_value = None
+
+        exc = litellm.Timeout(message="timeout", model="gpt-4", llm_provider="openai")
+        exc.failed_deployment_id = "fallback-deployment"
+
+        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+            _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
+
+            mock_set_cooldown.assert_called_once()
+
 
 class TestRunAsyncFallbackTriggersCooldown:
     class RouterWithLoggingKwarg:

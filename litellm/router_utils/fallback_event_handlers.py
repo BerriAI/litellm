@@ -71,6 +71,17 @@ def _trigger_cooldown_for_failed_deployment(
             )
             return
 
+        # The proxy's `x-litellm-timeout` header lets a caller set an arbitrarily short
+        # timeout, which litellm.Timeout reports as status 408 regardless of the deployment's
+        # actual health. Left unguarded, a caller could force a 408 on every deployment in
+        # the fallback chain from a single request with a near-zero timeout.
+        if kwargs.get("client_side_timeout") and cast_exception_status_to_int(exception_status) == 408:
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment: a caller-supplied "
+                "x-litellm-timeout caused this 408, not deployment health."
+            )
+            return
+
         # Only Router._set_failed_deployment_id_on_exception()'s server-stamped id is
         # trusted here: a metadata-bucket lookup (e.g. "metadata"/"litellm_metadata")
         # can't reliably tell a caller-supplied bucket from a router-authored one

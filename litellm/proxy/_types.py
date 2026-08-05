@@ -4000,6 +4000,10 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     stream_timeout: float | None
     user: str | None
     num_retries: int | None
+    # True when `timeout` came from the caller-controlled `x-litellm-timeout` header rather
+    # than deployment config, so a deliberately tiny value isn't treated as a deployment
+    # health signal (see cooldown_handlers._trigger_cooldown_for_failed_deployment).
+    client_side_timeout: bool
 
 
 class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
