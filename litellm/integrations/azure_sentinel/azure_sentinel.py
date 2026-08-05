@@ -16,6 +16,7 @@ import asyncio
 import os
 import time
 import traceback
+from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -64,15 +65,15 @@ class AzureSentinelLogger(CustomBatchLogger):
         """
         self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
-        resolved_dcr_immutable_id = dcr_immutable_id or os.getenv("AZURE_SENTINEL_DCR_IMMUTABLE_ID")
-        resolved_stream_name = stream_name or os.getenv("AZURE_SENTINEL_STREAM_NAME") or "Custom-LiteLLM"
-        resolved_audit_stream_name = (
+        resolved_dcr_immutable_id: Final = dcr_immutable_id or os.getenv("AZURE_SENTINEL_DCR_IMMUTABLE_ID")
+        resolved_stream_name: Final = stream_name or os.getenv("AZURE_SENTINEL_STREAM_NAME") or "Custom-LiteLLM"
+        resolved_audit_stream_name: Final = (
             audit_stream_name or os.getenv("AZURE_SENTINEL_AUDIT_STREAM_NAME") or resolved_stream_name
         )
-        resolved_endpoint = endpoint or os.getenv("AZURE_SENTINEL_ENDPOINT")
-        resolved_tenant_id = tenant_id or os.getenv("AZURE_SENTINEL_TENANT_ID") or os.getenv("AZURE_TENANT_ID")
-        resolved_client_id = client_id or os.getenv("AZURE_SENTINEL_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID")
-        resolved_client_secret = (
+        resolved_endpoint: Final = endpoint or os.getenv("AZURE_SENTINEL_ENDPOINT")
+        resolved_tenant_id: Final = tenant_id or os.getenv("AZURE_SENTINEL_TENANT_ID") or os.getenv("AZURE_TENANT_ID")
+        resolved_client_id: Final = client_id or os.getenv("AZURE_SENTINEL_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID")
+        resolved_client_secret: Final = (
             client_secret or os.getenv("AZURE_SENTINEL_CLIENT_SECRET") or os.getenv("AZURE_CLIENT_SECRET")
         )
 
@@ -149,16 +150,16 @@ class AzureSentinelLogger(CustomBatchLogger):
         assert self.client_id is not None, "client_id is required"
         assert self.client_secret is not None, "client_secret is required"
 
-        token_url = f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token"
+        token_url: Final = f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token"
 
-        token_data = {
+        token_data: Final = {
             "client_id": self.client_id,
             "client_secret": self.client_secret,
             "scope": self.oauth_scope,
             "grant_type": "client_credentials",
         }
 
-        response = await self.async_httpx_client.post(
+        response: Final = await self.async_httpx_client.post(
             url=token_url,
             data=token_data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -167,9 +168,9 @@ class AzureSentinelLogger(CustomBatchLogger):
         if response.status_code != 200:
             raise Exception(f"Failed to get OAuth2 token: {response.status_code} - {response.text}")
 
-        token_response = response.json()
+        token_response: Final = response.json()
         self.oauth_token = token_response.get("access_token")
-        expires_in = token_response.get("expires_in", 3600)
+        expires_in: Final = token_response.get("expires_in", 3600)
 
         if not self.oauth_token:
             raise Exception("OAuth2 token response did not contain access_token")
@@ -191,7 +192,7 @@ class AzureSentinelLogger(CustomBatchLogger):
         """
         try:
             verbose_logger.debug("Azure Sentinel: Logging - Enters logging function for model %s", kwargs)
-            standard_logging_payload = kwargs.get("standard_logging_object", None)
+            standard_logging_payload: Final = kwargs.get("standard_logging_object", None)
 
             if standard_logging_payload is None:
                 verbose_logger.warning("Azure Sentinel: standard_logging_object not found in kwargs")
@@ -221,7 +222,7 @@ class AzureSentinelLogger(CustomBatchLogger):
                 "Azure Sentinel: Logging - Enters failure logging function for model %s",
                 kwargs,
             )
-            standard_logging_payload = kwargs.get("standard_logging_object", None)
+            standard_logging_payload: Final = kwargs.get("standard_logging_object", None)
 
             if standard_logging_payload is None:
                 verbose_logger.warning("Azure Sentinel: standard_logging_object not found in kwargs")
@@ -294,14 +295,14 @@ class AzureSentinelLogger(CustomBatchLogger):
             verbose_logger.debug("Azure Sentinel - about to flush %s %s", len(log_queue), log_type)
 
             # Get OAuth2 token
-            bearer_token = await self._get_oauth_token()
+            bearer_token: Final = await self._get_oauth_token()
 
             # Convert log queue to JSON array format expected by Logs Ingestion API
             # Each log entry should be a JSON object in the array
-            body = safe_dumps(log_queue)
+            body: Final = safe_dumps(log_queue)
 
             # Set headers for Logs Ingestion API
-            headers = {
+            headers: Final = {
                 "Authorization": f"Bearer {bearer_token}",
                 "Content-Type": "application/json",
             }

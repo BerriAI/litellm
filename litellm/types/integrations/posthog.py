@@ -1,6 +1,6 @@
-from typing import Any, Dict, TypedDict
+from typing import Any, Dict, Final, TypedDict
 
-POSTHOG_MAX_BATCH_SIZE = 100
+POSTHOG_MAX_BATCH_SIZE: Final = 100
 
 
 class PostHogEventPayload(TypedDict):

@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -44,7 +46,7 @@ def get_fal_ai_image_generation_config(model: str) -> BaseImageGenerationConfig:
     Returns:
         The appropriate configuration class for the specified model
     """
-    model_lower = model.lower()
+    model_lower: Final = model.lower()
 
     # Map model names to their corresponding configuration classes
     if "nano-banana" in model_lower or "gemini-25-flash-image" in model_lower:

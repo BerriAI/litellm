@@ -9,7 +9,7 @@ identifying ids are denied so an empty user_id can never select an
 unscoped query.
 """
 
-from typing import Any
+from typing import Any, Final
 
 from litellm.proxy._types import (
     UserAPIKeyAuth,
@@ -51,8 +51,8 @@ def build_owner_filter(
     if _user_has_admin_view(user_api_key_dict):
         return {}
 
-    user_id = user_api_key_dict.user_id
-    team_id = user_api_key_dict.team_id
+    user_id: Final = user_api_key_dict.user_id
+    team_id: Final = user_api_key_dict.team_id
 
     if user_id is not None and team_id is not None:
         return {
@@ -86,11 +86,11 @@ def can_access_resource(
     if _user_has_admin_view(user_api_key_dict):
         return True
 
-    user_id = user_api_key_dict.user_id
+    user_id: Final = user_api_key_dict.user_id
     if user_id is not None and created_by is not None and created_by == user_id:
         return True
 
-    team_id = user_api_key_dict.team_id
+    team_id: Final = user_api_key_dict.team_id
     if team_id is not None and resource_team_id is not None and resource_team_id == team_id:
         return True
 

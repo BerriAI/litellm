@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -12,7 +12,7 @@ from ..common_utils import (
     get_copilot_default_headers,
 )
 
-_MESSAGES_PROXY_API_VERSION = "2026-06-01"
+_MESSAGES_PROXY_API_VERSION: Final = "2026-06-01"
 
 
 class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
@@ -68,9 +68,9 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         # session, never the caller-supplied api_base. rstrip so a
         # tenant-specific base with a trailing slash does not yield a
         # double-slash URL once "/v1/messages" is appended downstream.
-        dynamic_api_base = (self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
+        dynamic_api_base: Final = (self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
         try:
-            dynamic_api_key = self.authenticator.get_api_key()
+            dynamic_api_key: Final = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
             raise AuthenticationError(
                 model=model,
@@ -79,7 +79,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             )
 
         # Merge Copilot headers with provided headers
-        copilot_headers = get_copilot_default_headers(dynamic_api_key)
+        copilot_headers: Final = get_copilot_default_headers(dynamic_api_key)
         for key, value in copilot_headers.items():
             if key not in headers:
                 headers[key] = value

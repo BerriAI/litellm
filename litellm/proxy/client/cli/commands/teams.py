@@ -1,6 +1,6 @@
 """Team management commands for LiteLLM CLI."""
 
-from typing import Any
+from typing import Any, Final
 
 import click
 import requests
@@ -17,13 +17,13 @@ def teams():
 
 def display_teams_table(teams: list[dict[str, Any]]) -> None:
     """Display teams in a formatted table"""
-    console = Console()
+    console: Final = Console()
 
     if not teams:
         console.print("No teams found for your user.")
         return
 
-    table = Table(title="Available Teams")
+    table: Final = Table(title="Available Teams")
     table.add_column("Index", style="cyan", no_wrap=True)
     table.add_column("Team Alias", style="magenta")
     table.add_column("Team ID", style="green")
@@ -64,15 +64,15 @@ def display_teams_table(teams: list[dict[str, Any]]) -> None:
 @click.pass_context
 def list(ctx: click.Context):
     """List teams that you belong to"""
-    client = Client(ctx.obj["base_url"], ctx.obj["api_key"])
+    client: Final = Client(ctx.obj["base_url"], ctx.obj["api_key"])
 
     try:
         # Use list() for simpler response structure (returns array directly)
-        teams = client.teams.list()
+        teams: Final = client.teams.list()
         display_teams_table(teams)
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
-        error_body = e.response.json()
+        error_body: Final = e.response.json()
         click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:
@@ -84,19 +84,19 @@ def list(ctx: click.Context):
 @click.pass_context
 def available(ctx: click.Context):
     """List teams that are available to join"""
-    client = Client(ctx.obj["base_url"], ctx.obj["api_key"])
+    client: Final = Client(ctx.obj["base_url"], ctx.obj["api_key"])
 
     try:
-        teams = client.teams.get_available()
+        teams: Final = client.teams.get_available()
         if teams:
-            console = Console()
+            console: Final = Console()
             console.print("\nAvailable Teams to Join:")
             display_teams_table(teams)
         else:
             click.echo("No available teams to join.")
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
-        error_body = e.response.json()
+        error_body: Final = e.response.json()
         click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -108,8 +108,8 @@ def available(ctx: click.Context):
 @click.pass_context
 def assign_key(ctx: click.Context, team_id: str | None):
     """Assign your current CLI key to a team"""
-    client = Client(ctx.obj["base_url"], ctx.obj["api_key"])
-    api_key = ctx.obj["api_key"]
+    client: Final = Client(ctx.obj["base_url"], ctx.obj["api_key"])
+    api_key: Final = ctx.obj["api_key"]
 
     if not api_key:
         click.echo("No API key found. Please login first using 'litellm login'")
@@ -127,7 +127,7 @@ def assign_key(ctx: click.Context, team_id: str | None):
             # Use interactive selection from auth module
             from .auth import prompt_team_selection
 
-            selected_team = prompt_team_selection(teams)
+            selected_team: Final = prompt_team_selection(teams)
 
             if selected_team:
                 team_id = selected_team.get("team_id")
@@ -154,7 +154,7 @@ def assign_key(ctx: click.Context, team_id: str | None):
 
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
-        error_body = e.response.json()
+        error_body: Final = e.response.json()
         click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:

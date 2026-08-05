@@ -3,7 +3,7 @@ import time
 from collections.abc import Iterator, Mapping, Sequence
 from itertools import groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Union, cast
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import (
@@ -49,7 +49,7 @@ class ChunkProcessor:
         if not chunks:
             return []
 
-        first_chunk = chunks[0]
+        first_chunk: Final = chunks[0]
         first_hidden_params: dict[str, Any] = {}
         if isinstance(first_chunk, dict):
             candidate = first_chunk.get("_hidden_params", {})
@@ -93,7 +93,7 @@ class ChunkProcessor:
         if not chunks:
             return
 
-        model = getattr(response, "model", None)
+        model: Final = getattr(response, "model", None)
         if not model:
             return
 
@@ -114,7 +114,7 @@ class ChunkProcessor:
                 _, provider_str, _, _ = get_llm_provider(model)
                 provider = LlmProviders(provider_str)
 
-            provider_config = ProviderConfigManager.get_provider_chat_config(
+            provider_config: Final = ProviderConfigManager.get_provider_chat_config(
                 model=model,
                 provider=provider,
             )
@@ -160,16 +160,16 @@ class ChunkProcessor:
 
     def build_base_response(self, chunks: list[dict[str, Any]]) -> ModelResponse:
         chunk = self.first_chunk
-        id = ChunkProcessor._get_chunk_id(chunks)
-        object = chunk["object"]
-        created = chunk["created"]
-        first_chunk_model = chunk["model"]
+        id: Final = ChunkProcessor._get_chunk_id(chunks)
+        object: Final = chunk["object"]
+        created: Final = chunk["created"]
+        first_chunk_model: Final = chunk["model"]
         # Get the actual model - for Azure Model Router, this finds the real model from later chunks
-        model = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
-        system_fingerprint = chunk.get("system_fingerprint", None)
+        model: Final = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
+        system_fingerprint: Final = chunk.get("system_fingerprint", None)
 
-        first_chunk_with_choices = next((c for c in chunks if c.get("choices")), chunk)
-        role = first_chunk_with_choices["choices"][0]["delta"]["role"]
+        first_chunk_with_choices: Final = next((c for c in chunks if c.get("choices")), chunk)
+        role: Final = first_chunk_with_choices["choices"][0]["delta"]["role"]
         finish_reason = "stop"
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
@@ -261,7 +261,7 @@ class ChunkProcessor:
         tool_calls_list: list[
             ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
         ] = []  # mutable-ok: see return type
-        tool_call_map: dict[int, dict[str, Any]] = {}  # Map to store tool calls by index
+        tool_call_map: Final[dict[int, dict[str, Any]]] = {}  # Map to store tool calls by index
 
         for chunk in tool_call_chunks:
             choices = chunk["choices"]
@@ -360,7 +360,9 @@ class ChunkProcessor:
                         if isinstance(provider_fields, dict):
                             tool_call_map[index]["provider_specific_fields"].update(provider_fields)
 
-        joined_fragments = self._join_fragments_by_index_and_field(self._iter_tool_call_fragments(tool_call_chunks))
+        joined_fragments: Final = self._join_fragments_by_index_and_field(
+            self._iter_tool_call_fragments(tool_call_chunks)
+        )
 
         # Convert the map to a list of tool calls
         for index in sorted(tool_call_map.keys()):
@@ -401,10 +403,10 @@ class ChunkProcessor:
         return tool_calls_list
 
     def get_combined_function_call_content(self, function_call_chunks: list[dict[str, Any]]) -> FunctionCall:
-        argument_list = []
+        argument_list: Final = []
         delta = function_call_chunks[0]["choices"][0]["delta"]
         function_call = delta.get("function_call", "")
-        function_call_name = function_call.name
+        function_call_name: Final = function_call.name
 
         for chunk in function_call_chunks:
             choices = chunk["choices"]
@@ -418,7 +420,7 @@ class ChunkProcessor:
                     arguments = function_call.arguments
                     argument_list.append(arguments)
 
-        combined_arguments = "".join(argument_list)
+        combined_arguments: Final = "".join(argument_list)
 
         return FunctionCall(
             name=function_call_name,
@@ -428,7 +430,7 @@ class ChunkProcessor:
     def get_combined_content(
         self, chunks: list[dict[str, Any]], delta_key: str = "content"
     ) -> ChatCompletionAssistantContentValue:
-        content_list: list[str] = []
+        content_list: Final[list[str]] = []
         for chunk in chunks:
             choices = chunk["choices"]
             for choice in choices:
@@ -439,7 +441,7 @@ class ChunkProcessor:
                 content_list.append(content)
 
         # Combine the "content" strings into a single string || combine the 'function' strings into a single string
-        combined_content = "".join(content_list)
+        combined_content: Final = "".join(content_list)
 
         # Update the "content" field within the response dictionary
         return combined_content
@@ -452,7 +454,7 @@ class ChunkProcessor:
             ChatCompletionThinkingBlock,
         )
 
-        thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
+        thinking_blocks: Final[list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]] = []
         current_thinking_text_parts: list[str] = []
         current_signature: str | None = None
 
@@ -506,8 +508,8 @@ class ChunkProcessor:
         return self.get_combined_content(chunks, delta_key="reasoning_content")
 
     def get_combined_audio_content(self, chunks: list[dict[str, Any]]) -> ChatCompletionAudioResponse:
-        base64_data_list: list[str] = []
-        transcript_list: list[str] = []
+        base64_data_list: Final[list[str]] = []
+        transcript_list: Final[list[str]] = []
         expires_at: int | None = None
         id: str | None = None
 
@@ -527,7 +529,7 @@ class ChunkProcessor:
                         elif k == "id" and v is not None and isinstance(v, str):
                             id = v
 
-        concatenated_audio = concatenate_base64_list(base64_data_list)
+        concatenated_audio: Final = concatenate_base64_list(base64_data_list)
         return ChatCompletionAudioResponse(
             data=concatenated_audio,
             expires_at=expires_at or int(time.time() + 3600),
@@ -730,7 +732,7 @@ class ChunkProcessor:
         prompt_tokens_details: PromptTokensDetailsWrapper | None,
         current: CacheCreationTokenDetails | None,
     ) -> CacheCreationTokenDetails | None:
-        incoming = cast(
+        incoming: Final = cast(
             CacheCreationTokenDetails | None,
             getattr(prompt_tokens_details, "cache_creation_token_details", None),
         )
@@ -745,7 +747,7 @@ class ChunkProcessor:
     ) -> PromptTokensDetailsWrapper | None:
         if prompt_tokens_details is None or cache_creation_token_details is None:
             return prompt_tokens_details
-        existing = cast(
+        existing: Final = cast(
             CacheCreationTokenDetails | None,
             getattr(prompt_tokens_details, "cache_creation_token_details", None),
         )
@@ -774,13 +776,13 @@ class ChunkProcessor:
         does not silently affect other providers that may legitimately report
         ``completion_tokens=1`` from a single usage event.
         """
-        saw_non_cursor_completion = completion_tokens > 1 or completion_usage_updates >= 2
+        saw_non_cursor_completion: Final = completion_tokens > 1 or completion_usage_updates >= 2
         if saw_non_cursor_completion:
             return completion_tokens
 
         custom_llm_provider: str | None = None
         if chunks:
-            first_chunk = chunks[0]
+            first_chunk: Final = chunks[0]
             if isinstance(first_chunk, dict):
                 hp = first_chunk.get("_hidden_params")
             else:
@@ -806,20 +808,20 @@ class ChunkProcessor:
         returned_usage = Usage()
         # # Update usage information if needed
 
-        calculated_usage_per_chunk = self._calculate_usage_per_chunk(chunks=chunks)
-        prompt_tokens = calculated_usage_per_chunk["prompt_tokens"]
-        completion_tokens = calculated_usage_per_chunk["completion_tokens"]
+        calculated_usage_per_chunk: Final = self._calculate_usage_per_chunk(chunks=chunks)
+        prompt_tokens: Final = calculated_usage_per_chunk["prompt_tokens"]
+        completion_tokens: Final = calculated_usage_per_chunk["completion_tokens"]
         ## anthropic prompt caching information ##
-        cache_creation_input_tokens: int | None = calculated_usage_per_chunk["cache_creation_input_tokens"]
-        cache_read_input_tokens: int | None = calculated_usage_per_chunk["cache_read_input_tokens"]
+        cache_creation_input_tokens: Final[int | None] = calculated_usage_per_chunk["cache_creation_input_tokens"]
+        cache_read_input_tokens: Final[int | None] = calculated_usage_per_chunk["cache_read_input_tokens"]
 
-        server_tool_use: ServerToolUse | None = calculated_usage_per_chunk["server_tool_use"]
-        web_search_requests: int | None = calculated_usage_per_chunk["web_search_requests"]
-        completion_tokens_details: CompletionTokensDetails | None = calculated_usage_per_chunk[
+        server_tool_use: Final[ServerToolUse | None] = calculated_usage_per_chunk["server_tool_use"]
+        web_search_requests: Final[int | None] = calculated_usage_per_chunk["web_search_requests"]
+        completion_tokens_details: Final[CompletionTokensDetails | None] = calculated_usage_per_chunk[
             "completion_tokens_details"
         ]
         prompt_tokens_details: PromptTokensDetailsWrapper | None = calculated_usage_per_chunk["prompt_tokens_details"]
-        cost: float | None = calculated_usage_per_chunk["cost"]
+        cost: Final[float | None] = calculated_usage_per_chunk["cost"]
 
         try:
             returned_usage.prompt_tokens = prompt_tokens or token_counter(model=model, messages=messages)
@@ -898,7 +900,7 @@ def concatenate_base64_list(base64_strings: list[str]) -> str:
         str: The concatenated result as a base64-encoded string.
     """
     # Decode each base64 string and collect the resulting bytes
-    combined_bytes = b"".join(base64.b64decode(b64_str) for b64_str in base64_strings)
+    combined_bytes: Final = b"".join(base64.b64decode(b64_str) for b64_str in base64_strings)
 
     # Encode the concatenated bytes back to base64
     return base64.b64encode(combined_bytes).decode("utf-8")

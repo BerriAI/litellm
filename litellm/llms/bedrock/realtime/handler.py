@@ -7,7 +7,7 @@ This uses aws_sdk_bedrock_runtime for bidirectional streaming with Nova Sonic.
 import asyncio
 import contextlib
 import json
-from typing import Any
+from typing import Any, Final
 
 from pydantic import TypeAdapter
 
@@ -18,7 +18,7 @@ from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 from .transformation import BedrockRealtimeConfig
 
-_CLIENT_MODALITIES_ADAPTER: TypeAdapter["list[str] | None"] = TypeAdapter(list[str] | None)
+_CLIENT_MODALITIES_ADAPTER: Final[TypeAdapter["list[str] | None"]] = TypeAdapter(list[str] | None)
 
 
 class BedrockRealtime(BaseAWSLLM):
@@ -70,7 +70,7 @@ class BedrockRealtime(BaseAWSLLM):
 
         # Get AWS region
         if aws_region_name is None:
-            optional_params = {
+            optional_params: Final = {
                 "aws_region_name": aws_region_name,
             }
             aws_region_name = self._get_aws_region_name(optional_params, model)
@@ -85,7 +85,7 @@ class BedrockRealtime(BaseAWSLLM):
 
         verbose_proxy_logger.debug("Bedrock Realtime: Connecting to %s with model %s", endpoint_uri, model)
 
-        credentials = self.get_credentials(
+        credentials: Final = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
@@ -105,10 +105,10 @@ class BedrockRealtime(BaseAWSLLM):
                     "or configure credentials in the environment"
                 ),
             )
-        frozen_credentials = credentials.get_frozen_credentials()
+        frozen_credentials: Final = credentials.get_frozen_credentials()
 
         # Initialize Bedrock client with aws_sdk_bedrock_runtime
-        config = Config(
+        config: Final = Config(
             endpoint_uri=endpoint_uri,
             region=aws_region_name,
             aws_access_key_id=frozen_credentials.access_key,
@@ -116,13 +116,13 @@ class BedrockRealtime(BaseAWSLLM):
             aws_session_token=frozen_credentials.token,
             aws_credentials_identity_resolver=StaticCredentialsResolver(),
         )
-        bedrock_client = BedrockRuntimeClient(config=config)
+        bedrock_client: Final = BedrockRuntimeClient(config=config)
 
-        transformation_config = BedrockRealtimeConfig()
+        transformation_config: Final = BedrockRealtimeConfig()
 
         try:
             # Initialize the bidirectional stream
-            bedrock_stream = await bedrock_client.invoke_model_with_bidirectional_stream(
+            bedrock_stream: Final = await bedrock_client.invoke_model_with_bidirectional_stream(
                 InvokeModelWithBidirectionalStreamOperationInput(model_id=model)
             )
 
@@ -132,7 +132,7 @@ class BedrockRealtime(BaseAWSLLM):
             verbose_proxy_logger.debug("Bedrock Realtime: sent session.created to client on connect")
 
             # Track state for transformation
-            session_state = {
+            session_state: Final = {
                 "current_output_item_id": None,
                 "current_response_id": None,
                 "current_conversation_id": None,
@@ -143,7 +143,7 @@ class BedrockRealtime(BaseAWSLLM):
             }
 
             # Create tasks for bidirectional forwarding
-            client_to_bedrock_task = asyncio.create_task(
+            client_to_bedrock_task: Final = asyncio.create_task(
                 self._forward_client_to_bedrock(
                     websocket,
                     bedrock_stream,
@@ -154,7 +154,7 @@ class BedrockRealtime(BaseAWSLLM):
                 )
             )
 
-            bedrock_to_client_task = asyncio.create_task(
+            bedrock_to_client_task: Final = asyncio.create_task(
                 self._forward_bedrock_to_client(
                     bedrock_stream,
                     websocket,
@@ -196,7 +196,7 @@ class BedrockRealtime(BaseAWSLLM):
         )
 
         async def send_to_bedrock(bedrock_message: str) -> None:
-            event = InvokeModelWithBidirectionalStreamInputChunk(
+            event: Final = InvokeModelWithBidirectionalStreamInputChunk(
                 value=BidirectionalInputPayloadPart(bytes_=bedrock_message.encode("utf-8"))
             )
             await bedrock_stream.input_stream.send(event)
