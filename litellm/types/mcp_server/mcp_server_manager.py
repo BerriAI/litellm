@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Final, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -247,7 +247,7 @@ class MCPServer(BaseModel):
 
         # PAT passthrough: auth_type is none but extra_headers includes auth headers
         if self.auth_type == MCPAuth.none and self.extra_headers:
-            auth_header_names = {"authorization", "x-api-key", "api-key", "apikey"}
+            auth_header_names: Final = {"authorization", "x-api-key", "api-key", "apikey"}
             return any(h.lower() in auth_header_names for h in self.extra_headers)
 
         return False

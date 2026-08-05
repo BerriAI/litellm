@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional, Union
+from typing import Final, List, Literal, Optional, Union
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from pydantic import PrivateAttr
@@ -76,12 +76,12 @@ def build_code_interpreter_log_outputs(
     """
     if not isinstance(content, dict):
         return None
-    parts = []
+    parts: Final = []
     if content.get("stdout"):
         parts.append(content["stdout"])
     if content.get("stderr"):
         parts.append(f"STDERR: {content['stderr']}")
-    logs = "".join(parts)
+    logs: Final = "".join(parts)
     return [OutputCodeInterpreterCallLog(type="logs", logs=logs)] if logs else None
 
 

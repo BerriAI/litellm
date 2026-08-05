@@ -1,4 +1,3 @@
-from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -307,7 +306,7 @@ EXPECTED_RESPONSE_MODELS = {
     "/customer/update": CustomerResponse,
     "/customer/delete": DeleteCustomersResponse,
     "/customer/info": CustomerResponse,
-    "/customer/list": List[CustomerResponse],
+    "/customer/list": list[CustomerResponse],
     "/customer/daily/activity": SpendAnalyticsPaginatedResponse,
 }
 

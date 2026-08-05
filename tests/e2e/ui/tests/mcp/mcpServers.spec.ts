@@ -36,7 +36,7 @@ test.describe("MCP Servers", () => {
     await formModal.locator('input[id="url"]').fill("https://e2e-fake-mcp.test.local/mcp");
 
     // Authentication: None
-    // The auth_type Form.Item has no label prop (create_mcp_server.tsx:795), so
+    // The auth_type Form.Item has no label prop (CreateMCPServer.tsx), so
     // it can't be anchored by label text. Scope via the enclosing Collapse
     // panel ("Authentication") instead — that anchor is stable even if the
     // placeholder copy changes.

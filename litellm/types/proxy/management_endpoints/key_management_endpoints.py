@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Final, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -100,7 +100,7 @@ class BulkUpdateTeamKeysRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_selection(self) -> "BulkUpdateTeamKeysRequest":
-        has_key_ids = self.key_ids is not None and len(self.key_ids) > 0
+        has_key_ids: Final = self.key_ids is not None and len(self.key_ids) > 0
         if has_key_ids and self.all_keys_in_team:
             raise ValueError("Provide either `key_ids` or `all_keys_in_team=True`, not both.")
         if not has_key_ids and not self.all_keys_in_team:

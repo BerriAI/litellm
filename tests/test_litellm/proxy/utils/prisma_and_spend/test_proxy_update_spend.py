@@ -9,11 +9,13 @@ Symbols pinned here:
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import litellm.proxy.utils as utils_mod
 from litellm.proxy.utils import ProxyUpdateSpend
 
 
@@ -166,6 +168,40 @@ async def test_update_spend_logs_writes_batches_via_create_many(
         "skip_duplicates": True,
         "first_request_id": "r0",
     }
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_bounds_each_statement_by_payload_bytes(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A flush of prompt-carrying rows must reach Prisma as several small
+    statements rather than one huge one: the query engine's resident memory is
+    a high-water mark set by the largest statement it ever executes, and it
+    never returns that memory to the OS."""
+    monkeypatch.setattr(utils_mod, "SPEND_LOG_WRITE_BATCH_MAX_BYTES", 50_000)
+    blob = json.dumps({"content": "x" * 10_000})
+    logs = [make_spend_log_row(request_id=f"r{i}", messages=blob, response=blob) for i in range(50)]
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock()
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    await ProxyUpdateSpend.update_spend_logs(
+        n_retry_times=0,
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+        logs_to_process=logs,
+    )
+
+    calls = mock_prisma_client.db.litellm_spendlogs.create_many.await_args_list
+    written = [row["request_id"] for call in calls for row in call.kwargs["data"]]
+    # Each statement is encoded whole rather than summed row by row, so the
+    # assertion covers the collection framing the rows carry on the wire and
+    # not only the payload the batcher adds up.
+    largest_statement_bytes = max(len(json.dumps(list(call.kwargs["data"]), default=str)) for call in calls)
+    assert written == [f"r{i}" for i in range(50)]
+    assert [len(call.kwargs["data"]) for call in calls] == [2] * 25
+    assert largest_statement_bytes <= 50_000
 
 
 @pytest.mark.asyncio
@@ -327,14 +363,14 @@ async def test_update_spend_logs_caps_isolation_attempts_under_poison_flood(
     mock_prisma_client: Any, make_spend_log_row: Any
 ) -> None:
     """A flood of poisoned rows must not amplify one failed bulk insert into
-    unbounded failed inserts. The per-batch attempt budget hard-caps the number
-    of ``create_many`` calls regardless of how many rows are poisoned, so the DB
-    work stays bounded and well below the input row count, and the helper still
-    completes without raising.
+    unbounded failed inserts. The per-batch failure budget hard-caps the number
+    of failed ``create_many`` calls regardless of how many rows are poisoned, so
+    the DB work stays bounded and well below the input row count, and the helper
+    still completes without raising.
     """
     import litellm.proxy.utils as utils_mod
 
-    attempt_cap = utils_mod.MAX_SPEND_LOG_ISOLATION_ATTEMPTS_PER_BATCH
+    attempt_cap = utils_mod.MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH
     # single create_many batch (< BATCH_SIZE) whose row count exceeds the attempt
     # cap, so the bound bites and attempts stay below the input row count
     n_rows = attempt_cap * 3
@@ -358,6 +394,103 @@ async def test_update_spend_logs_caps_isolation_attempts_under_poison_flood(
     attempts = mock_prisma_client.db.litellm_spendlogs.create_many.await_count
     assert attempts <= attempt_cap
     assert attempts < n_rows
+
+
+async def _flush_and_count_create_many(
+    mock_prisma_client: Any,
+    logs: List[Any],
+    max_bytes: int,
+    poison: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> int:
+    """Run one flush and return how many ``create_many`` calls it issued."""
+
+    async def _create_many(*, data: Any, skip_duplicates: bool) -> None:
+        if poison:
+            raise _data_error("invalid byte sequence for encoding UTF8: 0x00")
+
+    monkeypatch.setattr(utils_mod, "SPEND_LOG_WRITE_BATCH_MAX_BYTES", max_bytes)
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_create_many)
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    await ProxyUpdateSpend.update_spend_logs(
+        n_retry_times=0,
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+        logs_to_process=logs,
+    )
+    return int(mock_prisma_client.db.litellm_spendlogs.create_many.await_count)
+
+
+@pytest.mark.asyncio
+async def test_poison_flood_cost_does_not_grow_with_the_number_of_statements(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Splitting a flush by payload bytes must not multiply what a poison flood
+    costs. The same poisoned rows are flushed as one statement and as several;
+    the split run may only pay the one unavoidable insert per extra statement,
+    not a fresh isolation budget each time.
+    """
+    blob = json.dumps({"content": "x" * 2_000})
+    logs = [make_spend_log_row(request_id=f"r{i}", messages=blob, response=blob) for i in range(300)]
+    split_bytes = 250_000
+
+    statements = await _flush_and_count_create_many(
+        mock_prisma_client, logs, max_bytes=split_bytes, poison=False, monkeypatch=monkeypatch
+    )
+    split_attempts = await _flush_and_count_create_many(
+        mock_prisma_client, logs, max_bytes=split_bytes, poison=True, monkeypatch=monkeypatch
+    )
+    single_attempts = await _flush_and_count_create_many(
+        mock_prisma_client, logs, max_bytes=1_000_000_000, poison=True, monkeypatch=monkeypatch
+    )
+
+    # A clean flush issues exactly one call per statement, so this is the split
+    # count; asserting it is >1 is what proves the split was really exercised.
+    assert statements > 1
+    assert single_attempts == utils_mod.MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH
+    assert split_attempts <= single_attempts + statements
+
+
+@pytest.mark.asyncio
+async def test_clean_statement_is_still_written_after_a_poison_flood(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sharing the isolation budget must not let a poison flood in one
+    statement silently drop the clean statements behind it. The budget bounds
+    failed inserts only, so a later statement is still attempted and its rows
+    persist.
+    """
+    blob = json.dumps({"content": "x" * 2_000})
+    poisoned = [make_spend_log_row(request_id=f"bad{i}", messages=blob, response=blob) for i in range(300)]
+    # Larger than the budget, so it is always yielded as its own statement and
+    # the assertion cannot pass by riding along with a poisoned one.
+    lone_blob = json.dumps({"content": "x" * 300_000})
+    clean = [make_spend_log_row(request_id="good", messages=lone_blob, response=lone_blob)]
+    written: List[str] = []
+
+    async def _create_many(*, data: Any, skip_duplicates: bool) -> None:
+        ids = [row["request_id"] for row in data]
+        if any(request_id.startswith("bad") for request_id in ids):
+            raise _data_error("invalid byte sequence for encoding UTF8: 0x00")
+        written.extend(ids)
+
+    monkeypatch.setattr(utils_mod, "SPEND_LOG_WRITE_BATCH_MAX_BYTES", 250_000)
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_create_many)
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    await ProxyUpdateSpend.update_spend_logs(
+        n_retry_times=0,
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+        logs_to_process=poisoned + clean,
+    )
+
+    assert written == ["good"]
 
 
 def test_disable_spend_updates_reflects_general_settings(

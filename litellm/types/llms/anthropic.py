@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Optional, Union
+from typing import Any, Dict, Final, Iterable, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import Literal, NotRequired, Required, TypedDict
@@ -127,7 +127,7 @@ class AnthropicToolSearchToolBM25(TypedDict, total=False):
     input_examples: Optional[List[Dict[str, Any]]]
 
 
-ANTHROPIC_ADVISOR_TOOL_TYPE: Literal["advisor_20260301"] = "advisor_20260301"
+ANTHROPIC_ADVISOR_TOOL_TYPE: Final[Literal["advisor_20260301"]] = "advisor_20260301"
 
 
 class AnthropicAdvisorTool(TypedDict, total=False):
@@ -670,12 +670,12 @@ class AnthropicChatCompletionUsageBlock(ChatCompletionUsageBlock, total=False):
     cache_read_input_tokens: int
 
 
-ANTHROPIC_API_HEADERS = {
+ANTHROPIC_API_HEADERS: Final = {
     "anthropic-version",
     "anthropic-beta",
 }
 
-ANTHROPIC_API_ONLY_HEADERS = {  # fails if calling anthropic on vertex ai / bedrock
+ANTHROPIC_API_ONLY_HEADERS: Final = {  # fails if calling anthropic on vertex ai / bedrock
     "anthropic-beta",
 }
 
@@ -711,13 +711,13 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)
-ANTHROPIC_TOOL_SEARCH_BETA_HEADER = "advanced-tool-use-2025-11-20"
+ANTHROPIC_TOOL_SEARCH_BETA_HEADER: Final = "advanced-tool-use-2025-11-20"
 
 # Effort beta header constant
-ANTHROPIC_EFFORT_BETA_HEADER = "effort-2025-11-24"
+ANTHROPIC_EFFORT_BETA_HEADER: Final = "effort-2025-11-24"
 
 # OAuth constants
-ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat"
-ANTHROPIC_OAUTH_BETA_HEADER = "oauth-2025-04-20"
+ANTHROPIC_OAUTH_TOKEN_PREFIX: Final = "sk-ant-oat"
+ANTHROPIC_OAUTH_BETA_HEADER: Final = "oauth-2025-04-20"
 
-ANTHROPIC_PROMPT_CACHING_SCOPE_BETA_HEADER = "prompt-caching-scope-2026-01-05"
+ANTHROPIC_PROMPT_CACHING_SCOPE_BETA_HEADER: Final = "prompt-caching-scope-2026-01-05"
