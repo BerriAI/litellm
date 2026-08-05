@@ -3657,6 +3657,7 @@ class LlmProviders(str, Enum):
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
+    MACHGEN = "machgen"
     FAL_AI = "fal_ai"
     STABILITY = "stability"
     HEROKU = "heroku"
