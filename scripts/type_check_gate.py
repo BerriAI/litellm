@@ -46,7 +46,7 @@ import tempfile
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUDGET_PATH = REPO_ROOT / "basedpyright-code-budget.json"
@@ -137,6 +137,25 @@ def run_basedpyright(cwd: Path = REPO_ROOT) -> str:
         sys.stderr.write(proc.stderr)
         raise SystemExit(f"basedpyright exited {proc.returncode}")
     return proc.stdout
+
+
+def resolve_base_point(base_ref: str, cwd: Path = REPO_ROOT) -> str:
+    """The snapshot commit base counts are measured at: merge-base(base_ref, HEAD),
+    made aware of an in-progress merge. Mid-merge, HEAD is still the pre-merge tip,
+    so its merge-base is the old branch point and every violation the base gained
+    since then would be blamed on this change. While MERGE_HEAD exists, prefer
+    merge-base(base_ref, MERGE_HEAD) whenever it is the newer of the two."""
+    head_point: Final = _run(["git", "merge-base", base_ref, "HEAD"], cwd=cwd).strip()
+    if not head_point:
+        return base_ref
+    merge_head: Final = _run(["git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD"], cwd=cwd).strip()
+    if not merge_head:
+        return head_point
+    merge_point: Final = _run(["git", "merge-base", base_ref, merge_head], cwd=cwd).strip()
+    if not merge_point:
+        return head_point
+    older: Final = _run(["git", "merge-base", head_point, merge_point], cwd=cwd).strip()
+    return merge_point if older == head_point else head_point
 
 
 @contextlib.contextmanager
@@ -324,7 +343,7 @@ def cmd_update(current: Mapping[str, int], base_ref: str = DEFAULT_BASE) -> None
     by exactly what they cleared since it diverged, and limits never rise.
     """
     budget = json.loads(BUDGET_PATH.read_text()) if BUDGET_PATH.exists() else {}
-    base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
+    base_point = resolve_base_point(base_ref)
     updated = ratcheted_budget(budget, current, base_counts_cached(base_point))
     BUDGET_PATH.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n")
     cleared = sum(budget[code]["limit"] - updated[code]["limit"] for code in updated)
@@ -349,7 +368,7 @@ def cmd_check(head: Mapping[str, int], base_ref: str) -> None:
             f"OK: every rule is within its basedpyright limit ({sum(head.values())} errors total)"
         )
         return
-    base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
+    base_point = resolve_base_point(base_ref)
     base = base_counts_cached(base_point)
     if is_vacuous_run(base, budget):
         print(

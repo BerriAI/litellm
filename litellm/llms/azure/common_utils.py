@@ -509,8 +509,6 @@ class BaseAzureLLM(BaseOpenAILLM):
             openai_client=openai_client,
             client_initialization_params=client_initialization_params,
             client_type="azure",
-            litellm_owned_client=client is None
-            and self.owns_wrapped_http_client(azure_client_params.get("http_client")),
         )
         return openai_client
 
