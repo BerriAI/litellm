@@ -7,18 +7,20 @@ import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { getMissingTiersError } from "./build_complexity_router_config";
 import { testAutoRouterRouting } from "../networking";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
+import { getAllPresets, getPresetByKey, getRequiredModelsInPreset } from "@/lib/autorouter_presets";
 
-// Every model referenced by both bundled family presets. A caller holding all of these can select
-// either preset; dropping any one greys out the preset that names it.
+const ANTHROPIC_PRESET = getPresetByKey("anthropic_family")!;
+const ANTHROPIC_TIERS = ANTHROPIC_PRESET.complexity_router_config.tiers;
+
+// Every model referenced by the bundled family presets, derived from the presets themselves so
+// that renaming a preset's models in autorouter_presets.json does not red these tests. A caller
+// holding all of these can select either preset; dropping any one greys out the preset that
+// names it.
 const ALL_FAMILY_MODELS: ModelGroup[] = [
-  { model_group: "claude-haiku-4-5", mode: "chat" },
-  { model_group: "claude-sonnet-4-5", mode: "chat" },
-  { model_group: "claude-opus-5", mode: "chat" },
-  { model_group: "gpt-5-nano", mode: "chat" },
-  { model_group: "gpt-5-mini", mode: "chat" },
-  { model_group: "gpt-5", mode: "chat" },
-  { model_group: "o3", mode: "chat" },
-];
+  ...new Set(getAllPresets().flatMap((preset) => [...getRequiredModelsInPreset(preset)])),
+].map((model_group) => ({ model_group, mode: "chat" }));
+
+const ANTHROPIC_ONLY_MODEL = ANTHROPIC_TIERS.COMPLEX[0];
 
 const openTemplateDropdown = (): void => {
   fireEvent.mouseDown(screen.getByTestId("template-selector").querySelector(".ant-select-selector")!);
@@ -428,13 +430,15 @@ describe("AddAutoRouterTab", () => {
     });
 
     it("disables a preset missing one of its models, naming the missing model", async () => {
-      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS.filter((m) => m.model_group !== "claude-opus-5"));
+      mockFetchAvailableModels.mockResolvedValue(
+        ALL_FAMILY_MODELS.filter((m) => m.model_group !== ANTHROPIC_ONLY_MODEL),
+      );
 
       renderWithProviders(<Harness />);
       openTemplateDropdown();
 
       await waitFor(() => {
-        expect(optionByLabel("Anthropic Family")!.textContent).toContain("Missing: claude-opus-5");
+        expect(optionByLabel("Anthropic Family")!.textContent).toContain(`Missing: ${ANTHROPIC_ONLY_MODEL}`);
       });
       expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true);
     });
@@ -458,7 +462,8 @@ describe("AddAutoRouterTab", () => {
       expect(screen.queryByText("Advanced: Keyword/Semantic Matching")).not.toBeInTheDocument();
       expect(
         screen.getByText(
-          "Simple: claude-haiku-4-5 · Medium: claude-sonnet-4-5 · Complex: claude-opus-5 · Reasoning: claude-opus-5",
+          `Simple: ${ANTHROPIC_TIERS.SIMPLE.join(", ")} · Medium: ${ANTHROPIC_TIERS.MEDIUM.join(", ")} · ` +
+            `Complex: ${ANTHROPIC_TIERS.COMPLEX.join(", ")} · Reasoning: ${ANTHROPIC_TIERS.REASONING.join(", ")}`,
         ),
       ).toBeInTheDocument();
     });
@@ -500,15 +505,8 @@ describe("AddAutoRouterTab", () => {
 
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
       expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
-        auto_router_default_model: "claude-sonnet-4-5",
-        complexity_router_config: {
-          tiers: {
-            SIMPLE: ["claude-haiku-4-5"],
-            MEDIUM: ["claude-sonnet-4-5"],
-            COMPLEX: ["claude-opus-5"],
-            REASONING: ["claude-opus-5"],
-          },
-        },
+        auto_router_default_model: ANTHROPIC_TIERS.MEDIUM[0],
+        complexity_router_config: { tiers: ANTHROPIC_TIERS },
       });
     });
 
