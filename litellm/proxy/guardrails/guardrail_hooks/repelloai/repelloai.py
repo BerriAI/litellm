@@ -223,7 +223,7 @@ class RepelloAIGuardrail(CustomGuardrail):
             return repelloai_response
         except HTTPException as e:
             status = "guardrail_failed_to_respond"
-            guardrail_json_response = str(e.detail) if not isinstance(e.detail, (dict, list)) else e.detail  # type: ignore[assignment]
+            guardrail_json_response = str(e.detail) if not isinstance(e.detail, (dict, list)) else e.detail
             raise
         except HTTPError as e:
             status = "guardrail_failed_to_respond"

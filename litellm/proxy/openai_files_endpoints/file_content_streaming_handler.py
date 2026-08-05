@@ -88,7 +88,7 @@ class FileContentStreamingHandler:
             raise
         finally:
             if hasattr(stream_iterator, "aclose"):
-                await stream_iterator.aclose()  # type: ignore[attr-defined]
+                await stream_iterator.aclose()
 
     @staticmethod
     async def get_streaming_file_content_response(
@@ -112,7 +112,7 @@ class FileContentStreamingHandler:
                     "file_id": file_id,
                     "stream": True,
                     **data,
-                }  # type: ignore
+                }
             ),
         )
 

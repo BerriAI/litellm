@@ -15,7 +15,7 @@ from mcp.client.stdio import stdio_client
 
 streamable_http_client: Any | None = None
 try:
-    import mcp.client.streamable_http as streamable_http_module  # type: ignore
+    import mcp.client.streamable_http as streamable_http_module
 
     streamable_http_client = getattr(streamable_http_module, "streamable_http_client", None)
 except ImportError:

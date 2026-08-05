@@ -882,7 +882,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         payload["id"] = self._correlation_id(call_details) or f"chatcmpl-{uuid.uuid4()}"
         self._prepend_system_prompt(payload, call_details)
 
-        return payload  # type: ignore[return-value]
+        return payload
 
     @staticmethod
     def _caller_metadata(user_api_key_dict: "UserAPIKeyAuth") -> StandardLoggingUserAPIKeyMetadata:

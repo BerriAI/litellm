@@ -24,6 +24,6 @@ class LambdaAIChatConfig(OpenAILikeChatConfig):
         # Lambda AI is openai compatible, we just need to set the api_base
         api_base = (
             api_base or get_secret_str("LAMBDA_API_BASE") or "https://api.lambda.ai/v1"  # Default Lambda API base URL
-        )  # type: ignore
+        )
         dynamic_api_key: Final = api_key or get_secret_str("LAMBDA_API_KEY")
         return api_base, dynamic_api_key

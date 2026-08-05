@@ -8,7 +8,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, Union, cast, get_type_hints
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-import httpx  # type: ignore
+import httpx
 from openai.types.file_deleted import FileDeleted
 
 import litellm
@@ -217,7 +217,7 @@ def _custom_logger_callbacks(logging_obj: LiteLLMLoggingObj) -> list["CustomLogg
     custom_loggers: Final[list[CustomLogger]] = []
     for cb in callbacks:
         if isinstance(cb, str):
-            resolved = get_custom_logger_compatible_class(cb)  # type: ignore[arg-type]
+            resolved = get_custom_logger_compatible_class(cb)
             if resolved is None:
                 continue
             cb = resolved
@@ -574,7 +574,7 @@ class BaseLLMHTTPHandler:
             completion_stream, headers = self.make_sync_call(
                 provider_config=provider_config,
                 api_base=api_base,
-                headers=headers,  # type: ignore
+                headers=headers,
                 data=data,
                 signed_json_body=signed_json_body,
                 original_data=data,
@@ -926,7 +926,7 @@ class BaseLLMHTTPHandler:
         )
 
         if aembedding is True:
-            return self.aembedding(  # type: ignore
+            return self.aembedding(
                 request_data=data,
                 api_base=api_base,
                 headers=headers,
@@ -1083,7 +1083,7 @@ class BaseLLMHTTPHandler:
         )
 
         if _is_async is True:
-            return self.arerank(  # type: ignore
+            return self.arerank(
                 model=model,
                 request_data=data,
                 custom_llm_provider=custom_llm_provider,
@@ -1267,7 +1267,7 @@ class BaseLLMHTTPHandler:
             raise ValueError(f"No provider config found for model: {model} and provider: {custom_llm_provider}")
 
         if atranscription is True:
-            return self.async_audio_transcriptions(  # type: ignore
+            return self.async_audio_transcriptions(
                 model=model,
                 audio_file=audio_file,
                 optional_params=optional_params,
@@ -1859,7 +1859,7 @@ class BaseLLMHTTPHandler:
                 response = await async_httpx_client.post(
                     url=complete_url,
                     headers=headers,
-                    json=data,  # type: ignore
+                    json=data,
                     timeout=timeout,
                 )
         except Exception as e:
@@ -5897,7 +5897,7 @@ class BaseLLMHTTPHandler:
 
                 await realtime_streaming.bidirectional_forward()
 
-        except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+        except websockets.exceptions.InvalidStatusCode as e:
             verbose_logger.exception("Error connecting to backend: %s", e)
             await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception as e:
@@ -6238,7 +6238,7 @@ class BaseLLMHTTPHandler:
                         yield rust_backend
                         return
 
-                async with websockets.connect(  # type: ignore
+                async with websockets.connect(
                     ws_url,
                     additional_headers=headers,
                     max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
@@ -6294,7 +6294,7 @@ class BaseLLMHTTPHandler:
                 )
                 await streaming.bidirectional_forward()
 
-        except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+        except websockets.exceptions.InvalidStatusCode as e:
             verbose_logger.exception("Error connecting to responses WS backend: %s", e)
             await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception as e:

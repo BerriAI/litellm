@@ -24,7 +24,7 @@ def set_global_prompt_directory(directory: str) -> None:
     """
     import litellm
 
-    litellm.global_prompt_directory = directory  # type: ignore
+    litellm.global_prompt_directory = directory
 
 
 def _get_prompt_data_from_dotprompt_content(dotprompt_content: str) -> dict:

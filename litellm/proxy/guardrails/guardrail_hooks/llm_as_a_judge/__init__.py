@@ -187,7 +187,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 response_format={"type": "json_object"},
                 temperature=0,
             )
-        raw: Final = response.choices[0].message.content or "{}"  # type: ignore[union-attr]
+        raw: Final = response.choices[0].message.content or "{}"
         return _parse_judge_verdict(raw)
 
     async def apply_guardrail(

@@ -23,7 +23,7 @@ def create_config_class(provider: SimpleProviderConfig):
     # Choose base class
     base_class: Final[type] = OpenAIGPTConfig if provider.base_class == "openai_gpt" else OpenAILikeChatConfig
 
-    class JSONProviderConfig(base_class):  # type: ignore[valid-type,misc]
+    class JSONProviderConfig(base_class):
         @overload
         def _transform_messages(
             self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
@@ -190,7 +190,7 @@ def create_responses_config_class(provider: SimpleProviderConfig):
 
     class JSONProviderResponsesConfig(OpenAILikeResponsesConfig):
         @property
-        def custom_llm_provider(self):  # type: ignore[override]
+        def custom_llm_provider(self):
             return provider.slug
 
         def validate_environment(

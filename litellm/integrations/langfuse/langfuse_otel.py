@@ -74,7 +74,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 LangFuseLogger as _LFLogger,
             )
 
-            metadata = _LFLogger.add_metadata_from_header(litellm_params, metadata)  # type: ignore
+            metadata = _LFLogger.add_metadata_from_header(litellm_params, metadata)
         except Exception:
             # Fallback silently if import fails; header enrichment just won't happen
             pass

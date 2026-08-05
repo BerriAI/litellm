@@ -1144,7 +1144,7 @@ class GenerateKeyRequest(KeyRequestBase):
 
 
 class GenerateKeyResponse(KeyRequestBase):
-    key: str  # type: ignore
+    key: str
     key_name: str | None = None
     key_type: str | None = None
     expires: datetime | None = None
@@ -2869,7 +2869,7 @@ class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):
-    organization_id: str  # type: ignore
+    organization_id: str
     created_at: datetime
     updated_at: datetime
 

@@ -177,12 +177,12 @@ end
                     lock_key,
                 )
 
-        current_value = await self.redis_cache.async_get_cache(lock_key)  # type: ignore
+        current_value = await self.redis_cache.async_get_cache(lock_key)
         if isinstance(current_value, bytes):
             current_value = current_value.decode("utf-8")
         if current_value != self.pod_id:
             return 0
-        result = await self.redis_cache.async_delete_cache(lock_key)  # type: ignore
+        result = await self.redis_cache.async_delete_cache(lock_key)
         return int(result or 0)
 
     @staticmethod

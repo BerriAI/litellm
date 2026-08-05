@@ -134,8 +134,8 @@ def _file_types_to_b64(image: FileTypes | None) -> str:
         raise ValueError("Nova Canvas image edit requires an image input")
     if hasattr(image, "read") and callable(getattr(image, "read", None)):
         if hasattr(image, "seek"):
-            image.seek(0)  # type: ignore[union-attr]
-        image_bytes: Final = image.read()  # type: ignore[union-attr]
+            image.seek(0)
+        image_bytes: Final = image.read()
         return base64.b64encode(image_bytes).decode("utf-8")
     if isinstance(image, bytes):
         return base64.b64encode(image).decode("utf-8")
@@ -149,7 +149,7 @@ def _file_types_to_b64(image: FileTypes | None) -> str:
             "Nova Canvas image edit does not support tuple FileTypes. "
             "Pass a file-like object, bytes, or a base64-encoded string."
         )
-    return base64.b64encode(bytes(image)).decode("utf-8")  # type: ignore[arg-type]
+    return base64.b64encode(bytes(image)).decode("utf-8")
 
 
 def _supports_nova_canvas_image_edit_from_model_cost(model: str) -> bool:
@@ -310,7 +310,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         mask_raw: Final = op.pop("mask", None)
         mask_b64: str | None = None
         if mask_raw is not None:
-            mask_b64 = _file_types_to_b64(mask_raw)  # type: ignore[arg-type]
+            mask_b64 = _file_types_to_b64(mask_raw)
 
         _size: Final = op.pop("size", None)
         width = op.pop("width", None)

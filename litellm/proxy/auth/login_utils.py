@@ -207,7 +207,7 @@ async def authenticate_user(
                     "spend": 0,
                     "user_id": key_user_id,
                     "team_id": "litellm-dashboard",
-                },  # type: ignore
+                },
             )
         else:
             raise ProxyException(
@@ -217,7 +217,7 @@ async def authenticate_user(
                 code=500,
             )
 
-        key = response["token"]  # type: ignore
+        key = response["token"]
 
         if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
             from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
@@ -272,7 +272,7 @@ async def authenticate_user(
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
                     request_type="key",
-                    **{  # type: ignore
+                    **{
                         "user_role": user_role,
                         "duration": LITELLM_UI_SESSION_DURATION,
                         "key_max_budget": litellm.max_ui_session_budget,
@@ -292,7 +292,7 @@ async def authenticate_user(
                     code=500,
                 )
 
-            key = response["token"]  # type: ignore
+            key = response["token"]
 
             return LoginResult(
                 user_id=user_id,

@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
+from openai.types.audio.transcription_create_params import FileTypes
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
@@ -35,7 +35,7 @@ class VideoObject(BaseModel):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)
         except Exception:
@@ -58,7 +58,7 @@ class VideoResponse(BaseModel):
     def __getitem__(self, key):
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)
         except Exception:
@@ -120,7 +120,7 @@ class CharacterObject(BaseModel):
     def __getitem__(self, key):
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)
         except Exception:
