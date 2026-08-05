@@ -271,7 +271,7 @@ class A2ACompletionBridgeHandler:
         # 3. Accumulate content and emit artifact update
         accumulated_text = ""
         chunk_count = 0
-        async for chunk in response:  # type: ignore[union-attr]
+        async for chunk in response:
             chunk_count += 1
 
             # Extract delta content

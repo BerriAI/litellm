@@ -64,13 +64,13 @@ class OpenAIImageVariationsHandler:
                 "base_url": api_base,
                 "http_client": litellm.client_session,
                 "timeout": timeout,
-                "max_retries": max_retries,  # type: ignore
+                "max_retries": max_retries,
                 "organization": organization,
             }
 
             client = self.get_async_client(client=client, init_client_params=init_client_params)
 
-            raw_response: Final = await client.images.with_raw_response.create_variation(**data)  # type: ignore
+            raw_response: Final = await client.images.with_raw_response.create_variation(**data)
             response: Final = raw_response.parse()
             response_json: Final = response.model_dump()
 
@@ -174,20 +174,20 @@ class OpenAIImageVariationsHandler:
                     image=image,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
-                )  # type: ignore
+                )
 
             init_client_params: Final = {
                 "api_key": api_key,
                 "base_url": api_base,
                 "http_client": litellm.client_session,
                 "timeout": timeout,
-                "max_retries": max_retries,  # type: ignore
+                "max_retries": max_retries,
                 "organization": organization,
             }
 
             client = self.get_sync_client(client=client, init_client_params=init_client_params)
 
-            raw_response: Final = client.images.with_raw_response.create_variation(**json_data)  # type: ignore
+            raw_response: Final = client.images.with_raw_response.create_variation(**json_data)
             response: Final = raw_response.parse()
             response_json: Final = response.model_dump()
 

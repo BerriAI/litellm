@@ -143,7 +143,7 @@ def _update_request_data_with_managed_file_id(
         # Use model-based routing with credentials from config
         prepare_data_with_credentials(
             data=data,
-            credentials=credentials,  # type: ignore
+            credentials=credentials,
             file_id=original_file_id,  # Use decoded file ID if from encoded ID
         )
 

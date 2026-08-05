@@ -35,7 +35,7 @@ class ContainerObject(BaseModel):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)
         except Exception:
@@ -59,7 +59,7 @@ class DeleteContainerResult(BaseModel):
     def __getitem__(self, key):
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)
         except Exception:
@@ -84,7 +84,7 @@ class ContainerListResponse(BaseModel):
     def __getitem__(self, key):
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)
         except Exception:
@@ -149,7 +149,7 @@ class ContainerFileObject(BaseModel):
     def __getitem__(self, key):
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)
         except Exception:
@@ -174,7 +174,7 @@ class ContainerFileListResponse(BaseModel):
     def __getitem__(self, key):
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)
         except Exception:
@@ -198,7 +198,7 @@ class DeleteContainerFileResponse(BaseModel):
     def __getitem__(self, key):
         return getattr(self, key)
 
-    def json(self, **kwargs):  # type: ignore
+    def json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)
         except Exception:

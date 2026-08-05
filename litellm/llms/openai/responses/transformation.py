@@ -219,7 +219,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     validated_input.append(filtered_item)
                 else:
                     validated_input.append(item)
-            return validated_input  # type: ignore
+            return validated_input
         # Input is expected to be either str or List, no single BaseModel expected
         return input
 
