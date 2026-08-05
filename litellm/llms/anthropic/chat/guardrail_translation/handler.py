@@ -26,10 +26,10 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
-    openai_messages_without_system,
-    openai_messages_without_tool,
+    filtered_structured_messages,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -326,19 +326,25 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
 
         chat_completion_compatible_request: Final = self._translate_to_openai(data)
 
-        structured_messages = cast(
-            list[AllMessageValues],
-            chat_completion_compatible_request.get("messages", []),
+        structured_messages: Final = list(
+            filtered_structured_messages(
+                cast(
+                    list[AllMessageValues],
+                    chat_completion_compatible_request.get("messages", []),
+                ),
+                scan_only_tool_results=scan_only_tool_results,
+                skip_system=skip_system,
+                skip_tool=skip_tool,
+            )
         )
-        if skip_system:
-            structured_messages = openai_messages_without_system(structured_messages)
-        if skip_tool:
-            structured_messages = openai_messages_without_tool(structured_messages)
 
-        tools_to_check: Final[list[ChatCompletionToolParam]] = chat_completion_compatible_request.get("tools", [])
+        tools_to_check: Final[list[ChatCompletionToolParam]] = (
+            [] if scan_only_tool_results else chat_completion_compatible_request.get("tools", [])
+        )
 
         # Step 1: Extract all text content and images
         extracted: Final = tuple(
@@ -347,6 +353,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 msg_idx=msg_idx,
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
+                scan_only_tool_results=scan_only_tool_results,
             )
             for msg_idx, message in enumerate(messages)
         )
@@ -461,6 +468,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         msg_idx: int,
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
+        scan_only_tool_results: bool = False,
     ) -> ExtractedInput:
         """
         Extract text content and images from a message.
@@ -471,6 +479,8 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         content: Final = message.get("content", None)
         if isinstance(content, str):
+            if scan_only_tool_results:
+                return EMPTY_EXTRACTED_INPUT
             return ExtractedInput(scanned=(ScannedText(content, MessageContentTarget(msg_idx)),), images=())
         if not isinstance(content, list):
             return EMPTY_EXTRACTED_INPUT
@@ -481,6 +491,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 msg_idx=msg_idx,
                 content_idx=content_idx,
                 skip_tool_message=skip_tool_message,
+                scan_only_tool_results=scan_only_tool_results,
             )
             for content_idx, content_item in enumerate(content)
             if isinstance(content_item, dict)
@@ -497,11 +508,15 @@ class AnthropicMessagesHandler(BaseTranslation):
         msg_idx: int,
         content_idx: int,
         skip_tool_message: bool,
+        scan_only_tool_results: bool = False,
     ) -> ExtractedInput:
         if content_item.get("type") == "tool_result":
             if skip_tool_message:
                 return EMPTY_EXTRACTED_INPUT
             return cls._extract_tool_result(content_item=content_item, msg_idx=msg_idx, content_idx=content_idx)
+
+        if scan_only_tool_results:
+            return EMPTY_EXTRACTED_INPUT
 
         text_str: Final = content_item.get("text", None)
         return ExtractedInput(

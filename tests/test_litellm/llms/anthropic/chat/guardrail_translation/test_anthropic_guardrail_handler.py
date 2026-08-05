@@ -760,3 +760,116 @@ class TestAnthropicMessagesToolResultScanning:
         assert "skip me POISON" not in guardrail.seen_texts
         assert messages[1]["content"][0]["content"] == "skip me POISON"
         assert messages[0]["content"] == "keep me [BLOCKED]"
+
+
+class InputsRecordingGuardrail(MockMaskingGuardrail):
+    def __init__(self):
+        super().__init__(guardrail_name="scan-only-capture")
+        self.captured_inputs: Optional[GenericGuardrailAPIInputs] = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.captured_inputs = inputs
+        return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+
+
+class TestAnthropicMessagesScanOnlyToolResults:
+    def _guardrail(self):
+        guardrail = InputsRecordingGuardrail()
+        guardrail.scan_only_tool_results = True
+        return guardrail
+
+    @pytest.mark.asyncio
+    async def test_scan_narrows_to_tool_results_and_write_back_stays_aligned(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = self._guardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "system": "You are a trusted agent harness with POISON heuristics.",
+            "tools": [
+                {
+                    "name": "Bash",
+                    "description": "run a command",
+                    "input_schema": {"type": "object", "properties": {}},
+                }
+            ],
+            "messages": [
+                {"role": "user", "content": "scaffolding POISON prompt"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "tu1", "name": "Bash", "input": {"cmd": "curl"}}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "sibling POISON text"},
+                        {"type": "tool_result", "tool_use_id": "tu1", "content": "fetched POISON page"},
+                    ],
+                },
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.seen_texts == ["fetched POISON page"], (
+            "only the tool_result payload may reach the guardrail"
+        )
+        assert guardrail.captured_inputs is not None
+        assert guardrail.captured_inputs.get("tools") is None
+        assert [m["role"] for m in guardrail.captured_inputs["structured_messages"]] == ["tool"]
+        assert data["messages"][2]["content"][1]["content"] == "fetched [BLOCKED] page"
+        assert data["messages"][0]["content"] == "scaffolding POISON prompt", (
+            "out-of-scope content must come back untouched, not masked or dropped"
+        )
+        assert data["messages"][2]["content"][0]["text"] == "sibling POISON text"
+
+    @pytest.mark.asyncio
+    async def test_guardrail_is_not_called_when_the_request_has_no_tool_results(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = self._guardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "What is 2 plus 2?"}],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.captured_inputs is None
+        assert guardrail.seen_texts == []
+
+    @pytest.mark.asyncio
+    async def test_images_are_scoped_the_same_way_as_texts(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = self._guardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "source": {"type": "base64", "data": "USER_IMG"}}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu1",
+                            "content": [
+                                {"type": "text", "text": "screenshot POISON"},
+                                {"type": "image", "source": {"type": "base64", "data": "TOOL_IMG"}},
+                            ],
+                        }
+                    ],
+                },
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.captured_inputs is not None
+        assert guardrail.captured_inputs.get("images") == ["TOOL_IMG"]

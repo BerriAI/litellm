@@ -1229,3 +1229,71 @@ class TestIncrementalScanRespectsSkipFlags:
             assert mock_api.call_count == 1
             scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
             assert scanned == ["It is sunny in Paris.", "And tomorrow?"]
+
+
+class TestScanOnlyToolResults:
+    def _bedrock_guardrail(self):
+        from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+
+        guardrail = BedrockGuardrail(
+            guardrail_name="bedrock-scan-only-tool-results",
+            guardrailIdentifier="test-guardrail",
+            guardrailVersion="DRAFT",
+            default_on=True,
+        )
+        guardrail.scan_only_tool_results = True
+        return guardrail
+
+    @pytest.mark.asyncio
+    async def test_only_tool_role_content_is_scanned(self):
+        from unittest.mock import AsyncMock, patch
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = self._bedrock_guardrail()
+        data = {
+            "messages": [
+                {"role": "system", "content": "SYSTEM-PROMPT-not-scanned"},
+                {"role": "user", "content": "USER-PROMPT-not-scanned"},
+                {
+                    "role": "assistant",
+                    "content": "ASSISTANT-not-scanned",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": '{"path": "report.html"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT-scanned"},
+            ]
+        }
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            assert mock_api.call_count == 1
+            scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
+            assert scanned == ["TOOL-RESULT-scanned"]
+
+    @pytest.mark.parametrize("flag_value", [None, "false", 0, object()])
+    @pytest.mark.asyncio
+    async def test_scope_narrows_only_when_the_flag_is_actually_true(self, flag_value):
+        from unittest.mock import AsyncMock, patch
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = self._bedrock_guardrail()
+        guardrail.scan_only_tool_results = flag_value
+        data = {
+            "messages": [
+                {"role": "user", "content": "USER-PROMPT"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT"},
+            ]
+        }
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            assert mock_api.call_count == 1
+            scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
+            assert scanned == ["USER-PROMPT", "TOOL-RESULT"], (
+                "anything but an explicit True must leave the whole request in scope"
+            )
