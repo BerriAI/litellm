@@ -432,7 +432,11 @@ def _get_batch_job_usage_from_response_body(response_body: dict, custom_llm_prov
             usage_object=response_body.get("usage", None) or {},
             reasoning_content=None,
         )
+    from litellm.responses.utils import ResponseAPILoggingUtils
+
     _usage_dict: Final = response_body.get("usage", None) or {}
+    if ResponseAPILoggingUtils._is_response_api_usage(_usage_dict):
+        return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_usage_dict)
     usage: Final[Usage] = Usage(**_usage_dict)
     return usage
 

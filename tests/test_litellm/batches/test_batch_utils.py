@@ -405,6 +405,33 @@ def test_total_usage_sums_successful_only(monkeypatch):
     )
 
 
+def test_total_usage_and_cost_normalize_mixed_responses_and_chat():
+    responses_row = _success_row(
+        usage={
+            "input_tokens": 20,
+            "output_tokens": 7,
+            "total_tokens": 27,
+            "input_tokens_details": {"cached_tokens": 3},
+        }
+    )
+    chat_row = _success_row(usage=_usage(10, 5))
+
+    cost, usage, _ = bu._aggregate_batch_cost_usage_models(
+        entries=[responses_row, chat_row],
+        custom_llm_provider="openai",
+        model_info={
+            "input_cost_per_token_batches": 0.00125,
+            "output_cost_per_token_batches": 0.005,
+        },
+    )
+
+    assert usage.prompt_tokens == 30
+    assert usage.completion_tokens == 12
+    assert usage.total_tokens == 42
+    assert usage.cache_read_input_tokens == 3
+    assert cost == pytest.approx((30 * 0.00125) + (12 * 0.005))
+
+
 def test_total_usage_empty_is_zero():
     cost, usage, models = bu._aggregate_batch_cost_usage_models(entries=[], custom_llm_provider="openai")
     assert cost == 0.0
