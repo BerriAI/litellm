@@ -12,7 +12,7 @@ import json
 
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 from urllib.parse import urlparse
 
@@ -326,23 +326,25 @@ def create_azure_ad_redis_connect_func(
     return ad_connect
 
 
-def _get_azure_ad_redis_username(redis_kwargs: dict) -> str | None:
-    username = redis_kwargs.get("username") or os.environ.get("REDIS_USERNAME")
+def _get_azure_ad_redis_username(redis_kwargs: Mapping[str, object]) -> str | None:
+    username: Final = redis_kwargs.get("username") or os.environ.get("REDIS_USERNAME")
     return str(username) if username is not None else None
 
 
 def _get_credential_provider_from_connect_func(
     redis_connect_func: Callable | None,
-    redis_kwargs: dict,
-):
+    redis_kwargs: Mapping[str, object],
+) -> GCPIAMCredentialProvider | AzureADCredentialProvider | None:
     if redis_connect_func is None:
         return None
-    connect_func_attrs = getattr(redis_connect_func, "__dict__", {})
-    if "_gcp_service_account" in connect_func_attrs and "_azure_credential" in connect_func_attrs:
+    connect_func_attrs: Final[frozenset[str]] = frozenset(getattr(redis_connect_func, "__dict__", ()))
+    has_gcp: Final = "_gcp_service_account" in connect_func_attrs
+    has_azure: Final = "_azure_credential" in connect_func_attrs
+    if has_gcp and has_azure:
         raise ValueError("redis_connect_func cannot define both GCP and Azure credentials")
-    if "_gcp_service_account" in connect_func_attrs:
+    if has_gcp:
         return GCPIAMCredentialProvider(redis_connect_func._gcp_service_account)
-    if "_azure_credential" in connect_func_attrs:
+    if has_azure:
         return AzureADCredentialProvider(
             redis_connect_func._azure_credential,
             username=_get_azure_ad_redis_username(redis_kwargs),
@@ -462,8 +464,15 @@ def _get_redis_client_logic(**env_overrides):
     _redis_url: Final = redis_kwargs.get("url")
     _uses_url: Final = "startup_nodes" not in redis_kwargs and _redis_url is not None
     if _credential_provider is not None or _azure_ad_enabled:
+        _parsed_redis_url: Final = urlparse(str(_redis_url)) if _uses_url else None
         _uses_tls: Final = (
-            urlparse(str(_redis_url)).scheme == "rediss" if _uses_url else redis_kwargs.get("ssl") is True
+            (
+                str(_redis_url).startswith("rediss://")
+                and _parsed_redis_url.scheme == "rediss"
+                and _parsed_redis_url.hostname is not None
+            )
+            if _parsed_redis_url is not None
+            else redis_kwargs.get("ssl") is True
         )
         if not _uses_tls:
             raise ValueError("Redis IAM authentication requires TLS")
