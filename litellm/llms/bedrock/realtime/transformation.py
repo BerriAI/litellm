@@ -871,6 +871,9 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         if not current_output_item_id or not current_response_id:
             return [], current_delta_chunks
 
+        if content_end.get("type") == "TOOL" or current_delta_type not in ("text", "audio"):
+            return [], current_delta_chunks
+
         returned_messages: list[OpenAIRealtimeEvents] = []
 
         # Send appropriate done event based on type
@@ -903,7 +906,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             )
             returned_messages.append(content_part_done)
 
-        elif current_delta_type == "audio":
+        else:
             audio_done = OpenAIRealtimeResponseAudioDone(
                 type="response.audio.done",
                 content_index=0,

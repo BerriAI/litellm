@@ -684,6 +684,35 @@ class TestBedrockRealtimeResponseTransformation:
         logging_obj = MagicMock()
         logging_obj.litellm_trace_id = "trace_123"
 
+        state = {
+            "session_configuration_request": json.dumps({"configured": True}),
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": "conv_123",
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        }
+
+        content_start_result = config.transform_realtime_response(
+            json.dumps({"event": {"contentStart": {"role": "TOOL", "type": "TOOL"}}}),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        assert content_start_result["response"] == []
+        assert content_start_result["current_delta_type"] is None
+        state.update(
+            {
+                "current_output_item_id": content_start_result["current_output_item_id"],
+                "current_response_id": content_start_result["current_response_id"],
+                "current_conversation_id": content_start_result["current_conversation_id"],
+                "current_delta_chunks": content_start_result["current_delta_chunks"],
+                "current_item_chunks": content_start_result["current_item_chunks"],
+                "current_delta_type": content_start_result["current_delta_type"],
+            }
+        )
+
         tool_use_message = {
             "event": {
                 "toolUse": {
@@ -698,15 +727,7 @@ class TestBedrockRealtimeResponseTransformation:
             json.dumps(tool_use_message),
             "amazon.nova-2-sonic-v1:0",
             logging_obj,
-            realtime_response_transform_input={
-                "session_configuration_request": json.dumps({"configured": True}),
-                "current_output_item_id": None,
-                "current_response_id": None,
-                "current_conversation_id": "conv_123",
-                "current_delta_chunks": [],
-                "current_item_chunks": [],
-                "current_delta_type": "text",
-            },
+            realtime_response_transform_input=state,
         )
 
         assert len(result["response"]) == 1
@@ -720,7 +741,6 @@ class TestBedrockRealtimeResponseTransformation:
         assert function_call["item_id"] == result["current_output_item_id"]
         assert json.loads(function_call["arguments"]) == {"location": "Seattle"}
 
-        # A follow-up contentEnd must reuse the same persisted ids
         content_end_message = {
             "event": {
                 "contentEnd": {
@@ -745,6 +765,42 @@ class TestBedrockRealtimeResponseTransformation:
         )
         assert follow_up["current_response_id"] == result["current_response_id"]
         assert follow_up["current_output_item_id"] == result["current_output_item_id"]
+        assert follow_up["response"] == []
+        assert all(msg["type"] != "response.output_item.done" for msg in follow_up["response"])
+
+    def test_tool_content_end_does_not_emit_message_output_item_done(self):
+        """Minted tool ids must not unlock unpaired message output_item.done on TOOL contentEnd"""
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+
+        content_end_message = {
+            "event": {
+                "contentEnd": {
+                    "stopReason": "TOOL_USE",
+                    "type": "TOOL",
+                }
+            }
+        }
+        result = config.transform_realtime_response(
+            json.dumps(content_end_message),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                "session_configuration_request": json.dumps({"configured": True}),
+                "current_output_item_id": "item_minted_for_tool",
+                "current_response_id": "resp_minted_for_tool",
+                "current_conversation_id": "conv_123",
+                "current_delta_chunks": [],
+                "current_item_chunks": [],
+                "current_delta_type": "text",
+            },
+        )
+
+        assert result["response"] == []
+        assert result["current_response_id"] == "resp_minted_for_tool"
+        assert result["current_output_item_id"] == "item_minted_for_tool"
+        assert result["current_delta_type"] == "text"
 
     def test_transform_content_end_text(self):
         """Test contentEnd for text response"""
