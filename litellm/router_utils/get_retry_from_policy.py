@@ -8,7 +8,9 @@ from litellm.exceptions import (
     AuthenticationError,
     BadRequestError,
     ContentPolicyViolationError,
+    InternalServerError,
     RateLimitError,
+    ServiceUnavailableError,
     Timeout,
 )
 from litellm.types.router import RetryPolicy
@@ -26,6 +28,8 @@ def get_num_retries_from_retry_policy(
     TimeoutErrorRetries: Optional[int] = None
     RateLimitErrorRetries: Optional[int] = None
     ContentPolicyViolationErrorRetries: Optional[int] = None
+    InternalServerErrorRetries: Optional[int] = None
+    ServiceUnavailableErrorRetries: Optional[int] = None
     """
     # if we can find the exception then in the retry policy -> return the number of retries
 
@@ -48,6 +52,10 @@ def get_num_retries_from_retry_policy(
         and retry_policy.ContentPolicyViolationErrorRetries is not None
     ):
         return retry_policy.ContentPolicyViolationErrorRetries
+    if isinstance(exception, ServiceUnavailableError) and retry_policy.ServiceUnavailableErrorRetries is not None:
+        return retry_policy.ServiceUnavailableErrorRetries
+    if isinstance(exception, InternalServerError) and retry_policy.InternalServerErrorRetries is not None:
+        return retry_policy.InternalServerErrorRetries
     if isinstance(exception, BadRequestError) and retry_policy.BadRequestErrorRetries is not None:
         return retry_policy.BadRequestErrorRetries
 

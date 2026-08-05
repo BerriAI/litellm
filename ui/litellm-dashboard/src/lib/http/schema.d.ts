@@ -31451,6 +31451,8 @@ export interface components {
             InternalServerErrorRetries?: number | null;
             /** Ratelimiterrorretries */
             RateLimitErrorRetries?: number | null;
+            /** Serviceunavailableerrorretries */
+            ServiceUnavailableErrorRetries?: number | null;
             /** Timeouterrorretries */
             TimeoutErrorRetries?: number | null;
         };
