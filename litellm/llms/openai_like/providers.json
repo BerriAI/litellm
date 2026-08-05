@@ -114,5 +114,9 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
+  },
+  "modelis": {
+    "base_url": "https://modelishub.com/v1",
+    "api_key_env": "MODELIS_API_KEY"
   }
 }
