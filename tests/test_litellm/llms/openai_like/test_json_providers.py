@@ -627,3 +627,18 @@ class TestCoralBricksPricing:
         # 200 uncached input tokens at full rate + 800 cached at 0 + output.
         expected = 200 * inp + 800 * 0.0 + 100 * out
         assert abs(cost - expected) < 1e-12, (cost, expected)
+
+    def test_add_known_models_registers_coralbricks(self):
+        """Covers the coralbricks branch in add_known_models: cost-map rows
+        with litellm_provider=coralbricks land in the provider model set."""
+        litellm.add_known_models(
+            {
+                "coralbricks/test-model": {
+                    "litellm_provider": "coralbricks",
+                    "mode": "chat",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                }
+            }
+        )
+        assert "coralbricks/test-model" in litellm.coralbricks_models
