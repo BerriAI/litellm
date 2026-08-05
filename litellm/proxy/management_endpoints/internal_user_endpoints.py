@@ -443,6 +443,7 @@ async def new_user(
     - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
     - teams: Optional[list] - specify a list of team id's a user belongs to.
     - user_email: Optional[str] - Specify a user email.
+    - password: Optional[str] - Specify a user password, used for Admin UI username/password login. Stored as a scrypt hash.
     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
     - max_budget: Optional[float] - Specify max budget for a given user.
