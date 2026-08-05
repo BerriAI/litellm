@@ -642,3 +642,70 @@ def test_degraded_preset_synthesizes_nothing_without_team_credentials():
     stays silent rather than inventing an uncredentialled vendor export."""
     degraded = TenantTracerCache(OpenTelemetryV2Config(exporters=[]), "arize", "litellm")
     assert degraded._config_with_headers({}, None).exporters == []
+
+
+# --- transport is part of a destination's identity ------------------------- #
+# Two destinations can agree on endpoint, headers and Resource attrs and still
+# disagree on OTLP transport (an Arize credential naming ``arize_http_endpoint``
+# resolves to otlp_http where the backend's intrinsic default is gRPC). The
+# provider cache and the synthesized exporter both have to carry that.
+
+
+def _arize_dest_with_protocol(protocol):
+    return OtelDestination(
+        endpoint="https://collector.internal/v1",
+        headers={"space_id": "S", "api_key": "K"},
+        callback_name="arize",
+        resource_attributes={"model_id": "proj", "arize.project.name": "proj"},
+        protocol=protocol,
+    )
+
+
+def _exporter_transports(provider):
+    """The OTLP transport of each of a provider's exporters. Both exporters are named
+    ``OTLPSpanExporter``; only the defining module tells gRPC from HTTP apart."""
+    return {
+        "http" if ".http." in type(sp.span_exporter).__module__ else "grpc"
+        for sp in provider._active_span_processor._span_processors
+        if getattr(sp, "span_exporter", None) is not None
+        and "otlp" in type(sp.span_exporter).__module__
+    }
+
+
+def test_same_endpoint_and_headers_but_different_protocol_are_distinct_providers():
+    """Two destinations differing only in OTLP transport must not share a provider;
+    reusing the first one's exports the second's spans over the wrong transport."""
+    cache = _cache("arize")
+    cache.tracers_for(NoOpTracer(), (_arize_dest_with_protocol(None),))
+    cache.tracers_for(NoOpTracer(), (_arize_dest_with_protocol("otlp_http"),))
+
+    assert len(cache._providers) == 2
+    transports = sorted(t for p in cache._providers.values() for t in _exporter_transports(p))
+    assert transports == ["grpc", "http"]
+
+
+def test_synthesized_exporter_uses_the_transport_the_credentials_pin():
+    """A team whose Arize credentials name an HTTP collector gets an HTTP exporter, not
+    the backend's intrinsic gRPC default."""
+    cache = _cache("arize", exporters=[ExporterSpec(kind="otlp_grpc", endpoint="https://env/v1", owner=None)])
+    params = {
+        "arize_space_id": "S",
+        "arize_api_key": "K",
+        "arize_http_endpoint": "https://collector.internal/v1",
+    }
+
+    config = cache._config_with_headers({"space_id": "S"}, params)
+
+    (synthesized,) = [spec for spec in config.exporters if spec.owner == "arize"]
+    assert synthesized.endpoint == "https://collector.internal/v1"
+    assert synthesized.kind == "otlp_http"
+
+
+def test_synthesized_exporter_keeps_the_backend_default_when_credentials_pin_nothing():
+    """Credentials that name no transport still get the backend's intrinsic one."""
+    cache = _cache("arize", exporters=[ExporterSpec(kind="otlp_grpc", endpoint="https://env/v1", owner=None)])
+
+    config = cache._config_with_headers({"space_id": "S"}, {"arize_space_id": "S", "arize_api_key": "K"})
+
+    (synthesized,) = [spec for spec in config.exporters if spec.owner == "arize"]
+    assert synthesized.kind == "otlp_grpc"

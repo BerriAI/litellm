@@ -128,17 +128,19 @@ class TenantTracerCache:
         """A cached provider that keeps the configured exporters and rewrites only this
         backend's owned exporter's headers to ``headers`` (the per-request credentials).
 
-        The endpoint is part of the key: when the preset contributed no exporter the
-        synthesized one resolves its endpoint from the request's own credentials, so two
-        tenants sharing vendor credentials on different hosts would otherwise collide and
-        the second tenant's traces would ship to the first tenant's collector.
+        The endpoint and transport are part of the key: when the preset contributed no
+        exporter the synthesized one resolves both from the request's own credentials, so
+        two tenants sharing vendor credentials on different hosts would otherwise collide
+        and the second tenant's traces would ship to the first tenant's collector.
         """
-        from litellm.integrations.otel.presets import dynamic_otlp_endpoint
+        from litellm.integrations.otel.presets import dynamic_otlp_destination
 
+        destination = dynamic_otlp_destination(self._callback_name, dynamic_params)
         cache_key: tuple[object, ...] = (
             "dynamic",
             tuple(sorted(headers.items())),
-            dynamic_otlp_endpoint(self._callback_name, dynamic_params),
+            destination.endpoint if destination is not None else None,
+            destination.protocol if destination is not None else None,
         )
         provider = self._providers.get(cache_key)
         if provider is not None:
@@ -194,16 +196,21 @@ class TenantTracerCache:
         dynamic_params: "StandardCallbackDynamicParams | None",
     ) -> "tuple[ExporterSpec, ...]":
         """This backend's exporter built from the request's own credentials, or empty
-        when they don't resolve to an endpoint."""
-        from litellm.integrations.otel.presets import dynamic_otlp_endpoint
+        when they don't resolve to an endpoint.
 
-        endpoint = dynamic_otlp_endpoint(self._callback_name, dynamic_params)
-        if not endpoint:
+        The builder's ``protocol`` wins over the backend's intrinsic transport, matching
+        ``_config_with_destinations``: values that pin an HTTP collector for a gRPC-default
+        backend would otherwise be exported over gRPC and dropped.
+        """
+        from litellm.integrations.otel.presets import dynamic_otlp_destination
+
+        destination = dynamic_otlp_destination(self._callback_name, dynamic_params)
+        if destination is None or not destination.endpoint:
             return ()
         return (
             ExporterSpec(
-                kind=self._owned_otlp_kind(),
-                endpoint=endpoint,
+                kind=destination.protocol or self._owned_otlp_kind(),
+                endpoint=destination.endpoint,
                 headers=header_str,
                 owner=self._callback_name,
             ),
@@ -238,7 +245,7 @@ class TenantTracerCache:
     ) -> Tracer:
         cache_key: tuple[object, ...] = (
             resource_key,
-            tuple(sorted((d.endpoint, tuple(sorted(d.headers.items()))) for d in group)),
+            tuple(sorted((d.endpoint, tuple(sorted(d.headers.items())), d.protocol or "") for d in group)),
             include_base,
         )
         provider = self._providers.get(cache_key)
