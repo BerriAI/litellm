@@ -67,12 +67,18 @@ class _TierReply(BaseModel):
     tier: str
 
 
+class TierClassification(BaseModel):
+    """Structured response schema for the LLM-based complexity classifier."""
+
+    tier: Literal["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
+
+
 def _tier_classification_model(tier_names: Sequence[str]) -> type[BaseModel]:
     """Response schema whose tier Literal is the active tier set, so the classifier
     structurally cannot return a name outside it."""
     return create_model(
-        "TierClassification",
-        __doc__="Structured response schema for the LLM-based complexity classifier.",
+        TierClassification.__name__,
+        __doc__=TierClassification.__doc__,
         tier=(Literal[tuple(tier_names)], ...),
     )
 
@@ -85,7 +91,7 @@ def _tier_name(tier: ComplexityTier | str) -> str:
 _CLASSIFICATION_TIER_CRITERIA: Final[Mapping[str, str]] = MappingProxyType(
     {
         "SIMPLE": (
-            "greetings, chitchat, or factual lookups with a short known answer. Do not use SIMPLE for "
+            "greetings, chitchat, or factual lookups with a short known answer. Do not use this tier for "
             "unsolved problems, proofs, deep theory, multi-step analysis, or non-trivial code, even if "
             "the request is only one sentence."
         ),
@@ -816,6 +822,10 @@ class ComplexityRouter(CustomLogger):
                 decision["savings_baseline_deployment_id"] = baseline.deployment_id
         if tier is not None:
             decision["tier"] = _tier_name(tier)
+            if not self.config.has_custom_tiers:
+                label = self.config.tier_label(ComplexityTier(_tier_name(tier)))
+                if label != _tier_name(tier):
+                    decision["tier_label"] = label
         if score is not None:
             decision["score"] = score
             decision["tier_boundaries"] = self._effective_tier_boundaries()
@@ -959,19 +969,20 @@ class ComplexityRouter(CustomLogger):
             },
             {"role": "user", "content": user_payload},
         ]
+        response_format: Final = type_to_response_format_param(response_model)
 
         proxy_server_request: Final = {
             "body": {
                 "model": llm_config.model,
                 "messages": messages_for_call,
-                "response_format": type_to_response_format_param(response_model),
+                "response_format": response_format,
             }
         }
 
         response: Final[ModelResponse] = await self.litellm_router_instance.acompletion(
             model=llm_config.model,
             messages=messages_for_call,
-            response_format=response_model,
+            response_format=response_format,
             timeout=llm_config.timeout_ms / 1000,
             metadata=metadata,
             proxy_server_request=proxy_server_request,
@@ -986,14 +997,18 @@ class ComplexityRouter(CustomLogger):
             if raw_tier not in self.config.tier_names():
                 raise ValueError(f"LLM classifier returned an unknown tier: {raw_tier!r}")
             return raw_tier
-        return ComplexityTier[raw_tier]
+        tier: Final = self.config.tier_for_label(raw_tier)
+        if tier is None:
+            raise ValueError(f"LLM classifier returned an unrecognized tier: {raw_tier!r}")
+        return tier
 
     def _rubric_entries(self) -> tuple[tuple[str, str], ...]:
-        """(name, description) per active tier: operator definitions, or the built-in criteria."""
+        """(name, description) per active tier: operator definitions, or the built-in criteria
+        under the operator's display labels."""
         definitions: Final = self.config.tier_definitions
         if definitions is not None:
             return tuple((definition.name, definition.description) for definition in definitions)
-        return _CANONICAL_TIER_ENTRIES
+        return tuple((label, _CLASSIFICATION_TIER_CRITERIA[tier.value]) for tier, label in self.config.labeled_tiers())
 
     @staticmethod
     def _build_classifier_user_payload(

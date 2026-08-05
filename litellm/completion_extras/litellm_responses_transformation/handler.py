@@ -238,7 +238,7 @@ class ResponsesToCompletionBridgeHandler:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
-                streaming_response=result,  # type: ignore
+                streaming_response=result,
                 sync_stream=True,
                 json_mode=kwargs.get("json_mode"),
             )
@@ -336,7 +336,7 @@ class ResponsesToCompletionBridgeHandler:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
-                streaming_response=result,  # type: ignore
+                streaming_response=result,
                 sync_stream=False,
                 json_mode=kwargs.get("json_mode"),
             )

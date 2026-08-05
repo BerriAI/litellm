@@ -27,12 +27,14 @@ The router scores each request across 7 dimensions:
 
 The weighted sum is mapped to tiers using configurable boundaries:
 
-| Tier | Score Range | Typical Use |
-|------|-------------|-------------|
-| SIMPLE | < 0.15 | Basic questions, greetings |
-| MEDIUM | 0.15 - 0.35 | Standard queries |
-| COMPLEX | 0.35 - 0.60 | Technical, multi-part requests |
-| REASONING | > 0.60 | Chain-of-thought, analysis |
+| Tier | Score Range | Boundary key below it | Typical Use |
+|------|-------------|-----------------------|-------------|
+| SIMPLE | < 0.15 | - | Basic questions, greetings |
+| MEDIUM | 0.15 - 0.35 | `simple_medium` | Standard queries |
+| COMPLEX | 0.35 - 0.60 | `medium_complex` | Technical, multi-part requests |
+| REASONING | > 0.60 | `complex_reasoning` | Chain-of-thought, analysis |
+
+Tier names are defaults you can rename with [`tier_labels`](#renaming-the-tiers). The three `tier_boundaries` keys are named after those defaults but they are scorer knobs, not tiers: each one names the gap between two rungs and is persisted by name on every routing decision, so they stay `simple_medium` / `medium_complex` / `complex_reasoning` no matter what you call the tiers. The column above tells a renamed deployment which knob it is turning.
 
 ## Configuration
 
@@ -51,37 +53,33 @@ model_list:
           REASONING: o1-preview
 ```
 
-### Custom tier definitions
+### Renaming the tiers
 
-`tier_definitions` replaces the built-in SIMPLE/MEDIUM/COMPLEX/REASONING with an operator-defined tier set. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet, so the classifier reasons over your taxonomy directly:
+`tier_labels` puts your own vocabulary on the four tiers:
 
 ```yaml
 model_list:
-  - model_name: support-router
+  - model_name: smart-router
     litellm_params:
       model: auto_router/complexity_router
       complexity_router_config:
-        classifier_type: llm
-        classifier_llm_config:
-          model: haiku-classifier
-        tier_definitions:
-          - name: CASUAL
-            description: greetings, chitchat, and quick factual questions
-          - name: CODING
-            description: any programming task, code review, or debugging
-          - name: RESEARCH
-            description: multi-step analysis, proofs, or open-ended research
-        fallback_tier: CODING
-        classification_prompt: Sort each request by the kind of work our support desk must do to answer it.
+        tier_labels:
+          SIMPLE: Cheap
+          MEDIUM: Standard
+          COMPLEX: Premium
+          REASONING: Deep
         tiers:
-          CASUAL: gpt-4o-mini
-          CODING: gpt-4o
-          RESEARCH: o1-preview
+          SIMPLE: gpt-5-nano
+          MEDIUM: gpt-5-mini
+          COMPLEX: gpt-5
+          REASONING: o3
 ```
 
-The rules: between 2 and 8 tiers, unique names, every defined tier mapped in `tiers` and no other keys, and `classifier_type: llm` (the heuristic scorer only produces the built-in tiers). `fallback_tier` is required and names the tier routed to when the classifier call fails, since the heuristic fallback cannot produce custom tiers. `classification_prompt` is optional and replaces the rubric's opening instructions; the per-tier bullets and the trust-boundary paragraph that tells the classifier to ignore tier requests embedded in quoted caller text are always appended after it and cannot be overridden. It also works without `tier_definitions` to reword the instructions over the built-in tiers.
+Labels are display-only. Every config key stays canonical, so `tiers`, `keyword_tier_rules[].tier`, and `tier_boundaries` are written exactly as they are without labels. A partial map is fine and any tier you leave out keeps its default name. Two tiers can't share a label, and a label can't be another tier's canonical name, since either would make a log row ambiguous.
 
-The order of `tier_definitions` is ascending severity, so list the cheapest tier first and the deepest last. `keyword_tier_rules` may target the defined names, and when a prompt matches several rules the most severe matched tier wins, ranked by that order, exactly as the built-in set ranks by SIMPLE through REASONING. Features built on the built-in tier ladder are rejected at config write when combined with `tier_definitions`: escalation keywords, `adaptive`, `session_affinity`, and `plugins`. Spend logs record the custom tier name in `routing_decision.tier`, and a classifier failure is visible as `cause: classifier_fallback`.
+Where the names show up depends on your classifier. Under the default heuristic scorer they are cosmetic: the scorer maps a weighted score to a rung and never reads a tier name, so renaming changes what you see in the dashboard and your spend logs and nothing else. Under `classifier_type: llm` the labels are also the names in the rubric the classifier reasons with and the values it must return, so clearer names can sharpen its choices. Either way the names are operator-facing, and an API caller never sees them.
+
+Spend logs keep `routing_decision.tier` canonical so rows from before and after a rename stay comparable, and gain `routing_decision.tier_label` on the tiers you renamed.
 
 ### Full Configuration
 
@@ -91,6 +89,13 @@ model_list:
     litellm_params:
       model: auto_router/complexity_router
       complexity_router_config:
+        # Display names for the tiers (optional, config keys stay canonical)
+        tier_labels:
+          SIMPLE: Cheap
+          MEDIUM: Standard
+          COMPLEX: Premium
+          REASONING: Deep
+
         # Tier to model mapping
         tiers:
           SIMPLE: gpt-4o-mini

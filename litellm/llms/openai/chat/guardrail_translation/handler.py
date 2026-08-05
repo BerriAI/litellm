@@ -109,7 +109,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if images_to_check:
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
-                inputs["tool_calls"] = tool_calls_to_check  # type: ignore
+                inputs["tool_calls"] = tool_calls_to_check
             structured_messages = self.get_structured_messages(data)
             if structured_messages:
                 if skip_system:
@@ -159,7 +159,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 if guardrailed_tool_calls:
                     await self._apply_guardrail_responses_to_input_tool_calls(
                         messages=messages,
-                        tool_calls=guardrailed_tool_calls,  # type: ignore
+                        tool_calls=guardrailed_tool_calls,
                         task_mappings=tool_call_task_mappings,
                     )
 
@@ -364,7 +364,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if images_to_check:
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
-                inputs["tool_calls"] = tool_calls_to_check  # type: ignore
+                inputs["tool_calls"] = tool_calls_to_check
             # Include model information from the response if available
             if hasattr(response, "model") and response.model:
                 inputs["model"] = response.model

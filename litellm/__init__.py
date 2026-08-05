@@ -1269,8 +1269,8 @@ from .llms.xai.common_utils import XAIModelInfo
 from litellm.types.utils import LlmProviders
 
 ## Lazy loading this is not straightforward, will leave it here for now.
-from .main import *  # type: ignore
-from .compression import compress  # type: ignore[no-redef]
+from .main import *
+from .compression import compress
 
 # Skills API
 from .skills.main import (
@@ -1341,7 +1341,7 @@ from .assistants.main import *
 from .batches.main import *
 from .images.main import *
 from .videos.main import *
-from .batch_completion.main import *  # type: ignore
+from .batch_completion.main import *
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
@@ -2054,7 +2054,7 @@ if TYPE_CHECKING:
     supports_reasoning: Callable[..., bool]
     acreate: Callable[..., Any]
     get_max_tokens: Callable[..., int]
-    get_model_info: Callable[..., _ModelInfoType]  # type: ignore[no-redef]
+    get_model_info: Callable[..., _ModelInfoType]
     register_prompt_template: Callable[..., None]
     validate_environment: Callable[..., dict]
     check_valid_key: Callable[..., bool]

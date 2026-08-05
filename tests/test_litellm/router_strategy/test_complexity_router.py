@@ -1377,6 +1377,143 @@ class TestLLMClassifierConfig:
         assert config.classifier_llm_config is None
 
 
+CUSTOM_TIER_LABELS: Dict[str, str] = {
+    "SIMPLE": "Cheap",
+    "MEDIUM": "Standard",
+    "COMPLEX": "Premium",
+    "REASONING": "Deep",
+}
+
+
+class TestTierLabels:
+    """tier_labels renames the tiers an operator sees, and nothing else.
+
+    Config keys, the heuristic scorer, and the model actually routed to are all defined by the
+    canonical tier, so a rename must be provably inert on the routing path.
+    """
+
+    def test_default_labels_are_the_canonical_names(self):
+        config = ComplexityRouterConfig()
+        assert config.labeled_tiers() == (
+            (ComplexityTier.SIMPLE, "SIMPLE"),
+            (ComplexityTier.MEDIUM, "MEDIUM"),
+            (ComplexityTier.COMPLEX, "COMPLEX"),
+            (ComplexityTier.REASONING, "REASONING"),
+        )
+
+    def test_a_partial_map_leaves_unlisted_tiers_canonical(self):
+        """Renaming one tier must not force an operator to restate the other three."""
+        config = ComplexityRouterConfig(tier_labels={"SIMPLE": "Cheap"})
+        assert config.tier_label(ComplexityTier.SIMPLE) == "Cheap"
+        assert config.tier_label(ComplexityTier.MEDIUM) == "MEDIUM"
+        assert config.tier_label(ComplexityTier.REASONING) == "REASONING"
+
+    def test_labels_are_stripped(self):
+        config = ComplexityRouterConfig(tier_labels={"SIMPLE": "  Cheap  "})
+        assert config.tier_label(ComplexityTier.SIMPLE) == "Cheap"
+
+    def test_labeled_tiers_is_in_ascending_severity_order(self):
+        """Order is what makes escalation ('bump one tier') coherent, so it is pinned here.
+
+        The rubric and the classifier's response-format enum are both rendered from this, and a
+        model reads an ordered list as ordered, so a reordering would change classification.
+        """
+        config = ComplexityRouterConfig(tier_labels=CUSTOM_TIER_LABELS)
+        assert [label for _, label in config.labeled_tiers()] == ["Cheap", "Standard", "Premium", "Deep"]
+
+    @pytest.mark.parametrize(
+        "labels,reason",
+        [
+            pytest.param({"SIMPLE": ""}, "empty", id="empty-label"),
+            pytest.param({"SIMPLE": "   "}, "blank after strip", id="whitespace-only-label"),
+            pytest.param({"SIMPLE": "Deep", "MEDIUM": "Deep"}, "two tiers share a label", id="duplicate-labels"),
+            pytest.param({"SIMPLE": "deep", "MEDIUM": "Deep"}, "case-insensitive duplicate", id="duplicate-casefold"),
+            pytest.param({"SIMPLE": "Cheap", "MEDIUM": "CHEAP"}, "case-insensitive duplicate", id="duplicate-upper"),
+            pytest.param({"SIMPLE": "COMPLEX"}, "shadows another tier's canonical name", id="shadow-canonical"),
+            pytest.param({"MEDIUM": "simple"}, "shadows another canonical name, any case", id="shadow-lowercase"),
+            pytest.param({"SIMPLE": "Medium"}, "collides with an unrenamed tier's name", id="collide-with-default"),
+        ],
+    )
+    def test_ambiguous_or_empty_labels_are_rejected(self, labels, reason):
+        """A label that is blank, duplicated, or another tier's name makes a log row unreadable.
+
+        Under classifier_type='llm' it is worse than cosmetic: {"SIMPLE": "COMPLEX"} would render the
+        rubric line '- COMPLEX: greetings, chitchat...' and teach the classifier the wrong criteria.
+        """
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(tier_labels=labels)
+
+    def test_a_tier_labelled_with_its_own_canonical_name_is_a_no_op(self):
+        """The shadowing check must reject only OTHER tiers' names.
+
+        Kills an over-broad check that would refuse a config which spells out all four labels and
+        leaves one of them alone.
+        """
+        config = ComplexityRouterConfig(tier_labels={"SIMPLE": "SIMPLE", "MEDIUM": "Standard"})
+        assert config.tier_label(ComplexityTier.SIMPLE) == "SIMPLE"
+        assert config.tier_label(ComplexityTier.MEDIUM) == "Standard"
+
+    def test_tier_for_label_resolves_labels_then_canonical_names(self):
+        config = ComplexityRouterConfig(tier_labels={"REASONING": "Deep"})
+        assert config.tier_for_label("Deep") == ComplexityTier.REASONING
+        assert config.tier_for_label("deep") == ComplexityTier.REASONING
+        # A renamed tier's canonical name still resolves, so a classifier that ignores the rubric
+        # and emits REASONING costs a tier lookup rather than a fallback to the heuristic.
+        assert config.tier_for_label("REASONING") == ComplexityTier.REASONING
+        assert config.tier_for_label("SIMPLE") == ComplexityTier.SIMPLE
+        assert config.tier_for_label("nonsense") is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "prompt,expected_model",
+        [
+            pytest.param("Hello!", "gpt-4o-mini", id="simple"),
+            pytest.param("Let's think step by step and prove the theorem.", "o1-preview", id="reasoning"),
+        ],
+    )
+    async def test_labels_never_change_which_model_is_routed_to(
+        self, mock_router_instance, basic_config, prompt, expected_model
+    ):
+        """The heuristic scorer never reads a tier name, so a rename must be inert end to end.
+
+        Kills any mutation that lets a label leak into tier lookup or model selection, which would
+        silently repoint traffic (and spend) the moment an operator renamed a tier.
+        """
+        renamed = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "tier_labels": CUSTOM_TIER_LABELS},
+        )
+        canonical = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+
+        renamed_response = await renamed.async_pre_routing_hook(
+            model="test-complexity-router", request_kwargs={}, messages=[{"role": "user", "content": prompt}]
+        )
+        canonical_response = await canonical.async_pre_routing_hook(
+            model="test-complexity-router", request_kwargs={}, messages=[{"role": "user", "content": prompt}]
+        )
+
+        assert renamed_response.model == canonical_response.model == expected_model
+        assert renamed_response.routing_decision["tier"] == canonical_response.routing_decision["tier"]
+
+    def test_tiers_and_tier_boundaries_keys_stay_canonical_under_a_rename(self):
+        """Renaming is display-only: the config keys an operator writes do not move.
+
+        tier_boundaries especially, since those three keys name the gaps between tiers and are
+        persisted by name on every scored routing decision.
+        """
+        config = ComplexityRouterConfig(
+            tiers={"SIMPLE": "gpt-4o-mini", "REASONING": "o1-preview"},
+            tier_labels=CUSTOM_TIER_LABELS,
+        )
+        assert set(config.tiers) == {"SIMPLE", "REASONING"}
+        assert set(config.tier_boundaries) == {"simple_medium", "medium_complex", "complex_reasoning"}
+
+
 class TestLLMClassifier:
     """Test the LLM-based classifier path (aclassify) and its fallback behavior."""
 
@@ -1588,6 +1725,108 @@ class TestLLMClassifier:
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
         for key in ("litellm_session_id", "litellm_trace_id"):
             assert call_kwargs.get(key) == expected.get(key)
+
+    def test_generated_response_format_without_labels_matches_the_shipped_pydantic_schema(self):
+        """The wire shape a default deployment sends must not drift now that the enum is spliced in.
+
+        TierClassification's Literal cannot carry runtime labels, so the model handed to
+        type_to_response_format_param is rebuilt from labeled_tiers() instead of being the shipped
+        class. This pins the two together: an unrenamed router must still send byte-identical
+        structured-output JSON, since providers validate it and a silent drift would break
+        classification for every existing deployment at once.
+        """
+        from litellm.llms.base_llm.base_utils import type_to_response_format_param
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            TierClassification,
+            _tier_classification_model,
+        )
+
+        generated = type_to_response_format_param(
+            _tier_classification_model(tuple(label for _, label in ComplexityRouterConfig().labeled_tiers()))
+        )
+        assert generated == type_to_response_format_param(TierClassification)
+
+    @pytest.mark.asyncio
+    async def test_renamed_tiers_reach_the_rubric_and_the_response_format(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        """The classifier is told to emit the operator's labels, and told what each one means.
+
+        Two failure modes are killed together: labels never threaded into the call at all, and labels
+        threaded in while the criteria that define each tier are dropped along with the canonical name.
+        """
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**llm_classifier_config, "tier_labels": CUSTOM_TIER_LABELS},
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "Deep"}'))
+
+        await router.aclassify("hi")
+
+        body = mock_router_instance.acompletion.call_args.kwargs["proxy_server_request"]["body"]
+        rubric = body["messages"][0]["content"]
+        assert "- Deep:" in rubric
+        assert "- Cheap:" in rubric
+        assert "- REASONING:" not in rubric
+        assert "- SIMPLE:" not in rubric
+        # The label is only the token the model emits; the criteria stay pinned to the canonical tier.
+        assert "proofs" in rubric
+        assert "greetings, chitchat" in rubric
+        assert body["response_format"]["json_schema"]["schema"]["properties"]["tier"]["enum"] == [
+            "Cheap",
+            "Standard",
+            "Premium",
+            "Deep",
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "verdict,expected_model",
+        [
+            pytest.param("Deep", "o1-preview", id="label-the-rubric-asked-for"),
+            pytest.param("deep", "o1-preview", id="label-in-a-different-case"),
+            # A model that ignores the rubric and answers in LiteLLM's vocabulary should still be
+            # understood: falling back to the heuristic there would quietly undo the rename's effect.
+            pytest.param("REASONING", "o1-preview", id="canonical-name-under-a-rename"),
+            pytest.param("Cheap", "gpt-4o-mini", id="renamed-bottom-tier"),
+        ],
+    )
+    async def test_a_labelled_verdict_resolves_to_its_tier(
+        self, mock_router_instance, llm_classifier_config, verdict, expected_model
+    ):
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**llm_classifier_config, "tier_labels": CUSTOM_TIER_LABELS},
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "%s"}' % verdict))
+
+        outcome = await router.aclassify("hi")
+
+        assert outcome.cause == "llm_classifier"
+        assert router.get_model_for_tier(outcome.tier) == expected_model
+
+    @pytest.mark.asyncio
+    async def test_a_verdict_matching_no_label_falls_back_to_the_heuristic(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        """An unrecognized string must degrade to scoring rather than route on a guess.
+
+        Renaming widens what the classifier can return, so this is the path a typo'd or hallucinated
+        label takes, and it must land on the same safe fallback as unparseable output.
+        """
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**llm_classifier_config, "tier_labels": CUSTOM_TIER_LABELS},
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "Expensive"}'))
+
+        outcome = await router.aclassify("Hello!")
+
+        assert outcome.cause == "heuristic_scorer"
+        assert outcome.tier == ComplexityTier.SIMPLE
 
     @pytest.mark.asyncio
     async def test_aclassify_falls_back_to_heuristic_on_llm_exception(
@@ -3891,6 +4130,69 @@ class TestRoutingDecisionContents:
         assert decision["score"] < decision["tier_boundaries"]["complex_reasoning"]
 
 
+    @pytest.mark.asyncio
+    async def test_an_unrenamed_router_writes_no_tier_label(self, complexity_router):
+        """Renaming is opt-in, so a deployment that never renamed must gain no new key.
+
+        Kills an always-emit mutation, which would put a key repeating `tier` verbatim on every
+        auto-routed spend row for every deployment that never asked for one.
+        """
+        response = await complexity_router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        decision = response.routing_decision
+        assert decision["tier"] == "SIMPLE"
+        assert "tier_label" not in decision
+
+    @pytest.mark.asyncio
+    async def test_a_renamed_tier_is_logged_beside_its_canonical_name(self, mock_router_instance, basic_config):
+        """The row carries both: canonical for analytics continuity, the label for the reader.
+
+        Putting the label in `tier` instead would break every dashboard query and every historical
+        comparison the moment an operator renamed a tier, so both keys are asserted together.
+        """
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "tier_labels": CUSTOM_TIER_LABELS},
+        )
+        response = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        decision = response.routing_decision
+        assert decision["tier"] == "SIMPLE"
+        assert decision["tier_label"] == "Cheap"
+        # Boundary keys name the gaps between tiers and are not renameable, so they stay canonical
+        # even on a row whose tier was renamed.
+        assert set(decision["tier_boundaries"]) == {"simple_medium", "medium_complex", "complex_reasoning"}
+
+    @pytest.mark.asyncio
+    async def test_only_the_renamed_tiers_carry_a_label(self, mock_router_instance, basic_config):
+        """A partial map must not stamp a redundant label on the tiers it left alone."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "tier_labels": {"REASONING": "Deep"}},
+        )
+        simple = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        reasoning = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Let's think step by step and prove the theorem."}],
+        )
+        assert "tier_label" not in simple.routing_decision
+        assert reasoning.routing_decision["tier"] == "REASONING"
+        assert reasoning.routing_decision["tier_label"] == "Deep"
+
+
 class TestSignalsNeverQuoteTheSystemPrompt:
     """Signals are persisted to the caller-readable spend log, so they may name a matched
     term only when the caller supplied it. A term matched solely in the system prompt is
@@ -5546,7 +5848,7 @@ class TestTierDefinitionsClassifier:
             "Judge the intellectual difficulty of answering correctly, not how short the request is.\n"
             "\n"
             "Tiers:\n"
-            "- SIMPLE: greetings, chitchat, or factual lookups with a short known answer. Do not use SIMPLE for "
+            "- SIMPLE: greetings, chitchat, or factual lookups with a short known answer. Do not use this tier for "
             "unsolved problems, proofs, deep theory, multi-step analysis, or non-trivial code, even if the request "
             "is only one sentence.\n"
             "- MEDIUM: everyday requests that need some explanation, light reasoning, or minor code/technical content.\n"

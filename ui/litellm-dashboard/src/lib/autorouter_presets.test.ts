@@ -174,6 +174,20 @@ describe("autorouter_presets", () => {
     // The whole point of the separator normalization: a caller whose proxy only registered the
     // dotted form of a version number still gets that model written into the tier, not the
     // preset's own hyphenated spelling (which the caller never actually registered).
+    it("prefills a preset's tier_labels and leaves them undefined when the preset has none", () => {
+      const base = {
+        tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+        classifier_type: "heuristic" as const,
+        session_affinity: false,
+      };
+      const labeled = buildPresetPrefill(
+        { ...base, tier_labels: { SIMPLE: "Cheap", REASONING: "Deep" } },
+        new Set(["gpt-5-nano"]),
+      );
+      expect(labeled.complexityRouterConfig.tier_labels).toEqual({ SIMPLE: "Cheap", REASONING: "Deep" });
+      expect(buildPresetPrefill(base, new Set(["gpt-5-nano"])).complexityRouterConfig.tier_labels).toBeUndefined();
+    });
+
     it("rewrites a preset's model name to the caller's differently-punctuated registered spelling", () => {
       const config = {
         tiers: { SIMPLE: ["claude-sonnet-4-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },

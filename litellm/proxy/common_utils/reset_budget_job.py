@@ -792,7 +792,7 @@ class ResetBudgetJob:
                 if changed:
                     await VerificationTokenRepository(self.prisma_client).table.update(
                         where={"token": row["token"]},
-                        data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
+                        data={"budget_limits": json.dumps(windows)},
                     )
         except Exception as e:
             verbose_proxy_logger.exception("Failed to reset budget windows for keys: %s", e)
@@ -821,7 +821,7 @@ class ResetBudgetJob:
                 if changed:
                     await TeamRepository(self.prisma_client).table.update(
                         where={"team_id": row["team_id"]},
-                        data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
+                        data={"budget_limits": json.dumps(windows)},
                     )
         except Exception as e:
             verbose_proxy_logger.exception("Failed to reset budget windows for teams: %s", e)
