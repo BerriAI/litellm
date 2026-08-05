@@ -373,7 +373,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     # Response translation: Responses API -> Anthropic                    #
     # ------------------------------------------------------------------ #
 
-    def translate_response(
+    def translate_response(  # noqa: PLR0915
         self,
         response: ResponsesAPIResponse,
     ) -> AnthropicMessagesResponse:
@@ -387,6 +387,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         )
 
         from litellm.types.llms.openai import ResponseAPIUsage
+        from litellm.types.responses.main import (
+            GenericResponseOutputItem,
+            OutputText,
+        )
 
         content: Final[list[dict[str, Any]]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
@@ -425,6 +429,40 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     ).model_dump()
                 )
                 stop_reason = "tool_use"
+
+            elif isinstance(item, GenericResponseOutputItem):
+                if item.type == "reasoning":
+                    for part in (item.content or []):
+                        if isinstance(part, OutputText) and part.text:
+                            content.append(
+                                AnthropicResponseContentBlockThinking(
+                                    type="thinking",
+                                    thinking=part.text,
+                                    signature=None,
+                                ).model_dump()
+                            )
+                elif item.type == "message":
+                    for part in (item.content or []):
+                        if isinstance(part, OutputText) and part.text:
+                            content.append(
+                                AnthropicResponseContentBlockText(
+                                    type="text", text=part.text
+                                ).model_dump()
+                            )
+                elif item.type == "function_call":
+                    try:
+                        input_data = json.loads(item.arguments) if hasattr(item, "arguments") and item.arguments else {}
+                    except (json.JSONDecodeError, TypeError):
+                        input_data = {}
+                    content.append(
+                        AnthropicResponseContentBlockToolUse(
+                            type="tool_use",
+                            id=getattr(item, "call_id", "") or getattr(item, "id", ""),
+                            name=getattr(item, "name", ""),
+                            input=input_data,
+                        ).model_dump()
+                    )
+                    stop_reason = "tool_use"
 
             elif isinstance(item, dict):
                 item_type = item.get("type")
