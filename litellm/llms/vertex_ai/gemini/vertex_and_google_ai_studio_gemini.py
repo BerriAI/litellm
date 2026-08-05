@@ -11,8 +11,6 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
 import httpx
 
 import litellm
-import litellm.litellm_core_utils
-import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -2429,7 +2427,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         _candidates: Final = completion_response.get("candidates")
         if _candidates and len(_candidates) > 0:
             content_policy_violations: Final = VertexGeminiConfig().get_flagged_finish_reasons()
-            if "finishReason" in _candidates[0] and _candidates[0]["finishReason"] in content_policy_violations.keys():
+            if "finishReason" in _candidates[0] and _candidates[0]["finishReason"] in content_policy_violations:
                 return self._handle_content_policy_violation(
                     model_response=model_response,
                     completion_response=completion_response,

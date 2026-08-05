@@ -13,7 +13,7 @@ import asyncio
 import math
 import re
 import time
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
@@ -109,7 +109,7 @@ from .auth_utils import get_model_from_request, get_request_route_template
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 

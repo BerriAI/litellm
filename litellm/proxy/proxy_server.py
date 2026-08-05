@@ -130,7 +130,7 @@ if TYPE_CHECKING:
 
     from litellm.integrations.opentelemetry import OpenTelemetry
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
     OpenTelemetry = Any
@@ -640,7 +640,6 @@ except Exception:
     version = "0.0.0"
 litellm.suppress_debug_info = True
 import json
-from typing import Union
 
 from fastapi import (
     Depends,
@@ -6679,7 +6678,7 @@ class ProxyConfig:
                 await evict_config_param("anthropic_beta_headers_reload_config")
 
                 # Count providers in config
-                provider_count = sum(1 for k in new_config.keys() if k != "provider_aliases" and k != "description")
+                provider_count = sum(1 for k in new_config if k != "provider_aliases" and k != "description")
                 verbose_proxy_logger.info(
                     "Anthropic beta headers config reloaded successfully. Providers: %s", provider_count
                 )
@@ -15188,7 +15187,7 @@ async def get_config_general_settings(
             )
 
 
-GeneralSettingsUILiteLLMValue = Union[float, bool, str, None]
+GeneralSettingsUILiteLLMValue = float | bool | str | None
 
 
 class GeneralSettingsUILiteLLMFieldSpec(TypedDict):
@@ -16122,7 +16121,7 @@ async def reload_anthropic_beta_headers(
         )
         await invalidate_config_param("anthropic_beta_headers_reload_config")
 
-        provider_count: Final = sum(1 for k in new_config.keys() if k not in ["provider_aliases", "description"])
+        provider_count: Final = sum(1 for k in new_config if k not in ["provider_aliases", "description"])
         verbose_proxy_logger.info(
             "Anthropic beta headers config reloaded successfully in current pod. Providers: %s", provider_count
         )

@@ -30,7 +30,6 @@ from openai import AsyncOpenAI
 from typing_extensions import overload
 
 import litellm
-import litellm.litellm_core_utils
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
 from litellm._logging import verbose_router_logger
@@ -241,7 +240,7 @@ if TYPE_CHECKING:
         ResponsesAPIResponse,
     )
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
     AutoRouter = Any
@@ -3410,9 +3409,7 @@ class Router:
 
         # Await the first task to complete successfully
         while pending_tasks:
-            done, pending_tasks = await asyncio.wait(
-                pending_tasks, return_when=asyncio.FIRST_COMPLETED
-            )
+            done, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
             for completed_task in done:
                 result = await check_response(completed_task)
 
@@ -5240,9 +5237,7 @@ class Router:
                     # Update kwargs with the current model name or any other model-specific adjustments
                     ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
                     if not custom_llm_provider:
-                        _, custom_llm_provider, _, _ = get_llm_provider(
-                            model=model
-                        )
+                        _, custom_llm_provider, _, _ = get_llm_provider(model=model)
                     new_kwargs: Final = safe_deep_copy(kwargs)
                     self._update_kwargs_with_deployment(
                         deployment=cast(dict, model_name),
@@ -6029,9 +6024,7 @@ class Router:
                 raise Exception(
                     "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
                 )
-        return await original_function(
-            custom_llm_provider=custom_llm_provider, client=client, **kwargs
-        )
+        return await original_function(custom_llm_provider=custom_llm_provider, client=client, **kwargs)
 
     #### [END] ASSISTANTS API ####
 
@@ -6359,14 +6352,9 @@ class Router:
 
         if hasattr(original_exception, "message") and litellm.expose_router_debug_in_errors:
             # add the available fallbacks to the exception
-            original_exception.message += ". Received Model Group={}\nAvailable Model Group Fallbacks={}".format(
-                model_group,
-                mask_sensitive_structure(fallback_model_group),
-            )
+            original_exception.message += f". Received Model Group={model_group}\nAvailable Model Group Fallbacks={mask_sensitive_structure(fallback_model_group)}"
             if len(fallback_failure_exception_str) > 0:
-                original_exception.message += (
-                    f"\nError doing the fallback: {fallback_failure_exception_str}"
-                )
+                original_exception.message += f"\nError doing the fallback: {fallback_failure_exception_str}"
 
         raise original_exception
 
@@ -7497,7 +7485,7 @@ class Router:
                 litellm_params=litellm_params,
                 model_info=_model_info,
             )
-            for field in CustomPricingLiteLLMParams.model_fields.keys():
+            for field in CustomPricingLiteLLMParams.model_fields:
                 if deployment.litellm_params.get(field) is not None:
                     _model_info[field] = deployment.litellm_params[field]
 
@@ -8246,7 +8234,7 @@ class Router:
         self._add_deployment(deployment=deployment)
 
         _model_info_dict: Final[dict] = deployment.model_info.model_dump(exclude_none=True)
-        for field in CustomPricingLiteLLMParams.model_fields.keys():
+        for field in CustomPricingLiteLLMParams.model_fields:
             field_value = deployment.litellm_params.get(field)
             if field_value is not None:
                 _model_info_dict[field] = field_value
@@ -9124,9 +9112,7 @@ class Router:
                     and model_info["supports_parallel_function_calling"] is True
                 ):
                     model_group_info.supports_parallel_function_calling = True
-                if (
-                    model_info.get("supports_vision", None) is not None and model_info["supports_vision"] is True
-                ):
+                if model_info.get("supports_vision", None) is not None and model_info["supports_vision"] is True:
                     model_group_info.supports_vision = True
                 if (
                     model_info.get("supports_function_calling", None) is not None
@@ -9144,9 +9130,7 @@ class Router:
                 ):
                     model_group_info.supports_url_context = True
 
-                if (
-                    model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True
-                ):
+                if model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True:
                     model_group_info.supports_reasoning = True
                 if (
                     model_info.get("supported_openai_params", None) is not None
@@ -9495,7 +9479,7 @@ class Router:
         else:
             # When model_name is None, return all model IDs
             # Use the index map keys for O(n) where n = total deployments
-            for model_id in self.model_id_to_deployment_index_map.keys():
+            for model_id in self.model_id_to_deployment_index_map:
                 idx = self.model_id_to_deployment_index_map[model_id]
                 model = self.model_list[idx]
                 if "model_info" in model and "id" in model["model_info"]:
@@ -10876,9 +10860,7 @@ class Router:
                         args=(e, traceback_exception),
                     ).start()  # log response
                     # Handle any exceptions that might occur during streaming
-                    asyncio.create_task(
-                        logging_obj.async_failure_handler(e, traceback_exception)
-                    )
+                    asyncio.create_task(logging_obj.async_failure_handler(e, traceback_exception))
             raise e
 
     async def async_get_available_deployment_for_pass_through(
@@ -11003,9 +10985,7 @@ class Router:
                         target=logging_obj.failure_handler,
                         args=(e, traceback_exception),
                     ).start()
-                    asyncio.create_task(
-                        logging_obj.async_failure_handler(e, traceback_exception)
-                    )
+                    asyncio.create_task(logging_obj.async_failure_handler(e, traceback_exception))
             raise e
 
     async def _run_routing_plugins(

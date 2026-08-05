@@ -1613,7 +1613,7 @@ if MCP_AVAILABLE:
         ``mcp_server_auth_headers``). Either form skips the pre-emptive 401.
         """
         if oauth2_headers:
-            for k in oauth2_headers.keys():
+            for k in oauth2_headers:
                 if k.lower() == "authorization":
                     return True
         return _client_has_per_server_auth_header(server, mcp_server_auth_headers)
