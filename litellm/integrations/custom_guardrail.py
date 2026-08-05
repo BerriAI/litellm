@@ -1218,16 +1218,22 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
     that does not share identity with the one in request_data.  This helper
     bridges that gap so guardrail_information is non-null in spend logs for all
     routes, not just /v1/chat/completions.
+
+    Hooks whose signature carries no ``logging_obj`` (``async_pre_call_hook``,
+    ``async_moderation_hook``) leave it ``None``; for those the object is taken from
+    ``request_data["litellm_logging_obj"]``, which every route that builds its own
+    request dict already seeds.
     """
-    if logging_obj is None:
+    target: Final = logging_obj if logging_obj is not None else request_data.get("litellm_logging_obj")
+    if target is None:
         return
     meta_src: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data)) or {}
     slg_info: Final = meta_src.get("standard_logging_guardrail_information")
     if not slg_info:
         return
     entries: Final[list] = slg_info if isinstance(slg_info, list) else [slg_info]
-    mcd: Final = getattr(logging_obj, "model_call_details", None) or {}
-    _append_slg_to_litellm_params(getattr(logging_obj, "litellm_params", None), entries)
+    mcd: Final = getattr(target, "model_call_details", None) or {}
+    _append_slg_to_litellm_params(getattr(target, "litellm_params", None), entries)
     _append_slg_to_litellm_params(mcd.get("litellm_params"), entries)
 
 
