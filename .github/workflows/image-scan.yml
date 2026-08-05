@@ -68,7 +68,7 @@ jobs:
         env:
           LITELLM_IMAGE: litellm-image-scan:${{ github.sha }}
         run: |
-          python -m pip install "pytest==9.0.3"
+          python -m pip install --no-cache-dir --require-hashes -r .github/scripts/image-scan-requirements.txt
           python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py -v
 
       # Scans the whole shipped artifact: OS/apk plus every language package
@@ -114,5 +114,5 @@ jobs:
           LITELLM_MIGRATION_INTERPRETER: python3
           LITELLM_MIGRATION_SCRIPT: /app/run.py
         run: |
-          python -m pip install "pytest==9.0.3"
+          python -m pip install --no-cache-dir --require-hashes -r .github/scripts/image-scan-requirements.txt
           python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py -v

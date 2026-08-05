@@ -36,4 +36,6 @@ jobs:
           version: "0.10.9"
 
       - name: Run Semgrep (custom rules)
-        run: uv tool run --from 'semgrep==1.157.0' semgrep scan --config .semgrep/rules . --error
+        run: |
+          pip install --no-cache-dir --require-hashes -r .github/scripts/semgrep-requirements.txt
+          semgrep scan --config .semgrep/rules . --error
