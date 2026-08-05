@@ -5271,6 +5271,30 @@ class TestCustomClassifierSystemPrompt:
         assert "000-00-0000" in messages[1]["content"]
 
     @pytest.mark.asyncio
+    async def test_a_prompt_that_invents_tier_names_falls_back_instead_of_raising(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        """The most likely custom-prompt mistake: renaming the buckets. The four names are pinned by
+        the structured-output schema, so an off-schema tier has to land on the configured fallback
+        rather than escaping as an exception to the caller's request."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_llm_config": {
+                    **llm_classifier_config["classifier_llm_config"],
+                    "system_prompt": "Answer with PUBLIC, INTERNAL, or SECRET.",
+                },
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o",
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SECRET"}'))
+        outcome = await router.aclassify("my ssn is 000-00-0000")
+        assert outcome.cause == "default_model_fallback"
+
+    @pytest.mark.asyncio
     async def test_no_custom_prompt_keeps_the_built_in_rubric_on_the_wire(
         self, llm_complexity_router, mock_router_instance
     ):
@@ -5361,6 +5385,87 @@ class TestClassifierFallbackChoice:
         assert response.model == "gpt-4o"
         assert response.routing_decision is not None
         assert response.routing_decision["cause"] == "default_model_fallback"
+
+    @pytest.mark.asyncio
+    async def test_a_classifier_failure_does_not_pin_the_session_to_the_default_model(self, mock_router_instance):
+        """One transient timeout must not hold a session on default_model for the whole affinity TTL:
+        that turn was never classified, so there is nothing worth pinning and the next turn retries."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {
+                    "SIMPLE": "gpt-4o-mini",
+                    "MEDIUM": "gpt-4o",
+                    "COMPLEX": "claude-sonnet-4-20250514",
+                    "REASONING": "o1-preview",
+                },
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o",
+                "session_affinity": True,
+            },
+        )
+        mock_router_instance.cache = DualCache()
+        request_kwargs: Dict = {"metadata": {"session_id": "session-flaky"}}
+
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        first = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert first is not None
+        assert first.model == "gpt-4o"
+
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+        second = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "prove the Riemann hypothesis"}],
+        )
+        assert second is not None
+        assert second.model == "o1-preview"
+        assert second.routing_decision is not None
+        assert second.routing_decision["cause"] == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_a_successful_classification_still_pins_the_session(self, mock_router_instance):
+        """Guard on the fix above: only the failed-classifier cause is unpinnable, so an ordinary
+        turn on a default_model-fallback router must still pin exactly as it did before."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": "o1-preview"},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o",
+                "session_affinity": True,
+            },
+        )
+        mock_router_instance.cache = DualCache()
+        request_kwargs: Dict = {"metadata": {"session_id": "session-steady"}}
+
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+        first = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "prove the Riemann hypothesis"}],
+        )
+        assert first is not None
+        assert first.model == "o1-preview"
+
+        with patch.object(router, "aclassify", side_effect=AssertionError("pinned turn must not reclassify")):
+            second = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=request_kwargs,
+                messages=[{"role": "user", "content": "Hello!"}],
+            )
+        assert second is not None
+        assert second.model == "o1-preview"
 
     @pytest.mark.asyncio
     async def test_default_model_fallback_does_not_bypass_routing_plugins(self, mock_router_instance):

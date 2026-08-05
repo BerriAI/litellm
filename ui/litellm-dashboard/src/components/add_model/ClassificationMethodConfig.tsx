@@ -14,6 +14,33 @@ import {
 
 const { Text } = Typography;
 
+const DEFAULT_SCORING_EXPLANATION =
+  "The router scores each request across 7 dimensions: token count, code presence, reasoning markers, technical " +
+  "terms, simple indicators, multi-step patterns, and question complexity. The weighted score determines the tier:";
+
+const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
+  "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
+  "names stay fixed. The scoring below is the heuristic, which now runs only when the classifier call fails:";
+
+const CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK =
+  "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
+  "names stay fixed. The scoring below no longer runs at all, since a failed classifier routes to the default " +
+  "model instead:";
+
+/**
+ * What the scoring breakdown below it actually describes. A custom prompt means the score no longer
+ * decides the tier, and pairing one with the default-model fallback means the heuristic never runs
+ * at all, so the panel must not keep implying a score is involved on either router.
+ */
+const scoringExplanation = (value: ComplexityRouterConfigValue): string => {
+  const usesCustomPrompt =
+    value.classifier_type === "llm" && Boolean(value.classifier_llm_config?.system_prompt?.trim());
+  if (!usesCustomPrompt) return DEFAULT_SCORING_EXPLANATION;
+  return value.classifier_fallback === "default_model"
+    ? CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK
+    : CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK;
+};
+
 interface ClassificationMethodConfigProps {
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
@@ -36,8 +63,6 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
 }) => {
   const classifierModelMissing =
     showValidationErrors && value.classifier_type === "llm" && !value.classifier_llm_config?.model;
-  const usesCustomPrompt =
-    value.classifier_type === "llm" && Boolean(value.classifier_llm_config?.system_prompt?.trim());
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
     const nextValue: ComplexityRouterConfigValue = {
@@ -298,9 +323,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           How Classification Works
         </Text>
         <Text type="secondary" style={{ fontSize: 13 }}>
-          {usesCustomPrompt
-            ? "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier names stay fixed. The scoring below is the heuristic, which now runs only as the fallback:"
-            : "The router scores each request across 7 dimensions: token count, code presence, reasoning markers, technical terms, simple indicators, multi-step patterns, and question complexity. The weighted score determines the tier:"}
+          {scoringExplanation(value)}
         </Text>
         <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, color: "rgba(0, 0, 0, 0.45)" }}>
           <li>

@@ -486,6 +486,39 @@ describe("ComplexityRouterConfig classifier fallback", () => {
     expect(screen.queryByText("If the classifier fails")).not.toBeInTheDocument();
   });
 
+  it("stops describing the heuristic as the fallback once a custom prompt routes failures to the default model", () => {
+    // With both set, the heuristic scorer never runs, so the panel must not keep implying a
+    // score decides anything on this router.
+    renderWithProviders(
+      <ComplexityRouterConfig
+        modelInfo={mockModelInfo}
+        value={{
+          ...llmValue,
+          classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, system_prompt: "Grade data sensitivity" },
+          classifier_fallback: "default_model",
+        }}
+        onChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByText(/no longer runs at all/)).toBeInTheDocument();
+  });
+
+  it("still describes the heuristic as the fallback when a custom prompt keeps heuristic fallback", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        modelInfo={mockModelInfo}
+        value={{
+          ...llmValue,
+          classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, system_prompt: "Grade data sensitivity" },
+        }}
+        onChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByText(/only when the classifier call fails/)).toBeInTheDocument();
+  });
+
   it("clears a stored fallback when switching back to the heuristic classifier", () => {
     const onChange = vi.fn();
     renderWithProviders(

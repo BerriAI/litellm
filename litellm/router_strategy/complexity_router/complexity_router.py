@@ -355,6 +355,16 @@ def _extract_prior_turns(
     return tuple((role, _truncate(text, per_turn_chars)) for role, text in reversed(tuple(prior)))
 
 
+def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bool:
+    """Whether a first-turn decision is worth pinning for the rest of the session.
+
+    A classifier that timed out did not decide anything, so pinning where its fallback landed
+    would let one transient failure hold the session on default_model for the whole TTL. Those
+    turns stay unpinned and the next one classifies again.
+    """
+    return decision is None or decision.get("cause") != "default_model_fallback"
+
+
 class DimensionScore:
     """Represents a score for a single dimension with optional signal."""
 
@@ -1545,7 +1555,7 @@ class ComplexityRouter(CustomLogger):
             conversation_continuing=conversation_continuing,
             resolved_messages=resolved_messages,
         )
-        if cache_key is not None and response is not None:
+        if cache_key is not None and response is not None and _decision_is_pinnable(response.routing_decision):
             await self.litellm_router_instance.cache.async_set_cache(
                 key=cache_key,
                 value=response.model,
