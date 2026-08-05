@@ -1015,6 +1015,7 @@ def run_server(
                 raise e
             else:
                 from litellm.proxy.proxy_server import (
+                 from proxy_server import (
                     KeyManagementSettings,
                     ProxyConfig,
                     app,
