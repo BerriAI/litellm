@@ -7644,11 +7644,11 @@ def _pop_complete_sse_frame(buffer: str) -> tuple[str | None, str]:
     return buffer[:frame_end], buffer[frame_end:]
 
 
-_STREAM_KEEPALIVE = object()
+_STREAM_KEEPALIVE: Final = object()
 
-_KEEPALIVE_MIN_SECONDS = 1.0
-_KEEPALIVE_MAX_SECONDS = 300.0
-_EMPTY_MAPPING: Mapping[str, Any] = MappingProxyType({})
+_KEEPALIVE_MIN_SECONDS: Final = 1.0
+_KEEPALIVE_MAX_SECONDS: Final = 300.0
+_EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
 
 
 async def _iter_with_keepalive(aiter: AsyncIterator[Any], keepalive_seconds: float) -> AsyncGenerator[Any, None]:
@@ -7657,7 +7657,7 @@ async def _iter_with_keepalive(aiter: AsyncIterator[Any], keepalive_seconds: flo
             yield item
         return
 
-    pending: asyncio.Task[Any] | None = None
+    pending: asyncio.Task[Any] | None = None  # rebind-ok: rebound each loop iteration
     try:
         while True:
             if pending is None:
@@ -7687,14 +7687,16 @@ class _DeploymentKeepaliveConfig(NamedTuple):
     allow_client_override: bool
 
 
-def _keepalive_from_deployment_config(request_data: Mapping[str, Any], response) -> _DeploymentKeepaliveConfig | None:
+def _keepalive_from_deployment_config(
+    request_data: Mapping[str, Any], response: object
+) -> _DeploymentKeepaliveConfig | None:
     if llm_router is None:
         return None
 
-    hidden = getattr(response, "_hidden_params", None)
-    model_id = hidden.get("model_id") if isinstance(hidden, dict) else None
-    if model_id:
-        deployment = llm_router.get_deployment(model_id=model_id)
+    hidden: Final = get_hidden_params_dict(response)
+    model_id: Final = hidden.get("model_id")
+    if isinstance(model_id, str) and model_id:
+        deployment: Final = llm_router.get_deployment(model_id=model_id)
         # A populated model_id names the specific deployment that served this
         # stream. If it no longer resolves (e.g. removed by a config reload
         # mid-stream), that's a stale identity, not an absent one: don't fall
@@ -7713,7 +7715,7 @@ def _keepalive_from_deployment_config(request_data: Mapping[str, Any], response)
     # model_name agrees on both keepalive_seconds and
     # allow_client_keepalive_override (including deployments that leave either
     # field unset), so a stream never inherits a sibling deployment's policy.
-    configs = frozenset(
+    configs: Final = frozenset(
         (
             (deployment_dict.get("litellm_params") or _EMPTY_MAPPING).get("keepalive_seconds"),
             bool(
@@ -7730,19 +7732,19 @@ def _keepalive_from_deployment_config(request_data: Mapping[str, Any], response)
     return None
 
 
-def _is_explicit_keepalive_disable(raw) -> bool:
-    if raw is None:
+def _is_explicit_keepalive_disable(raw: object) -> bool:
+    if not isinstance(raw, (int, float, str)):
         return False
     try:
         return float(raw) <= 0
-    except (TypeError, ValueError):
+    except ValueError:
         return False
 
 
-def _resolve_keepalive_seconds(request_data: Mapping[str, Any], response=None) -> float:
-    deployment_config = _keepalive_from_deployment_config(request_data, response)
-    deployment_raw = deployment_config.keepalive_seconds if deployment_config is not None else None
-    allow_client_override = deployment_config.allow_client_override if deployment_config is not None else False
+def _resolve_keepalive_seconds(request_data: Mapping[str, Any], response: object = None) -> float:
+    deployment_config: Final = _keepalive_from_deployment_config(request_data, response)
+    deployment_raw: Final = deployment_config.keepalive_seconds if deployment_config is not None else None
+    allow_client_override: Final = deployment_config.allow_client_override if deployment_config is not None else False
 
     # An operator setting keepalive_seconds: 0 on a deployment is an explicit hard
     # disable: an authenticated client must not be able to re-enable heartbeats
@@ -7754,16 +7756,15 @@ def _resolve_keepalive_seconds(request_data: Mapping[str, Any], response=None) -
     # keepalive_seconds is operator-only unless the deployment explicitly opts in:
     # a client can't unilaterally enable heartbeats (and the LB-idle-timeout
     # evasion that comes with them) for a deployment that never configured this.
-    raw = request_data.get("keepalive_seconds") if allow_client_override else None
-    if raw is None:
-        raw = deployment_raw
+    client_supplied: Final = request_data.get("keepalive_seconds") if allow_client_override else None
+    raw: Final = client_supplied if client_supplied is not None else deployment_raw
     try:
-        value = float(raw) if raw is not None else 0.0
-    except (TypeError, ValueError):
+        value: Final = float(raw) if isinstance(raw, (int, float, str)) else 0.0
+    except ValueError:
         return 0.0
     if value <= 0:
         return 0.0
-    clamped = max(_KEEPALIVE_MIN_SECONDS, min(value, _KEEPALIVE_MAX_SECONDS))
+    clamped: Final = max(_KEEPALIVE_MIN_SECONDS, min(value, _KEEPALIVE_MAX_SECONDS))
     if clamped != value:
         verbose_proxy_logger.info(
             "keepalive_seconds=%s clamped to %s [min=%s, max=%s]",
@@ -7823,8 +7824,10 @@ async def async_data_generator(
         else:
             stream_iterator = response
 
-        _ka_secs = _resolve_keepalive_seconds(request_data, response)
-        stream_source = _iter_with_keepalive(stream_iterator.__aiter__(), _ka_secs) if _ka_secs > 0 else stream_iterator
+        _ka_secs: Final = _resolve_keepalive_seconds(request_data, response)
+        stream_source: Final = (
+            _iter_with_keepalive(stream_iterator.__aiter__(), _ka_secs) if _ka_secs > 0 else stream_iterator
+        )
 
         async for item in stream_source:
             if item is _STREAM_KEEPALIVE:

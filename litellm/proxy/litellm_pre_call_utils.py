@@ -890,7 +890,7 @@ class LiteLLMProxyRequestSetup:
         fields. Subject to the same deployment-level allow_client_keepalive_override
         gate as the request body field: see _resolve_keepalive_seconds.
         """
-        keepalive_seconds_header = headers.get("x-litellm-keepalive-seconds", None)
+        keepalive_seconds_header: Final = headers.get("x-litellm-keepalive-seconds", None)
         if keepalive_seconds_header is not None:
             return float(keepalive_seconds_header)
         return None
@@ -1127,7 +1127,7 @@ class LiteLLMProxyRequestSetup:
         if num_retries is not None:
             data["num_retries"] = num_retries
 
-        keepalive_seconds = LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request(headers)
+        keepalive_seconds: Final = LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request(headers)
         if keepalive_seconds is not None:
             data["keepalive_seconds"] = keepalive_seconds
 
