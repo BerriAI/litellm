@@ -2450,3 +2450,16 @@ def test_strict_guardrail_modes_flag_controls_raise_vs_warn(monkeypatch, caplog)
         )
     assert instance is not None
     assert any("not in the supported event hooks" in rec.message for rec in caplog.records)
+
+
+def test_field_type_inference_handles_pep604_unions():
+    from litellm.proxy.guardrails.guardrail_endpoints import (
+        _get_field_type_from_annotation,
+        _unwrap_optional_type,
+    )
+
+    assert _get_field_type_from_annotation(Optional[int]) == "number"
+    assert _get_field_type_from_annotation(int | None) == "number"
+    assert _get_field_type_from_annotation(list[str] | None) == "array"
+    assert _get_field_type_from_annotation(bool | None) == "boolean"
+    assert _unwrap_optional_type(str | None) is str

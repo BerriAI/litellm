@@ -1,6 +1,6 @@
 """Types for the Block Code Execution guardrail."""
 
-from typing import Any, cast, Final, List, Literal, Optional, TypedDict
+from typing import Any, Final, Literal, TypedDict, cast
 
 from pydantic import Field
 
@@ -35,14 +35,14 @@ class CodeBlockDetection(TypedDict, total=False):
     language: str
     confidence: float
     action_taken: CodeBlockActionTaken
-    evidence: Optional[str]
-    snippet: Optional[str]
+    evidence: str | None
+    snippet: str | None
 
 
 class BlockCodeExecutionGuardrailConfigModel(GuardrailConfigModel):
     """Configuration for the Block Code Execution guardrail."""
 
-    blocked_languages: Optional[List[str]] = Field(
+    blocked_languages: list[str] | None = Field(
         default=None,
         description="Language tags to block (e.g. python, javascript, bash). Empty or None = block all fenced code blocks.",
         json_schema_extra=cast(

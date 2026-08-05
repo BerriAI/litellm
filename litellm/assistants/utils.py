@@ -8,8 +8,8 @@ from ..types.llms.openai import *
 
 def get_optional_params_add_message(
     role: str | None,
-    content: str | List[MessageContentTextObject | MessageContentImageFileObject | MessageContentImageURLObject] | None,
-    attachments: List[Attachment] | None,
+    content: str | list[MessageContentTextObject | MessageContentImageFileObject | MessageContentImageURLObject] | None,
+    attachments: list[Attachment] | None,
     metadata: dict | None,
     custom_llm_provider: str,
     **kwargs,

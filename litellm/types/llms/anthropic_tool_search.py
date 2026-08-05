@@ -4,7 +4,7 @@ Tool Search Beta Header Configuration
 Reference: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
 """
 
-from typing import Dict, Final
+from typing import Final
 
 from litellm.types.utils import LlmProviders
 
@@ -15,7 +15,7 @@ TOOL_SEARCH_BETA_HEADER_BEDROCK: Final = "tool-search-tool-2025-10-19"
 
 
 # Mapping of custom_llm_provider -> tool search beta header
-TOOL_SEARCH_BETA_HEADER_BY_PROVIDER: Final[Dict[str, str]] = {
+TOOL_SEARCH_BETA_HEADER_BY_PROVIDER: Final[dict[str, str]] = {
     LlmProviders.ANTHROPIC.value: TOOL_SEARCH_BETA_HEADER_ANTHROPIC,
     LlmProviders.AZURE.value: TOOL_SEARCH_BETA_HEADER_ANTHROPIC,
     LlmProviders.AZURE_AI.value: TOOL_SEARCH_BETA_HEADER_ANTHROPIC,
