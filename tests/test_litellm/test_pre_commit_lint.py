@@ -1,5 +1,9 @@
 import os
+import signal
 import subprocess
+import time
+from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -29,6 +33,11 @@ case "$*" in
     lint)
         [ "${STUB_FAIL:-}" = "make-lint" ] && exit 1
         [ -n "${STUB_BARRIER_DIR:-}" ] && barrier_sync python "dashboard genapi"
+        if [ -n "${STUB_HANG_DIR:-}" ]; then
+            echo "$$" > "$STUB_HANG_DIR/make.pid"
+            touch "$STUB_HANG_DIR/make.started"
+            sleep 60
+        fi
         ;;
 esac
 exit 0
@@ -99,13 +108,17 @@ def _sandbox(tmp_path: Path) -> tuple[Path, Path]:
     return repo, bin_dir
 
 
-def _run(repo: Path, bin_dir: Path, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    env = {
+def _env(repo: Path, bin_dir: Path, extra_env: dict[str, str]) -> dict[str, str]:
+    return {
         "PATH": os.pathsep.join([str(bin_dir), "/usr/bin", "/bin"]),
         "HOME": str(repo.parent),
         "STUB_BIN": str(bin_dir),
         **extra_env,
     }
+
+
+def _run(repo: Path, bin_dir: Path, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    env = _env(repo, bin_dir, extra_env)
     return subprocess.run(
         [str(SCRIPT)],
         cwd=repo,
@@ -133,6 +146,50 @@ def test_all_blocks_passing_exits_zero(tmp_path: Path) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     proc = _run(repo, bin_dir, {})
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def _wait_until(predicate: Callable[[], bool], timeout_seconds: float) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return predicate()
+
+
+def _pid_gone(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+def test_interrupt_kills_background_jobs_and_removes_logs(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    hang_dir = tmp_path / "hang"
+    hang_dir.mkdir()
+    tmp_dir = tmp_path / "tmpdir"
+    tmp_dir.mkdir()
+    extra = {"STUB_HANG_DIR": str(hang_dir), "TMPDIR": str(tmp_dir)}
+    proc = subprocess.Popen(
+        [str(SCRIPT)],
+        cwd=repo,
+        env=_env(repo, bin_dir, extra),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        assert _wait_until((hang_dir / "make.started").exists, 10)
+        os.killpg(proc.pid, signal.SIGINT)
+        assert proc.wait(timeout=10) != 0
+        make_pid = int((hang_dir / "make.pid").read_text())
+        assert _wait_until(lambda: _pid_gone(make_pid), 5)
+        assert list(tmp_dir.iterdir()) == []
+    finally:
+        with suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGTERM)
 
 
 @pytest.mark.parametrize(
