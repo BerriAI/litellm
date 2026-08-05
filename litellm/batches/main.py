@@ -104,7 +104,7 @@ def _resolve_timeout(
 @client
 async def acreate_batch(
     completion_window: Literal["24h"],
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
+    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses"],
     input_file_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
     metadata: dict[str, str] | None = None,
@@ -154,7 +154,7 @@ async def acreate_batch(
 @client
 def create_batch(
     completion_window: Literal["24h"],
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
+    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses"],
     input_file_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
     metadata: dict[str, str] | None = None,
