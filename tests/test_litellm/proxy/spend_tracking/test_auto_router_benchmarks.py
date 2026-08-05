@@ -6,6 +6,7 @@ is exercised here without a database.
 
 import datetime as dt
 from dataclasses import fields
+from decimal import Decimal
 
 import pytest
 
@@ -232,6 +233,35 @@ class TestTotals:
         assert response.routers_in_scope == 0
         assert response.groups == ()
         assert response.totals.turns == 0
+
+    def test_decimal_and_string_aggregates_survive_the_driver(self):
+        """SUM over BIGINT and EXTRACT(EPOCH) yield NUMERIC, which the driver may hand
+        back as Decimal or a numeric string; neither may read as zero traffic."""
+        response = build_response(
+            rows=[
+                _row(
+                    "a",
+                    sessions=Decimal("2"),
+                    turns=Decimal("64"),
+                    total_tokens=Decimal("10000"),
+                    total_session_seconds="7200.5",
+                )
+            ],
+            start_date=dt.date(2026, 8, 1),
+            end_date=dt.date(2026, 8, 3),
+        )
+        assert response.totals.turns == 64
+        assert response.totals.total_tokens == 10_000
+        assert response.totals.avg_tokens_per_session == pytest.approx(5000.0)
+        assert response.totals.avg_session_seconds == pytest.approx(3600.25)
+
+    def test_a_malformed_aggregate_reads_as_zero_rather_than_failing_the_page(self):
+        response = build_response(
+            rows=[_row("a", total_tokens="not-a-number")],
+            start_date=dt.date(2026, 8, 1),
+            end_date=dt.date(2026, 8, 3),
+        )
+        assert response.totals.total_tokens == 0
 
     def test_group_identity_is_carried_through(self):
         response = build_response(

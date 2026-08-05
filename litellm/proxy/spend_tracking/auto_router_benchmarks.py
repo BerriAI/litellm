@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import astuple, dataclass, fields
 from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
 from functools import reduce
 from typing import TYPE_CHECKING, Final
 
@@ -136,7 +137,16 @@ def _per(numerator: float, denominator: float) -> float:
 
 
 def _number(value: object) -> float:
-    return float(value) if isinstance(value, (int, float)) else 0.0
+    """Postgres aggregates surface through the driver as int, float, Decimal or a numeric
+    string depending on the column type (SUM over BIGINT and EXTRACT both yield NUMERIC)."""
+    if isinstance(value, (int, float, Decimal)):
+        return float(value)
+    if not isinstance(value, str):
+        return 0.0
+    try:
+        return float(value)
+    except ValueError:
+        return 0.0
 
 
 def _counters_from_row(row: Mapping[str, object]) -> _Counters:
