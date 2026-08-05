@@ -110,6 +110,14 @@ python_checks() {
     return $rc
 }
 
+on_interrupt() {
+    trap - INT TERM
+    rm -f "${python_log:-}" "${dash_log:-}" "${gen_log:-}"
+    kill 0 2>/dev/null
+    exit 130
+}
+trap on_interrupt INT TERM
+
 if [ -n "$litellm_py_files" ]; then
     python_log=$(mktemp)
     python_checks > "$python_log" 2>&1 &
