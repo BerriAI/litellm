@@ -116,7 +116,7 @@ class PassthroughEndpointRouter:
                 model=model,
                 custom_llm_provider=litellm_params.get("custom_llm_provider"),
             )
-        except Exception:
+        except litellm.exceptions.BadRequestError:
             return None
         return provider
 
