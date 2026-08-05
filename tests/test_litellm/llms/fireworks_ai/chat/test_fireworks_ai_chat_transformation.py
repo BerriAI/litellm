@@ -1282,3 +1282,252 @@ def test_streaming_surfaces_fireworks_response_fields():
     assert surfaced["fireworks_raw_outputs"] == [raw_output]
     assert surfaced["fireworks_perf_metrics"] == {"prompt-tokens": 5}
     assert surfaced["fireworks_prompt_token_ids"] == [1, 2, 3]
+
+
+def test_map_extra_body_params_translates_truncate_prompt_tokens():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"truncate_prompt_tokens": 4096}}, _REASONING_MODEL
+    )
+    assert result == {"prompt_truncate_len": 4096}
+
+
+def test_map_extra_body_params_truncate_prompt_tokens_conflicts_with_alias():
+    config = FireworksAIConfig()
+    with pytest.raises(litellm.BadRequestError, match="aliases"):
+        config.map_extra_body_params(
+            {"prompt_truncate_len": 2048, "extra_body": {"truncate_prompt_tokens": 4096}},
+            _REASONING_MODEL,
+        )
+    with pytest.raises(litellm.BadRequestError, match="aliases"):
+        config.map_extra_body_params(
+            {"extra_body": {"truncate_prompt_tokens": 4096, "prompt_truncate_len": 2048}},
+            _REASONING_MODEL,
+        )
+
+
+def test_map_extra_body_params_chat_template_kwargs_enable_thinking():
+    config = FireworksAIConfig()
+    disabled = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
+        _REASONING_MODEL,
+    )
+    assert disabled == {"reasoning_effort": "none"}
+
+    enabled = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"enable_thinking": True}}},
+        _REASONING_MODEL,
+    )
+    assert enabled == {"reasoning_effort": "medium"}
+
+
+def test_map_extra_body_params_chat_template_kwargs_conflicts_with_reasoning_effort():
+    config = FireworksAIConfig()
+    with pytest.raises(litellm.BadRequestError, match="enable_thinking"):
+        config.map_extra_body_params(
+            {
+                "reasoning_effort": "high",
+                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+            },
+            _REASONING_MODEL,
+        )
+
+
+def test_map_extra_body_params_chat_template_kwargs_conflicts_with_thinking():
+    config = FireworksAIConfig()
+    with pytest.raises(litellm.BadRequestError, match="enable_thinking"):
+        config.map_extra_body_params(
+            {
+                "thinking": {"type": "enabled", "budget_tokens": 4096},
+                "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
+            },
+            _REASONING_MODEL,
+        )
+
+
+def test_map_extra_body_params_chat_template_kwargs_dropped_for_non_reasoning_model():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"enable_thinking": False, "custom_flag": 1}}},
+        _NON_REASONING_MODEL,
+    )
+    assert result == {}
+
+
+def test_map_extra_body_params_guided_json():
+    config = FireworksAIConfig()
+    schema = {"type": "object", "properties": {"x": {"type": "string"}}}
+    result = config.map_extra_body_params(
+        {"extra_body": {"guided_json": schema}}, _REASONING_MODEL
+    )
+    assert result == {
+        "response_format": {"type": "json_schema", "json_schema": {"schema": schema}}
+    }
+
+
+def test_map_extra_body_params_guided_grammar_and_choice():
+    config = FireworksAIConfig()
+    grammar = config.map_extra_body_params(
+        {"extra_body": {"guided_grammar": "root ::= 'hello'"}}, _REASONING_MODEL
+    )
+    assert grammar == {
+        "response_format": {"type": "grammar", "grammar": "root ::= 'hello'"}
+    }
+
+    choice = config.map_extra_body_params(
+        {"extra_body": {"guided_choice": ["yes", "no"]}}, _REASONING_MODEL
+    )
+    assert choice == {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"schema": {"type": "string", "enum": ["yes", "no"]}},
+        }
+    }
+
+
+def test_map_extra_body_params_guided_conflicts_with_response_format():
+    config = FireworksAIConfig()
+    with pytest.raises(litellm.BadRequestError, match="response_format"):
+        config.map_extra_body_params(
+            {
+                "response_format": {"type": "json_object"},
+                "extra_body": {"guided_json": {"type": "object"}},
+            },
+            _REASONING_MODEL,
+        )
+
+
+def test_map_extra_body_params_multiple_guided_params_rejected():
+    config = FireworksAIConfig()
+    with pytest.raises(litellm.BadRequestError, match="multiple guided decoding params"):
+        config.map_extra_body_params(
+            {"extra_body": {"guided_json": {"type": "object"}, "guided_grammar": "root ::= 'x'"}},
+            _REASONING_MODEL,
+        )
+
+
+@pytest.mark.parametrize(
+    "param,value",
+    [
+        ("min_tokens", 10),
+        ("stop_token_ids", [1, 2]),
+        ("include_stop_str_in_output", True),
+        ("skip_special_tokens", False),
+        ("spaces_between_special_tokens", True),
+        ("best_of", 2),
+        ("use_beam_search", True),
+        ("guided_decoding_backend", "outlines"),
+        ("guided_regex", "[0-9]+"),
+        ("add_generation_prompt", True),
+        ("continue_final_message", True),
+        ("add_special_tokens", False),
+        ("detokenize", True),
+        ("allowed_token_ids", [1]),
+        ("bad_words", ["foo"]),
+    ],
+)
+def test_map_extra_body_params_strips_unsupported_nim_vllm_params(param, value, caplog):
+    import logging
+
+    config = FireworksAIConfig()
+    with caplog.at_level(logging.DEBUG):
+        result = config.map_extra_body_params(
+            {"extra_body": {param: value}}, _REASONING_MODEL
+        )
+    assert result == {}
+    assert param in caplog.text
+
+
+def test_map_extra_body_params_preserves_unknown_passthrough():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"top_k": 40, "some_future_param": "x", "truncate_prompt_tokens": 100}},
+        _REASONING_MODEL,
+    )
+    assert result == {
+        "prompt_truncate_len": 100,
+        "extra_body": {"top_k": 40, "some_future_param": "x"},
+    }
+
+
+def test_map_extra_body_params_no_extra_body():
+    config = FireworksAIConfig()
+    assert config.map_extra_body_params({}, _REASONING_MODEL) == {}
+    unchanged = {"temperature": 0.5, "extra_body": None}
+    assert config.map_extra_body_params(unchanged, _REASONING_MODEL) == unchanged
+
+
+def test_nim_vllm_extras_translated_end_to_end_in_request_body():
+    """
+    Passing NIM/vLLM extras to litellm.completion must reach the Fireworks
+    request body translated, not verbatim: truncate_prompt_tokens becomes
+    prompt_truncate_len, chat_template_kwargs.enable_thinking becomes
+    reasoning_effort, min_tokens is dropped, and fireworks-native top_k still
+    passes through. Asserts on the actual JSON posted to the API, so a revert
+    of the _complete_fireworks_ai wiring fails this test.
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    model = "accounts/fireworks/models/glm-5p1"
+    body = {
+        "id": "chat-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    raw_response = MagicMock()
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    raw_response.text = json.dumps(body)
+    raw_response.json = lambda: body
+
+    client = HTTPHandler()
+    with patch.object(client, "post", return_value=raw_response) as mock_post:
+        litellm.completion(
+            model=f"fireworks_ai/{model}",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="fw-test-key",
+            client=client,
+            truncate_prompt_tokens=4096,
+            chat_template_kwargs={"enable_thinking": False},
+            min_tokens=10,
+            top_k=40,
+        )
+
+    request_body = json.loads(mock_post.call_args.kwargs["data"])
+    assert request_body["prompt_truncate_len"] == 4096
+    assert "truncate_prompt_tokens" not in request_body
+    assert request_body["reasoning_effort"] == "none"
+    assert "chat_template_kwargs" not in request_body
+    assert "min_tokens" not in request_body
+    assert request_body["top_k"] == 40
+
+
+def test_in_schema_unsupported_params_still_raise():
+    """
+    The extras translation channel does not weaken the supported-params gate
+    for in-schema OpenAI params: store is still rejected with drop_params=False
+    and dropped with drop_params=True.
+    """
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.get_optional_params(
+            model="accounts/fireworks/models/llama-v3-70b-instruct",
+            custom_llm_provider="fireworks_ai",
+            drop_params=False,
+            store=True,
+        )
+    optional_params = litellm.get_optional_params(
+        model="accounts/fireworks/models/llama-v3-70b-instruct",
+        custom_llm_provider="fireworks_ai",
+        drop_params=True,
+        store=True,
+    )
+    assert "store" not in optional_params
