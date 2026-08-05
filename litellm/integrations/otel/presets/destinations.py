@@ -85,11 +85,23 @@ def _weave_destination(values: Mapping[str, str]) -> OtelDestination | None:
 
 def _generic_destination(values: Mapping[str, str]) -> OtelDestination | None:
     """Any OTLP backend: an explicit endpoint plus raw headers. The catch-all that
-    makes the registry cover self-hosted collectors / Phoenix / Honeycomb / etc."""
+    makes the registry cover self-hosted collectors / Phoenix / Honeycomb / etc.
+
+    The protocol is pinned rather than left for the router to default, because this
+    fallback also builds destinations for named backends whose own adapter declined the
+    values (an ``arize`` credential carrying only ``otel_endpoint``). Leaving it unset
+    there made the router apply the backend's intrinsic transport -- gRPC for Arize --
+    to the plain HTTP URL the admin typed, so the destination silently delivered nothing
+    while still being disclosed as active.
+    """
     endpoint = values.get("otel_endpoint")
     if not endpoint:
         return None
-    return OtelDestination(endpoint=endpoint, headers=_parse_header_string(values.get("otel_headers", "")))
+    return OtelDestination(
+        endpoint=endpoint,
+        headers=_parse_header_string(values.get("otel_headers", "")),
+        protocol="otlp_http",
+    )
 
 
 _ADAPTERS: Mapping[str, Callable[[Mapping[str, str]], OtelDestination | None]] = {
