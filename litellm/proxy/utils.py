@@ -167,6 +167,7 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
 
     Span = _Span | Any
@@ -2996,6 +2997,10 @@ class PrismaClient:
     _spend_log_transactions_lock = asyncio.Lock()
     tool_usage_transactions: list["ToolUsageTransaction"] = []
     _tool_usage_transactions_lock = asyncio.Lock()
+    autorouter_turn_transactions: ClassVar[
+        list["AutoRouterTurnTransaction"]
+    ] = []  # mutable-ok: drained queue, mirrors tool_usage_transactions
+    _autorouter_turn_transactions_lock = asyncio.Lock()
 
     def __init__(
         self,
@@ -5515,24 +5520,33 @@ async def update_spend(
 
     ### UPDATE SPEND LOGS ###
     # Check queue size with lock protection
-    async with prisma_client._spend_log_transactions_lock:
-        queue_size: Final = len(prisma_client.spend_log_transactions)
+    queue_size: Final = await _total_queued_spend_transactions(prisma_client)
     verbose_proxy_logger.debug("Spend Logs transactions: %s", queue_size)
-
-    async with prisma_client._tool_usage_transactions_lock:
-        tool_usage_queue_size: Final = len(prisma_client.tool_usage_transactions)
 
     # Process spend log transactions when called directly.
     # This keeps backwards compatibility with the old behavior.
     # See update_spend_logs_job and _monitor_spend_logs_queue for the new behavior.
     # Safe to keep: under high concurrency this can take up to ~30s to run,
     # so it's unlikely to overlap with monitor_spend_logs_queue.
-    if queue_size > 0 or tool_usage_queue_size > 0:
+    if queue_size > 0:
         await update_spend_logs_job(
             prisma_client=prisma_client,
             db_writer_client=db_writer_client,
             proxy_logging_obj=proxy_logging_obj,
         )
+
+
+async def _total_queued_spend_transactions(prisma_client: PrismaClient) -> int:
+    """Pending entries across every request-time spend queue, sized under each queue's
+    lock. Every drain trigger reads this one owner, so a queue added later joins the
+    direct path, the batch job's emptiness check and the monitor at once."""
+    async with prisma_client._spend_log_transactions_lock:
+        spend_queue_size: Final = len(prisma_client.spend_log_transactions)
+    async with prisma_client._tool_usage_transactions_lock:
+        tool_queue_size: Final = len(prisma_client.tool_usage_transactions)
+    async with prisma_client._autorouter_turn_transactions_lock:
+        autorouter_queue_size: Final = len(prisma_client.autorouter_turn_transactions)
+    return spend_queue_size + tool_queue_size + autorouter_queue_size
 
 
 async def update_daily_tag_spend(
@@ -5597,11 +5611,7 @@ async def update_spend_logs_job(
     # Atomically pop batch from queue. The tool usage queue counts toward the
     # emptiness check: a spend-log write failure aborts a run before the tool
     # drain below, and those entries must not strand once the spend queue drains.
-    async with prisma_client._spend_log_transactions_lock:
-        queue_size: Final = len(prisma_client.spend_log_transactions)
-    async with prisma_client._tool_usage_transactions_lock:
-        tool_queue_size: Final = len(prisma_client.tool_usage_transactions)
-    if queue_size == 0 and tool_queue_size == 0:
+    if await _total_queued_spend_transactions(prisma_client) == 0:
         return
 
     async with prisma_client._spend_log_transactions_lock:
@@ -5652,6 +5662,26 @@ async def update_spend_logs_job(
             tool_tracking_err,
         )
 
+    async with prisma_client._autorouter_turn_transactions_lock:
+        autorouter_turns_to_process: Final = prisma_client.autorouter_turn_transactions[:MAX_LOGS_PER_INTERVAL]
+        remaining_autorouter_turns: Final = prisma_client.autorouter_turn_transactions[
+            len(autorouter_turns_to_process) :
+        ]
+        prisma_client.autorouter_turn_transactions = remaining_autorouter_turns  # rebind-ok: drain under lock
+    try:
+        from litellm.proxy.db.autorouter_session_rollup import flush_autorouter_turn_transactions
+
+        await flush_autorouter_turn_transactions(
+            prisma_client=prisma_client,
+            transactions=autorouter_turns_to_process,
+        )
+    except Exception as autorouter_tracking_err:  # noqa: BLE001  # a drain bug must not abort the spend job
+        verbose_proxy_logger.error(
+            "Spend tracking - auto-router session rollup drain failed; %s turn transactions dropped: %s",
+            len(autorouter_turns_to_process),
+            autorouter_tracking_err,
+        )
+
 
 async def _monitor_spend_logs_queue(
     prisma_client: PrismaClient,
@@ -5686,11 +5716,7 @@ async def _monitor_spend_logs_queue(
         try:
             # Check queue sizes with lock protection; the tool usage queue keeps
             # the monitor firing when a prior failed run left it nonempty.
-            async with prisma_client._spend_log_transactions_lock:
-                spend_queue_size = len(prisma_client.spend_log_transactions)
-            async with prisma_client._tool_usage_transactions_lock:
-                tool_queue_size = len(prisma_client.tool_usage_transactions)
-            queue_size = spend_queue_size + tool_queue_size
+            queue_size = await _total_queued_spend_transactions(prisma_client)
 
             if queue_size > 0:
                 if queue_size >= threshold:
