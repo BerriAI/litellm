@@ -1334,11 +1334,12 @@ class TestExtractUserMessageAndSystemPrompt:
         assert sys_prompt is None
 
 
-def _llm_response(content: str):
+def _llm_response(content: str, response_cost: float | None = None):
     """Build a fake acompletion response with the given message content."""
     response = MagicMock()
     response.choices = [MagicMock()]
     response.choices[0].message.content = content
+    response._hidden_params = {} if response_cost is None else {"response_cost": response_cost}
     return response
 
 
@@ -1551,6 +1552,61 @@ class TestLLMClassifier:
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
         assert call_kwargs["model"] == "haiku-classifier"
         assert call_kwargs["timeout"] == 0.4
+
+    @pytest.mark.asyncio
+    async def test_aclassify_llm_success_captures_classifier_cost(self, llm_complexity_router, mock_router_instance):
+        """The classifier call is billed, so its cost must ride the outcome.
+
+        The classifier's own spend-log row already accounts for the money; this value is
+        what lets the parent request report it per-request (routing_decision and the
+        x-litellm-classifier-cost header), which is otherwise invisible to the caller."""
+        mock_router_instance.acompletion = AsyncMock(
+            return_value=_llm_response('{"tier": "COMPLEX"}', response_cost=8.1e-05)
+        )
+        outcome = await llm_complexity_router.aclassify("hi")
+        assert outcome.cause == "llm_classifier"
+        assert outcome.classifier_cost == 8.1e-05
+
+    @pytest.mark.asyncio
+    async def test_aclassify_captures_cost_from_the_real_client_pipeline(self, llm_classifier_config):
+        """No injected hidden params here: a real Router serves the classifier via
+        mock_response, so litellm's own client wrapper (update_response_metadata ->
+        ResponseMetadata.set_hidden_params) computes and stamps response_cost from the
+        deployment's per-token pricing. Pins that the capture reads a field the normal
+        success path actually populates."""
+        real_router = Router(
+            model_list=[
+                {
+                    "model_name": "haiku-classifier",
+                    "litellm_params": {
+                        "model": "openai/mock-classifier",
+                        "api_key": "mock-key",
+                        "mock_response": '{"tier": "COMPLEX"}',
+                        "input_cost_per_token": 1.5e-07,
+                        "output_cost_per_token": 6e-07,
+                    },
+                }
+            ]
+        )
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=real_router,
+            complexity_router_config=llm_classifier_config,
+        )
+        outcome = await router.aclassify("hi")
+        assert outcome.cause == "llm_classifier"
+        assert outcome.classifier_cost == pytest.approx(1.35e-05)
+
+    @pytest.mark.asyncio
+    async def test_aclassify_classifier_cost_is_none_when_call_is_unpriced(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """A classifier model with no pricing yields no cost; the outcome must say None,
+        never 0, so the header layer can distinguish unpriced from free."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+        outcome = await llm_complexity_router.aclassify("hi")
+        assert outcome.cause == "llm_classifier"
+        assert outcome.classifier_cost is None
 
     @pytest.mark.asyncio
     async def test_aclassify_forwards_request_metadata_for_spend_tracking(
@@ -4115,6 +4171,45 @@ class TestRoutingDecisionContents:
         assert "tier_boundaries" not in decision
 
     @pytest.mark.asyncio
+    async def test_llm_classifier_decision_carries_classifier_cost(self, llm_complexity_router, mock_router_instance):
+        """The decision must report what the classifier call cost the caller.
+
+        The hook returns the record through PreRoutingHookResponse, whose pydantic
+        validation strips keys the TypedDict does not declare, so this also pins that
+        classifier_cost survives the per-request path end to end."""
+        mock_router_instance.acompletion = AsyncMock(
+            return_value=_llm_response('{"tier": "REASONING"}', response_cost=8.1e-05)
+        )
+        response = await llm_complexity_router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert response is not None
+        decision = response.routing_decision
+        assert decision is not None
+        assert decision["cause"] == "llm_classifier"
+        assert decision["classifier_cost"] == 8.1e-05
+
+    @pytest.mark.asyncio
+    async def test_llm_classifier_decision_omits_cost_when_call_is_unpriced(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """An unpriced classifier call records no classifier_cost key at all, matching
+        how every optional fact on this record is omitted rather than nulled."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+        response = await llm_complexity_router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert response is not None
+        decision = response.routing_decision
+        assert decision is not None
+        assert decision["cause"] == "llm_classifier"
+        assert "classifier_cost" not in decision
+
+    @pytest.mark.asyncio
     async def test_llm_classifier_fallback_decision_reports_heuristic(
         self, llm_complexity_router, mock_router_instance
     ):
@@ -4131,6 +4226,7 @@ class TestRoutingDecisionContents:
         assert decision is not None
         assert decision["cause"] == "heuristic_scorer"
         assert "classifier_model" not in decision
+        assert "classifier_cost" not in decision
         assert isinstance(decision["score"], float)
 
     @pytest.mark.asyncio
