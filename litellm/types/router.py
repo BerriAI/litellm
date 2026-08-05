@@ -259,6 +259,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     auto_router_config: str | None = None
     auto_router_default_model: str | None = None
     auto_router_embedding_model: str | None = None
+    auto_router_max_input_chars: int | None = None
 
     # complexity-router params
     complexity_router_config: dict | None = None

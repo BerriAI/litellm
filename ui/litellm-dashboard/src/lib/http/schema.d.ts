@@ -26712,6 +26712,8 @@ export interface components {
             auto_router_default_model?: string | null;
             /** Auto Router Embedding Model */
             auto_router_embedding_model?: string | null;
+            /** Auto Router Max Input Chars */
+            auto_router_max_input_chars?: number | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
             /** Aws Bedrock Project Id */
@@ -35287,6 +35289,8 @@ export interface components {
             auto_router_default_model?: string | null;
             /** Auto Router Embedding Model */
             auto_router_embedding_model?: string | null;
+            /** Auto Router Max Input Chars */
+            auto_router_max_input_chars?: number | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
             /** Aws Bedrock Project Id */

@@ -7288,3 +7288,49 @@ def test_pre_call_checks_keeps_deployment_when_provider_is_unresolvable(monkeypa
     )
 
     assert len(result) == 1
+
+
+class TestAutoRouterMaxInputCharsWiring:
+    """`auto_router_max_input_chars` on the deployment has to reach the AutoRouter that embeds prompts.
+
+    Without it the cap silently reverts to the default, so an operator whose embedding model has a
+    512-token window cannot lower it and every long prompt falls back to the default model instead
+    of being routed.
+    """
+
+    @staticmethod
+    def _router(**extra_params) -> "litellm.Router":
+        pytest.importorskip("semantic_router", reason="auto-router needs the semantic-router extra")
+        return litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
+                {
+                    "model_name": "my-auto-router",
+                    "litellm_params": {
+                        "model": "auto_router/my-auto-router",
+                        "auto_router_config": json.dumps(
+                            {"routes": [{"name": "gpt-4o", "utterances": ["write me code"]}]}
+                        ),
+                        "auto_router_default_model": "gpt-4o",
+                        "auto_router_embedding_model": "text-embedding-3-small",
+                        **extra_params,
+                    },
+                },
+            ]
+        )
+
+    @staticmethod
+    def _registered_auto_router(router: "litellm.Router"):
+        return router.auto_routers["my-auto-router"][0].strategy
+
+    def test_should_pass_the_configured_cap_to_the_auto_router(self):
+        router = self._router(auto_router_max_input_chars=512)
+
+        assert self._registered_auto_router(router).max_input_chars == 512
+
+    def test_should_fall_back_to_the_shared_default_when_the_deployment_omits_it(self):
+        from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
+
+        router = self._router()
+
+        assert self._registered_auto_router(router).max_input_chars == DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
