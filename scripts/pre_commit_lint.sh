@@ -95,17 +95,25 @@ bootstrap_hint() {
     echo "  Fix: make bootstrap" >&2
 }
 
-if [ -n "$litellm_py_files" ]; then
+python_checks() {
+    local rc=0
     echo "pre-commit: linting Python (make lint)"
-    make lint || { echo "✗ Python lint failed. Fix the reds above, then re-run make pre-commit." >&2; status=1; }
+    make lint || { echo "✗ Python lint failed. Fix the reds above, then re-run make pre-commit." >&2; rc=1; }
     # `make lint` format-checks files in origin/base...HEAD, which at pre-commit time
     # predates the staged change, so format-check the staged litellm files directly to
     # cover a brand-new commit before it lands.
     if [ -n "$fmt_files" ]; then
         echo "pre-commit: ruff format --check (staged litellm files)"
         printf '%s\n' "$fmt_files" | xargs uv run --no-sync ruff format --check --exclude '/enterprise/' \
-            || { echo "✗ Unformatted staged files. Fix with: make format, then re-stage." >&2; status=1; }
+            || { echo "✗ Unformatted staged files. Fix with: make format, then re-stage." >&2; rc=1; }
     fi
+    return $rc
+}
+
+if [ -n "$litellm_py_files" ]; then
+    python_log=$(mktemp)
+    python_checks > "$python_log" 2>&1 &
+    python_pid=$!
 fi
 
 if [ -n "$e2e_py_files" ] && [ -z "$litellm_py_files" ]; then
@@ -119,18 +127,24 @@ if [ -n "$e2e_py_files" ]; then
         || { echo "✗ Raw HTTP client import in tests/e2e. Route the call through tests/e2e/e2e_http.py, then re-run make pre-commit." >&2; status=1; }
 fi
 
-if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ]; then
+dashboard_checks() {
     echo "pre-commit: linting dashboard (prettier + eslint + lint budgets)"
     if [ ! -d ui/litellm-dashboard/node_modules ]; then
         echo "✗ ui/litellm-dashboard/node_modules is missing; dashboard lint cannot run." >&2
         bootstrap_hint
-        status=1
-    else
-        lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd ui/litellm-dashboard && npm run format)." >&2; status=1; }
+        return 1
     fi
+    lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd ui/litellm-dashboard && npm run format)." >&2; return 1; }
+}
+
+if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ]; then
+    dash_log=$(mktemp)
+    dashboard_checks > "$dash_log" 2>&1 &
+    dash_pid=$!
 fi
 
-if [ -n "$spec_files" ]; then
+genapi_checks() {
+    local status=0
     echo "pre-commit: checking dashboard API types are in sync (npm run gen:api)"
     # gen-api-types.mjs imports litellm.proxy.proxy_server, which needs the proxy deps
     # and an up-to-date Prisma client; check-ui-api-types.yml installs those and runs
@@ -156,6 +170,26 @@ if [ -n "$spec_files" ]; then
         echo "✗ Could not regenerate API types (npm run gen:api failed)." >&2
         status=1
     fi
+    return $status
+}
+
+if [ -n "$spec_files" ]; then
+    gen_log=$(mktemp)
+    genapi_checks > "$gen_log" 2>&1 &
+    gen_pid=$!
+fi
+
+if [ -n "${python_pid:-}" ]; then
+    wait "$python_pid" || status=1
+    cat "$python_log"; rm -f "$python_log"
+fi
+if [ -n "${dash_pid:-}" ]; then
+    wait "$dash_pid" || status=1
+    cat "$dash_log"; rm -f "$dash_log"
+fi
+if [ -n "${gen_pid:-}" ]; then
+    wait "$gen_pid" || status=1
+    cat "$gen_log"; rm -f "$gen_log"
 fi
 
 exit $status
