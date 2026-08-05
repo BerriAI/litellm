@@ -797,7 +797,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         except OpenAIError as e:
             raise e
         except Exception as e:
-            status_code: Final = getattr(e, "status_code", 500)
+            status_code: Final = getattr(e, "status_code", 400)
             error_headers = getattr(e, "headers", None)
             error_text: Final = getattr(e, "text", str(e))
             error_response: Final = getattr(e, "response", None)
@@ -920,7 +920,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 # e.message
             except Exception as e:
                 exception_response = getattr(e, "response", None)
-                status_code = getattr(e, "status_code", 500)
+                status_code = getattr(e, "status_code", 400)
                 exception_body = getattr(e, "body", None)
                 error_headers = getattr(e, "headers", None)
                 if error_headers is None and exception_response:
@@ -1075,7 +1075,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     raise e
 
                 error_headers = getattr(e, "headers", None)
-                status_code = getattr(e, "status_code", 500)
+                status_code = getattr(e, "status_code", 400)
                 error_response = getattr(e, "response", None)
                 exception_body = getattr(e, "body", None)
                 if error_headers is None and error_response:
@@ -1097,14 +1097,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         )
                     elif hasattr(e, "status_code"):
                         raise OpenAIError(
-                            status_code=getattr(e, "status_code", 500),
+                            status_code=getattr(e, "status_code", 400),
                             message=str(e),
                             headers=error_headers,
                             body=exception_body,
                         )
                     else:
                         raise OpenAIError(
-                            status_code=500,
+                            status_code=400,
                             message=f"{e}",
                             headers=error_headers,
                             body=exception_body,
@@ -1228,7 +1228,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 additional_args={"complete_input_dict": data},
                 original_response=str(e),
             )
-            status_code: Final = getattr(e, "status_code", 500)
+            status_code: Final = getattr(e, "status_code", 400)
             error_headers = getattr(e, "headers", None)
             error_text: Final = getattr(e, "text", str(e))
             error_response: Final = getattr(e, "response", None)
@@ -1314,7 +1314,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         except OpenAIError as e:
             raise e
         except Exception as e:
-            status_code: Final = getattr(e, "status_code", 500)
+            status_code: Final = getattr(e, "status_code", 400)
             error_headers = getattr(e, "headers", None)
             error_text: Final = getattr(e, "text", str(e))
             error_response: Final = getattr(e, "response", None)
@@ -1468,9 +1468,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 original_response=str(e),
             )
             if hasattr(e, "status_code"):
-                raise OpenAIError(status_code=getattr(e, "status_code", 500), message=str(e))
+                raise OpenAIError(status_code=getattr(e, "status_code", 400), message=str(e))
             else:
-                raise OpenAIError(status_code=500, message=str(e))
+                raise OpenAIError(status_code=400, message=str(e))
 
     def audio_speech(
         self,
