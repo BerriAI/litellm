@@ -8,6 +8,8 @@ use crate::providers::bedrock::constants::{
     AWS_REGION, AWS_REGION_NAME, BEDROCK_ANTHROPIC_VERSION, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE,
     DEFAULT_BEDROCK_REGION,
 };
+
+const AWS_BEARER_TOKEN_BEDROCK: &str = "AWS_BEARER_TOKEN_BEDROCK";
 use serde::Serialize;
 use serde_json::Value;
 
@@ -157,16 +159,24 @@ impl AnthropicMessagesProviderConfig for BedrockMessagesConfig {
 
     fn resolve_api_key(
         &self,
-        _api_key: Option<&str>,
-        _env_lookup: &dyn Fn(&str) -> Option<String>,
+        api_key: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> CoreResult<String> {
-        Ok(String::new())
+        Ok(match api_key {
+            Some(value) if !value.trim().is_empty() => value.trim().to_string(),
+            Some(_) => String::new(),
+            None => env_lookup(AWS_BEARER_TOKEN_BEDROCK)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_default(),
+        })
     }
 
     fn auth_strategy(&self) -> MessagesAuthStrategy {
-        todo!(
-            "Bedrock authenticates with a bearer token or a signed request, not a static api key header"
-        )
+        MessagesAuthStrategy::BearerOrSigV4
+    }
+
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        &[("content-type", "application/json")]
     }
 
     fn transform_request(
@@ -250,6 +260,40 @@ mod tests {
         assert_eq!(
             BEDROCK_MESSAGES_CONFIG.signing_region(None, &|_| None),
             Some(DEFAULT_BEDROCK_REGION.to_string())
+        );
+    }
+
+    #[test]
+    fn auth_uses_an_explicit_bearer_token_or_falls_back_to_sigv4() {
+        let env = |key: &str| {
+            (key == AWS_BEARER_TOKEN_BEDROCK).then(|| "env-token".to_string())
+        };
+
+        assert_eq!(
+            BEDROCK_MESSAGES_CONFIG.auth_strategy(),
+            MessagesAuthStrategy::BearerOrSigV4
+        );
+        assert_eq!(
+            BEDROCK_MESSAGES_CONFIG
+                .resolve_api_key(Some("request-token"), &env)
+                .expect("token"),
+            "request-token"
+        );
+        assert_eq!(
+            BEDROCK_MESSAGES_CONFIG
+                .resolve_api_key(None, &env)
+                .expect("token"),
+            "env-token"
+        );
+        assert!(
+            BEDROCK_MESSAGES_CONFIG
+                .resolve_api_key(Some(" "), &env)
+                .expect("token")
+                .is_empty()
+        );
+        assert_eq!(
+            BEDROCK_MESSAGES_CONFIG.default_headers(),
+            &[("content-type", "application/json")]
         );
     }
 

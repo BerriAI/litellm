@@ -41,12 +41,15 @@ pub(super) fn prepare_messages_call(
     if !already_authorized {
         let api_key = config.resolve_api_key(request.api_key, &env_lookup)?;
         let auth_header = match auth_strategy {
-            MessagesAuthStrategy::Bearer => {
-                ("authorization".to_string(), format!("Bearer {api_key}"))
+            MessagesAuthStrategy::Bearer => Some(("authorization".to_string(), format!("Bearer {api_key}"))),
+            MessagesAuthStrategy::BearerOrSigV4 => {
+                (!api_key.is_empty()).then(|| ("authorization".to_string(), format!("Bearer {api_key}")))
             }
-            MessagesAuthStrategy::Header(name) => (name.to_string(), api_key),
+            MessagesAuthStrategy::Header(name) => Some((name.to_string(), api_key)),
         };
-        headers.push(auth_header);
+        if let Some(auth_header) = auth_header {
+            headers.push(auth_header);
+        }
     }
 
     for (name, value) in config.default_headers() {

@@ -6,13 +6,14 @@ use super::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessagesAuthStrategy {
     Bearer,
+    BearerOrSigV4,
     Header(&'static str),
 }
 
 impl MessagesAuthStrategy {
     pub fn header_name(self) -> &'static str {
         match self {
-            Self::Bearer => "authorization",
+            Self::Bearer | Self::BearerOrSigV4 => "authorization",
             Self::Header(header_name) => header_name,
         }
     }
