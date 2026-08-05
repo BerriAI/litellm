@@ -113,15 +113,19 @@ python_checks() {
 on_interrupt() {
     trap - INT TERM
     rm -f "${python_log:-}" "${dash_log:-}" "${gen_log:-}"
-    kill 0 2>/dev/null
+    for job_pid in ${python_pid:-} ${dash_pid:-} ${gen_pid:-}; do
+        kill -- "-$job_pid" 2>/dev/null || true
+    done
     exit 130
 }
 trap on_interrupt INT TERM
 
 if [ -n "$litellm_py_files" ]; then
     python_log=$(mktemp)
+    set -m
     python_checks > "$python_log" 2>&1 &
     python_pid=$!
+    set +m
 fi
 
 if [ -n "$e2e_py_files" ] && [ -z "$litellm_py_files" ]; then
@@ -147,8 +151,10 @@ dashboard_checks() {
 
 if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ]; then
     dash_log=$(mktemp)
+    set -m
     dashboard_checks > "$dash_log" 2>&1 &
     dash_pid=$!
+    set +m
 fi
 
 genapi_checks() {
@@ -183,8 +189,10 @@ genapi_checks() {
 
 if [ -n "$spec_files" ]; then
     gen_log=$(mktemp)
+    set -m
     genapi_checks > "$gen_log" 2>&1 &
     gen_pid=$!
+    set +m
 fi
 
 if [ -n "${python_pid:-}" ]; then
