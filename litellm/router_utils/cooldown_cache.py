@@ -32,7 +32,7 @@ class CooldownCacheValue(TypedDict):
 # Cap on the corrected in-memory TTL set in `_corrected_active_cooldown`: re-checks the
 # real remaining cooldown against Redis at least this often, so an entry that later gets
 # deleted or extended in Redis before its original deadline is still noticed promptly.
-_MAX_CORRECTED_IN_MEMORY_TTL_SECONDS = 60.0
+_MAX_CORRECTED_IN_MEMORY_TTL_SECONDS: Final = 60.0
 
 
 class CooldownCache:
@@ -119,14 +119,14 @@ class CooldownCache:
         Also corrects the in-memory TTL when DualCache promotes a Redis entry using the
         default 600s TTL instead of the true remaining cooldown time.
         """
-        cooldown_cache_value = CooldownCacheValue(**result)  # pyright: ignore[reportUnknownArgumentType] - result comes from an untyped cache read, not from our own code
-        remaining = (cooldown_cache_value["timestamp"] + cooldown_cache_value["cooldown_time"]) - current_time
+        cooldown_cache_value: Final = CooldownCacheValue(**result)  # pyright: ignore[reportUnknownArgumentType] - result comes from an untyped cache read, not from our own code
+        remaining: Final = (cooldown_cache_value["timestamp"] + cooldown_cache_value["cooldown_time"]) - current_time
         if remaining <= 0:
             self.cache.in_memory_cache.delete_cache(key)
             return None
-        current_expiry = self.cache.in_memory_cache.ttl_dict.get(key)
+        current_expiry: Final = self.cache.in_memory_cache.ttl_dict.get(key)
         if current_expiry is not None and current_expiry > current_time + remaining + 5:
-            corrected_ttl = min(remaining, _MAX_CORRECTED_IN_MEMORY_TTL_SECONDS)
+            corrected_ttl: Final = min(remaining, _MAX_CORRECTED_IN_MEMORY_TTL_SECONDS)
             self.cache.in_memory_cache.delete_cache(key)
             self.cache.in_memory_cache.set_cache(key, result, ttl=corrected_ttl)
         return cooldown_cache_value
@@ -148,7 +148,7 @@ class CooldownCache:
         if results is None or all(v is None for v in results):
             return active_cooldowns
 
-        current_time = time.time()
+        current_time: Final = time.time()
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
                 key = CooldownCache.get_cooldown_cache_key(model_id)
@@ -167,7 +167,7 @@ class CooldownCache:
         results: Final = self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
 
         active_cooldowns: Final = []
-        current_time = time.time()
+        current_time: Final = time.time()
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
                 key = CooldownCache.get_cooldown_cache_key(model_id)

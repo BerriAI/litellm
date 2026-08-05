@@ -54,34 +54,37 @@ def _trigger_cooldown_for_failed_deployment(
         # can't reliably tell a caller-supplied bucket from a router-authored one
         # without knowing this call's function_name, so a client with permission to
         # set metadata could otherwise get an arbitrary deployment cooled down.
-        deployment_id: str | None = getattr(exception, "failed_deployment_id", None)
+        deployment_id: Final[str | None] = getattr(exception, "failed_deployment_id", None)
 
         if deployment_id is None:
             verbose_router_logger.debug("Cannot trigger cooldown for fallback: no failed_deployment_id on exception")
             return
 
-        exception_status: str | int = getattr(exception, "status_code", "")
+        exception_status: Final[str | int] = getattr(exception, "status_code", "")
 
-        deployment_dict = litellm_router.get_model_info(id=deployment_id)
-        deployment_cooldown = (
+        deployment_dict: Final = litellm_router.get_model_info(id=deployment_id)
+        deployment_cooldown: Final = (
             (deployment_dict.get("litellm_params") or MappingProxyType({})).get("cooldown_time")
             if deployment_dict is not None
             else None
         )
-        exception_headers = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
+        exception_headers: Final = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
             original_exception=exception
         )
-        header_cooldown = (
+        header_cooldown: Final = (
             litellm.utils._get_retry_after_from_exception_header(response_headers=exception_headers)
             if exception_headers is not None
             else None
         )
-        if deployment_cooldown is not None and deployment_cooldown >= 0:
-            time_to_cooldown = deployment_cooldown
-        elif header_cooldown is not None and header_cooldown >= 0:
-            time_to_cooldown = header_cooldown
-        else:
-            time_to_cooldown = litellm_router.cooldown_time
+        time_to_cooldown: Final = (
+            deployment_cooldown
+            if deployment_cooldown is not None and deployment_cooldown >= 0
+            else (
+                header_cooldown
+                if header_cooldown is not None and header_cooldown >= 0
+                else litellm_router.cooldown_time
+            )
+        )
 
         increment_deployment_failures_for_current_minute(
             litellm_router_instance=litellm_router,
