@@ -22996,6 +22996,12 @@ export interface components {
             timezone?: string | null;
         };
         /**
+         * ComplexityTier
+         * @description Complexity tiers for routing decisions.
+         * @enum {string}
+         */
+        ComplexityTier: "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
+        /**
          * ComplianceCheckRequest
          * @description Request payload for compliance check endpoints.
          *
@@ -31387,7 +31393,7 @@ export interface components {
             };
             /**
              * Tier Definitions
-             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet. Requires classifier_type 'llm', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, and plugins are unavailable with a custom tier set because they rely on the built-in severity order.
+             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, and plugins are unavailable with a custom tier set because they are built on the built-in tier ladder.
              */
             tier_definitions?: components["schemas"]["TierDefinition"][] | null;
             /**
