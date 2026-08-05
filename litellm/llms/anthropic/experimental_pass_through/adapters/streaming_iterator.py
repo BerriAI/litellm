@@ -366,7 +366,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 "output_tokens": output_tokens,
             }
             iterations.append(message_iteration)
-        augmented_usage["iterations"] = iterations  # type: ignore[typeddict-unknown-key]
+        augmented_usage["iterations"] = iterations
         augmented["usage"] = augmented_usage
         return augmented
 
@@ -997,7 +997,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             block_type,
             content_block_start,
         ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
-            choices=chunk.choices  # type: ignore
+            choices=chunk.choices
         )
 
         # Restore original tool name if it was truncated for OpenAI's 64-char limit

@@ -535,9 +535,9 @@ def decrypt_credentials(
         "aws_session_token",
     ]
     for field in secret_fields:
-        value = credentials.get(field)  # type: ignore[literal-required]
+        value = credentials.get(field)
         if value is not None and isinstance(value, str):
-            credentials[field] = decrypt_value_helper(  # type: ignore[literal-required]
+            credentials[field] = decrypt_value_helper(
                 value=value,
                 key=field,
                 exception_type="debug",
@@ -807,7 +807,7 @@ async def create_mcp_server(
     data_dict["updated_by"] = touched_by
 
     new_mcp_server: Final[LiteLLM_MCPServerTable] = await MCPServerRepository(prisma_client).table.create(
-        data=data_dict  # type: ignore
+        data=data_dict
     )
 
     _decrypt_env_vars_on_returned_row(new_mcp_server)
@@ -932,7 +932,7 @@ async def update_mcp_server(
 
     updated_mcp_server: Final[LiteLLM_MCPServerTable] = await MCPServerRepository(prisma_client).table.update(
         where={"server_id": data.server_id},
-        data=data_dict,  # type: ignore
+        data=data_dict,
     )
 
     _decrypt_env_vars_on_returned_row(updated_mcp_server)

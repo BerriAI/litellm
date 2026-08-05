@@ -1209,14 +1209,14 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         for key in ("result", "data", "inspection", "ai_defense", "aiDefense"):
             value = inspect_response.get(key)
             if cls._has_decision_fields(value):
-                return value  # type: ignore[return-value]
+                return value
 
         result: Final = inspect_response.get("result")
         if isinstance(result, dict):
             for key in ("data", "inspection", "ai_defense", "aiDefense"):
                 value = result.get(key)
                 if cls._has_decision_fields(value):
-                    return value  # type: ignore[return-value]
+                    return value
 
         return inspect_response
 

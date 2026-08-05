@@ -2,7 +2,7 @@ import types
 from collections.abc import AsyncIterator, Iterator
 from typing import Final, cast
 
-import httpx  # type: ignore
+import httpx
 
 import litellm
 from litellm import verbose_logger
@@ -198,7 +198,7 @@ async def make_call(
                 data=data,
                 messages=messages,
                 encoding=litellm.encoding,
-            )  # type: ignore
+            )
             completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
         elif bedrock_invoke_provider == "anthropic":
             decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
@@ -282,7 +282,7 @@ def make_sync_call(
                 data=data,
                 messages=messages,
                 encoding=litellm.encoding,
-            )  # type: ignore
+            )
             completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
         elif bedrock_invoke_provider == "anthropic":
             decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
@@ -693,13 +693,13 @@ class AWSEventStreamDecoder:
             chunk = parsed_response.get("chunk")
             if not chunk:
                 return None
-            return chunk.get("bytes").decode()  # type: ignore[no-any-return]
+            return chunk.get("bytes").decode()
         else:
             chunk = response_dict.get("body")
             if not chunk:
                 return None
 
-            return chunk.decode()  # type: ignore[no-any-return]
+            return chunk.decode()
 
 
 class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
@@ -786,7 +786,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
     def _chunk_parser(self, chunk_data: ModelResponse) -> GChunk:
         try:
             chunk_usage: Final[Usage] = getattr(chunk_data, "usage")
-            text = chunk_data.choices[0].message.content or ""  # type: ignore
+            text = chunk_data.choices[0].message.content or ""
             tool_use = None
             _model_response_tool_call: Final = cast(
                 List[ChatCompletionMessageToolCall] | None,
@@ -795,7 +795,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
             if self.json_mode is True:
                 text, tool_use = self._handle_json_mode_chunk(
                     text=text,
-                    tool_calls=chunk_data.choices[0].message.tool_calls,  # type: ignore
+                    tool_calls=chunk_data.choices[0].message.tool_calls,
                 )
             elif _model_response_tool_call is not None:
                 tool_use = ChatCompletionToolCallChunk(

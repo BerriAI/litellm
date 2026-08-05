@@ -76,7 +76,7 @@ class AiPolicySuggester:
                 temperature=0.2,
             )
 
-            tool_calls: Final = response.choices[0].message.tool_calls  # type: ignore
+            tool_calls: Final = response.choices[0].message.tool_calls
             if not tool_calls:
                 return {
                     "selected_templates": [],

@@ -15,7 +15,7 @@ from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 try:
     from prisma.errors import RecordNotFoundError
 except ImportError:
-    RecordNotFoundError = Exception  # type: ignore
+    RecordNotFoundError = Exception
 
 import litellm
 from litellm._logging import verbose_proxy_logger

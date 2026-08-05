@@ -427,7 +427,7 @@ def anthropic_messages_handler(
     local_vars: Final = locals()
     is_async: Final = kwargs.pop("is_async", False)
     # Use provided client or create a new one
-    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
 
     # Store original model name before get_llm_provider strips the provider prefix
     # This is needed by agentic hooks (e.g., websearch_interception) to make follow-up requests

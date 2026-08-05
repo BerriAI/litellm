@@ -253,7 +253,7 @@ class PromptManager:
             "dict": dict,
         }
 
-        return type_mapping.get(schema_type.lower(), str)  # type: ignore
+        return type_mapping.get(schema_type.lower(), str)
 
     def get_prompt(self, prompt_id: str, version: int | None = None) -> PromptTemplate | None:
         """

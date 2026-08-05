@@ -99,7 +99,7 @@ def strip_name_from_message(message: AllMessageValues, allowed_name_roles: list[
     """
     msg_copy: Final = message.copy()
     if msg_copy.get("role") not in allowed_name_roles:
-        msg_copy.pop("name", None)  # type: ignore
+        msg_copy.pop("name", None)
     return msg_copy
 
 
@@ -114,7 +114,7 @@ def strip_name_from_messages(
         msg_role = message.get("role")
         msg_copy = message.copy()
         if msg_role not in allowed_name_roles:
-            msg_copy.pop("name", None)  # type: ignore
+            msg_copy.pop("name", None)
         new_messages.append(msg_copy)
     return new_messages
 
@@ -1511,9 +1511,7 @@ def convert_prefix_message_to_non_prefix_messages(
                     "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
                 }
             )
-            new_messages.append(
-                {**{k: v for k, v in message.items() if k != "prefix"}}  # type: ignore
-            )
+            new_messages.append({**{k: v for k, v in message.items() if k != "prefix"}})
         else:
             new_messages.append(message)
     return new_messages
