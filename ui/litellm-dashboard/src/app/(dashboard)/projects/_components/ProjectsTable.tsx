@@ -2,10 +2,11 @@
 
 import { SortingState } from "@tanstack/react-table";
 import { FolderKanban } from "lucide-react";
+import { parseAsInteger, useQueryState } from "nuqs";
 import { useMemo, useState } from "react";
 
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, DataTablePagination } from "@/components/shared/DataTable";
 
 import { getProjectsTableColumns } from "./ProjectsTableColumns";
 
@@ -18,7 +19,8 @@ interface ProjectsTableProps {
   isTeamsLoading: boolean;
 }
 
-const PAGE_SIZE_OPTIONS = [10, 25, 50];
+const DEFAULT_PAGE_SIZE = 10;
+const PAGE_SIZE_OPTIONS = [DEFAULT_PAGE_SIZE, 25, 50];
 
 function EmptyState({ isFiltered }: { isFiltered: boolean }) {
   return (
@@ -45,11 +47,16 @@ export function ProjectsTable({
   isTeamsLoading,
 }: ProjectsTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(1).withOptions({ history: "push" }));
 
   const columns = useMemo(() => {
     const deps = { onProjectClick, teamAliasMap, isTeamsLoading };
     return getProjectsTableColumns(deps);
   }, [onProjectClick, teamAliasMap, isTeamsLoading]);
+
+  const pageCount = Math.max(Math.ceil(projects.length / pageSize), 1);
+  const pageIndex = page >= 1 && page <= pageCount ? page - 1 : 0;
 
   return (
     <DataTable
@@ -60,7 +67,22 @@ export function ProjectsTable({
       sorting={sorting}
       onSortingChange={setSorting}
       paginationMode="client"
+      pagination={{ pageIndex, pageSize }}
       pageSizeOptions={PAGE_SIZE_OPTIONS}
+      paginationSlot={() => (
+        <DataTablePagination
+          page={pageIndex}
+          pageSize={pageSize}
+          rowCount={projects.length}
+          onPageChange={(nextPageIndex) => void setPage(nextPageIndex + 1)}
+          onPageSizeChange={(nextPageSize) => {
+            setPageSize(nextPageSize);
+            void setPage(1);
+          }}
+          pageSizeOptions={PAGE_SIZE_OPTIONS}
+          isLoading={isLoading}
+        />
+      )}
       isLoading={isLoading}
       loadingMessage="Loading projects…"
       noDataMessage={<EmptyState isFiltered={isFiltered} />}
