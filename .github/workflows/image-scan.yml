@@ -11,7 +11,8 @@ on:
       - docker/Dockerfile.non_root
       - migrations/Dockerfile
       - migrations/run.py
-      - tests/proxy_migration_tests/test_offline_image_migration.py
+      - litellm-proxy-extras/**
+      - tests/proxy_migration_tests/**
       - uv.lock
       - ui/litellm-dashboard/package-lock.json
       - .github/workflows/image-scan.yml
