@@ -1,4 +1,4 @@
-from typing import Any, Dict, Final, List, Optional
+from typing import Any, Final
 
 from pydantic import BaseModel, field_validator
 
@@ -14,7 +14,7 @@ class UserListResponse(BaseModel):
     Response model for the user list endpoint
     """
 
-    users: List[LiteLLM_UserTableWithKeyCount]
+    users: list[LiteLLM_UserTableWithKeyCount]
     total: int
     page: int
     page_size: int
@@ -24,9 +24,9 @@ class UserListResponse(BaseModel):
 class BulkUpdateUserRequest(BaseModel):
     """Request for bulk user updates"""
 
-    users: Optional[List[UpdateUserRequest]] = None  # List of specific user update requests
-    all_users: Optional[bool] = False  # Flag to update all users
-    user_updates: Optional[UpdateUserRequestNoUserIDorEmail] = None  # Updates to apply to all users when all_users=True
+    users: list[UpdateUserRequest] | None = None  # List of specific user update requests
+    all_users: bool | None = False  # Flag to update all users
+    user_updates: UpdateUserRequestNoUserIDorEmail | None = None  # Updates to apply to all users when all_users=True
 
     @field_validator("users", "all_users", "user_updates")
     @classmethod
@@ -56,17 +56,17 @@ class BulkUpdateUserRequest(BaseModel):
 class UserUpdateResult(BaseModel):
     """Result of a single user update operation"""
 
-    user_id: Optional[str] = None
-    user_email: Optional[str] = None
+    user_id: str | None = None
+    user_email: str | None = None
     success: bool
-    error: Optional[str] = None
-    updated_user: Optional[Dict[str, Any]] = None
+    error: str | None = None
+    updated_user: dict[str, Any] | None = None
 
 
 class BulkUpdateUserResponse(BaseModel):
     """Response for bulk user update operations"""
 
-    results: List[UserUpdateResult]
+    results: list[UserUpdateResult]
     total_requested: int
     successful_updates: int
     failed_updates: int

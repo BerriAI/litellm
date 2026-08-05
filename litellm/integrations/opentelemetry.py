@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Union, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -47,12 +47,12 @@ if TYPE_CHECKING:
     )
     from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
-    Span = Union[_Span, Any]
-    Tracer = Union[_Tracer, Any]
-    Context = Union[_Context, Any]
-    SpanExporter = Union[_SpanExporter, Any]
-    UserAPIKeyAuth = Union[_UserAPIKeyAuth, Any]
-    ManagementEndpointLoggingPayload = Union[_ManagementEndpointLoggingPayload, Any]
+    Span = _Span | Any
+    Tracer = _Tracer | Any
+    Context = _Context | Any
+    SpanExporter = _SpanExporter | Any
+    UserAPIKeyAuth = _UserAPIKeyAuth | Any
+    ManagementEndpointLoggingPayload = _ManagementEndpointLoggingPayload | Any
 else:
     Span = Any
     Tracer = Any
@@ -186,16 +186,7 @@ def _normalize_team_metadata_keys(value: Any) -> list[str]:
 
 _FREEZE_MAX_DEPTH: Final = 16
 
-HashableScope = Union[
-    str,
-    int,
-    float,
-    bool,
-    bytes,
-    None,
-    tuple["HashableScope", ...],
-    frozenset["HashableScope"],
-]
+HashableScope = str | int | float | bool | bytes | None | tuple["HashableScope", ...] | frozenset["HashableScope"]
 
 
 def _freeze_for_dedupe(value: object, _depth: int = 0) -> HashableScope:

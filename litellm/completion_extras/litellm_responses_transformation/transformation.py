@@ -367,7 +367,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 stream_options = normalize_responses_api_stream_options(value)
                 if stream_options is not None:
                     responses_api_request["stream_options"] = stream_options
-            elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
+            elif key in ResponsesAPIOptionalRequestParams.__annotations__:
                 responses_api_request[key] = value
             elif key == "previous_response_id":
                 responses_api_request["previous_response_id"] = value

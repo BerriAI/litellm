@@ -322,7 +322,7 @@ oci_transformation: Final = OCIChatConfig()
 ovhcloud_transformation: Final = OVHCloudChatConfig()
 lemonade_transformation: Final = LemonadeChatConfig()
 
-MOCK_RESPONSE_TYPE = Union[str, Exception, dict, ModelResponse, ModelResponseStream]
+MOCK_RESPONSE_TYPE = str | Exception | dict | ModelResponse | ModelResponseStream
 ####### COMPLETION ENDPOINTS ################
 
 

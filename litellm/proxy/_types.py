@@ -3,7 +3,7 @@ import json
 import os
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Union
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from pydantic import (
@@ -67,7 +67,7 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -4010,7 +4010,7 @@ class JWTKeyItem(TypedDict, total=False):
     kid: str
 
 
-JWKKeyValue = Union[list[JWTKeyItem], JWTKeyItem]
+JWKKeyValue = list[JWTKeyItem] | JWTKeyItem
 
 
 class JWKUrlResponse(TypedDict, total=False):
@@ -4053,15 +4053,15 @@ class UserManagementEndpointParamDocStringEnums(str, enum.Enum):
     duration_doc_str = """Optional[str] - Duration for the key auto-created on `/user/new`. Default is None."""
 
 
-PassThroughEndpointLoggingResultValues = Union[
-    ModelResponse,
-    TextCompletionResponse,
-    ImageResponse,
-    EmbeddingResponse,
-    VideoObject,
-    StandardPassThroughResponseObject,
-    ResponsesAPIResponse,
-]
+PassThroughEndpointLoggingResultValues = (
+    ModelResponse
+    | TextCompletionResponse
+    | ImageResponse
+    | EmbeddingResponse
+    | VideoObject
+    | StandardPassThroughResponseObject
+    | ResponsesAPIResponse
+)
 
 
 class PassThroughEndpointLoggingTypedDict(TypedDict):
@@ -4162,7 +4162,7 @@ class ClientSideFallbackModel(TypedDict, total=False):
     messages: list[AllMessageValues]
 
 
-ALL_FALLBACK_MODEL_VALUES = Union[str, ClientSideFallbackModel]
+ALL_FALLBACK_MODEL_VALUES = str | ClientSideFallbackModel
 
 
 RBAC_ROLES = Literal[

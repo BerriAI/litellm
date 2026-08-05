@@ -260,7 +260,11 @@ class RouteChecks:
                 query_params: Final = request.query_params
                 user_id: Final = query_params.get("user_id")
                 verbose_proxy_logger.debug("user_id: %s & valid_token.user_id: %s", user_id, valid_token.user_id)
-                if user_id and user_id != valid_token.user_id:
+                if (
+                    user_id
+                    and user_id != valid_token.user_id
+                    and _user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+                ):
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail=f"key not allowed to access this user's info. user_id={user_id}, key's user_id={valid_token.user_id}",
