@@ -1992,6 +1992,31 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return web_search_requests
 
     @staticmethod
+    def _calculate_google_maps_grounding_requests(grounding_metadata: list[dict]) -> int | None:
+        """
+        Count Maps-grounded prompts from groundingMetadata.
+
+        Grounding with Google Maps never populates webSearchQueries; its response
+        signals are groundingChunks[].maps (retrieved places, with placeId) and
+        googleMapsWidgetContextToken. Google bills Maps grounding per grounded
+        prompt, so count 1 per groundingMetadata item with Maps evidence rather
+        than 1 per retrieved chunk.
+        See https://ai.google.dev/gemini-api/docs/pricing and
+        https://github.com/BerriAI/litellm/issues/35906
+        """
+        google_maps_grounding_requests: int | None = None
+
+        if grounding_metadata and isinstance(grounding_metadata, list):
+            for grounding_metadata_item in grounding_metadata:
+                if not isinstance(grounding_metadata_item, dict):
+                    continue
+                grounding_chunks = grounding_metadata_item.get("groundingChunks") or []
+                has_maps_chunk = any(isinstance(chunk, dict) and chunk.get("maps") for chunk in grounding_chunks)
+                if has_maps_chunk or grounding_metadata_item.get("googleMapsWidgetContextToken"):
+                    google_maps_grounding_requests = (google_maps_grounding_requests or 0) + 1
+        return google_maps_grounding_requests
+
+    @staticmethod
     def _create_streaming_choice(
         chat_completion_message: ChatCompletionResponseMessage,
         candidate: Candidates,
@@ -2458,6 +2483,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             web_search_requests: Final = VertexGeminiConfig._calculate_web_search_requests(grounding_metadata)
             if web_search_requests is not None:
                 cast(PromptTokensDetailsWrapper, usage.prompt_tokens_details).web_search_requests = web_search_requests
+
+            google_maps_grounding_requests: Final = VertexGeminiConfig._calculate_google_maps_grounding_requests(
+                grounding_metadata
+            )
+            if google_maps_grounding_requests is not None:
+                if usage.prompt_tokens_details is None:
+                    usage.prompt_tokens_details = PromptTokensDetailsWrapper()
+                usage.prompt_tokens_details.google_maps_grounding_requests = google_maps_grounding_requests
 
             setattr(model_response, "usage", usage)
 
@@ -3216,6 +3249,14 @@ class ModelResponseIterator:
         web_search_requests: Final = VertexGeminiConfig._calculate_web_search_requests(grounding_metadata)
         if web_search_requests is not None:
             cast(PromptTokensDetailsWrapper, usage.prompt_tokens_details).web_search_requests = web_search_requests
+
+        google_maps_grounding_requests: Final = VertexGeminiConfig._calculate_google_maps_grounding_requests(
+            grounding_metadata
+        )
+        if google_maps_grounding_requests is not None:
+            if usage.prompt_tokens_details is None:
+                usage.prompt_tokens_details = PromptTokensDetailsWrapper()
+            usage.prompt_tokens_details.google_maps_grounding_requests = google_maps_grounding_requests
 
         traffic_type: Final = processed_chunk.get("usageMetadata", {}).get("trafficType")
         if traffic_type:

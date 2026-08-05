@@ -3,7 +3,10 @@ import os
 import pytest
 
 import litellm
-from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
+from litellm.llms.gemini.cost_calculator import (
+    cost_per_google_maps_grounding_request,
+    cost_per_web_search_request,
+)
 from litellm.llms.gemini.image_edit.cost_calculator import (
     cost_calculator as gemini_image_edit_cost_calculator,
 )
@@ -301,3 +304,58 @@ def test_gemini_image_generation_cost_no_web_search_when_absent():
     )
 
     assert cost_zero == cost_none
+
+
+def _make_maps_usage(google_maps_grounding_requests: int | None) -> Usage:
+    return Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            google_maps_grounding_requests=google_maps_grounding_requests,
+        ),
+    )
+
+
+def test_google_maps_grounding_cost_from_model_info():
+    """Maps grounding is priced from google_maps_grounding_cost_per_query."""
+    model_info = {
+        "key": "gemini/gemini-3.5-flash",
+        "google_maps_grounding_cost_per_query": 0.014,
+    }
+    cost = cost_per_google_maps_grounding_request(
+        usage=_make_maps_usage(2), model_info=model_info
+    )
+    assert cost == pytest.approx(0.014 * 2)
+
+
+def test_google_maps_grounding_cost_default_rate():
+    """Models without a Maps pricing key fall back to $25 / 1K requests."""
+    model_info = {"key": "gemini/gemini-2.5-flash"}
+    cost = cost_per_google_maps_grounding_request(
+        usage=_make_maps_usage(1), model_info=model_info
+    )
+    assert cost == pytest.approx(0.025)
+
+
+def test_google_maps_grounding_cost_zero_when_absent():
+    """No Maps grounding requests recorded should return zero cost."""
+    model_info = {
+        "key": "gemini/gemini-3.5-flash",
+        "google_maps_grounding_cost_per_query": 0.014,
+    }
+    assert (
+        cost_per_google_maps_grounding_request(
+            usage=_make_maps_usage(None), model_info=model_info
+        )
+        == 0.0
+    )
+    usage_without_details = Usage(
+        prompt_tokens=100, completion_tokens=50, total_tokens=150
+    )
+    assert (
+        cost_per_google_maps_grounding_request(
+            usage=usage_without_details, model_info=model_info
+        )
+        == 0.0
+    )

@@ -604,3 +604,51 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
 
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage
+
+
+# Grounding with Google Maps (https://github.com/BerriAI/litellm/issues/35906)
+def _gemini_usage(web_search_requests=None, google_maps_grounding_requests=None):
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    return Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            web_search_requests=web_search_requests,
+            google_maps_grounding_requests=google_maps_grounding_requests,
+        ),
+    )
+
+
+def test_google_maps_grounding_cost_maps_only(local_model_cost_map):
+    """Maps-only grounding (no webSearchQueries) must not be billed 0."""
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gemini-3.5-flash",
+        response_object=None,
+        usage=_gemini_usage(google_maps_grounding_requests=1),
+        custom_llm_provider="gemini",
+    )
+    assert cost == pytest.approx(0.014)
+
+
+def test_google_maps_grounding_cost_combined_with_web_search(local_model_cost_map):
+    """Combined googleSearch + googleMaps bills both SKUs, not just search."""
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gemini-3.5-flash",
+        response_object=None,
+        usage=_gemini_usage(web_search_requests=2, google_maps_grounding_requests=1),
+        custom_llm_provider="gemini",
+    )
+    assert cost == pytest.approx(0.014 * 2 + 0.014)
+
+
+def test_google_maps_grounding_cost_absent(local_model_cost_map):
+    """No Maps grounding recorded keeps existing behavior."""
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gemini-3.5-flash",
+        response_object=None,
+        usage=_gemini_usage(),
+        custom_llm_provider="gemini",
+    )
+    assert cost == 0.0

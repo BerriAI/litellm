@@ -50,11 +50,20 @@ class StandardBuiltInToolCostTracking:
         """
         standard_built_in_tools_params = standard_built_in_tools_params or {}
 
+        # Grounding with Google Maps is a separate SKU from web search and can
+        # fire alone or alongside googleSearch on the same request, so its cost
+        # is additive to every branch below.
+        google_maps_grounding_cost: Final = StandardBuiltInToolCostTracking._handle_google_maps_grounding_cost(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            usage=usage,
+        )
+
         # Handle web search
         if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
             response_object=response_object, usage=usage
         ):
-            return StandardBuiltInToolCostTracking._handle_web_search_cost(
+            return google_maps_grounding_cost + StandardBuiltInToolCostTracking._handle_web_search_cost(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 usage=usage,
@@ -64,18 +73,52 @@ class StandardBuiltInToolCostTracking:
 
         # Handle file search
         if StandardBuiltInToolCostTracking.response_object_includes_file_search_call(response_object=response_object):
-            return StandardBuiltInToolCostTracking._handle_file_search_cost(
+            return google_maps_grounding_cost + StandardBuiltInToolCostTracking._handle_file_search_cost(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 standard_built_in_tools_params=standard_built_in_tools_params,
             )
 
         # Handle Azure assistant features
-        return StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
+        return google_maps_grounding_cost + StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
             model=model,
             custom_llm_provider=custom_llm_provider,
             standard_built_in_tools_params=standard_built_in_tools_params,
         )
+
+    @staticmethod
+    def _handle_google_maps_grounding_cost(
+        model: str,
+        custom_llm_provider: str | None,
+        usage: Usage | None,
+    ) -> float:
+        """Handle Grounding with Google Maps cost calculation.
+
+        Only Gemini responses populate
+        ``prompt_tokens_details.google_maps_grounding_requests``, so this
+        returns 0.0 for every other provider/response.
+        """
+        from litellm.types.utils import PromptTokensDetailsWrapper
+
+        if (
+            usage is None
+            or usage.prompt_tokens_details is None
+            or not isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
+            or not getattr(usage.prompt_tokens_details, "google_maps_grounding_requests", None)
+        ):
+            return 0.0
+
+        from litellm.llms.gemini.cost_calculator import (
+            cost_per_google_maps_grounding_request,
+        )
+
+        model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        if model_info is None and "/" in model:
+            model_info = StandardBuiltInToolCostTracking._safe_get_model_info(model=model)
+
+        return cost_per_google_maps_grounding_request(usage=usage, model_info=model_info)
 
     @staticmethod
     def _handle_web_search_cost(

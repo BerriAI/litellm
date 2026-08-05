@@ -186,6 +186,11 @@
         "gemini_native_audio": {
           "type": "boolean"
         },
+        "google_maps_grounding_cost_per_query": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD per Maps-grounded prompt (Gemini Grounding with Google Maps)."
+        },
         "input_cost_per_audio_per_second": {
           "type": "number",
           "minimum": 0

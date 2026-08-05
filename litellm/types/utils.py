@@ -276,6 +276,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     web_search_billing_unit: Optional[
         Literal["per_query", "per_prompt"]
     ]  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
+    google_maps_grounding_cost_per_query: Optional[
+        float
+    ]  # Cost per Maps-grounded prompt (Gemini Grounding with Google Maps)
     citation_cost_per_token: Optional[float]  # Cost per citation token for Perplexity
     tiered_pricing: Optional[List[Dict[str, Any]]]  # Tiered pricing structure for models like Dashscope
     litellm_provider: Required[str]
@@ -1598,6 +1601,9 @@ class PromptTokensDetailsWrapper(
 
     web_search_requests: Optional[int] = None
     """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
+
+    google_maps_grounding_requests: Optional[int] = None
+    """Number of Maps-grounded prompts (Gemini Grounding with Google Maps). Billed separately from web search."""
 
     tool_use_tokens: Optional[int] = None
     """Prompt tokens consumed by server-side tool use (e.g. Gemini grounding via googleSearch)."""
