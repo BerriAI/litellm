@@ -766,9 +766,9 @@ def function_setup(
     original_function: str,
     rules_obj: Rules,
     start_time: datetime.datetime,
-    *args: Any,  # noqa: ANN401  # positional passthrough to the wrapped LLM call
+    *args: Any,  # positional passthrough to the wrapped LLM call (ANN401 ignored, see ruff-strict.toml)
     is_async_call: bool = True,
-    **kwargs: Any,  # noqa: ANN401  # kwargs-ok: forwarded to Logging()/callbacks, varies per call_type
+    **kwargs: Any,  # kwargs-ok: forwarded to Logging()/callbacks, varies per call_type
 ) -> tuple[LiteLLMLoggingObject, dict[str, Any]]:
     ### NOTICES ###
     if litellm.set_verbose is True:

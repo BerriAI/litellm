@@ -2059,11 +2059,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def success_handler(
         self,
-        result: Any = None,  # noqa: ANN401  # heterogeneous response object across handler variants
+        result: Any = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
-        **kwargs: Any,  # noqa: ANN401  # kwargs-ok: forwarded to _success_handler_body
+        **kwargs: Any,  # kwargs-ok: forwarded to _success_handler_body
     ) -> None:
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""
@@ -2076,11 +2076,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _success_handler_body(
         self,
-        result: Any = None,  # noqa: ANN401  # heterogeneous response object across handler variants
+        result: Any = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
-        **kwargs: Any,  # noqa: ANN401  # kwargs-ok: forwarded from success_handler
+        **kwargs: Any,  # kwargs-ok: forwarded from success_handler
     ) -> None:
         verbose_logger.debug("Logging Details LiteLLM-Success Call: Cache_hit=%s", cache_hit)
         if not self.should_run_logging(event_type="sync_success"):  # prevent double logging
@@ -2490,11 +2490,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
     async def async_success_handler(
         self,
-        result: Any = None,  # noqa: ANN401  # heterogeneous response object across handler variants
+        result: Any = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
-        **kwargs: Any,  # noqa: ANN401  # kwargs-ok: forwarded to _async_success_handler_body
+        **kwargs: Any,  # kwargs-ok: forwarded to _async_success_handler_body
     ) -> None:
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""
@@ -2507,11 +2507,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
     async def _async_success_handler_body(
         self,
-        result: Any = None,  # noqa: ANN401  # heterogeneous response object across handler variants
+        result: Any = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
-        **kwargs: Any,  # noqa: ANN401  # kwargs-ok: forwarded from async_success_handler
+        **kwargs: Any,  # kwargs-ok: forwarded from async_success_handler
     ) -> None:
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
