@@ -1,5 +1,5 @@
 import userEvent from "@testing-library/user-event";
-import React, { useState } from "react";
+import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import Navbar from "./navbar";
@@ -130,7 +130,7 @@ vi.mock("@/utils/cookieUtils", () => ({
 
 // Mock window.location.href for logout testing
 Object.defineProperty(window, "location", {
-  value: { href: "" },
+  value: { href: "", pathname: "/" },
   writable: true,
 });
 
@@ -247,6 +247,31 @@ describe("Navbar", () => {
     mockUseThemeImpl = () => ({ logoUrl: null });
   });
 
+  it("should use the dark logo fallback in dark mode", () => {
+    renderWithProviders(<Navbar {...defaultProps} isDarkMode />);
+
+    const logoImg = screen.getByAltText("LiteLLM Brand");
+    expect(logoImg).toHaveAttribute("src", "/assets/logos/litellm_logo_dark.png");
+  });
+
+  it("should use the proxy-served dark logo fallback when mounted under /ui", () => {
+    window.location.pathname = "/ui/model_hub";
+
+    renderWithProviders(<Navbar {...defaultProps} isDarkMode />);
+
+    const logoImg = screen.getByAltText("LiteLLM Brand");
+    expect(logoImg).toHaveAttribute("src", "http://localhost:4000/ui/assets/logos/litellm_logo_dark.png");
+
+    window.location.pathname = "/";
+  });
+
+  it("should use the backend default logo fallback in light mode", () => {
+    renderWithProviders(<Navbar {...defaultProps} />);
+
+    const logoImg = screen.getByAltText("LiteLLM Brand");
+    expect(logoImg).toHaveAttribute("src", "http://localhost:4000/get_image");
+  });
+
   it("should hide user dropdown on public pages", () => {
     const publicPageProps = { ...defaultProps, isPublicPage: true };
     renderWithProviders(<Navbar {...publicPageProps} />);
@@ -304,10 +329,9 @@ describe("Navbar", () => {
     expect(window.location.href).toBe("");
   });
 
-  it("should not render dark mode toggle slider", () => {
+  it("renders the dark mode toggle slider", () => {
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    // DO NOT RENDER THIS UNTIL ALL COMPONENTS ARE CONFIRMED TO SUPPORT DARK MODE STYLES. IT IS AN ISSUE IF THIS TEST FAILS.
-    expect(screen.queryByTestId("dark-mode-toggle")).not.toBeInTheDocument();
+    expect(screen.getByTestId("dark-mode-toggle")).toBeInTheDocument();
   });
 });

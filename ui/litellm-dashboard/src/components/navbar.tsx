@@ -50,8 +50,12 @@ const Navbar: React.FC<NavbarProps> = ({
   const version = healthData?.litellm_version;
   const disableBouncingIcon = useDisableBouncingIcon();
 
-  // Simple logo URL: use custom logo if available, otherwise default
-  const imageUrl = logoUrl || `${baseUrl}/get_image`;
+  const isServedFromProxyUi = typeof window !== "undefined" && window.location?.pathname?.startsWith("/ui");
+  const defaultDarkLogoUrl = isServedFromProxyUi
+    ? `${baseUrl}/ui/assets/logos/litellm_logo_dark.png`
+    : "/assets/logos/litellm_logo_dark.png";
+  const defaultLogoUrl = isDarkMode ? defaultDarkLogoUrl : `${baseUrl}/get_image`;
+  const imageUrl = logoUrl || defaultLogoUrl;
 
   useEffect(() => {
     const initializeProxySettings = async () => {
@@ -87,7 +91,7 @@ const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
+    <nav className="bg-white dark:bg-[#0e0e0e] border-b border-gray-200 dark:border-[#1e1e1e] sticky top-0 z-10">
       <div className="w-full">
         <div className="flex items-center h-14 px-4">
           <div className="flex items-center flex-shrink-0">
@@ -142,17 +146,13 @@ const Navbar: React.FC<NavbarProps> = ({
           <div className="flex items-center space-x-5 ml-auto">
             <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
             <CommunityEngagementButtons />
-            {/* Dark mode is currently a work in progress. To test, you can change 'false' to 'true' below.
-            Do not set this to true by default until all components are confirmed to support dark mode styles. */}
-            {false && (
-              <Switch
-                data-testid="dark-mode-toggle"
-                checked={isDarkMode}
-                onChange={toggleDarkMode}
-                checkedChildren={<MoonOutlined />}
-                unCheckedChildren={<SunOutlined />}
-              />
-            )}
+            <Switch
+              data-testid="dark-mode-toggle"
+              checked={isDarkMode}
+              onChange={toggleDarkMode}
+              checkedChildren={<MoonOutlined />}
+              unCheckedChildren={<SunOutlined />}
+            />
             <Button type="text" href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer">
               Docs
             </Button>
