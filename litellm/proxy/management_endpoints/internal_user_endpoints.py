@@ -584,7 +584,7 @@ async def new_user(
         special_keys: Final = ["token", "token_id"]
         response_dict: Final = {}
         for key, value in response.items():
-            if key in NewUserResponse.model_fields.keys() and key not in special_keys:
+            if key in NewUserResponse.model_fields and key not in special_keys:
                 response_dict[key] = value
 
         response_dict["key"] = response.get("token", "")
