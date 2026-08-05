@@ -1061,3 +1061,23 @@ def test_sanitize_event_metadata_caps_value_length_and_handles_none():
     assert sanitize_event_metadata(None) == {}
     big = sanitize_event_metadata({"k": "v" * 5000})
     assert len(big["k"]) == 1024
+
+
+def test_blank_otel_v2_flag_reads_as_off(monkeypatch):
+    """Regression: a declared-but-empty ``LITELLM_OTEL_V2=`` raised a pydantic
+    ValidationError. The flag is read while ``proxy_server`` is still importing, so the
+    error escaped module import and the proxy never bound its port; a blank var is routine
+    in k8s ConfigMaps and ``.env``. Lives here rather than beside the mount tests because
+    those need an optional instrumentation package CI does not install, which would leave
+    this uncovered.
+    """
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    for raw in ('', '   '):
+        monkeypatch.setenv('LITELLM_OTEL_V2', raw)
+        is_otel_v2_enabled.cache_clear()
+        assert is_otel_v2_enabled() is False
+    monkeypatch.setenv('LITELLM_OTEL_V2', '1')
+    is_otel_v2_enabled.cache_clear()
+    assert is_otel_v2_enabled() is True
+    is_otel_v2_enabled.cache_clear()

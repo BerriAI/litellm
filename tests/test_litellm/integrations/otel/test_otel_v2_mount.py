@@ -84,29 +84,12 @@ def test_gate_toggles_with_env(monkeypatch):
     assert is_otel_v2_enabled() is True
 
 
-def test_blank_flag_reads_as_off_instead_of_crashing_the_proxy(monkeypatch):
-    """Regression: a declared-but-empty ``LITELLM_OTEL_V2=`` raised a pydantic
-    ValidationError. The flag is read from ``instrument_fastapi_app`` while
-    ``proxy_server`` is still importing, so the error escaped module import and the
-    proxy never bound its port; a blank var is routine in k8s ConfigMaps and ``.env``.
-    """
-    monkeypatch.setenv("LITELLM_OTEL_V2", "")
-    is_otel_v2_enabled.cache_clear()
-    assert is_otel_v2_enabled() is False
-
-
 def test_blank_flag_does_not_escape_the_startup_mount(monkeypatch):
     """The whole-proxy symptom: ``instrument_fastapi_app`` is called at
     ``proxy_server`` import time, so it must not raise on a blank flag."""
     monkeypatch.setenv("LITELLM_OTEL_V2", "")
     is_otel_v2_enabled.cache_clear()
     instrument_fastapi_app(fastapi.FastAPI())
-
-
-def test_whitespace_only_flag_reads_as_off(monkeypatch):
-    monkeypatch.setenv("LITELLM_OTEL_V2", "   ")
-    is_otel_v2_enabled.cache_clear()
-    assert is_otel_v2_enabled() is False
 
 
 def test_instrumented_app_emits_server_span():
