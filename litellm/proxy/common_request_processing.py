@@ -67,6 +67,9 @@ if TYPE_CHECKING:
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
+from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
+    restamp_anthropic_stream_chunk_model,
+)
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.types.utils import (
     ModelResponse,
@@ -1950,6 +1953,9 @@ class ProxyBaseLLMRequestProcessing:
                             request_data=self.data,
                             proxy_logging_obj=proxy_logging_obj,
                             request=request,
+                            restamp_model=(
+                                None if _should_return_raw_model_name(self.data) else requested_model_from_client
+                            ),
                         )
                         return await create_response(
                             generator=selected_data_generator,
@@ -2803,6 +2809,18 @@ class ProxyBaseLLMRequestProcessing:
             return chunk
 
     @staticmethod
+    def _sse_chunk_serializer(restamp_model: str | None) -> StreamChunkSerializer:
+        if not restamp_model:
+            return ProxyBaseLLMRequestProcessing.return_sse_chunk
+
+        def serialize(chunk: object) -> str:
+            return ProxyBaseLLMRequestProcessing.return_sse_chunk(
+                restamp_anthropic_stream_chunk_model(chunk, restamp_model)
+            )
+
+        return serialize
+
+    @staticmethod
     async def _finalize_streaming_generator_cleanup(
         request: Request | None,
         request_data: dict,
@@ -2991,6 +3009,7 @@ class ProxyBaseLLMRequestProcessing:
         request_data: dict,
         proxy_logging_obj: ProxyLogging,
         request: Request | None = None,
+        restamp_model: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Anthropic /messages and Google /generateContent streaming data generator require SSE events.
@@ -2999,13 +3018,17 @@ class ProxyBaseLLMRequestProcessing:
         SSE serializers directly (rather than re-wrapping it in another
         ``async for: yield`` trampoline), so a streamed chunk traverses one
         fewer async-generator layer / coroutine resume on the hot path.
+
+        ``restamp_model`` publishes that name on the Anthropic ``message_start``
+        event in place of the provider's model, matching what the non-streaming
+        response reports.
         """
         return ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
             proxy_logging_obj=proxy_logging_obj,
-            serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+            serialize_chunk=ProxyBaseLLMRequestProcessing._sse_chunk_serializer(restamp_model),
             serialize_error=lambda proxy_exc: (
                 f"{STREAM_SSE_DATA_PREFIX}{json.dumps({'error': proxy_exc.to_dict()})}\n\n"
             ),
