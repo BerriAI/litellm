@@ -274,9 +274,8 @@ async def get_form_data(request: Request) -> dict[str, Any]:
     Handles when OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
     """
     form: Final = await request.form()
-    form_data: Final = dict(form)
     parsed_form_data: Final[dict[str, Any]] = {}
-    for key, value in form_data.items():
+    for key, value in form.multi_items():
         # OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
         if key.endswith("[]"):
             clean_key = key[:-2]
