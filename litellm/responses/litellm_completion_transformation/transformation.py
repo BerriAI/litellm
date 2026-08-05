@@ -1763,18 +1763,15 @@ class LiteLLMCompletionResponsesConfig:
                                 choice.finish_reason
                             ),
                             role="assistant",
-                            content=(
-                                [
-                                    OutputText(
-                                        type="output_text",
-                                        text=reasoning_content,
-                                        annotations=[],
-                                    )
-                                ]
-                                if reasoning_content
-                                # mutable-ok: GenericResponseOutputItem.content is typed as a list
-                                else []
-                            ),
+                            content=[
+                                OutputText(
+                                    type="output_text",
+                                    text=text,
+                                    annotations=[],
+                                )
+                                for text in (reasoning_content,)
+                                if text
+                            ],
                             encrypted_content=encrypted_content,
                         )
                     ]

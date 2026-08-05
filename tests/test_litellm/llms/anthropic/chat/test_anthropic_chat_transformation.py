@@ -180,6 +180,50 @@ def test_calculate_usage_sums_provider_thinking_tokens_across_iterations():
     assert usage.completion_tokens_details.text_tokens == 150
 
 
+def test_calculate_usage_falls_back_when_only_some_iterations_report_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 10,
+            "output_tokens": 300,
+            "output_tokens_details": {"thinking_tokens": 240},
+            "iterations": [
+                {"input_tokens": 5, "output_tokens": 100, "output_tokens_details": {"thinking_tokens": 60}},
+                {"input_tokens": 5, "output_tokens": 200},
+            ],
+        },
+        reasoning_content=None,
+    )
+
+    assert usage.completion_tokens == 300
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 240
+    assert usage.completion_tokens_details.text_tokens == 60
+
+
+def test_calculate_usage_reports_unknown_split_when_only_some_iterations_report_thinking_tokens():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 10,
+            "output_tokens": 300,
+            "iterations": [
+                {"input_tokens": 5, "output_tokens": 100, "output_tokens_details": {"thinking_tokens": 60}},
+                {"input_tokens": 5, "output_tokens": 200},
+            ],
+        },
+        reasoning_content="",
+        completion_response={"content": [{"type": "thinking", "thinking": "", "signature": "sig"}]},
+    )
+
+    assert usage.completion_tokens == 300
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens is None
+    assert usage.completion_tokens_details.text_tokens is None
+
+
 def test_calculate_usage_reports_unknown_split_when_thinking_ran_without_a_count():
     config = AnthropicConfig()
 

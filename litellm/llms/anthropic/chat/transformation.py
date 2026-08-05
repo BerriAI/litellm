@@ -2134,9 +2134,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         reasoning_content: str | None,
         completion_response: Mapping[str, object] | None,
     ) -> CompletionTokensDetailsWrapper:
+        iteration_thinking_tokens: Final = self._sum_iteration_thinking_tokens(iterations) if iterations else None
         reported_thinking_tokens: Final = (
-            self._sum_iteration_thinking_tokens(iterations)
-            if iterations
+            iteration_thinking_tokens
+            if iteration_thinking_tokens is not None
             else self._thinking_tokens_from_usage(usage_object)
         )
         if reported_thinking_tokens is not None:
@@ -2160,10 +2161,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def _sum_iteration_thinking_tokens(self, iterations: Sequence[object]) -> int | None:
         per_iteration: Final = tuple(
-            self._thinking_tokens_from_usage(iteration) for iteration in iterations if isinstance(iteration, Mapping)
+            self._thinking_tokens_from_usage(iteration) if isinstance(iteration, Mapping) else None
+            for iteration in iterations
         )
         reported: Final = tuple(tokens for tokens in per_iteration if tokens is not None)
-        return sum(reported) if reported else None
+        return sum(reported) if len(reported) == len(per_iteration) else None
 
     @staticmethod
     def is_anthropic_usage_object(usage_object: dict) -> bool:
