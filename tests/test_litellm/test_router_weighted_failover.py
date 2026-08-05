@@ -129,6 +129,62 @@ async def test_ageneric_api_call_with_fallbacks_helper_stamps_dynamic_id_for_cli
 
 
 @pytest.mark.asyncio
+async def test_acompletion_stamps_dynamic_id_for_clientside_credentials():
+    """Same bug as the generic-API-call helper above, but in the regular completion
+    path: _acompletion's exception handlers must stamp the dynamic client-side-credential
+    deployment id, not the shared static deployment's id."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "test-key"},
+                "model_info": {"id": "dep-a"},
+            }
+        ],
+    )
+
+    with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError) as exc_info:
+            await router._acompletion(
+                model="test-model",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="tenant-supplied-key",
+                metadata={"model_group": "test-model"},
+            )
+
+    failed_deployment_id = getattr(exc_info.value, "failed_deployment_id", None)
+    assert failed_deployment_id is not None
+    assert failed_deployment_id != "dep-a"
+
+
+def test_completion_stamps_dynamic_id_for_clientside_credentials():
+    """Sync counterpart: _completion's exception handler must stamp the dynamic
+    client-side-credential deployment id, not the shared static deployment's id."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "test-key"},
+                "model_info": {"id": "dep-a"},
+            }
+        ],
+    )
+
+    with patch("litellm.completion", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError) as exc_info:
+            router._completion(
+                model="test-model",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="tenant-supplied-key",
+                metadata={"model_group": "test-model"},
+            )
+
+    failed_deployment_id = getattr(exc_info.value, "failed_deployment_id", None)
+    assert failed_deployment_id is not None
+    assert failed_deployment_id != "dep-a"
+
+
+@pytest.mark.asyncio
 async def test_maybe_run_weighted_failover_returns_none_without_failed_id():
     router = Router(
         model_list=[
