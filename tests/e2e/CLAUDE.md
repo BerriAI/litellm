@@ -119,14 +119,36 @@ mgmt.<endpoint>.<assertion>
         mgmt.key.generate.happy_path      (surface=ui)
 ```
 
-MCPs - endpoint features with the protocol op as the variant
+MCPs - endpoint features with the protocol op as the variant. Feature map and full
+vocabulary: `coverage_registry/MCP_FEATURES.md`. `auth_family` is how the *client*
+authenticates to LiteLLM; upstream server auth is an assertion (e.g. `upstream_sigv4`)
 
 ```
 mcp.<operation>.<auth_family>.<assertion>
-  operation   : list_tools | call_tool | list_resources | read_resource | list_prompts | get_prompt
+  operation   : list_tools | call_tool | list_resources | read_resource | list_resource_templates
+                | list_prompts | get_prompt | tool_search | tool_call_virtual | test_connection
+                | sampling | elicitation | chat_completion | responses | messages
+                | auth | permission | oauth | toolset | health
   auth_family : none | api_key | bearer | oauth
-  assertion   : succeeds | denied_without_permission
+  assertion   : succeeds | denied_without_permission | access_group_scoped | allowed_tools_scoped
+                | disallowed_tools_blocked | params_filtered | toolset_scoped
+                | namespaced_multi_server | partial_on_upstream_fault | progress_forwarded
+                | cost_logged | concurrent_limit | forwards_extra_headers | resolves_user_env_vars
+                | auto_executes_tools | stream_auto_executes_tools | semantic_filter_narrows
+                | enforces_model_access
+                | upstream_static_auth | upstream_oauth2_client_credentials
+                | upstream_oauth2_authorization_code | delegate_auth_upstream | oauth_passthrough
+                | upstream_true_passthrough | upstream_token_exchange | upstream_id_jag
+                | upstream_oauth_delegate | upstream_sigv4
+                | transport_http | transport_sse | transport_stdio | openapi_tools
+                | returns_401_not_500 | returns_429_on_budget | empty_intersection_denies
+                | dangling_grant_errors | stable_id_survives_repoint | per_server_route
+                | sees_newly_added_server | trailing_slash_parity | resource_metadata_public_https
+                | prefix_separator_honored | byok_not_false_unhealthy
+                | unregistered_server_blocked | acting_user_oauth_token
   e.g.  mcp.call_tool.oauth.succeeds
+        mcp.messages.api_key.auto_executes_tools
+        mcp.chat_completion.api_key.auto_executes_tools
 ```
 
 Reliability & Performance - behavior features (no route; endpoint is exercised_on)

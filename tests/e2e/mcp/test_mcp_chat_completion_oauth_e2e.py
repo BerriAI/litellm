@@ -68,8 +68,11 @@ class TestMcpChatCompletionOauth:
     the user's stored upstream token, lists and executes Linear's tools during
     the completion, and returns the answer."""
 
-    @pytest.mark.covers("mcp.list_tools.oauth.succeeds")
-    @pytest.mark.covers("mcp.call_tool.oauth.succeeds")
+    @pytest.mark.covers(
+        "mcp.list_tools.oauth.succeeds",
+        "mcp.call_tool.oauth.succeeds",
+        "mcp.chat_completion.oauth.auto_executes_tools",
+    )
     def test_chat_completion_uses_linear_with_x_litellm_api_key_header(
         self, chat_client: ChatMcpClient, resources: ResourceManager
     ) -> None:
@@ -132,8 +135,11 @@ class TestMcpChatCompletionOauth:
             f"Linear tool {alias}-{LINEAR_READONLY_TOOL} was not executed with a result: {meta.mcp_call_results}"
         )
 
-    @pytest.mark.covers("mcp.list_tools.oauth.succeeds")
-    @pytest.mark.covers("mcp.call_tool.oauth.succeeds")
+    @pytest.mark.covers(
+        "mcp.list_tools.oauth.succeeds",
+        "mcp.call_tool.oauth.succeeds",
+        "mcp.chat_completion.oauth.auto_executes_tools",
+    )
     def test_chat_completion_uses_linear_with_authorization_bearer_header(
         self, chat_client: ChatMcpClient, resources: ResourceManager
     ) -> None:
