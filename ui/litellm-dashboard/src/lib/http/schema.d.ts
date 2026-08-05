@@ -22512,7 +22512,6 @@ export interface components {
         /** ChatCompletionAudioObject */
         ChatCompletionAudioObject: {
             input_audio: components["schemas"]["InputAudio"];
-            prompt_cache_breakpoint?: components["schemas"]["PromptCacheBreakpoint"];
             /**
              * Type
              * @constant
@@ -30647,19 +30646,6 @@ export interface components {
             /** Prompt Id */
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
-        };
-        /**
-         * PromptCacheBreakpoint
-         * @description Marks the exact end of a reusable prompt prefix.
-         *
-         *     The breakpoint inherits its TTL from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a token block.
-         */
-        PromptCacheBreakpoint: {
-            /**
-             * Mode
-             * @constant
-             */
-            mode: "explicit";
         };
         /** PromptInfo */
         PromptInfo: {
