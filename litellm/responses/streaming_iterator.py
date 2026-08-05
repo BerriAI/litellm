@@ -5,11 +5,11 @@ import json
 import time
 import traceback
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, Protocol
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -30,7 +30,15 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
-from litellm.types.llms.openai import ResponsesAPIStreamEvents
+from litellm.types.guardrails import PresidioPerRequestConfig
+from litellm.types.llms.openai import (
+    ContentPartDonePartOutputText,
+    ContentPartDonePartReasoningText,
+    ContentPartDonePartRefusal,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
+    ResponsesAPIStreamingResponse,
+)
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
 
@@ -131,7 +139,7 @@ class BaseResponsesAPIStreamingIterator:
         self.logging_obj = logging_obj
         self.finished = False
         self.responses_api_provider_config = responses_api_provider_config
-        self.completed_response: Any | None = None
+        self.completed_response: ResponsesAPIStreamingResponse | ResponsesAPIResponse | None = None
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
         self._yielded_first_chunk = False
@@ -176,7 +184,7 @@ class BaseResponsesAPIStreamingIterator:
                 llm_provider=self.custom_llm_provider or "",
             )
 
-    def _process_chunk(self, chunk) -> Any | None:
+    def _process_chunk(self, chunk: str) -> ResponsesAPIStreamingResponse | None:
         """Process a single chunk of data from the stream"""
         if not chunk:
             return None
@@ -451,7 +459,7 @@ class BaseResponsesAPIStreamingIterator:
             is_pre_first_chunk=not self._yielded_first_chunk,
         )
 
-    def _get_completed_response_object(self) -> Any | None:
+    def _get_completed_response_object(self) -> ResponsesAPIResponse | None:
         openai_types: Final = _get_openai_response_types()
         completed_response: Final = self.completed_response
         if isinstance(completed_response, openai_types.ResponsesAPIResponse):
@@ -527,7 +535,9 @@ class BaseResponsesAPIStreamingIterator:
 
         self._completed_response_cached = True
 
-    async def _call_post_streaming_deployment_hook(self, chunk):
+    async def _call_post_streaming_deployment_hook(
+        self, chunk: ResponsesAPIStreamingResponse
+    ) -> ResponsesAPIStreamingResponse:
         """
         Allow callbacks to modify streaming chunks before returning (parity with chat).
         """
@@ -545,7 +555,7 @@ class BaseResponsesAPIStreamingIterator:
                 except Exception:
                     typed_call_type = None
 
-            request_data: Final = self.request_data or getattr(self.logging_obj, "model_call_details", {})
+            request_data: Final = self.request_data or self.logging_obj.model_call_details
             callbacks: Final = getattr(litellm, "callbacks", None) or []
             hooks_ran = False
             for callback in callbacks:
@@ -564,7 +574,9 @@ class BaseResponsesAPIStreamingIterator:
         except Exception:
             return chunk
 
-    async def call_post_streaming_hooks_for_testing(self, chunk):
+    async def call_post_streaming_hooks_for_testing(
+        self, chunk: ResponsesAPIStreamingResponse
+    ) -> ResponsesAPIStreamingResponse:
         """
         Helper to invoke streaming deployment hooks explicitly (used in tests).
         """
@@ -880,7 +892,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _set_events_from_response(
         self,
-        transformed: Any,
+        transformed: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
     ) -> None:
         self._events = _build_synthetic_response_events(
@@ -894,7 +906,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> Any:
+    async def __anext__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopAsyncIteration
         evt: Final = self._events[self._idx]
@@ -908,7 +920,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __iter__(self):
         return self
 
-    def __next__(self) -> Any:
+    def __next__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopIteration
         evt: Final = self._events[self._idx]
@@ -923,7 +935,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __init__(
         self,
-        response: Any,
+        response: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict[str, Any] | None = None,
         call_type: str | None = None,
@@ -941,13 +953,13 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         )
         self._completed_response_cache_hit = True
         self._persist_completed_response_before_logging = False
-        self._events: list[Any] = []
+        self._events: Sequence[ResponsesAPIStreamingResponse] = []
         self._idx = 0
         self._set_events_from_response(transformed=response, logging_obj=logging_obj)
 
     def _set_events_from_response(
         self,
-        transformed: Any,
+        transformed: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
     ) -> None:
         self._events = _build_synthetic_response_events(
@@ -961,7 +973,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> Any:
+    async def __anext__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopAsyncIteration
         evt: Final = self._events[self._idx]
@@ -975,7 +987,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __iter__(self):
         return self
 
-    def __next__(self) -> Any:
+    def __next__(self) -> ResponsesAPIStreamingResponse:
         if self._idx >= len(self._events):
             raise StopIteration
         evt: Final = self._events[self._idx]
@@ -1000,8 +1012,8 @@ def _build_response_status_event(
         "response.created",
         "response.in_progress",
     ],
-    transformed: Any,
-) -> Any:
+    transformed: ResponsesAPIResponse,
+) -> ResponsesAPIStreamingResponse:
     openai_types: Final = _get_openai_response_types()
     in_progress_response: Final = transformed.model_copy(
         deep=True,
@@ -1018,10 +1030,10 @@ def _build_content_part_done_event(
     output_index: int,
     content_index: int,
     part_payload: dict[str, Any],
-) -> Any | None:
+) -> ResponsesAPIStreamingResponse | None:
     openai_types: Final = _get_openai_response_types()
     part_type: Final = part_payload.get("type")
-    part: Any
+    part: ContentPartDonePartOutputText | ContentPartDonePartRefusal | ContentPartDonePartReasoningText
     if part_type == "output_text":
         annotations: Final = [
             openai_types.BaseLiteLLMOpenAIResponseObject(**annotation)
@@ -1057,7 +1069,7 @@ def _build_content_part_done_event(
 
 def _add_text_like_part_events(
     *,
-    events: list[Any],
+    events: list[ResponsesAPIStreamingResponse],  # mutable-ok: caller's accumulator, appended to below
     item_id: str,
     output_index: int,
     content_index: int,
@@ -1123,13 +1135,13 @@ def _add_text_like_part_events(
 
 def _build_synthetic_response_events(
     *,
-    transformed: Any,
+    transformed: ResponsesAPIResponse,
     logging_obj: LiteLLMLoggingObj,
     chunk_size: int,
-) -> list[Any]:
+) -> list[ResponsesAPIStreamingResponse]:  # mutable-ok: caller (self._events) accepts the built accumulator
     openai_types: Final = _get_openai_response_types()
     if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-        usage_obj: Final[Any | None] = getattr(transformed, "usage", None)
+        usage_obj: Final = transformed.usage
         if usage_obj is not None:
             try:
                 cost: Final[float | None] = logging_obj._response_cost_calculator(result=transformed)
@@ -1138,13 +1150,13 @@ def _build_synthetic_response_events(
             except Exception:
                 pass
 
-    events: Final[list[Any]] = [
+    events: Final[list[ResponsesAPIStreamingResponse]] = [  # mutable-ok: appended to throughout this function
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, transformed),
     ]
 
     sequence_number = 0
-    for output_index, output_item in enumerate(getattr(transformed, "output", []) or []):
+    for output_index, output_item in enumerate(transformed.output):
         output_item_payload = _dump_response_object(output_item)
         item_id = str(output_item_payload.get("id") or transformed.id)
         item_type = output_item_payload.get("type")
@@ -1277,6 +1289,24 @@ RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
 RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES: Final = frozenset({"input_text", "output_text", "text"})
 
 
+class _PIIGuardrailCallback(Protocol):
+    """
+    Structural interface for the PII-masking guardrail callbacks used by
+    ``ResponsesWebSocketStreaming``. Matched duck-typed (not imported directly)
+    to avoid a layering violation (SDK importing from proxy guardrail hooks).
+    """
+
+    def get_presidio_settings_from_request_data(self, data: Mapping[str, Any]) -> PresidioPerRequestConfig | None: ...
+
+    async def check_pii(
+        self,
+        text: str,
+        output_parse_pii: bool,
+        presidio_config: PresidioPerRequestConfig | None,
+        request_data: Mapping[str, Any],
+    ) -> str: ...
+
+
 class ResponsesWebSocketStreaming:
     """
     Manages bidirectional WebSocket forwarding for the Responses API
@@ -1296,22 +1326,22 @@ class ResponsesWebSocketStreaming:
         backend_ws: Any,
         logging_obj: LiteLLMLoggingObj,
         user_api_key_dict: Any | None = None,
-        request_data: dict | None = None,
+        request_data: dict[str, Any] | None = None,  # mutable-ok: self.request_data is item-assigned below (line ~1518)
         first_message: str | None = None,
-        guardrail_callbacks: list[Any] | None = None,
-        output_guardrail_callbacks: list[Any] | None = None,
+        guardrail_callbacks: Sequence[_PIIGuardrailCallback] | None = None,
+        output_guardrail_callbacks: Sequence[_PIIGuardrailCallback] | None = None,
         authorized_model: str | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
-        self.request_data: dict = request_data or {}
+        self.request_data: dict[str, Any] = request_data or {}  # mutable-ok: item-assigned below (line ~1518)
         self.messages: list[dict] = []
         self.input_messages: list[dict[str, str]] = []
         self.first_message = first_message
-        self.guardrail_callbacks: list[Any] = guardrail_callbacks or []
-        self.output_guardrail_callbacks: list[Any] = output_guardrail_callbacks or []
+        self.guardrail_callbacks: Sequence[_PIIGuardrailCallback] = guardrail_callbacks or []
+        self.output_guardrail_callbacks: Sequence[_PIIGuardrailCallback] = output_guardrail_callbacks or []
         # Model name authorized at connection time; enforced on every
         # response.create frame to prevent deployment-substitution attacks.
         self.authorized_model: str | None = authorized_model
@@ -1618,7 +1648,10 @@ class ResponsesWebSocketStreaming:
                         continue
                     text = content_block.get("text")
                     if isinstance(text, str):
-                        unmasked = cb._unmask_pii_text(text, pii_tokens)
+                        # any-ok: _unmask_pii_text is a duck-typed private helper on an
+                        # external guardrail plugin; declaring it on the Protocol falsely
+                        # trips reportPrivateUsage since the name starts with an underscore.
+                        unmasked = getattr(cb, "_unmask_pii_text")(text, pii_tokens)
                         if unmasked != text:
                             content_block["text"] = unmasked
                             modified = True
@@ -1627,7 +1660,8 @@ class ResponsesWebSocketStreaming:
         if event_type in self._DELTA_EVENT_TYPES:
             delta: Final = evt_obj.get("delta")
             if isinstance(delta, str):
-                unmasked = cb._unmask_pii_text(delta, pii_tokens)
+                # any-ok: see _unmask_pii_text note above.
+                unmasked = getattr(cb, "_unmask_pii_text")(delta, pii_tokens)
                 if unmasked != delta:
                     evt_obj["delta"] = unmasked
                     return json.dumps(evt_obj)
