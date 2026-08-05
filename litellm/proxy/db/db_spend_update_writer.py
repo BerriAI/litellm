@@ -1860,6 +1860,12 @@ class DBSpendUpdateWriter:
             )
             return None
 
+        # TODO: remove the successful_requests/failed_requests counters below once the
+        # admin UI has fully migrated to LiteLLM_DailyGatewayRequests, which is now the
+        # source of truth for SGR. This path derives the counts from spend-log metadata
+        # rather than from what the gateway answered, so the two intentionally disagree
+        # (see litellm/proxy/middleware/billable_request_metrics_middleware.py). The
+        # spend, token and per-entity columns written here stay either way.
         request_status: Final = prisma_client.get_request_status(payload)
         verbose_proxy_logger.debug("Logged request status: %s", request_status)
         _metadata: Final[SpendLogsMetadata] = json.loads(payload["metadata"])

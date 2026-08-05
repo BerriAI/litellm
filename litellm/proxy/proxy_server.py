@@ -353,6 +353,10 @@ from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
 )
+from litellm.proxy.db.gateway_request_tracking import (
+    GatewayRequestAccumulator,
+    flush_gateway_requests,
+)
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
@@ -410,6 +414,9 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 )
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     router as fallback_management_router,
+)
+from litellm.proxy.management_endpoints.gateway_request_endpoints import (
+    router as gateway_request_router,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
@@ -820,6 +827,11 @@ async def proxy_shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if prisma_client:
+        # Drain the SGR fold first: it lives in memory, so an un-drained interval
+        # is lost, and a write attempted after disconnect raises
+        # ClientNotConnectedError rather than persisting anything. Ordering this
+        # inside the same guard is what keeps the two from drifting apart.
+        await flush_gateway_requests(prisma_client, gateway_request_accumulator)
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
 
@@ -1901,6 +1913,11 @@ app.add_middleware(
         if build_billing_metrics_recorder is not None
         else None
     ),
+    # Unlike the billing recorder this is not license-gated: the admin UI must
+    # report SGR on any deployment. Gated only on a database being configured,
+    # since without one the fold would never be drained. Read at call time, so
+    # it sees prisma_client as of the first request rather than import time.
+    sink_factory=lambda: gateway_request_accumulator if prisma_client is not None else None,
 )
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
@@ -2068,6 +2085,10 @@ jwt_handler: Final = JWTHandler()
 prompt_injection_detection_obj: _OPTIONAL_PromptInjectionDetection | None = None
 store_model_in_db: bool = False
 open_telemetry_logger: OpenTelemetry | None = None
+### GATEWAY REQUEST COUNTS (SGR) ###
+# Folded in memory by BillableRequestMetricsMiddleware, drained to
+# LiteLLM_DailyGatewayRequests by the update_gateway_requests scheduler job.
+gateway_request_accumulator: Final = GatewayRequestAccumulator()
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj: ProxyLogging = ProxyLogging(user_api_key_cache=user_api_key_cache, premium_user=premium_user)
 ### REDIS QUEUE ###
@@ -8196,6 +8217,17 @@ class ProxyStartupEvent:
         verbose_proxy_logger.info(
             f"Tag spend update job scheduled at {tag_spend_update_interval}s interval "
             f"({tag_spend_update_interval / batch_writing_interval:.1f}x main job interval)"
+        )
+
+        ### UPDATE GATEWAY REQUEST COUNTS (SGR) ###
+        scheduler.add_job(
+            flush_gateway_requests,
+            "interval",
+            seconds=batch_writing_interval,
+            args=(prisma_client, gateway_request_accumulator),
+            id="update_gateway_requests_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
         ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
@@ -16478,6 +16510,7 @@ app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
+app.include_router(gateway_request_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 # Eager: /models/{name}:method overlaps with the OpenAI /models endpoint.
