@@ -180,6 +180,65 @@ async def test_ensure_batch_response_uses_batch_owner_when_db_batch_object_prese
 
 
 @pytest.mark.asyncio
+async def test_registered_output_file_row_denies_cross_user_access():
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _PROXY_LiteLLMManagedFiles,
+    )
+
+    raw_output_file_id = "file-raw-output"
+    prisma = MagicMock()
+    prisma.db.litellm_managedfiletable.upsert = AsyncMock()
+    prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
+    managed_files = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=MagicMock(),
+        prisma_client=prisma,
+    )
+    response = _build_batch_response(output_file_id=raw_output_file_id)
+
+    await ensure_batch_response_managed_file_ids(
+        response=response,
+        managed_files_obj=managed_files,
+        prisma_client=prisma,
+        verbose_proxy_logger=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(user_id="other-user", team_id="other-team"),
+        db_batch_object=SimpleNamespace(
+            created_by="batch-owner", team_id="team-owner", status="completed"
+        ),
+        unified_batch_id=UNIFIED_BATCH_ID,
+    )
+
+    unified_output_file_id = response.output_file_id
+    assert unified_output_file_id != raw_output_file_id
+    registered_row = prisma.db.litellm_managedfiletable.upsert.call_args.kwargs[
+        "data"
+    ]["create"]
+    assert registered_row["unified_file_id"] == unified_output_file_id
+    assert registered_row["created_by"] == "batch-owner"
+    assert registered_row["team_id"] == "team-owner"
+
+    prisma.db.litellm_managedfiletable.find_first = AsyncMock(
+        return_value=SimpleNamespace(**registered_row)
+    )
+
+    assert (
+        await managed_files.can_user_call_unified_file_id(
+            unified_file_id=unified_output_file_id,
+            user_api_key_dict=UserAPIKeyAuth(user_id="batch-owner"),
+        )
+        is True
+    )
+    assert (
+        await managed_files.can_user_call_unified_file_id(
+            unified_file_id=unified_output_file_id,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="intruder-user", team_id="intruder-team"
+            ),
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
 async def test_ensure_batch_response_derives_model_id_from_encoded_response_id():
     unified_id = "file-bWFuYWdlZF9vdXRwdXRfaWQ="
     response = _build_batch_response(output_file_id="file-raw-output")
