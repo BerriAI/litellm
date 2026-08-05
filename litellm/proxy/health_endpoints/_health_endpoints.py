@@ -6,7 +6,17 @@ import secrets
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, Literal, Optional, TypedDict, Union, cast
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Literal,
+    Mapping,
+    Optional,
+    TypedDict,
+    Union,
+    cast,
+)
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -27,6 +37,9 @@ from litellm.proxy._types import (
     SpecialModelNames,
     UserAPIKeyAuth,
     WebhookEvent,
+)
+from litellm.proxy.auth.auth_utils import (
+    _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -77,6 +90,27 @@ def _reject_os_environ_references(params: dict) -> None:
             if isinstance(value, (dict, list)) and id(value) not in seen:
                 seen.add(id(value))
                 stack.append(value)
+
+
+def _reject_banned_param_overrides(request_params: Mapping[str, object]) -> None:
+    """Reject request params that would replace a configured deployment's routing or credentials.
+
+    Applied only when a configured deployment supplies the base parameters. The
+    request may still adjust benign fields; routing and credential fields come
+    from the configuration. A caller who wants a fully custom connection supplies
+    the complete parameter set instead of naming a configured model.
+    """
+    for param in _BANNED_REQUEST_BODY_PARAMS:
+        if param in request_params:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"{param} cannot be overridden when testing a configured model. "
+                        "Provide the full connection parameters instead of naming a configured model."
+                    )
+                },
+            )
 
 
 def get_callback_identifier(callback):
@@ -1860,7 +1894,6 @@ async def test_model_connection(
                 )
 
         # Merge: config params (from proxy config) as base, request params override
-        # This allows users to override specific params while using config for credentials
         litellm_params = {**config_litellm_params, **request_litellm_params}
 
         ## Auth check
@@ -1875,6 +1908,8 @@ async def test_model_connection(
             prisma_client=prisma_client,
             premium_user=premium_user,
         )
+        if config_litellm_params:
+            _reject_banned_param_overrides(request_litellm_params)
         # Include health_check_params if provided
         litellm_params = _update_litellm_params_for_health_check(
             model_info={},
