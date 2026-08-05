@@ -1,6 +1,6 @@
 import types
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -38,7 +38,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         self,
         max_tokens: int | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key == "max_tokens" and value is None:
                 value = self.max_tokens
@@ -64,7 +64,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         }
 
     def get_supported_openai_params(self, model: str):
-        supported_params = super().get_supported_openai_params(model=model)
+        supported_params: Final = super().get_supported_openai_params(model=model)
         try:
             supported_params.remove("max_retries")
         except KeyError:
@@ -123,9 +123,9 @@ class VertexAILlama3Config(OpenAIGPTConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response = OpenAIChatCompletionResponse(**raw_response.json())  # type: ignore
+            completion_response: Final = OpenAIChatCompletionResponse(**raw_response.json())  # type: ignore
         except Exception as e:
-            response_headers = getattr(raw_response, "headers", None)
+            response_headers: Final = getattr(raw_response, "headers", None)
             raise VertexAIError(
                 message=f"Unable to get json response - {e}, Original Response: {raw_response.text}",
                 status_code=raw_response.status_code,
@@ -164,10 +164,10 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
         self._pending_chunk: ModelResponseStream | None = None
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
-        result = super().chunk_parser(chunk)
+        result: Final = super().chunk_parser(chunk)
         if not self.sent_role and result.choices:
-            delta = result.choices[0].delta
-            finish_reason = result.choices[0].finish_reason
+            delta: Final = result.choices[0].delta
+            finish_reason: Final = result.choices[0].finish_reason
 
             # If this is both the first chunk AND the final chunk (has finish_reason),
             # we need to split it into two chunks to match OpenAI format
@@ -207,7 +207,7 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
     def __next__(self):
         # First return any pending chunk from a previous split
         if self._pending_chunk is not None:
-            chunk = self._pending_chunk
+            chunk: Final = self._pending_chunk
             self._pending_chunk = None
             return chunk
         return super().__next__()
@@ -215,7 +215,7 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
     async def __anext__(self):
         # First return any pending chunk from a previous split
         if self._pending_chunk is not None:
-            chunk = self._pending_chunk
+            chunk: Final = self._pending_chunk
             self._pending_chunk = None
             return chunk
         return await super().__anext__()

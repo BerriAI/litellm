@@ -4,7 +4,7 @@ This file contains the calling Azure OpenAI's `/openai/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -62,11 +62,11 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         api_base = api_base.replace("https://", "wss://")
 
         # Determine path based on realtime_protocol (case-insensitive)
-        _is_ga = realtime_protocol is not None and realtime_protocol.upper() in (
+        _is_ga: Final = realtime_protocol is not None and realtime_protocol.upper() in (
             "GA",
             "V1",
         )
-        intent = (query_params or {}).get("intent")
+        intent: Final = (query_params or {}).get("intent")
 
         if _is_ga:
             path = "/openai/v1/realtime"
@@ -81,7 +81,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         if intent:
             query_parts.append(urlencode({"intent": intent}))
 
-        qs = "&".join(query_parts)
+        qs: Final = "&".join(query_parts)
         return f"{api_base}{path}?{qs}" if qs else f"{api_base}{path}"
 
     async def async_realtime(
@@ -105,11 +105,11 @@ class AzureOpenAIRealtime(AzureChatCompletion):
 
         if api_base is None:
             raise ValueError("api_base is required for Azure OpenAI calls")
-        backend_uses_beta_protocol = realtime_protocol is None or realtime_protocol.upper() not in ("GA", "V1")
+        backend_uses_beta_protocol: Final = realtime_protocol is None or realtime_protocol.upper() not in ("GA", "V1")
         if api_version is None and backend_uses_beta_protocol:
             raise ValueError("api_version is required for Azure OpenAI calls")
 
-        url = self._construct_url(
+        url: Final = self._construct_url(
             api_base,
             model,
             api_version,
@@ -118,7 +118,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         )
 
         try:
-            ssl_context = get_shared_realtime_ssl_context()
+            ssl_context: Final = get_shared_realtime_ssl_context()
             async with websockets.connect(  # type: ignore
                 url,
                 additional_headers={
@@ -127,7 +127,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_context,
             ) as backend_ws:
-                realtime_streaming = RealTimeStreaming(
+                realtime_streaming: Final = RealTimeStreaming(
                     websocket,
                     cast(ClientConnection, backend_ws),
                     logging_obj,

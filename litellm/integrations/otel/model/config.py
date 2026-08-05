@@ -2,7 +2,7 @@
 
 from enum import Enum
 from functools import lru_cache
-from typing import Annotated, Any
+from typing import Annotated, Any, Final
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -14,7 +14,7 @@ from litellm.integrations.otel.model.baggage import (
 )
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
-OTEL_V2_ENV = "LITELLM_OTEL_V2"
+OTEL_V2_ENV: Final = "LITELLM_OTEL_V2"
 
 
 class CaptureMessageContent(str):

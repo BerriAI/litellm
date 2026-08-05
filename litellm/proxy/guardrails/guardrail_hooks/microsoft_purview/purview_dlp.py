@@ -12,12 +12,7 @@ import threading
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Final, Union, cast
 
 import httpx
 from fastapi import HTTPException
@@ -122,13 +117,13 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         Returns:
             The processContent response dict.
         """
-        start_time = datetime.now()
+        start_time: Final = datetime.now()
         status: GuardrailStatus = "success"
         response: dict[str, Any] = {}
 
         try:
             etag, _ = await self._compute_protection_scopes(user_id)
-            correlation_id = request_data.get("litellm_call_id") or str(uuid.uuid4())
+            correlation_id: Final = request_data.get("litellm_call_id") or str(uuid.uuid4())
             response = await self._process_content(
                 user_id=user_id,
                 text=text,
@@ -151,10 +146,10 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             # caller can do nothing about, so they are mapped to 502.
             status = "guardrail_failed_to_respond"
             if block_on_violation:
-                upstream_status = exc.response.status_code
-                client_status = 502 if upstream_status in (401, 403) else upstream_status
+                upstream_status: Final = exc.response.status_code
+                client_status: Final = 502 if upstream_status in (401, 403) else upstream_status
                 headers: dict[str, str] | None = None
-                retry_after = exc.response.headers.get("retry-after")
+                retry_after: Final = exc.response.headers.get("retry-after")
                 if retry_after:
                     headers = {"Retry-After": retry_after}
                 raise HTTPException(
@@ -187,7 +182,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 exc,
             )
         finally:
-            end_time = datetime.now()
+            end_time: Final = datetime.now()
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider=self.guardrail_provider,
                 guardrail_json_response=response,
@@ -219,8 +214,8 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         extract them explicitly to keep DLP coverage consistent with the
         chat (``ModelResponse``) path.
         """
-        args: list[str] = []
-        output = getattr(result, "output", None)
+        args: Final[list[str]] = []
+        output: Final = getattr(result, "output", None)
         if not output:
             return args
         for item in output:
@@ -242,7 +237,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         arguments so that sensitive data returned inside function calls is not
         missed by the DLP scan.
         """
-        parts: list[str] = []
+        parts: Final[list[str]] = []
         if isinstance(result, TextCompletionResponse) and result.choices:
             for text_choice in result.choices:
                 if not isinstance(text_choice, TextChoices):
@@ -251,7 +246,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 if isinstance(raw, str) and raw.strip():
                     parts.append(raw)
         elif isinstance(result, ResponsesAPIResponse):
-            text = result.output_text
+            text: Final = result.output_text
             if text and text.strip():
                 parts.append(text)
             # Include tool-call arguments from ``function_call`` output items
@@ -309,13 +304,13 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             LiteLLMCompletionResponsesConfig,
         )
 
-        input_data = data.get("input")
+        input_data: Final = data.get("input")
         if input_data is None and not data.get("instructions"):
             return None
         try:
             # Always transform via messages so ``instructions`` become a system message
             # (string ``input`` alone would skip instructions and bypass DLP).
-            messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input_data if input_data is not None else "",
                 responses_api_request=data,
             )
@@ -357,7 +352,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         Raises ``HTTPException`` when no API-key-bound ``user_id`` exists or when
         only caller-influenceable identity fields are available (fail closed).
         """
-        trusted_id = self._resolve_trusted_user_id(data, user_api_key_dict)
+        trusted_id: Final = self._resolve_trusted_user_id(data, user_api_key_dict)
         if trusted_id:
             return trusted_id
 
@@ -396,7 +391,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         call_type: "CallTypesLiteral",
     ) -> dict[str, Any] | None:
         """Check user prompt against Purview DLP policies before LLM call."""
-        user_id = self._resolve_user_id_for_blocking(data, user_api_key_dict)
+        user_id: Final = self._resolve_user_id_for_blocking(data, user_api_key_dict)
 
         prompt_text: str | None = None
         if call_type in ("responses", "aresponses"):
@@ -408,7 +403,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             # place of the actual ``input``.
             prompt_text = self._responses_api_input_to_str(data, raise_on_failure=True)
         elif call_type in ("text_completion", "atext_completion"):
-            raw_prompt = data.get("prompt")
+            raw_prompt: Final = data.get("prompt")
             # Reject every token-id prompt shape Purview cannot evaluate —
             # flat ``list[int]`` (single prompt), ``list[list[int]]`` (multi-prompt
             # batches), and mixed lists that include any token-id sub-array.
@@ -426,7 +421,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 )
             prompt_text = self.completion_prompt_to_str(raw_prompt)
         else:
-            messages: list | None = data.get("messages")
+            messages: Final[list | None] = data.get("messages")
             if messages:
                 prompt_text = self.get_prompt_text_for_dlp(cast(list[Any], messages))
 
@@ -459,12 +454,12 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         which buffers all chunks before scanning.  The proxy automatically skips
         this hook for requests that have a streaming iterator hook defined.
         """
-        user_id = self._resolve_user_id_for_blocking(data, user_api_key_dict)
+        user_id: Final = self._resolve_user_id_for_blocking(data, user_api_key_dict)
 
-        parts = self._completion_response_text_parts(response)
+        parts: Final = self._completion_response_text_parts(response)
 
         if parts:
-            combined = "\n\n---\n\n".join(parts)
+            combined: Final = "\n\n---\n\n".join(parts)
             await self._check_content(
                 user_id=user_id,
                 text=combined,
@@ -495,10 +490,10 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
         # Resolve user ID up-front so identity failures don't waste work
         # buffering and assembling the stream.
-        user_id = self._resolve_user_id_for_blocking(request_data, user_api_key_dict)
+        user_id: Final = self._resolve_user_id_for_blocking(request_data, user_api_key_dict)
 
         # Buffer the entire stream before any DLP scan.
-        all_chunks: list[ModelResponseStream] = []
+        all_chunks: Final[list[ModelResponseStream]] = []
         async for chunk in response:
             all_chunks.append(chunk)
 
@@ -541,7 +536,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 yield chunk
             return
 
-        assembled_response = stream_chunk_builder(chunks=all_chunks)
+        assembled_response: Final = stream_chunk_builder(chunks=all_chunks)
 
         if assembled_response is None and all_chunks:
             # Fail closed: stream_chunk_builder dropped all chunks, so we cannot
@@ -589,7 +584,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             )
 
         # DLP passed — re-yield chunks from the assembled chat response.
-        mock_response = MockResponseIterator(model_response=assembled_response)
+        mock_response: Final = MockResponseIterator(model_response=assembled_response)
         async for chunk in mock_response:
             yield chunk
 
@@ -632,7 +627,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 verbose_proxy_logger.error("Purview audit background logging error: %s", exc)
 
         def _run_in_new_loop() -> None:
-            new_loop = asyncio.new_event_loop()
+            new_loop: Final = asyncio.new_event_loop()
             try:
                 asyncio.set_event_loop(new_loop)
                 new_loop.run_until_complete(_log_safe())
@@ -640,7 +635,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 new_loop.close()
                 asyncio.set_event_loop(None)
 
-        thread = threading.Thread(target=_run_in_new_loop, daemon=True)
+        thread: Final = threading.Thread(target=_run_in_new_loop, daemon=True)
         thread.start()
 
         return kwargs, result
@@ -652,7 +647,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         Each audit call (prompt and response) is wrapped in its own try/except
         so a failure on the first does not prevent the second from running.
         """
-        user_id = self._resolve_user_id_from_logging_kwargs(kwargs)
+        user_id: Final = self._resolve_user_id_from_logging_kwargs(kwargs)
         if not user_id:
             verbose_proxy_logger.debug("Purview audit: no user_id, skipping")
             return kwargs, result
@@ -673,7 +668,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             elif call_type in ("text_completion", "atext_completion"):
                 prompt_text = self.completion_prompt_to_str(kwargs.get("prompt"))
             else:
-                messages = kwargs.get("messages")
+                messages: Final = kwargs.get("messages")
                 if messages:
                     prompt_text = self.get_prompt_text_for_dlp(cast(list[Any], messages))
 
@@ -690,9 +685,9 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
         # Log response (downloadText) — runs regardless of prompt audit outcome
         try:
-            parts = self._completion_response_text_parts(result)
+            parts: Final = self._completion_response_text_parts(result)
             if parts:
-                combined = "\n\n---\n\n".join(parts)
+                combined: Final = "\n\n---\n\n".join(parts)
                 await self._check_content(
                     user_id=user_id,
                     text=combined,

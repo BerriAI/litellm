@@ -8,7 +8,7 @@ import asyncio
 import json
 import os
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import BaseModel
 from websockets.asyncio.client import ClientConnection, connect
@@ -56,14 +56,14 @@ class AimGuardrail(CustomGuardrail):
 
     def __init__(self, api_key: str | None = None, api_base: str | None = None, **kwargs):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
-        ssl_verify = kwargs.pop("ssl_verify", None)
+        ssl_verify: Final = kwargs.pop("ssl_verify", None)
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
             params={"ssl_verify": ssl_verify} if ssl_verify is not None else None,
         )
         self.api_key = api_key or os.environ.get("AIM_API_KEY")
         if not self.api_key:
-            msg = (
+            msg: Final = (
                 "Couldn't get Aim api key, either set the `AIM_API_KEY` in the environment or "
                 "pass it as a parameter to the guardrail in the config file"
             )
@@ -96,23 +96,23 @@ class AimGuardrail(CustomGuardrail):
         return data
 
     async def call_aim_guardrail(self, data: dict, hook: str, key_alias: str | None) -> dict:
-        user_email = data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
-        call_id = data.get("litellm_call_id")
-        headers = self._build_aim_headers(
+        user_email: Final = data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
+        call_id: Final = data.get("litellm_call_id")
+        headers: Final = self._build_aim_headers(
             hook=hook,
             key_alias=key_alias,
             user_email=user_email,
             litellm_call_id=call_id,
         )
-        response = await self.async_handler.post(
+        response: Final = await self.async_handler.post(
             f"{self.api_base}/fw/v1/analyze",
             headers=headers,
             json={"messages": self._build_aim_inspection_messages(data)},
         )
         response.raise_for_status()
-        res = response.json()
-        required_action = res.get("required_action")
-        action_type = required_action and required_action.get("action_type", None)
+        res: Final = response.json()
+        required_action: Final = res.get("required_action")
+        action_type: Final = required_action and required_action.get("action_type", None)
         if action_type is None:
             verbose_proxy_logger.debug("Aim: No required action specified")
             return data
@@ -123,7 +123,7 @@ class AimGuardrail(CustomGuardrail):
         elif action_type == "anonymize_action":
             return self._anonymize_request(res, data)
         else:
-            verbose_proxy_logger.error(f"Aim: {action_type} action")
+            verbose_proxy_logger.error("Aim: %s action", action_type)
         return data
 
     @staticmethod
@@ -132,7 +132,7 @@ class AimGuardrail(CustomGuardrail):
         without ``tool_call_id`` and bare ``role: "function"`` without ``name``
         are rejected; the flatten drops those fields, so any role outside
         ``{system, user, assistant}`` collapses to ``user`` for the AIM POST."""
-        safe_roles = {"system", "user", "assistant"}
+        safe_roles: Final = {"system", "user", "assistant"}
         return [{**m, "role": "user"} if m["role"] not in safe_roles else m for m in build_inspection_messages(data)]
 
     @staticmethod
@@ -146,7 +146,7 @@ class AimGuardrail(CustomGuardrail):
         )
 
     def _handle_block_action(self, analysis_result: Any, required_action: Any) -> None:
-        detection_message = required_action.get("detection_message", None)
+        detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Aim: Violation detected enabled policies: {policies}".format(
                 policies=list(analysis_result["policy_drill_down"].keys()),
@@ -156,7 +156,7 @@ class AimGuardrail(CustomGuardrail):
 
     def _anonymize_request(self, res: Any, data: dict) -> dict:
         verbose_proxy_logger.info("Aim: anonymize action")
-        redacted_chat = res.get("redacted_chat")
+        redacted_chat: Final = res.get("redacted_chat")
         if not redacted_chat:
             return data
         # Aim returns text-only redacted messages. Overwriting
@@ -170,7 +170,7 @@ class AimGuardrail(CustomGuardrail):
                 "request with plain string content to use anonymize, "
                 "or rely on block-mode policies."
             )
-        redacted_messages = [
+        redacted_messages: Final = [
             {
                 "role": message["role"],
                 "content": message["content"],
@@ -186,9 +186,9 @@ class AimGuardrail(CustomGuardrail):
     async def call_aim_guardrail_on_output(
         self, request_data: dict, output: str, hook: str, key_alias: str | None
     ) -> dict | None:
-        user_email = request_data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
-        call_id = request_data.get("litellm_call_id")
-        response = await self.async_handler.post(
+        user_email: Final = request_data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
+        call_id: Final = request_data.get("litellm_call_id")
+        response: Final = await self.async_handler.post(
             f"{self.api_base}/fw/v1/analyze",
             headers=self._build_aim_headers(
                 hook=hook,
@@ -202,19 +202,19 @@ class AimGuardrail(CustomGuardrail):
             },
         )
         response.raise_for_status()
-        res = response.json()
-        required_action = res.get("required_action")
-        action_type = required_action and required_action.get("action_type", None)
+        res: Final = response.json()
+        required_action: Final = res.get("required_action")
+        action_type: Final = required_action and required_action.get("action_type", None)
         if action_type and action_type == "block_action":
             return self._handle_block_action_on_output(res["analysis_result"], required_action)
-        redacted_chat = res.get("redacted_chat", None)
+        redacted_chat: Final = res.get("redacted_chat", None)
 
         if action_type and action_type == "anonymize_action" and redacted_chat:
             return {"redacted_output": redacted_chat["all_redacted_messages"][-1]["content"]}
         return {"redacted_output": output}
 
     def _handle_block_action_on_output(self, analysis_result: Any, required_action: Any) -> dict | None:
-        detection_message = required_action.get("detection_message", None)
+        detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Aim: detected: {detected}, enabled policies: {policies}".format(
                 detected=True,
@@ -268,13 +268,13 @@ class AimGuardrail(CustomGuardrail):
         # used to bypass Aim entirely because the hook only inspected
         # ``choices[0]``. Run inspections concurrently so multi-completion
         # responses don't pay an n× latency penalty.
-        choices_to_inspect = [c for c in response.choices if isinstance(c, Choices)]
+        choices_to_inspect: Final = [c for c in response.choices if isinstance(c, Choices)]
         if not choices_to_inspect:
             return response
         # ``return_exceptions=True`` lets every inspection finish even if
         # one fails — without it, the first exception would propagate and
         # leave the remaining tasks running in the background.
-        results = await asyncio.gather(
+        results: Final = await asyncio.gather(
             *(
                 self.call_aim_guardrail_on_output(
                     data,
@@ -304,8 +304,8 @@ class AimGuardrail(CustomGuardrail):
         response,
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
-        user_email = request_data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
-        call_id = request_data.get("litellm_call_id")
+        user_email: Final = request_data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
+        call_id: Final = request_data.get("litellm_call_id")
         async with connect(
             f"{self.ws_api_base}/fw/v1/analyze/stream",
             additional_headers=self._build_aim_headers(
@@ -315,7 +315,7 @@ class AimGuardrail(CustomGuardrail):
                 litellm_call_id=call_id,
             ),
         ) as websocket:
-            sender = asyncio.create_task(self.forward_the_stream_to_aim(websocket, response))
+            sender: Final = asyncio.create_task(self.forward_the_stream_to_aim(websocket, response))
             while True:
                 result = json.loads(await websocket.recv())
                 if verified_chunk := result.get("verified_chunk"):
@@ -328,7 +328,7 @@ class AimGuardrail(CustomGuardrail):
                         from litellm.proxy.proxy_server import StreamingCallbackError
 
                         raise StreamingCallbackError(blocking_message)
-                    verbose_proxy_logger.error(f"Unknown message received from AIM: {result}")
+                    verbose_proxy_logger.error("Unknown message received from AIM: %s", result)
                     return
 
     async def forward_the_stream_to_aim(
