@@ -2366,30 +2366,63 @@ def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
     assert cleaned.get("api_version") == "2024-10-21"
 
 
-class TestRejectBannedParamOverrides:
-    """Routing and credential fields come from the deployment configuration when a
-    request names a configured model; a request that wants its own connection
-    supplies the whole parameter set instead."""
+class TestConfigBaseForHealthCheck:
+    """A request that sets its own connection fields gets a base without the
+    configuration's credentials; anything it leaves unset still comes from
+    the configuration."""
 
-    def test_banned_param_is_refused(self):
-        from fastapi import HTTPException
+    CONFIG = {
+        "model": "openai/gpt-4o",
+        "api_key": "sk-configured",
+        "api_base": "https://configured.example/v1",
+        "vertex_credentials": "configured-creds",
+        "rpm": 100,
+    }
 
+    def _base(self, config, request):
         from litellm.proxy.health_endpoints._health_endpoints import (
-            _reject_banned_param_overrides,
+            _config_base_for_health_check,
         )
 
-        for param in ("api_base", "base_url", "vertex_credentials", "aws_web_identity_token"):
-            with pytest.raises(HTTPException) as exc_info:
-                _reject_banned_param_overrides({"model": "gpt-4o", param: "caller-supplied"})
-            assert exc_info.value.status_code == 400
-            assert param in str(exc_info.value.detail)
+        return _config_base_for_health_check(config, request)
 
-    def test_benign_params_are_allowed(self):
-        from litellm.proxy.health_endpoints._health_endpoints import (
-            _reject_banned_param_overrides,
+    def test_request_without_connection_fields_inherits_config(self):
+        base = self._base(self.CONFIG, {"model": "openai/gpt-4o"})
+        assert base["api_key"] == "sk-configured"
+        assert base["api_base"] == "https://configured.example/v1"
+
+    def test_request_setting_api_base_does_not_inherit_config_credentials(self):
+        base = self._base(self.CONFIG, {"api_base": "https://caller.example/v1"})
+        assert "api_key" not in base
+        assert "api_base" not in base
+        assert "vertex_credentials" not in base
+        assert base["rpm"] == 100
+
+    def test_add_model_flow_keeps_its_own_credentials(self):
+        """Adding a second deployment for an already-configured name sends a
+        complete connection; it is tested as sent, not as configured."""
+        request = {
+            "model": "openai/gpt-4o",
+            "api_base": "https://new-deployment.example/v1",
+            "api_key": "sk-new-deployment",
+        }
+        merged = {**self._base(self.CONFIG, request), **request}
+        assert merged["api_base"] == "https://new-deployment.example/v1"
+        assert merged["api_key"] == "sk-new-deployment"
+        assert "sk-configured" not in str(merged)
+
+    def test_destination_override_without_own_key_inherits_no_credential(self):
+        """A request that redirects the destination but supplies no credential
+        of its own gets none from the configuration."""
+        request = {"api_base": "https://elsewhere.example"}
+        merged = {**self._base(self.CONFIG, request), **request}
+        assert "api_key" not in merged
+        assert "sk-configured" not in str(merged)
+
+    def test_non_api_base_destination_field_also_drops_credentials(self):
+        base = self._base(
+            {**self.CONFIG, "aws_secret_access_key": "configured-secret"},
+            {"aws_bedrock_runtime_endpoint": "https://caller.example"},
         )
-
-        _reject_banned_param_overrides({})
-        _reject_banned_param_overrides({"model": "gpt-4o"})
-        _reject_banned_param_overrides({"model": "gpt-4o", "api_key": "sk-caller-owned"})
-        _reject_banned_param_overrides({"mode": "chat", "timeout": 30})
+        assert "api_key" not in base
+        assert "aws_secret_access_key" not in base
