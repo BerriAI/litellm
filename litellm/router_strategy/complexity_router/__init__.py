@@ -9,6 +9,7 @@ No external API calls - all scoring is local and <1ms.
 
 from litellm.router_strategy.complexity_router.complexity_router import (
     ComplexityRouter,
+    canonical_rubric_entries,
     classification_system_prompt,
 )
 from litellm.router_strategy.complexity_router.config import (
@@ -24,5 +25,6 @@ __all__ = [
     "ComplexityRouter",
     "ComplexityRouterConfig",
     "ComplexityTier",
+    "canonical_rubric_entries",
     "classification_system_prompt",
 ]

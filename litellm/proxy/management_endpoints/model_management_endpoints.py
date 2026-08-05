@@ -64,6 +64,7 @@ from litellm.router_strategy.complexity_router import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     ComplexityRouterConfig,
     ComplexityTier,
+    canonical_rubric_entries,
     classification_system_prompt,
 )
 from litellm.router_utils.auto_router_model_naming import (
@@ -1827,7 +1828,7 @@ async def get_auto_router_classifier_default_prompt(
         system_prompt=(
             classification_system_prompt(context_window_size)
             if labeled_tiers is None
-            else classification_system_prompt(context_window_size, labeled_tiers=labeled_tiers)
+            else classification_system_prompt(context_window_size, tier_entries=canonical_rubric_entries(labeled_tiers))
         )
     )
 

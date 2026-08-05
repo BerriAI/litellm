@@ -7644,6 +7644,9 @@ class Router:
         from litellm.router_strategy.complexity_router.complexity_router import (
             ComplexityRouter,
         )
+        from litellm.router_strategy.complexity_router.config import (
+            ComplexityRouterConfig,
+        )
 
         complexity_router_config: Final[dict | None] = deployment.litellm_params.complexity_router_config
 
@@ -7651,9 +7654,14 @@ class Router:
 
         # If no default model specified, try to get from config tiers
         if default_model is None and complexity_router_config:
-            tiers: Final = complexity_router_config.get("tiers", {})
+            parsed: Final = ComplexityRouterConfig.model_validate(complexity_router_config)
+            tiers: Final = parsed.tiers
             # Use MEDIUM tier as fallback default
-            medium: Final = tiers.get("MEDIUM") or tiers.get("SIMPLE")
+            medium: Final = (
+                (parsed.default_model if parsed.has_custom_tiers else None)
+                or tiers.get("MEDIUM")
+                or tiers.get("SIMPLE")
+            )
             if isinstance(medium, list):
                 default_model = medium[0] if medium else None
             else:

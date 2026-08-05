@@ -2764,6 +2764,7 @@ RoutingDecisionCause = Literal[
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
     "llm_classifier",
+    "classifier_fallback",
     # The LLM classifier failed and classifier_fallback is 'default_model', so the request
     # went to default_model without being classified. Distinct from "default_fallback",
     # which is a tier having no model configured rather than classification not happening.
