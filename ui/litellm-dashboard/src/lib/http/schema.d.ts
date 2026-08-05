@@ -12859,6 +12859,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/spend/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest External Usage
+         * @description PROXY_ADMIN ONLY: record externally measured usage into the same spend pipeline as proxy-routed traffic.
+         *
+         *     For inference traffic that legitimately bypasses the proxy (for example async batch processors
+         *     dispatching directly to model gateways), so budgets and spend stay coherent in litellm as the
+         *     single metering system.
+         *
+         *     Attribution (user/team/org) is derived from the given virtual key. Records accept an optional
+         *     idempotency_key, stored as the spend-log request_id: the reservation insert, counter updates and
+         *     dedup are checked atomically at the database primary key, so overlapping retries are safe. When
+         *     cost is omitted it is computed from litellm pricing; records whose model cannot be priced are
+         *     rejected with an error instead of being booked as zero spend.
+         */
+        post: operations["ingest_external_usage_spend_usage_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/spend/users": {
         parameters: {
             query?: never;
@@ -22482,6 +22512,7 @@ export interface components {
         /** ChatCompletionAudioObject */
         ChatCompletionAudioObject: {
             input_audio: components["schemas"]["InputAudio"];
+            prompt_cache_breakpoint?: components["schemas"]["PromptCacheBreakpoint"];
             /**
              * Type
              * @constant
@@ -24400,6 +24431,41 @@ export interface components {
             }[];
             /** Updated At */
             updated_at?: number | null;
+        };
+        /** ExternalUsageRecord */
+        ExternalUsageRecord: {
+            /**
+             * Api Key
+             * @description Raw virtual key (sk-...) to attribute usage to. Never logged.
+             */
+            api_key: string;
+            /** Completion Tokens */
+            completion_tokens: number;
+            /**
+             * Cost
+             * @description Explicit cost in USD. Computed from litellm pricing when omitted.
+             */
+            cost?: number | null;
+            /** End Time */
+            end_time?: string | null;
+            /** End User Id */
+            end_user_id?: string | null;
+            /**
+             * Idempotency Key
+             * @description Becomes the spend-log request_id for dedup on retries.
+             */
+            idempotency_key?: string | null;
+            /** Model */
+            model: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+            /** Tags */
+            tags?: string[] | null;
         };
         /**
          * FacetListResponse
@@ -30582,6 +30648,19 @@ export interface components {
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
         };
+        /**
+         * PromptCacheBreakpoint
+         * @description Marks the exact end of a reusable prompt prefix.
+         *
+         *     The breakpoint inherits its TTL from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a token block.
+         */
+        PromptCacheBreakpoint: {
+            /**
+             * Mode
+             * @constant
+             */
+            mode: "explicit";
+        };
         /** PromptInfo */
         PromptInfo: {
             /**
@@ -34117,6 +34196,30 @@ export interface components {
             trend: string;
             /** Type */
             type: string;
+        };
+        /** UsageIngestRecordResult */
+        UsageIngestRecordResult: {
+            /** Error */
+            error?: string | null;
+            /** Request Id */
+            request_id: string;
+            /** Spend */
+            spend?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "recorded" | "duplicate" | "error";
+        };
+        /** UsageIngestRequest */
+        UsageIngestRequest: {
+            /** Records */
+            records: components["schemas"]["ExternalUsageRecord"][];
+        };
+        /** UsageIngestResponse */
+        UsageIngestResponse: {
+            /** Results */
+            results: components["schemas"]["UsageIngestRecordResult"][];
         };
         /** UsageLogEntry */
         UsageLogEntry: {
@@ -50970,6 +51073,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_external_usage_spend_usage_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsageIngestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageIngestResponse"];
                 };
             };
             /** @description Validation Error */

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ from litellm.proxy.spend_tracking.usage_ingestion_endpoints import (
     ExternalUsageRecord,
     KeyAttribution,
     UsageIngestionDeps,
+    build_spend_log_payload,
     process_external_usage_record,
 )
 from litellm.proxy.utils import hash_token
@@ -35,17 +37,31 @@ class RecordingDeps:
         self._compute_cost_result = compute_cost_result
         self._compute_cost_error = compute_cost_error
         self.spend_calls: list[dict[str, Any]] = []
+        self.reserve_calls: list[dict[str, Any]] = []
         self.compute_cost_calls: list[tuple[Any, str]] = []
-        self.exists_calls: list[str] = []
 
     def as_deps(self) -> UsageIngestionDeps:
         async def lookup_key(hashed: str) -> KeyAttribution | None:
             self.looked_up_hashed = hashed
             return self._key
 
-        async def spend_log_exists(request_id: str) -> bool:
-            self.exists_calls.append(request_id)
-            return request_id in self._existing_ids
+        async def reserve_spend_log(
+            record: ExternalUsageRecord,
+            request_id: str,
+            hashed_token: str,
+            key: KeyAttribution,
+            cost: float,
+        ) -> bool:
+            self.reserve_calls.append(
+                {
+                    "record": record,
+                    "request_id": request_id,
+                    "hashed_token": hashed_token,
+                    "key": key,
+                    "cost": cost,
+                }
+            )
+            return request_id not in self._existing_ids
 
         async def record_spend(**kwargs: Any) -> None:
             self.spend_calls.append(kwargs)
@@ -58,7 +74,7 @@ class RecordingDeps:
 
         return UsageIngestionDeps(
             lookup_key=lookup_key,
-            spend_log_exists=spend_log_exists,
+            reserve_spend_log=reserve_spend_log,
             record_spend=record_spend,
             compute_cost=compute_cost,
             generate_request_id=lambda: GENERATED_ID,
@@ -81,61 +97,82 @@ def run(coro: Any) -> Any:
     return asyncio.run(coro)
 
 
-def test_records_spend_with_explicit_cost_without_calling_pricing():
+def test_spend_log_payload_matches_funnel_shape():
+    record = make_record(idempotency_key="batch-1-line-1", tags=["batch:job-42"], end_user_id="tenant-a")
+    payload = build_spend_log_payload(
+        record=record,
+        request_id="batch-1-line-1",
+        hashed_token=hash_token(RAW_KEY),
+        key=DEFAULT_KEY,
+        cost=0.123,
+    )
+    assert payload["request_id"] == "batch-1-line-1"
+    assert payload["spend"] == 0.123
+    assert payload["total_tokens"] == 150
+    assert payload["prompt_tokens"] == 100
+    assert payload["completion_tokens"] == 50
+    assert payload["api_key"] == hash_token(RAW_KEY)
+    assert payload["api_key"] != RAW_KEY
+    assert payload["team_id"] == "t-1"
+    assert payload["organization_id"] == "o-1"
+    assert payload["end_user"] == "tenant-a"
+
+    metadata = json.loads(payload["metadata"]) if isinstance(payload["metadata"], str) else payload["metadata"]
+    assert metadata["user_api_key"] == hash_token(RAW_KEY)
+
+    request_tags = (
+        json.loads(payload["request_tags"]) if isinstance(payload["request_tags"], str) else payload["request_tags"]
+    )
+    assert request_tags == ["batch:job-42"]
+
+
+def test_idempotent_record_books_through_atomic_reserve_not_funnel():
     deps = RecordingDeps(compute_cost_error=RuntimeError("pricing must not be consulted"))
-    result = run(process_external_usage_record(make_record(cost=0.123, idempotency_key="batch-1-line-1"), deps.as_deps()))
+    result = run(
+        process_external_usage_record(make_record(cost=0.123, idempotency_key="batch-1-line-1"), deps.as_deps())
+    )
     assert result.status == "recorded"
     assert result.spend == 0.123
     assert result.request_id == "batch-1-line-1"
-    assert len(deps.spend_calls) == 1
+
+    assert len(deps.reserve_calls) == 1
+    reserve_call = deps.reserve_calls[0]
+    assert reserve_call["request_id"] == "batch-1-line-1"
+    assert reserve_call["hashed_token"] == hash_token(RAW_KEY)
+    assert reserve_call["cost"] == 0.123
+    assert reserve_call["key"] == DEFAULT_KEY
+
+    assert deps.spend_calls == []
     assert deps.compute_cost_calls == []
 
-    call = deps.spend_calls[0]
-    assert call["token"] == hash_token(RAW_KEY)
-    assert call["token"] != RAW_KEY
-    assert call["user_id"] == "u-1"
-    assert call["team_id"] == "t-1"
-    assert call["org_id"] == "o-1"
-    assert call["response_cost"] == 0.123
 
-    response = call["completion_response"]
-    assert response.id == "batch-1-line-1"
-    assert response.usage.prompt_tokens == 100
-    assert response.usage.completion_tokens == 50
-    assert response.usage.total_tokens == 150
-
-    kwargs = call["kwargs"]
-    assert kwargs["call_type"] == "ingest_external_usage"
-    metadata = kwargs["litellm_params"]["metadata"]
-    assert metadata["user_api_key"] == hash_token(RAW_KEY)
-    assert metadata["user_api_key"] != RAW_KEY
-
-
-def test_computed_cost_used_when_no_explicit_cost():
+def test_computed_cost_is_resolved_before_reserving():
     deps = RecordingDeps(compute_cost_result=0.07)
     result = run(process_external_usage_record(make_record(idempotency_key="k-2"), deps.as_deps()))
     assert result.status == "recorded"
     assert result.spend == 0.07
     assert len(deps.compute_cost_calls) == 1
     assert deps.compute_cost_calls[0][1] == "gpt-4o-mini"
-    assert deps.spend_calls[0]["response_cost"] == 0.07
+    assert deps.reserve_calls[0]["cost"] == 0.07
 
 
-def test_unpriceable_model_without_explicit_cost_is_error_not_zero_spend():
+def test_unpriceable_model_without_explicit_cost_is_error_and_books_nothing():
     deps = RecordingDeps(compute_cost_error=ValueError("unknown model"))
     result = run(process_external_usage_record(make_record(idempotency_key="k-3"), deps.as_deps()))
     assert result.status == "error"
     assert result.spend is None
     assert "explicit cost" in (result.error or "")
-    assert len(deps.spend_calls) == 0
+    assert deps.reserve_calls == []
+    assert deps.spend_calls == []
 
 
-def test_unknown_key_is_rejected_and_never_books_spend():
+def test_unknown_key_is_rejected_and_books_nothing():
     deps = RecordingDeps(key=None)
     result = run(process_external_usage_record(make_record(idempotency_key="k-4"), deps.as_deps()))
     assert result.status == "error"
     assert result.error == "api key not found"
-    assert len(deps.spend_calls) == 0
+    assert deps.reserve_calls == []
+    assert deps.spend_calls == []
 
 
 def test_duplicate_idempotency_key_is_skipped_and_never_rebooks():
@@ -143,16 +180,30 @@ def test_duplicate_idempotency_key_is_skipped_and_never_rebooks():
     result = run(process_external_usage_record(make_record(idempotency_key="k-5"), deps.as_deps()))
     assert result.status == "duplicate"
     assert result.request_id == "k-5"
-    assert len(deps.spend_calls) == 0
+    assert len(deps.reserve_calls) == 1
+    assert deps.spend_calls == []
 
 
-def test_missing_idempotency_key_generates_request_id_and_skips_dedup_probe():
+def test_missing_idempotency_key_uses_funnel_with_generated_request_id():
     deps = RecordingDeps()
     result = run(process_external_usage_record(make_record(cost=0.01), deps.as_deps()))
     assert result.status == "recorded"
     assert result.request_id == GENERATED_ID
-    assert deps.spend_calls[0]["completion_response"].id == GENERATED_ID
-    assert deps.exists_calls == []
+    assert deps.reserve_calls == []
+    assert len(deps.spend_calls) == 1
+
+    call = deps.spend_calls[0]
+    assert call["token"] == hash_token(RAW_KEY)
+    assert call["user_id"] == "u-1"
+    assert call["team_id"] == "t-1"
+    assert call["org_id"] == "o-1"
+    assert call["response_cost"] == 0.01
+    response = call["completion_response"]
+    assert response.id == GENERATED_ID
+    assert response.usage.total_tokens == 150
+    metadata = call["kwargs"]["litellm_params"]["metadata"]
+    assert metadata["user_api_key"] == hash_token(RAW_KEY)
+    assert metadata["user_api_key"] != RAW_KEY
 
 
 def test_end_time_defaults_to_start_time_and_end_before_start_rejected():
@@ -167,17 +218,15 @@ def test_end_time_defaults_to_start_time_and_end_before_start_rejected():
         make_record(start_time=start, end_time=earlier)
 
 
-def test_tags_and_end_user_flow_into_payload():
+def test_record_without_idempotency_key_still_flows_tags_to_funnel_kwargs():
     deps = RecordingDeps()
     result = run(
         process_external_usage_record(
-            make_record(cost=0.01, idempotency_key="k-8", tags=["batch:job-42"], end_user_id="tenant-a"),
-            deps.as_deps(),
+            make_record(cost=0.01, tags=["batch:job-42"], end_user_id="tenant-a"), deps.as_deps()
         )
     )
     assert result.status == "recorded"
-    call = deps.spend_calls[0]
-    metadata = call["kwargs"]["litellm_params"]["metadata"]
+    metadata = deps.spend_calls[0]["kwargs"]["litellm_params"]["metadata"]
     assert metadata["tags"] == ["batch:job-42"]
     assert metadata["user_api_key_end_user_id"] == "tenant-a"
-    assert call["end_user_id"] == "tenant-a"
+    assert deps.spend_calls[0]["end_user_id"] == "tenant-a"
