@@ -5363,6 +5363,38 @@ class TestClassifierFallbackChoice:
         assert response.routing_decision["cause"] == "default_model_fallback"
 
     @pytest.mark.asyncio
+    async def test_default_model_fallback_does_not_bypass_routing_plugins(self, mock_router_instance):
+        """A failed classifier must not become a way around a policy plugin: default_model is never
+        checked against the plugin pipeline, so with plugins configured this path has to fall through
+        to the tier pool, which does run them. Mirrors the no-user-message path's guard."""
+
+        class ExcludeDefaultModel:
+            async def run(self, context):
+                context.candidate_models = [m for m in context.candidate_models if m != "gpt-4o-default"]
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"MEDIUM": ["gpt-4o-default", "gpt-4o-nano"]},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o-default",
+                "plugins": [ExcludeDefaultModel()],
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        response = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        assert response is not None
+        assert response.model == "gpt-4o-nano"
+
+    @pytest.mark.asyncio
     async def test_successful_classification_ignores_the_fallback_setting(
         self, default_model_fallback_router, mock_router_instance
     ):

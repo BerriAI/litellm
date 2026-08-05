@@ -85,6 +85,22 @@ describe("RoutingDecisionCard", () => {
     expect(screen.queryByText("Score")).not.toBeInTheDocument();
   });
 
+  it("explains a route that fell back to the default model after the classifier failed", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          router_model_name: "llm-router",
+          router_type: "complexity",
+          routed_model: "gpt-4o",
+          cause: "default_model_fallback",
+          tier: "MEDIUM",
+          signals: ["classifier-failed:default-model"],
+        }}
+      />,
+    );
+    expect(screen.getByText("Default model, LLM classifier failed")).toBeInTheDocument();
+  });
+
   it("shows the keyword that fired a tier rule", () => {
     render(
       <RoutingDecisionCard

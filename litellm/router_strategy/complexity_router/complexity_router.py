@@ -781,9 +781,16 @@ class ComplexityRouter(CustomLogger):
 
         The outcome still carries a tier because every downstream consumer is keyed on one, so it
         reports the tier whose pool holds default_model, and MEDIUM when no pool does. That tier is
-        provenance only: the pre-routing hook routes this cause straight to default_model rather than
-        picking from the tier's pool, since a pool with several models would otherwise land somewhere
-        else and the point of this fallback is a known destination when classification failed.
+        provenance only in the usual case: the pre-routing hook routes this cause straight to
+        default_model rather than picking from the tier's pool, since a pool with several models
+        would otherwise land somewhere else and the point of this fallback is a known destination
+        when classification failed.
+
+        On a router with routing plugins the hook does not short-circuit, because default_model was
+        never checked against the plugin pipeline and routing to it directly would let a failed
+        classifier bypass a policy plugin. There the tier is load-bearing, and resolving it to
+        default_model's own pool keeps the destination as close to the configured one as a
+        plugin-filtered pick allows.
         """
         default_model: Final = self.config.default_model
         pools: Final = self._tier_pools()
@@ -1653,23 +1660,29 @@ class ComplexityRouter(CustomLogger):
         if escalated:
             signals = (*signals, "escalation")
         score_repr: Final = f"{score:.3f}" if score is not None else "n/a"
-        if outcome.cause == "default_model_fallback" and self.config.default_model is not None:
+        fallback_model: Final = self.config.default_model if not self.config.plugins else None
+        if outcome.cause == "default_model_fallback" and fallback_model is not None:
             # Classification failed and the operator asked for default_model, so route there
             # directly. Neither the tier pool nor the adaptive bandit gets a say: both answer
             # "which model suits this tier", and no tier was decided. Escalation is skipped for
             # the same reason, since there is no classified tier to bump away from.
+            #
+            # Skipped when plugins are configured, matching the no-user-message path above:
+            # default_model is never checked against the plugin pipeline, so routing to it
+            # here would let a failed classifier silently bypass a policy plugin. Those
+            # routers fall through to the tier pool below, which does run the plugins.
             verbose_router_logger.info(
                 "ComplexityRouter: routing decision cause=%s, tier=%s, score=n/a, signals=%s, routed_model=%s",
                 outcome.cause,
                 classified_tier.value,
                 outcome.signals,
-                self.config.default_model,
+                fallback_model,
             )
             return PreRoutingHookResponse(
-                model=self.config.default_model,
+                model=fallback_model,
                 messages=messages if has_original_messages else None,
                 routing_decision=self._build_routing_decision(
-                    routed_model=self.config.default_model,
+                    routed_model=fallback_model,
                     conversation_continuing=conversation_continuing,
                     cause=outcome.cause,
                     tier=classified_tier,
