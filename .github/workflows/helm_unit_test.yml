@@ -25,10 +25,10 @@ jobs:
 
       - name: Install Helm Unit Test Plugin
         run: |
-          helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4
+          helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.8.2
       - name: Verify Helm Unit Test Plugin integrity
         run: |
-          EXPECTED_SHA="e251ba198448629678ff2168e1a469249d998155"
+          EXPECTED_SHA="b94e638e72cf00034654b70944c0d20cb5d0c3cf"
           PLUGIN_DIR="$(helm env HELM_PLUGINS)/helm-unittest"
           ACTUAL_SHA="$(git -C "$PLUGIN_DIR" rev-parse HEAD)"
           if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
@@ -39,5 +39,14 @@ jobs:
 
       - name: Run unit tests
         run: |
-          helm unittest -f 'tests/*.yaml' helm/litellm-helm
-          helm unittest -f 'tests/*.yaml' helm/litellm
+          for chart in helm/litellm-helm helm/litellm; do
+            declared="$(grep -h '^suite:' "$chart"/tests/*.yaml | wc -l | tr -d '[:space:]')"
+            output="$(mktemp)"
+            helm unittest -f 'tests/*.yaml' "$chart" | tee "$output"
+            executed="$(sed -n 's/^Test Suites:.*[[:space:]]\([0-9][0-9]*\) total$/\1/p' "$output")"
+            if [ "$declared" != "$executed" ]; then
+              echo "::error::$chart declares $declared test suites but helm-unittest ran $executed. Suites are being skipped silently, so their assertions never execute."
+              exit 1
+            fi
+            echo "$chart: all $declared declared test suites ran"
+          done
