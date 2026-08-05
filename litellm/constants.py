@@ -521,6 +521,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "mistral",
     "groq",
     "gigachat",
+    "command_code",
     "nvidia_nim",
     "cerebras",
     "baseten",

@@ -3590,6 +3590,7 @@ class LlmProviders(str, Enum):
     GROQ = "groq"
     A2A = "a2a"
     GIGACHAT = "gigachat"
+    COMMAND_CODE = "command_code"
     NVIDIA_NIM = "nvidia_nim"
     NVIDIA_RIVA = "nvidia_riva"
     SONIOX = "soniox"

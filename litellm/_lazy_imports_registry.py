@@ -307,6 +307,7 @@ LLM_CONFIG_NAMES: Final = (
     "WandbConfig",
     "GigaChatConfig",
     "GigaChatEmbeddingConfig",
+    "CommandCodeConfig",
     "DashScopeChatConfig",
     "ModelScopeChatConfig",
     "MoonshotChatConfig",
@@ -1158,6 +1159,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.gigachat.embedding.transformation",
         "GigaChatEmbeddingConfig",
     ),
+    "CommandCodeConfig": (".llms.command_code.chat.transformation", "CommandCodeConfig"),
     "DashScopeChatConfig": (
         ".llms.dashscope.chat.transformation",
         "DashScopeChatConfig",

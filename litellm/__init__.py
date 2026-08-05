@@ -260,6 +260,7 @@ api_key: Optional[str] = None
 openai_key: Optional[str] = None
 groq_key: Optional[str] = None
 gigachat_key: Optional[str] = None
+command_code_key: Optional[str] = None
 xai_key: Optional[str] = None
 databricks_key: Optional[str] = None
 openai_like_key: Optional[str] = None
@@ -666,6 +667,7 @@ chatgpt_models: Set = set()
 minimax_models: Set = set()
 aws_polly_models: Set = set()
 gigachat_models: Set = set()
+command_code_models: Set = set()
 llamagate_models: Set = set()
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
@@ -941,6 +943,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             aws_polly_models.add(key)
         elif value.get("litellm_provider") == "gigachat":
             gigachat_models.add(key)
+        elif value.get("litellm_provider") == "command_code":
+            command_code_models.add(key)
         elif value.get("litellm_provider") == "llamagate":
             llamagate_models.add(key)
         elif value.get("litellm_provider") == "reducto":
@@ -1173,6 +1177,7 @@ models_by_provider: dict = {
     "minimax": minimax_models,
     "aws_polly": aws_polly_models,
     "gigachat": gigachat_models,
+    "command_code": command_code_models,
     "llamagate": llamagate_models,
     "reducto": reducto_models,
     "bedrock_mantle": bedrock_mantle_models,
@@ -1964,6 +1969,7 @@ if TYPE_CHECKING:
     from .llms.gigachat.embedding.transformation import (
         GigaChatEmbeddingConfig as GigaChatEmbeddingConfig,
     )
+    from .llms.command_code.chat.transformation import CommandCodeConfig as CommandCodeConfig
     from .llms.nebius.chat.transformation import NebiusConfig as NebiusConfig
     from .llms.wandb.chat.transformation import WandbConfig as WandbConfig
     from .llms.dashscope.chat.transformation import (
