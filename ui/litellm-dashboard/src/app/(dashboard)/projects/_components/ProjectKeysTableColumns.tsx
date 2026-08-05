@@ -4,8 +4,7 @@ import { ColumnDef } from "@tanstack/react-table";
 
 import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
-import { BadgeLink } from "@/components/shared/BadgeLink";
-import { CellTooltip, DateCell } from "@/components/shared/table_cells";
+import { CellTooltip, DateCell, IdentityCell } from "@/components/shared/table_cells";
 import { keyDetailHref } from "@/utils/entityLinks";
 
 function OwnerCell({ record }: { record: KeyResponse }) {
@@ -31,15 +30,11 @@ export const getProjectKeysTableColumns = (): ColumnDef<KeyResponse>[] => [
     header: "Key Name",
     enableSorting: false,
     cell: ({ row }) => (
-      <BadgeLink
-        variant="link"
+      <IdentityCell
+        title={<span title={row.original.key_alias ?? undefined}>{row.original.key_alias || "—"}</span>}
         href={row.original.token ? keyDetailHref(row.original.token) : undefined}
-        className="max-w-60 px-0 py-0 font-medium"
-      >
-        <span className="min-w-0 truncate" title={row.original.key_alias ?? undefined}>
-          {row.original.key_alias || "—"}
-        </span>
-      </BadgeLink>
+        className="max-w-60"
+      />
     ),
   },
   {
