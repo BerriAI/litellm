@@ -820,7 +820,7 @@ def convert_anyof_null_to_nullable(schema, depth=0):
     anyof: Final = schema.get("anyOf", None)
     if anyof is not None:
         contains_null = False
-        for atype in list(anyof):
+        for atype in tuple(anyof):
             if isinstance(atype, dict) and atype.get("type") == "null":
                 # remove null type
                 anyof.remove(atype)
