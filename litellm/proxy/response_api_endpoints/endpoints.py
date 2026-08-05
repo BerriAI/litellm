@@ -19,6 +19,10 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket,
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _read_request_body,
+    _safe_set_request_parsed_body,
+)
 from litellm.types.llms.openai import REASONING_EFFORT, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
 
@@ -146,6 +150,18 @@ def _resolve_cursor_model_variant(
             return resolved
         return {**resolved, "reasoning": {**reasoning, "effort": variant.reasoning_effort}}  # mutable-ok: same
     return {**resolved, "reasoning": {"effort": variant.reasoning_effort}}  # mutable-ok: plain body dict
+
+
+async def _resolve_cursor_model_variant_before_auth(request: Request) -> None:
+    from litellm.proxy.proxy_server import llm_router
+
+    try:
+        raw_body: Final = await _read_request_body(request=request)
+    except (json.JSONDecodeError, ProxyException):
+        return
+    resolved: Final = _resolve_cursor_model_variant(raw_body, llm_router)
+    if resolved is not raw_body:
+        _safe_set_request_parsed_body(request=request, parsed_body=resolved)
 
 
 @router.post(
@@ -440,7 +456,10 @@ async def cursor_model_list(
 
 @router.post(
     "/cursor/chat/completions",
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=[
+        Depends(_resolve_cursor_model_variant_before_auth),
+        Depends(user_api_key_auth),
+    ],
     tags=["responses"],
 )
 async def cursor_chat_completions(
@@ -479,9 +498,7 @@ async def cursor_chat_completions(
         responses_api_bridge,
     )
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-    from litellm.proxy.common_utils.http_parsing_utils import _safe_set_request_parsed_body
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         async_data_generator,
         chat_completion,
         general_settings,
@@ -499,14 +516,13 @@ async def cursor_chat_completions(
     from litellm.types.utils import ModelResponse
 
     raw_body: Final = await _read_request_body(request=request)
-    data = _resolve_cursor_model_variant(raw_body, llm_router)
 
-    if _is_chat_completions_body(data):
+    if _is_chat_completions_body(raw_body):
         # Genuine chat completions body (Cursor sends these for models whose BYOK it
         # already fixed); delegate so behavior matches /chat/completions exactly.
         # Keyed on messages CONTENT, not key presence: Cursor can send a null or
         # empty messages stub alongside a real agent-mode input array
-        normalized: Final = _normalize_tool_dialect(data, to_chat=True)
+        normalized: Final = _normalize_tool_dialect(raw_body, to_chat=True)
         if normalized is not raw_body:
             _safe_set_request_parsed_body(request=request, parsed_body=normalized)
         return await chat_completion(
@@ -521,9 +537,11 @@ async def cursor_chat_completions(
     # Rebuild rather than pop: _read_request_body can return the request-scope
     # cached parsed-body dict itself, and removing keys from it corrupts the
     # cache's key snapshot so later readers get an empty body
-    data = {key: value for key, value in data.items() if key != "stream_options"}  # mutable-ok: plain body dict
+    body_without_stream_options: Final = {  # mutable-ok: base_process_llm_request mutates the body dict in place
+        key: value for key, value in raw_body.items() if key != "stream_options"
+    }
 
-    data = _normalize_tool_dialect(data, to_chat=False)
+    data: Final = _normalize_tool_dialect(body_without_stream_options, to_chat=False)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
 

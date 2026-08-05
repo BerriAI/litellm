@@ -241,7 +241,9 @@ def _message_text(content: object) -> str:
     return content if isinstance(content, str) else ""
 
 
-def _reminder_block_spans(lowered: str) -> Iterator[tuple[int, int]]:
+def _reminder_block_spans(
+    lowered: str, open_marker: str = _REMINDER_OPEN, close_marker: str = _REMINDER_CLOSE
+) -> Iterator[tuple[int, int]]:
     """Span of each complete reminder block, left to right.
 
     Literal `str.find`, not a regex: the delimiters are fixed strings, and `<system-reminder>.*?`
@@ -250,17 +252,17 @@ def _reminder_block_spans(lowered: str) -> Iterator[tuple[int, int]]:
     and an unclosed tag ends the scan, so this is linear without bounding the input.
     """
     cursor = 0
-    while (start := lowered.find(_REMINDER_OPEN, cursor)) != -1:
-        end = lowered.find(_REMINDER_CLOSE, start + len(_REMINDER_OPEN))
+    while (start := lowered.find(open_marker, cursor)) != -1:
+        end = lowered.find(close_marker, start + len(open_marker))
         if end == -1:
             return
-        cursor = end + len(_REMINDER_CLOSE)
+        cursor = end + len(close_marker)
         yield start, cursor
 
 
-def _strip_reminder_blocks(text: str) -> str:
+def _strip_reminder_blocks(text: str, open_marker: str = _REMINDER_OPEN, close_marker: str = _REMINDER_CLOSE) -> str:
     """Remove every complete reminder block from text, keeping everything written around them."""
-    spans: Final = tuple(_reminder_block_spans(text.lower()))
+    spans: Final = tuple(_reminder_block_spans(text.lower(), open_marker, close_marker))
     if not spans:
         return text.strip()
     keep_from: Final = (0, *(end for _, end in spans))
@@ -268,7 +270,7 @@ def _strip_reminder_blocks(text: str) -> str:
     return " ".join(kept for a, b in zip(keep_from, keep_to) if (kept := text[a:b].strip()))
 
 
-def _human_text(content: object) -> str:
+def _human_text(content: object, open_marker: str = _REMINDER_OPEN, close_marker: str = _REMINDER_CLOSE) -> str:
     """Message content as the text a human wrote, with complete reminder blocks removed.
 
     Harnesses inject reminders as ordinary text alongside the live ask, so the block is stripped and
@@ -277,13 +279,18 @@ def _human_text(content: object) -> str:
     one, and this same string drives escalation keywords and keyword_tier_rules, which choose the
     model and therefore the spend. An unclosed tag is not a block and is left intact.
     """
-    return _strip_reminder_blocks(_message_text(content))
+    return _strip_reminder_blocks(_message_text(content), open_marker, close_marker)
 
 
-def _iter_human_asks_newest_first(messages: Sequence[Mapping[str, object]]) -> Iterator[str]:
+def _iter_human_asks_newest_first(
+    messages: Sequence[Mapping[str, object]], markers: tuple[str, str] = (_REMINDER_OPEN, _REMINDER_CLOSE)
+) -> Iterator[str]:
     """Yield user-turn texts that carry a real human ask, newest first, with harness noise removed."""
+    open_marker, close_marker = markers
     return (
-        text for msg in reversed(messages) if msg.get("role") == "user" and (text := _human_text(msg.get("content")))
+        text
+        for msg in reversed(messages)
+        if msg.get("role") == "user" and (text := _human_text(msg.get("content"), open_marker, close_marker))
     )
 
 
@@ -321,7 +328,9 @@ def _conversation_is_continuing(messages: Sequence[Mapping[str, object]] | None)
     return any(message.get("role") == "assistant" for message in messages)
 
 
-def _newest_turn_ask(messages: Sequence[Mapping[str, object]]) -> str | None:
+def _newest_turn_ask(
+    messages: Sequence[Mapping[str, object]], markers: tuple[str, str] = (_REMINDER_OPEN, _REMINDER_CLOSE)
+) -> str | None:
     """The human ask on the newest user turn, or None when that turn carries only plumbing.
 
     Escalation reads this rather than the last ask in history, which survives across the plumbing
@@ -331,11 +340,12 @@ def _newest_turn_ask(messages: Sequence[Mapping[str, object]]) -> str | None:
     newest_user_turn: Final = next((msg for msg in reversed(messages) if msg.get("role") == "user"), None)
     if newest_user_turn is None:
         return None
-    return _human_text(newest_user_turn.get("content")) or None
+    return _human_text(newest_user_turn.get("content"), *markers) or None
 
 
 def _extract_current_ask_and_system_prompt(
     messages: Sequence[Mapping[str, object]],
+    markers: tuple[str, str] = (_REMINDER_OPEN, _REMINDER_CLOSE),
 ) -> tuple[str | None, str | None]:
     """The last real human ask and the last system prompt; either is None if absent.
 
@@ -343,7 +353,7 @@ def _extract_current_ask_and_system_prompt(
     the caller routes to its default model. That is the correct answer rather than a gap to fill:
     filling it would hand tier selection to harness-injected text.
     """
-    current_ask: Final = next(_iter_human_asks_newest_first(messages), None)
+    current_ask: Final = next(_iter_human_asks_newest_first(messages, markers), None)
     system_prompt: Final = next(
         (
             text
@@ -363,6 +373,7 @@ def _truncate(text: str, limit: int) -> str:
 def _iter_context_turns_newest_first(
     messages: Sequence[Mapping[str, object]],
     include_assistant: bool,
+    markers: tuple[str, str] = (_REMINDER_OPEN, _REMINDER_CLOSE),
 ) -> Iterator[tuple[str, str]]:
     """Yield (role, text) for turns eligible as classifier context, newest first.
 
@@ -376,7 +387,9 @@ def _iter_context_turns_newest_first(
     return (
         (role, text)
         for msg in reversed(messages)
-        if isinstance(role := msg.get("role"), str) and role in roles and (text := _human_text(msg.get("content")))
+        if isinstance(role := msg.get("role"), str)
+        and role in roles
+        and (text := _human_text(msg.get("content"), *markers))
     )
 
 
@@ -386,6 +399,7 @@ def _extract_prior_turns(
     window_size: int,
     per_turn_chars: int,
     include_assistant: bool,
+    markers: tuple[str, str] = (_REMINDER_OPEN, _REMINDER_CLOSE),
 ) -> tuple[tuple[str, str], ...]:
     """Up to window_size turns other than current_ask, oldest first, as (role, text).
 
@@ -403,7 +417,11 @@ def _extract_prior_turns(
         return ()
 
     prior: Final = islice(
-        (turn for turn in _iter_context_turns_newest_first(messages, include_assistant) if turn[1] != current_ask),
+        (
+            turn
+            for turn in _iter_context_turns_newest_first(messages, include_assistant, markers)
+            if turn[1] != current_ask
+        ),
         window_size,
     )
     return tuple((role, _truncate(text, per_turn_chars)) for role, text in reversed(tuple(prior)))
@@ -498,6 +516,7 @@ class ComplexityRouter(CustomLogger):
             if self.config.escalation_keywords is not None
             else DEFAULT_ESCALATION_KEYWORDS
         )
+        self._reminder_markers: tuple[str, str] = self.config.reminder_markers or (_REMINDER_OPEN, _REMINDER_CLOSE)
 
         # Lazily built on first semantic request and cached for reuse (route
         # embeddings are static, only the prompt is embedded per request). The lock
@@ -854,13 +873,21 @@ class ComplexityRouter(CustomLogger):
                 window_size=self.config.classifier_context_window_size,
                 per_turn_chars=self.config.classifier_context_per_turn_chars,
                 include_assistant=include_assistant,
+                markers=self._reminder_markers,
             )
             if context_enabled
             else ()
         )
         has_prior_conversation: Final = (
             context_enabled
-            and len(tuple(islice(_iter_context_turns_newest_first(messages or (), include_assistant), 2))) > 1
+            and len(
+                tuple(
+                    islice(
+                        _iter_context_turns_newest_first(messages or (), include_assistant, self._reminder_markers), 2
+                    )
+                )
+            )
+            > 1
         )
 
         user_payload: Final = self._build_classifier_user_payload(
@@ -1517,7 +1544,9 @@ class ComplexityRouter(CustomLogger):
                 routed_model: str | None = pinned_model
                 pin_escalation_keyword: str | None = None
                 if self.escalation_keywords:
-                    user_message: Final = _newest_turn_ask(resolved_messages) if resolved_messages else None
+                    user_message: Final = (
+                        _newest_turn_ask(resolved_messages, self._reminder_markers) if resolved_messages else None
+                    )
                     if user_message is not None:
                         pin_escalation_keyword = self._matched_escalation_keyword(user_message)
                     if pin_escalation_keyword is not None:
@@ -1613,7 +1642,7 @@ class ComplexityRouter(CustomLogger):
         # Determine whether the original request used messages directly
         has_original_messages: Final = messages is not None and len(messages) > 0
 
-        user_message, system_prompt = _extract_current_ask_and_system_prompt(resolved_messages)
+        user_message, system_prompt = _extract_current_ask_and_system_prompt(resolved_messages, self._reminder_markers)
 
         if user_message is None:
             verbose_router_logger.debug("ComplexityRouter: No user message found, routing to default model")
@@ -1639,7 +1668,7 @@ class ComplexityRouter(CustomLogger):
                 ),
             )
 
-        newest_ask: Final = _newest_turn_ask(resolved_messages)
+        newest_ask: Final = _newest_turn_ask(resolved_messages, self._reminder_markers)
         escalation_keyword: Final = self._matched_escalation_keyword(newest_ask) if newest_ask is not None else None
 
         override: Final = await self._resolve_keyword_tier_override(user_message, request_kwargs)
