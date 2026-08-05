@@ -544,12 +544,17 @@ class ComplexityRouter(CustomLogger):
         verbose_router_logger.debug("ComplexityRouter initialized for %s with tiers: %s", model_name, self.config.tiers)
 
     def _hardest_tier_models(self) -> tuple[str, ...]:
-        """The model pool of the most severe tier this router configures.
+        """The candidate pool the savings baseline is derived from.
 
-        The hardest *configured* tier, not REASONING unconditionally: a deployment
-        that only defines SIMPLE and MEDIUM is still measured against the best it
-        could actually have picked.
+        With built-in tiers this is the pool of the most severe tier this router
+        configures; the hardest *configured* tier, not REASONING unconditionally: a
+        deployment that only defines SIMPLE and MEDIUM is still measured against the
+        best it could actually have picked. A custom tier set defines no severity
+        order, so every defined tier's models are candidates and resolve_baseline's
+        cost ranking picks the counterfactual from the whole set.
         """
+        if self.config.has_custom_tiers:
+            return tuple(dict.fromkeys(model for models in self._tier_pools().values() for model in models))
         for tier in reversed(TIER_SEVERITY_ORDER):
             models = self.config.tiers.get(tier.value)
             if models:

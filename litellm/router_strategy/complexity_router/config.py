@@ -648,12 +648,20 @@ class ComplexityRouterConfig(BaseModel):
                 "fallback_tier is required with tier_definitions: it is where requests route when the "
                 "LLM classifier fails"
             )
+        empty_mappings: Final = tuple(sorted(name for name in names if not self.tiers.get(name)))
+        if empty_mappings:
+            raise ValueError(
+                f"tiers must map every defined tier to at least one model; empty: {', '.join(empty_mappings)}"
+            )
         stripped_fallback: Final = self.fallback_tier.strip()
         if stripped_fallback not in defined:
             raise ValueError(
                 f"fallback_tier {self.fallback_tier!r} is not one of the defined tiers: {', '.join(names)}"
             )
         self.fallback_tier = stripped_fallback
+        if self.default_model is None:
+            fallback_value: Final = self.tiers[stripped_fallback]
+            self.default_model = fallback_value if isinstance(fallback_value, str) else fallback_value[0]
         return self
 
     @model_validator(mode="after")
