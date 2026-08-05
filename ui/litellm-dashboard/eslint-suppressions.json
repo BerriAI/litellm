@@ -1072,11 +1072,6 @@
       "count": 6
     }
   },
-  "src/app/(dashboard)/models-and-endpoints/vertexCredentialsUpload.ts": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/old-usage/_components/usage.tsx": {
     "local/filename-pascal-case": {
       "count": 1
