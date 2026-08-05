@@ -22,6 +22,7 @@ import weakref
 from collections import defaultdict
 from collections.abc import AsyncGenerator, Callable, Generator, Mapping, Sequence
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, Union, cast
 
 import anyio
@@ -2997,7 +2998,7 @@ class Router:
             except (ValueError, TypeError):
                 pass  # Skip if value can't be converted to int
 
-    def _set_failed_deployment_id_on_exception(self, exception: Exception, deployment: dict) -> None:
+    def _set_failed_deployment_id_on_exception(self, exception: Exception, deployment: Mapping[str, Any]) -> None:
         """
         Stamp the failed deployment's `model_info.id` on the exception so the
         fallback layer can exclude it from subsequent re-picks within the same
@@ -4584,7 +4585,14 @@ class Router:
             if model is not None:
                 self.fail_calls[model] += 1
             if deployment is not None:
-                self._set_failed_deployment_id_on_exception(e, deployment)
+                # A client-side-credential call gets a dynamic deployment id generated inside
+                # _update_kwargs_with_deployment and stamped into kwargs["model_info"]; stamping
+                # the static shared deployment's id instead would let one tenant's bad credentials
+                # cool down the deployment every other tenant sharing this config relies on.
+                effective_model_info: Final = (
+                    kwargs.get("model_info") or deployment.get("model_info") or MappingProxyType({})
+                )
+                self._set_failed_deployment_id_on_exception(e, MappingProxyType({"model_info": effective_model_info}))
             raise e
 
     async def _aresponses_with_streaming_fallbacks(
