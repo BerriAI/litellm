@@ -93,7 +93,9 @@ _CONFIG_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset(
 
 
 def _config_base_for_health_check(
-    config_params: Mapping[str, object], request_params: Mapping[str, object]
+    config_params: Mapping[str, object],
+    request_params: Mapping[str, object],
+    allow_client_side_credentials: bool = False,
 ) -> dict[str, object]:
     """Return the configured parameters to merge under a connection-test request.
 
@@ -102,7 +104,14 @@ def _config_base_for_health_check(
     to the endpoint the configuration names. Anything the request does not set
     still comes from the configuration, which is what lets a request name a
     configured model and test it as configured.
+
+    ``general_settings.allow_client_side_credentials`` is the existing proxy-wide
+    opt-in for callers supplying their own connection parameters. Where an admin
+    has enabled it, a request may pair its own endpoint with the configured
+    credentials, as it could before.
     """
+    if allow_client_side_credentials:
+        return dict(config_params)
     if not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS):
         return dict(config_params)
     return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
@@ -1813,7 +1822,12 @@ async def test_model_connection(
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
     )
-    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        premium_user,
+        prisma_client,
+    )
     from litellm.types.router import Deployment, LiteLLM_Params
 
     try:
@@ -1883,7 +1897,11 @@ async def test_model_connection(
 
         # Merge: config params (from proxy config) as base, request params override
         litellm_params = {
-            **_config_base_for_health_check(config_litellm_params, request_litellm_params),
+            **_config_base_for_health_check(
+                config_litellm_params,
+                request_litellm_params,
+                allow_client_side_credentials=general_settings.get("allow_client_side_credentials") is True,
+            ),
             **request_litellm_params,
         }
 
