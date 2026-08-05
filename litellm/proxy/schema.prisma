@@ -1413,6 +1413,37 @@ model LiteLLM_AdaptiveRouterSession {
   @@index([last_activity_at], map: "idx_adaptive_router_session_activity")
 }
 
+model LiteLLM_AutoRouterSession {
+  api_key               String
+  session_id            String
+  router_name           String
+  router_type           String
+  first_turn_at         DateTime
+  last_turn_at          DateTime
+  last_model            String
+  models                Json     @default("{}")
+  turns                 Int      @default(0)
+  unordered_turns       Int      @default(0)
+  covered_turns         Int      @default(0)
+  cache_hits            Int      @default(0)
+  same_model_turns      Int      @default(0)
+  same_model_hits       Int      @default(0)
+  first_visit_turns     Int      @default(0)
+  first_visit_hits      Int      @default(0)
+  return_turns          Int      @default(0)
+  return_hits           Int      @default(0)
+  return_expired_misses Int      @default(0)
+  return_within_ttl_misses  Int      @default(0)
+  ttl_5m_turns          Int      @default(0)
+  ttl_1h_turns          Int      @default(0)
+  total_tokens          BigInt   @default(0)
+  spend                 Float    @default(0)
+  saved_spend           Float    @default(0)
+
+  @@id([api_key, session_id, router_name])
+  @@index([last_turn_at], map: "idx_autorouter_session_last_turn")
+}
+
 // ---------------------------------------------------------------------------
 // Workflow Run Tracking
 //

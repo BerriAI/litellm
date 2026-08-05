@@ -5962,7 +5962,8 @@ class ProxyConfig:
 
         # Schedule new job if retention period is set (not None)
         retention_period: Final = general_settings.get("maximum_spend_logs_retention_period")
-        if retention_period is not None:
+        autorouter_retention: Final = general_settings.get("maximum_autorouter_session_retention_period")
+        if retention_period is not None or autorouter_retention is not None:
             from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
                 SpendLogCleanup,
             )
@@ -6081,6 +6082,13 @@ class ProxyConfig:
             general_settings["maximum_spend_logs_retention_period"] = new_value
             # Reschedule cleanup job if value changed (including when set to None)
             if old_value != new_value:
+                await self._reschedule_spend_log_cleanup_job()
+
+        if "maximum_autorouter_session_retention_period" in _general_settings:
+            old_session_value: Final = general_settings.get("maximum_autorouter_session_retention_period")
+            new_session_value: Final = _general_settings["maximum_autorouter_session_retention_period"]
+            general_settings["maximum_autorouter_session_retention_period"] = new_session_value
+            if old_session_value != new_session_value:
                 await self._reschedule_spend_log_cleanup_job()
 
         for key in (
@@ -8346,7 +8354,10 @@ class ProxyStartupEvent:
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
         ### SPEND LOG CLEANUP ###
-        if general_settings.get("maximum_spend_logs_retention_period") is not None:
+        if (
+            general_settings.get("maximum_spend_logs_retention_period") is not None
+            or general_settings.get("maximum_autorouter_session_retention_period") is not None
+        ):
             spend_log_cleanup: Final = SpendLogCleanup()
             cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
 
