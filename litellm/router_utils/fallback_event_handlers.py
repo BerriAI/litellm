@@ -13,6 +13,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
 )
 from litellm.router_utils.cooldown_handlers import (
     _set_cooldown_deployments,
+    cast_exception_status_to_int,
     is_advisor_orchestration_failure,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
@@ -26,6 +27,10 @@ if TYPE_CHECKING:
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
+
+# Status codes a generic API call's caller-supplied resource id can trigger on its own
+# (e.g. a nonexistent file/batch/thread id), independent of the selected deployment's health.
+_REQUEST_SCOPED_STATUS_CODES: Final = frozenset((404,))
 
 
 def _trigger_cooldown_for_failed_deployment(
@@ -49,6 +54,23 @@ def _trigger_cooldown_for_failed_deployment(
             )
             return
 
+        exception_status: Final[str | int] = getattr(exception, "status_code", "")
+
+        # Generic API calls (files, batches, threads, rerank, ...) take a caller-supplied
+        # resource id, so a 404 there usually means "that id doesn't exist" rather than
+        # "this deployment is unhealthy". Left unguarded, one bad id would 404 every
+        # deployment in the fallback chain and cool all of them down from a single request.
+        if (
+            kwargs.get("original_generic_function") is not None
+            and cast_exception_status_to_int(exception_status) in _REQUEST_SCOPED_STATUS_CODES
+        ):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment: status %s on a generic API "
+                "call is caller-attributable, not a deployment health signal.",
+                exception_status,
+            )
+            return
+
         # Only Router._set_failed_deployment_id_on_exception()'s server-stamped id is
         # trusted here: a metadata-bucket lookup (e.g. "metadata"/"litellm_metadata")
         # can't reliably tell a caller-supplied bucket from a router-authored one
@@ -59,8 +81,6 @@ def _trigger_cooldown_for_failed_deployment(
         if deployment_id is None:
             verbose_router_logger.debug("Cannot trigger cooldown for fallback: no failed_deployment_id on exception")
             return
-
-        exception_status: Final[str | int] = getattr(exception, "status_code", "")
 
         deployment_dict: Final = litellm_router.get_model_info(id=deployment_id)
         deployment_cooldown: Final = (

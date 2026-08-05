@@ -289,9 +289,50 @@ class TestTriggerCooldownForFailedDeployment:
             "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments",
             side_effect=RuntimeError("cooldown error"),
         ):
+            _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
+
+    def test_skips_request_scoped_404_on_generic_api_call(self):
+        """A generic API call (files/batches/threads/rerank/...) forwards a caller-supplied
+        resource id, so a 404 there means "that id doesn't exist", not "this deployment is
+        unhealthy". Without this guard, a single bad id would 404 every deployment in the
+        fallback chain and cool all of them down from one request."""
+        mock_router = MagicMock()
+        mock_router.cooldown_time = 60.0
+        mock_router.get_model_info.return_value = None
+
+        exc = litellm.NotFoundError("not found", "openai", "gpt-4")
+        exc.failed_deployment_id = "fallback-deployment"
+
+        with (
+            patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown,
+            patch(
+                "litellm.router_utils.fallback_event_handlers.increment_deployment_failures_for_current_minute"
+            ) as mock_increment,
+        ):
             _trigger_cooldown_for_failed_deployment(
-                litellm_router=mock_router, kwargs={}, exception=exc
+                litellm_router=mock_router,
+                kwargs={"original_generic_function": MagicMock()},
+                exception=exc,
             )
+
+            mock_set_cooldown.assert_not_called()
+            mock_increment.assert_not_called()
+
+    def test_still_cools_down_404_outside_generic_api_call(self):
+        """The request-scoped-404 guard is scoped to generic API calls only: a 404 on a
+        regular completion fallback (no original_generic_function in kwargs) must still
+        cool down the deployment as before."""
+        mock_router = MagicMock()
+        mock_router.cooldown_time = 60.0
+        mock_router.get_model_info.return_value = None
+
+        exc = litellm.NotFoundError("not found", "openai", "gpt-4")
+        exc.failed_deployment_id = "fallback-deployment"
+
+        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+            _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
+
+            mock_set_cooldown.assert_called_once()
 
 
 class TestRunAsyncFallbackTriggersCooldown:
