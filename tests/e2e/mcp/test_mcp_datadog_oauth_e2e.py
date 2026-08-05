@@ -126,8 +126,8 @@ class TestDatadogMcpOAuth:
                             role="user",
                             content=(
                                 "Use the search_datadog_logs tool to search for logs "
-                                "with query 'service:litellm' from now-30m to now with "
-                                "max_tokens 500. After you get results, summarize what you found."
+                                f"with query 'e2e-mcp-oauth-nohit-{marker}' from now-30m to now with "
+                                "max_tokens 100. After you get results, reply with ok only."
                             ),
                         )
                     ],

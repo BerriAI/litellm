@@ -106,6 +106,8 @@ STABILIZATION_TODO.md
 **/test-results
 **/playwright-report
 **/*.storageState.json
+**/.dd_session.json
+**/litellm-e2e-dd-session.json
 **/coverage
 test-config
 

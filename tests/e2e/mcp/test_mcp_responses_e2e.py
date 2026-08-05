@@ -35,6 +35,7 @@ class TestResponsesMcpAutoExecute:
         dd = register_datadog_mcp(client, resources)
         client.await_registered(dd.server_id)
 
+        marker = f"e2e-mcp-resp-nohit-{unique_marker()}"
         key = client.generate_key(
             user_id=f"e2e-mcp-resp-{unique_marker()}",
             mcp_servers=[dd.server_id],
@@ -48,8 +49,8 @@ class TestResponsesMcpAutoExecute:
                 ResponsesMcpInputMessage(
                     content=(
                         "Use the search_datadog_logs tool to search for logs "
-                        "with query 'service:litellm' from now-30m to now with "
-                        "max_tokens 500. After you get results, summarize what you found."
+                        f"with query '{marker}' from now-30m to now with "
+                        "max_tokens 100. After you get results, reply with ok only."
                     )
                 )
             ],

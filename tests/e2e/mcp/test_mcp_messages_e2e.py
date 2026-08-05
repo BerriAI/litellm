@@ -30,18 +30,19 @@ from models import AnthropicMcpTool, AnthropicMessagesBody, ChatMessage
 
 pytestmark = pytest.mark.e2e
 
-TOOL_PROMPT = (
-    "Use the search_datadog_logs tool to search for logs "
-    "with query 'service:litellm' from now-30m to now with "
-    "max_tokens 500. After you get results, summarize what you found in one sentence."
-)
+def _tool_prompt(marker: str) -> str:
+    return (
+        "Use the search_datadog_logs tool to search for logs "
+        f"with query '{marker}' from now-30m to now with "
+        "max_tokens 100. After you get results, reply with ok only."
+    )
 
 
-def _messages_body(model: str, alias: str) -> AnthropicMessagesBody:
+def _messages_body(model: str, alias: str, marker: str) -> AnthropicMessagesBody:
     return AnthropicMessagesBody(
         model=model,
         max_tokens=1024,
-        messages=[ChatMessage(role="user", content=TOOL_PROMPT)],
+        messages=[ChatMessage(role="user", content=_tool_prompt(marker))],
         tools=[
             AnthropicMcpTool(
                 server_label="datadog",
@@ -63,6 +64,7 @@ class TestMessagesMcpAutoExecute:
         dd = register_datadog_mcp(client, resources)
         client.await_registered(dd.server_id)
 
+        marker = f"e2e-mcp-msg-nohit-{unique_marker()}"
         key = client.generate_key(
             user_id=f"e2e-mcp-msg-{unique_marker()}",
             mcp_servers=[dd.server_id],
@@ -71,7 +73,9 @@ class TestMessagesMcpAutoExecute:
         resources.defer(lambda: client.proxy.delete_key(key))
 
         response = unwrap(
-            client.messages_with_mcp(key, _messages_body(CHEAP_ANTHROPIC_MODEL, dd.alias))
+            client.messages_with_mcp(
+                key, _messages_body(CHEAP_ANTHROPIC_MODEL, dd.alias, marker)
+            )
         )
 
         assert response.content, f"/v1/messages returned no content blocks: {response}"
@@ -91,6 +95,7 @@ class TestMessagesMcpAutoExecute:
         dd = register_datadog_mcp(client, resources)
         client.await_registered(dd.server_id)
 
+        marker = f"e2e-mcp-msg-stream-nohit-{unique_marker()}"
         key = client.generate_key(
             user_id=f"e2e-mcp-msg-stream-{unique_marker()}",
             mcp_servers=[dd.server_id],
@@ -98,7 +103,7 @@ class TestMessagesMcpAutoExecute:
         )
         resources.defer(lambda: client.proxy.delete_key(key))
 
-        body = _messages_body(CHEAP_ANTHROPIC_MODEL, dd.alias)
+        body = _messages_body(CHEAP_ANTHROPIC_MODEL, dd.alias, marker)
         body.stream = True
 
         result = client.messages_stream_with_mcp(key, body)
