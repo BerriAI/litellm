@@ -7,7 +7,7 @@
         "SIMPLE": ["claude-haiku-4-5"],
         "MEDIUM": ["claude-sonnet-5"],
         "COMPLEX": ["claude-opus-5"],
-        "REASONING": ["claude-opus-5"]
+        "REASONING": ["claude-fable-5"]
       },
       "classifier_type": "heuristic",
       "escalation_keywords": ["LITELLM ESCALATE"],
