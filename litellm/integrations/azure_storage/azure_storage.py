@@ -6,7 +6,11 @@ from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
-from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS, AZURE_STORAGE_MSFT_VERSION
+from litellm.constants import (
+    _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    AZURE_STORAGE_DEFAULT_ENDPOINT_SUFFIX,
+    AZURE_STORAGE_MSFT_VERSION,
+)
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.azure.common_utils import get_azure_ad_token_from_entra_id
@@ -41,6 +45,9 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             if not _azure_storage_file_system:
                 raise ValueError("Missing required environment variable: AZURE_STORAGE_FILE_SYSTEM")
             self.azure_storage_file_system: str = _azure_storage_file_system
+            self.azure_storage_endpoint_suffix: str = (
+                os.getenv("AZURE_STORAGE_ENDPOINT_SUFFIX") or AZURE_STORAGE_DEFAULT_ENDPOINT_SUFFIX
+            )
             self._service_client = None
             # Time that the azure service client expires, in order to reset the connection pool and keep it fresh
             self._service_client_timeout: float | None = None
@@ -58,6 +65,14 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 "AzureBlobStorageLogger: Got exception on init AzureBlobStorageLogger client %s", e
             )
             raise e
+
+    @property
+    def azure_storage_dfs_endpoint(self) -> str:
+        return f"https://{self.azure_storage_account_name}.dfs.{self.azure_storage_endpoint_suffix}"
+
+    @property
+    def azure_storage_blob_endpoint(self) -> str:
+        return f"https://{self.azure_storage_account_name}.blob.{self.azure_storage_endpoint_suffix}"
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -144,7 +159,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 json_payload: Final = safe_dumps(payload) + "\n"  # Add newline for each log entry
                 payload_bytes: Final = json_payload.encode("utf-8")
                 filename: Final = f"{payload.get('id') or str(uuid.uuid4())}.json"
-                base_url = f"https://{self.azure_storage_account_name}.dfs.core.windows.net/{self.azure_storage_file_system}/{filename}"
+                base_url = f"{self.azure_storage_dfs_endpoint}/{self.azure_storage_file_system}/{filename}"
 
                 # Execute the 3-step upload process
                 await self._create_file(async_client, base_url)
@@ -296,7 +311,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self._service_client = None
         if not self._service_client:
             self._service_client = DataLakeServiceClient(
-                account_url=f"https://{self.azure_storage_account_name}.dfs.core.windows.net",
+                account_url=self.azure_storage_dfs_endpoint,
                 credential=self.azure_storage_account_key,
             )
             self._service_client_timeout = time.time() + _DEFAULT_TTL_FOR_HTTPX_CLIENTS

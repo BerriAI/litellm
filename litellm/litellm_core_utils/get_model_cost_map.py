@@ -14,6 +14,7 @@ import os
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from importlib.resources import files
 from typing import Final, Protocol
 
@@ -325,6 +326,7 @@ class ModelCostMapSourceInfo:
     url: str | None = None
     is_env_forced: bool = False
     fallback_reason: str | None = None
+    loaded_at: "datetime | None" = None
 
 
 # Module-level singleton tracking the source of the current cost map
@@ -347,6 +349,11 @@ def get_model_cost_map_source_info() -> dict:
         "is_env_forced": _cost_map_source_info.is_env_forced,
         "fallback_reason": _cost_map_source_info.fallback_reason,
     }
+
+
+def get_model_cost_map_loaded_at() -> "datetime | None":
+    """When this process last loaded its cost map, stamped at the start of every load"""
+    return _cost_map_source_info.loaded_at
 
 
 def _expand_model_aliases(model_cost: dict) -> dict:
@@ -428,6 +435,7 @@ def get_model_cost_map(url: str) -> dict:
     The full backup dict is only parsed when it must be *returned* as a
     fallback — it is never held in memory long-term.
     """
+    _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
     # Note: can't use get_secret_bool here — this runs during litellm.__init__
     # before litellm._key_management_settings is set.
     if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":

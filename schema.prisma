@@ -601,6 +601,8 @@ model LiteLLM_TagTable {
 model LiteLLM_Config {
   param_name String @id
   param_value Json?
+  last_run_at DateTime?
+  reload_revision BigInt @default(0)
 }
 
 // View spend, model, api_key per request

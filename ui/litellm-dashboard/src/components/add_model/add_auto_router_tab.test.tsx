@@ -1,17 +1,55 @@
-import { renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
+import { renderWithProviders, screen, waitFor, within, fireEvent, testQueryClient } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import AddAutoRouterTab from "./add_auto_router_tab";
 import NotificationManager from "../molecules/notifications_manager";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { getMissingTiersError } from "./build_complexity_router_config";
+import { testAutoRouterRouting } from "../networking";
+import { ModelGroup } from "@/components/llm_calls/fetch_models";
+import { getAllPresets, getPresetByKey, getRequiredModelsInPreset } from "@/lib/autorouter_presets";
+
+const ANTHROPIC_PRESET = getPresetByKey("anthropic_family")!;
+const ANTHROPIC_TIERS = ANTHROPIC_PRESET.complexity_router_config.tiers;
+
+// Every model referenced by the bundled family presets, derived from the presets themselves so
+// that renaming a preset's models in autorouter_presets.json does not red these tests. A caller
+// holding all of these can select either preset; dropping any one greys out the preset that
+// names it.
+const ALL_FAMILY_MODELS: ModelGroup[] = [
+  ...new Set(getAllPresets().flatMap((preset) => [...getRequiredModelsInPreset(preset)])),
+].map((model_group) => ({ model_group, mode: "chat" }));
+
+const ANTHROPIC_ONLY_MODEL = ANTHROPIC_TIERS.COMPLEX[0];
+
+const openTemplateDropdown = (): void => {
+  fireEvent.mouseDown(screen.getByTestId("template-selector").querySelector(".ant-select-selector")!);
+};
+
+// Detailed Configuration is collapsed by default, so any test reaching into it (a tier select, an
+// "Advanced: ..." sub-section) has to open it first.
+const expandDetailedConfiguration = (): void => {
+  fireEvent.click(screen.getByTestId("detailed-configuration-toggle"));
+};
+
+// The rendered antd option whose text starts with a preset label. Matching on text (not role +
+// accessible name) sidesteps antd's list re-rendering options in place on every state change.
+const optionByLabel = (label: string): HTMLElement | undefined =>
+  Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option")).find((el) =>
+    el.textContent?.startsWith(label),
+  );
+
+const isOptionDisabled = (option: HTMLElement): boolean => option.classList.contains("ant-select-item-option-disabled");
+
+const { mockFetchAvailableModels } = vi.hoisted(() => ({ mockFetchAvailableModels: vi.fn() }));
 
 vi.mock("../networking", () => ({
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
+  testAutoRouterRouting: vi.fn(),
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
-  fetchAvailableModels: vi.fn().mockResolvedValue([]),
+  fetchAvailableModels: mockFetchAvailableModels,
 }));
 
 vi.mock("./handle_add_auto_router_submit", () => ({
@@ -50,6 +88,23 @@ const Harness = () => <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" u
 describe("AddAutoRouterTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // testQueryClient is a shared singleton with staleTime: Infinity, so cached model lists would
+    // otherwise bleed across tests (a later test reusing accessToken="token" would read an earlier
+    // test's data instead of its own mock).
+    testQueryClient.clear();
+    mockFetchAvailableModels.mockResolvedValue([]);
+  });
+
+  // Detailed Configuration starts collapsed so the modal opens onto just Name + Template; a caller
+  // opts into the full tier/classifier form rather than always seeing it up front.
+  it("keeps Detailed Configuration collapsed until a caller opens it", () => {
+    renderWithProviders(<Harness />);
+
+    expect(screen.queryByText("Complexity Tier Configuration")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("detailed-configuration-toggle"));
+
+    expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
   });
 
   // Nothing is filled in, so there is nothing to submit. The button reports that itself instead of
@@ -115,6 +170,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "keyword-router");
+    expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
 
@@ -131,6 +187,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "keyword-router");
+    expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
     expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
@@ -151,6 +208,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "keyword-router");
+    expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
     await user.type(
@@ -170,6 +228,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "keyword-router");
+    expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
     const keywordsField = screen.getByText("Keywords 1").closest("div") as HTMLElement;
@@ -204,6 +263,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
+    expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Session Affinity"));
     expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
 
@@ -222,6 +282,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
+    expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Session Affinity"));
     await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
 
@@ -230,6 +291,253 @@ describe("AddAutoRouterTab", () => {
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
       session_affinity: true,
+    });
+  });
+
+  // Custom is the escape hatch, not the headline choice, so it's listed after every bundled preset
+  // rather than first.
+  it("lists Custom Configuration after the bundled presets", () => {
+    renderWithProviders(<Harness />);
+    openTemplateDropdown();
+
+    const labels = Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option")).map(
+      (option) => option.querySelector(".font-medium")?.textContent,
+    );
+
+    expect(labels).toEqual(["Anthropic Family", "OpenAI Family", "Custom Configuration"]);
+  });
+
+  describe("routing test", () => {
+    it("offers no routing test until the config is complete enough to route", async () => {
+      const actual = await vi.importActual<typeof import("./build_complexity_router_config")>(
+        "./build_complexity_router_config",
+      );
+      vi.mocked(getMissingTiersError).mockImplementation(actual.getMissingTiersError);
+
+      renderWithProviders(<Harness />);
+
+      expect(screen.getByTestId("auto-router-test-routing-btn")).toBeDisabled();
+    });
+
+    it("routes a prompt through the config on screen without creating the router", async () => {
+      const user = userEvent.setup();
+      vi.mocked(getMissingTiersError).mockReturnValue(null);
+      vi.mocked(testAutoRouterRouting).mockResolvedValue({
+        status: "success",
+        result: {
+          routed_model: "claude-opus-5",
+          routed_model_configured: true,
+          routing_decision: { routed_model: "claude-opus-5", tier: "COMPLEX", cause: "literal_keyword_match" },
+        },
+      });
+
+      renderWithProviders(<Harness />);
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "keyword-router");
+      expandDetailedConfiguration();
+      await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+      await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
+      const keywordsField = screen.getByText("Keywords 1").closest("div") as HTMLElement;
+      await user.type(within(keywordsField).getByRole("combobox"), "invoice{enter}");
+
+      await user.click(screen.getByTestId("auto-router-test-routing-btn"));
+      await user.type(await screen.findByTestId("auto-router-routing-test-prompt"), "reconcile this invoice");
+      await user.click(screen.getByTestId("auto-router-routing-test-send"));
+
+      await waitFor(() => expect(testAutoRouterRouting).toHaveBeenCalled());
+      const [accessToken, request] = vi.mocked(testAutoRouterRouting).mock.calls.at(-1)!;
+      expect(accessToken).toBe("token");
+      expect(request.prompt).toBe("reconcile this invoice");
+      expect(request.router_name).toBe("keyword-router");
+      expect(request.complexity_router_config).toMatchObject({
+        keyword_tier_rules: [{ keywords: ["invoice"], tier: "COMPLEX" }],
+      });
+      expect(await screen.findByTestId("auto-router-routing-test-routed-model")).toHaveTextContent("claude-opus-5");
+      expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
+    });
+
+    it("forgets the last prompt and result when the modal is reopened", async () => {
+      const user = userEvent.setup();
+      vi.mocked(getMissingTiersError).mockReturnValue(null);
+      vi.mocked(testAutoRouterRouting).mockResolvedValue({
+        status: "success",
+        result: {
+          routed_model: "claude-opus-5",
+          routed_model_configured: true,
+          routing_decision: { routed_model: "claude-opus-5", tier: "COMPLEX", cause: "heuristic_scorer" },
+        },
+      });
+
+      renderWithProviders(<Harness />);
+      await user.click(screen.getByTestId("auto-router-test-routing-btn"));
+      await user.type(await screen.findByTestId("auto-router-routing-test-prompt"), "reconcile this invoice");
+      await user.click(screen.getByTestId("auto-router-routing-test-send"));
+      expect(await screen.findByTestId("auto-router-routing-test-result")).toBeInTheDocument();
+
+      await user.click(screen.getAllByRole("button", { name: /^close$/i }).at(-1)!);
+      await user.click(screen.getByTestId("auto-router-test-routing-btn"));
+
+      expect(await screen.findByTestId("auto-router-routing-test-prompt")).toHaveValue("");
+      expect(screen.queryByTestId("auto-router-routing-test-result")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("template presets", () => {
+    // Opens the dropdown once, then waits out the useQuery load: an open antd Select re-renders its
+    // already-mounted options in place as state changes, so polling only re-reads the DOM here.
+    // Re-firing the open/close mousedown on every poll (calling openTemplateDropdown inside the
+    // waitFor callback) fights the dropdown's own open/close animation and hangs the test.
+    const waitForPresetEnabled = async (label: string) => {
+      openTemplateDropdown();
+      await waitFor(() => {
+        expect(isOptionDisabled(optionByLabel(label)!)).toBe(false);
+      });
+    };
+
+    it("disables every preset while the model list is loading", async () => {
+      let resolveModels: (models: ModelGroup[]) => void = () => {};
+      mockFetchAvailableModels.mockImplementation(
+        () =>
+          new Promise<ModelGroup[]>((resolve) => {
+            resolveModels = resolve;
+          }),
+      );
+
+      renderWithProviders(<Harness />);
+      openTemplateDropdown();
+
+      const anthropicOption = optionByLabel("Anthropic Family")!;
+      expect(isOptionDisabled(anthropicOption)).toBe(true);
+      expect(anthropicOption.textContent).toContain("Checking model availability");
+
+      // The dropdown is already open from above; polling re-reads its options in place rather than
+      // reopening (openTemplateDropdown toggles, so a second call here would close it instead).
+      resolveModels(ALL_FAMILY_MODELS);
+      await waitFor(() => {
+        expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
+      });
+    });
+
+    it("disables every preset and offers a retry when the model list fails to load", async () => {
+      mockFetchAvailableModels.mockRejectedValue(new Error("network error"));
+
+      renderWithProviders(<Harness />);
+
+      expect(await screen.findByText("Could not load available models.")).toBeInTheDocument();
+      openTemplateDropdown();
+      const anthropicOption = optionByLabel("Anthropic Family")!;
+      expect(isOptionDisabled(anthropicOption)).toBe(true);
+      expect(anthropicOption.textContent).toContain("Cannot verify these models are available");
+    });
+
+    it("disables a preset missing one of its models, naming the missing model", async () => {
+      mockFetchAvailableModels.mockResolvedValue(
+        ALL_FAMILY_MODELS.filter((m) => m.model_group !== ANTHROPIC_ONLY_MODEL),
+      );
+
+      renderWithProviders(<Harness />);
+      openTemplateDropdown();
+
+      await waitFor(() => {
+        expect(optionByLabel("Anthropic Family")!.textContent).toContain(`Missing: ${ANTHROPIC_ONLY_MODEL}`);
+      });
+      expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true);
+    });
+
+    it("enables a preset once every model it needs is available", async () => {
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+      renderWithProviders(<Harness />);
+
+      await waitForPresetEnabled("Anthropic Family");
+      await waitForPresetEnabled("OpenAI Family");
+    });
+
+    it("collapses detailed configuration and shows a tier summary once a preset is applied", async () => {
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+      renderWithProviders(<Harness />);
+      await waitForPresetEnabled("Anthropic Family");
+
+      fireEvent.click(optionByLabel("Anthropic Family")!);
+
+      expect(screen.queryByText("Advanced: Keyword/Semantic Matching")).not.toBeInTheDocument();
+      expect(
+        screen.getByText(
+          `Simple: ${ANTHROPIC_TIERS.SIMPLE.join(", ")} · Medium: ${ANTHROPIC_TIERS.MEDIUM.join(", ")} · ` +
+            `Complex: ${ANTHROPIC_TIERS.COMPLEX.join(", ")} · Reasoning: ${ANTHROPIC_TIERS.REASONING.join(", ")}`,
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("expands detailed configuration when Custom Configuration is chosen", () => {
+      renderWithProviders(<Harness />);
+      openTemplateDropdown();
+
+      fireEvent.click(optionByLabel("Custom Configuration")!);
+
+      expect(screen.getByText("Advanced: Keyword/Semantic Matching")).toBeInTheDocument();
+    });
+
+    it("lets a caller manually re-expand a detailed configuration a preset just collapsed", async () => {
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+      renderWithProviders(<Harness />);
+      await waitForPresetEnabled("Anthropic Family");
+      fireEvent.click(optionByLabel("Anthropic Family")!);
+      expect(screen.queryByText("Advanced: Keyword/Semantic Matching")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("detailed-configuration-toggle"));
+
+      expect(screen.getByText("Advanced: Keyword/Semantic Matching")).toBeInTheDocument();
+    });
+
+    // This is the regression test for the whole feature: if handlePresetChange stopped prefilling
+    // complexityRouterConfig, the real (unmocked here) getMissingTiersError would block the submit
+    // and handleAddAutoRouterSubmit would never be called.
+    it("carries a selected preset's tiers through to the create payload", async () => {
+      const user = userEvent.setup();
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+      renderWithProviders(<Harness />);
+      await waitForPresetEnabled("Anthropic Family");
+      fireEvent.click(optionByLabel("Anthropic Family")!);
+
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "anthropic-router");
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
+        auto_router_default_model: ANTHROPIC_TIERS.MEDIUM[0],
+        complexity_router_config: { tiers: ANTHROPIC_TIERS },
+      });
+    });
+
+    // Bugbot-found bug: submitBlockedReason disables the button for this, but Form's onFinish
+    // (wired to the same handler as the button) fires whenever the form itself is submitted,
+    // independent of the button's own disabled state. Without submitRecommendedRouter re-checking
+    // it, a real form submission (e.g. Enter, in browsers where that's implicit for this form)
+    // could still create a router referencing a model no longer in availableModelSet.
+    it("blocks a form submit when a referenced model disappears after the tiers are filled in", async () => {
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+      const { container } = renderWithProviders(<Harness />);
+      await waitForPresetEnabled("Anthropic Family");
+      fireEvent.click(optionByLabel("Anthropic Family")!);
+      fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "stale-model-router" } });
+      expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled();
+
+      // The model list changed after the tiers were filled in (e.g. a deployment removed
+      // elsewhere) - update the query cache directly rather than a real refetch, since that's the
+      // one thing under test, not how the data arrived. Waiting for the button to actually reflect
+      // the disabled state confirms the re-render (and availableModelSet) has settled before the
+      // form submits, the same way a real user's next interaction would only happen after that.
+      testQueryClient.setQueryData(["availableModels", "autoRouter", "token"], []);
+      await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled());
+
+      fireEvent.submit(container.querySelector("form")!);
+
+      await waitFor(() =>
+        expect(NotificationManager.fromBackend).toHaveBeenCalledWith(expect.stringContaining("no longer available")),
+      );
+      expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
     });
   });
 });
