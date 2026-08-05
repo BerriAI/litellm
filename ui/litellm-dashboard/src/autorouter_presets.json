@@ -16,7 +16,7 @@
   },
   "openai_family": {
     "label": "OpenAI Family",
-    "description": "Routes across the GPT model family: gpt-5-nano for simple queries, gpt-5-mini for medium, gpt-5 for complex, o3 for reasoning-heavy requests.",
+    "description": "Routes across the GPT model family: gpt-5.4-nano for simple queries, gpt-5.4-mini for medium, gpt-5.4 for complex, o3 for reasoning-heavy requests.",
     "complexity_router_config": {
       "tiers": {
         "SIMPLE": ["gpt-5.4-nano"],
