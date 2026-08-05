@@ -226,6 +226,8 @@ _REMINDER_CLOSE: Final = "</system-reminder>"
 
 _TRUNCATION_MARKER: Final = "..."
 
+_CJK_CHARACTER: Final = re.compile("[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ\U00020000-\U0003ffff]")
+
 
 def _message_text(content: object) -> str:
     """Flatten message content to plain text, joining multi-part text blocks.
@@ -623,23 +625,25 @@ class ComplexityRouter(CustomLogger):
         return DimensionScore("tokenCount", 0, None)
 
     def _keyword_matches(self, text: str, keyword: str) -> bool:
-        """
-        Check if a keyword matches in text using word boundary matching.
+        r"""
+        Check if a keyword matches in text.
 
-        For single-word keywords, uses regex word boundaries to avoid
-        false positives (e.g., "error" matching "terrorism", "class" matching "classical").
-        For multi-word phrases, uses substring matching.
+        Single-word keywords use regex word boundaries to avoid false positives, e.g. "api"
+        must not match "capital" and "error" must not match "terrorism".
+
+        Multi-word phrases and keywords containing CJK match as plain substrings. CJK is
+        written without spaces and every CJK character is a regex word character, so `\b`
+        never fires between two of them: `\b发票\b` misses "我需要开发票" entirely. The gate is
+        on the keyword rather than the text, so a keyword with no CJK in it keeps word
+        boundary matching no matter what script the prompt is written in.
         """
         kw_lower: Final = keyword.lower()
 
-        # For single-word keywords, use word boundary matching to avoid false positives
-        # e.g., "api" should not match "capital", "error" should not match "terrorism"
-        if " " not in kw_lower:
-            pattern: Final = r"\b" + re.escape(kw_lower) + r"\b"
-            return bool(re.search(pattern, text))
+        if " " in kw_lower or _CJK_CHARACTER.search(kw_lower):
+            return kw_lower in text
 
-        # For multi-word phrases, substring matching is fine
-        return kw_lower in text
+        pattern: Final = r"\b" + re.escape(kw_lower) + r"\b"
+        return bool(re.search(pattern, text))
 
     def _score_keyword_match(
         self,
