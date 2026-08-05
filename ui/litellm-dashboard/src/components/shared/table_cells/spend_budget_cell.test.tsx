@@ -30,6 +30,14 @@ describe("SpendBudgetCell", () => {
     expect(screen.getByText("of $100")).toBeInTheDocument();
   });
 
+  it("supports matching spend and budget precision for summary views", () => {
+    render(<SpendBudgetCell spend={98.854} maxBudget={3000} spendDecimals={2} budgetDecimals={2} />);
+
+    expect(screen.getByText("$98.85")).toBeInTheDocument();
+    expect(screen.getByText("of $3,000.00")).toBeInTheDocument();
+    expect(screen.getByRole("meter")).toHaveAttribute("aria-valuetext", "$98.85 of $3,000.00");
+  });
+
   it("keeps the default tone below 80% usage", () => {
     const { container } = render(<SpendBudgetCell spend={50} maxBudget={100} />);
     expect(indicator(container)?.className).toContain("bg-primary");
