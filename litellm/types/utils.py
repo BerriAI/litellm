@@ -3493,6 +3493,7 @@ all_litellm_params = (
         "auto_router_config",
         "auto_router_default_model",
         "auto_router_embedding_model",
+        "auto_router_max_input_chars",
         "complexity_router_config",
         "complexity_router_default_model",
         "adaptive_router_config",

@@ -91,6 +91,13 @@ DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD: Final = float(
 )
 MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH: Final = int(os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150))
 
+# Embedding models used for semantic routing have far smaller context windows than the chat models
+# they route to (512 tokens is common for self-hosted ones, 8k is generous), so an unbounded prompt
+# fails the embedding call and, with it, the whole request. Routing only needs enough of the ask to
+# place it against short route utterances, so every doc is cut to this many characters. Roughly 500
+# tokens of English, which fits even a 512-token encoder.
+DEFAULT_MAX_EMBEDDING_INPUT_CHARS: Final = int(os.getenv("DEFAULT_MAX_EMBEDDING_INPUT_CHARS", 2000))
+
 # Semantic Guard Defaults
 DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL: Final = str(
     os.getenv("DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL", "text-embedding-3-small")

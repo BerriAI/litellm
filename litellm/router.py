@@ -44,6 +44,7 @@ from litellm.caching.caching import (
 from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
+    DEFAULT_MAX_EMBEDDING_INPUT_CHARS,
     DEFAULT_MAX_LRU_CACHE_SIZE,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -7605,6 +7606,8 @@ class Router:
                 "auto_router_embedding_model is required for auto-router deployments. Please set it in the litellm_params"
             )
 
+        max_input_chars: Final[int | None] = deployment.litellm_params.auto_router_max_input_chars
+
         autor_router: Final[AutoRouter] = AutoRouter(
             model_name=deployment.model_name,
             auto_router_config_path=auto_router_config_path,
@@ -7612,6 +7615,7 @@ class Router:
             default_model=default_model,
             embedding_model=embedding_model,
             litellm_router_instance=self,
+            max_input_chars=(max_input_chars if max_input_chars is not None else DEFAULT_MAX_EMBEDDING_INPUT_CHARS),
         )
         self._register_pre_routing_strategy(
             registry=self.auto_routers,
