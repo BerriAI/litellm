@@ -13,6 +13,7 @@ Authentication priority:
 import os
 import re
 from typing import Any, Final, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -224,11 +225,8 @@ class DatabricksBase:
         """
         import requests
 
-        # Extract workspace URL from api_base
-        workspace_url = api_base.rstrip("/")
-        if "/serving-endpoints" in workspace_url:
-            workspace_url = workspace_url.replace("/serving-endpoints", "")
-
+        api_base_parts: Final = urlsplit(api_base)
+        workspace_url: Final = urlunsplit((api_base_parts.scheme, api_base_parts.netloc, "", "", ""))
         token_url: Final = f"{workspace_url}/oidc/v1/token"
 
         try:
