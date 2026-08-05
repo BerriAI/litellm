@@ -106,7 +106,6 @@ export const TIER_DESCRIPTIONS: Record<
 
 export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof ComplexityTiers>;
 
-// The name shown for a tier: the operator's own label when they set one, else LiteLLM's default.
 export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
   tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
 
@@ -189,8 +188,6 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <Tooltip title={tierInfo.description}>
                     <InfoCircleOutlined className="text-gray-400" />
                   </Tooltip>
-                  {/* Tiers are an ordered ladder, not a set of categories: escalation means "bump one
-                      tier", so the rung and its canonical name stay visible through any rename. */}
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
                   </Text>

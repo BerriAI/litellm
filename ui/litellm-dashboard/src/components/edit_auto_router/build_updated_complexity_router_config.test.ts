@@ -247,8 +247,6 @@ describe("buildUpdatedComplexityRouterConfig tier labels", () => {
     expect(result.tier_labels).toEqual({ SIMPLE: "Budget", REASONING: "Deep" });
   });
 
-  // tier_labels is managed, so clearing the inputs has to remove the key rather than leave the
-  // old names in the stored config.
   it("drops the key when every label is cleared back to the default", () => {
     const result = buildUpdatedComplexityRouterConfig(RENAMED, { ...FORM_VALUE, tier_labels: {} });
     expect(result.tier_labels).toBeUndefined();

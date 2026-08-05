@@ -2798,8 +2798,6 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     routed_model: str
     cause: RoutingDecisionCause
     tier: str
-    # The operator's display name for `tier`, present only when tier_labels renames it. `tier` stays
-    # canonical so analytics across a rename stay comparable.
     tier_label: str
     request_type: str
     score: float

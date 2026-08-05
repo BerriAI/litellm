@@ -141,8 +141,6 @@ describe("RoutingDecisionCard", () => {
   });
 
   it("drops the tier name from the score band on a renamed router", () => {
-    // The row carries a label for the routed tier and no other, so naming the band's
-    // tier would print LiteLLM's vocabulary next to the operator's.
     render(<RoutingDecisionCard decision={{ ...heuristic, tier_label: "Deep" }} />);
     expect(screen.getByText("(at or above 0.6)")).toBeInTheDocument();
     expect(screen.queryByText(/at or above 0\.6, REASONING/)).not.toBeInTheDocument();

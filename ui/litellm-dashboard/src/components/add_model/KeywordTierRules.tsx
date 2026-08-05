@@ -17,8 +17,6 @@ export interface KeywordTierRule {
 interface KeywordTierRulesProps {
   rules: KeywordTierRule[];
   onChange: (rules: KeywordTierRule[]) => void;
-  // Display names for the tiers, so a renamed router shows the operator's vocabulary here too.
-  // Only the visible text changes; the stored rule keeps the canonical tier as its value.
   tierLabels?: Partial<Record<ComplexityTier, string>>;
 }
 

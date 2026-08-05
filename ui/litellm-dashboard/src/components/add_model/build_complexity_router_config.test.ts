@@ -450,7 +450,6 @@ describe("getTierLabelsError", () => {
     expect(getTierLabelsError({ SIMPLE: "Cheap", MEDIUM: "cheap" })).toMatch(/unique/i);
   });
 
-  // A rename can collide with a tier the operator left alone, not just with another rename.
   it("rejects a rename that collides with an untouched tier's name", () => {
     expect(getTierLabelsError({ SIMPLE: "Medium" })).toMatch(/another tier's name/i);
   });

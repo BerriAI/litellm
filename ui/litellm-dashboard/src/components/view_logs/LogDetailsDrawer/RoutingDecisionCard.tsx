@@ -17,8 +17,6 @@ export interface RoutingDecision {
   routed_model?: string;
   cause?: string;
   tier?: string;
-  // Present only when the router renamed this tier. `tier` stays canonical so rows from before and
-  // after a rename still compare.
   tier_label?: string;
   request_type?: string;
   score?: number;
@@ -40,10 +38,6 @@ const ROUTER_TYPE_LABELS: Record<string, string> = {
  * The tier the score alone would have produced, given the boundaries in effect when
  * the decision was made. Rendered as the bracket that explains a score, so it must
  * use the snapshot rather than today's config.
- *
- * A row carries a label for the tier it was routed to and for no other, so a renamed
- * router gets the numeric range without a tier name rather than three of LiteLLM's
- * names next to one of the operator's.
  */
 function describeScoreAgainstBoundaries(
   score: number,

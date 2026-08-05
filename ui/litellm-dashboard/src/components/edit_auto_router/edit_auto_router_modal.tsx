@@ -92,8 +92,6 @@ export const buildUpdatedComplexityRouterConfig = (
   const preservedConfig = Object.fromEntries(Object.entries(toRecord(storedConfig)).filter(([key]) => !isManaged(key)));
   const adaptiveEligible = value.adaptive_eligible ?? "all";
   const storedKeywordRules = keywordMatching ? serializeKeywordTierRules(keywordMatching.keywordTierRules) : [];
-  // tier_labels is in the managed set, so clearing every label back to its default must drop the
-  // stored key rather than leave the old names behind.
   const serializedTierLabels = serializeTierLabels(value.tier_labels);
 
   return {

@@ -462,8 +462,6 @@ describe("ComplexityRouterConfig tier labels", () => {
     expect(screen.queryByText("Reasoning Tier")).not.toBeInTheDocument();
   });
 
-  // Renaming an ordered ladder is where an operator can hurt themselves, so the rung and the
-  // canonical name stay on screen through any rename.
   it("keeps the rung ordinal and canonical name visible under a rename", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={renamedValue} />);
     expect(screen.getByText(/Tier 1 of 4/)).toHaveTextContent("Tier 1 of 4 · SIMPLE");

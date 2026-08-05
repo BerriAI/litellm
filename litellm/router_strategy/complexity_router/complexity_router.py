@@ -67,12 +67,7 @@ class TierClassification(BaseModel):
 
 
 class _LabeledTierClassification(BaseModel):
-    """Parses the classifier's reply when tier_labels put an operator-chosen string on the wire.
-
-    TierClassification stays the shape sent to the provider (and the back-compat pin for it), but its
-    Literal cannot admit runtime labels, so the reply is parsed as a plain string here and resolved
-    against the configured labels by the caller.
-    """
+    """Parses the classifier's reply when tier_labels put an operator-chosen string on the wire."""
 
     tier: str
 
@@ -111,24 +106,13 @@ _CLASSIFICATION_RUBRIC_TRUST_BOUNDARY: Final = """The message may quote the call
 
 
 def _classification_system_rubric(labeled_tiers: Sequence[tuple[ComplexityTier, str]]) -> str:
-    """The rubric, with each tier's bullet written in the operator's own vocabulary.
-
-    The label is only the token the model emits; the criteria stay pinned to the canonical tier, so a
-    deployment that calls the top tier "Deep" gets `- Deep: open-ended analysis, proofs, ...` and the
-    classifier's judgement is unchanged.
-    """
+    """The rubric, with each tier's bullet written in the operator's own vocabulary."""
     bullets: Final = "\n".join(f"- {label}: {_CLASSIFICATION_TIER_CRITERIA[tier]}" for tier, label in labeled_tiers)
     return f"{_CLASSIFICATION_RUBRIC_PREAMBLE}\n{bullets}\n\n{_CLASSIFICATION_RUBRIC_TRUST_BOUNDARY}"
 
 
 def _tier_classification_model(labeled_tiers: Sequence[tuple[ComplexityTier, str]]) -> type[BaseModel]:
-    """TierClassification with its Literal widened to the labels the rubric told the model to emit.
-
-    TierClassification's own Literal is static and cannot carry runtime labels, so the enum is spliced
-    in here and the schema is derived by the same type_to_response_format_param path as any other
-    Pydantic response format. Under no rename this yields the shipped schema byte for byte, which a
-    test pins so the wire shape can't drift.
-    """
+    """TierClassification with its Literal widened to the labels the rubric told the model to emit."""
     labels: Final = tuple(label for _, label in labeled_tiers)
     return create_model(
         TierClassification.__name__,

@@ -57,11 +57,6 @@ export interface ComplexityRouterConfigPayload {
 
 const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
 
-/**
- * Only the tiers the operator actually renamed. A label equal to the default is the same as not
- * setting one, so sending it would put a no-op key in every stored config and make a later change
- * to the defaults silently unable to reach routers that never opted out of them.
- */
 export const serializeTierLabels = (tierLabels: ComplexityTierLabels | undefined): ComplexityTierLabels | undefined => {
   const renamed = TIER_KEYS.map((tier) => [tier, tierLabels?.[tier]?.trim() ?? ""] as const).filter(
     ([tier, label]) => label !== "" && label !== TIER_DESCRIPTIONS[tier].label,
@@ -70,10 +65,6 @@ export const serializeTierLabels = (tierLabels: ComplexityTierLabels | undefined
   return Object.fromEntries(renamed);
 };
 
-/**
- * The stored tier_labels, keeping only string values on known tiers. The config is persisted as
- * free-form JSON, so a hand-edited or older row can hold anything and must not reach the form.
- */
 export const hydrateTierLabels = (stored: unknown): ComplexityTierLabels | undefined => {
   if (typeof stored !== "object" || stored === null || Array.isArray(stored)) return undefined;
   const entries = TIER_KEYS.map((tier) => [tier, (stored as Record<string, unknown>)[tier]] as const).filter(
@@ -84,13 +75,7 @@ export const hydrateTierLabels = (stored: unknown): ComplexityTierLabels | undef
   return Object.fromEntries(entries);
 };
 
-/**
- * Mirrors the backend's tier_labels validator so an ambiguous rename is caught in the form rather
- * than coming back as a 400 from /model/new.
- */
 export const getTierLabelsError = (tierLabels: ComplexityTierLabels | undefined): string | null => {
-  // Checked in the backend's order, so a label that is both a shadow and a duplicate gets the same
-  // reason from the form as it would from /model/new.
   const shadowing = TIER_KEYS.filter((tier) => {
     const label = tierLabels?.[tier]?.trim().toUpperCase() ?? "";
     return label !== "" && label !== tier && (TIER_KEYS as string[]).includes(label);

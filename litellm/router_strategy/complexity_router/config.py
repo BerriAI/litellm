@@ -5,7 +5,6 @@ Contains default keyword lists, weights, tier boundaries, and configuration clas
 All values are configurable via proxy config.yaml.
 """
 
-from collections import Counter
 from enum import Enum
 from typing import Final, Literal
 
@@ -543,13 +542,12 @@ class ComplexityRouterConfig(BaseModel):
                 "tier_labels values must not reuse another tier's canonical name, which would make logs "
                 f"and the classifier rubric ambiguous: {', '.join(shadowed)}"
             )
-        label_counts: Final = Counter(label.casefold() for _, label in self.labeled_tiers())
+        labeled: Final = self.labeled_tiers()
+        folded_labels: Final = tuple(label.casefold() for _, label in labeled)
         duplicated: Final = tuple(
-            sorted(
-                " and ".join(tier.value for tier, label in self.labeled_tiers() if label.casefold() == folded)
-                for folded, count in label_counts.items()
-                if count > 1
-            )
+            " and ".join(tier.value for tier, label in labeled if label.casefold() == folded)
+            for position, folded in enumerate(folded_labels)
+            if folded_labels.count(folded) > 1 and folded_labels.index(folded) == position
         )
         if duplicated:
             raise ValueError(
