@@ -30,7 +30,7 @@ class OutageModel(BaseOutageModel):
 
 class ProviderRegionOutageModel(BaseOutageModel):
     provider_region_id: str
-    deployment_ids: set[str]
+    deployment_ids: set[str]  # mutable-ok: outage state accumulates ids via .add() and round-trips the cache as a list
 
 
 # we use this for the email header, please send a test email if you change this. verify it looks good on email

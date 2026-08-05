@@ -250,36 +250,38 @@ Other FileType Groupings
 """
 # Accepted file types for GEMINI 1.5 through Vertex AI
 # https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/send-multimodal-prompts#gemini-send-multimodal-samples-images-nodejs
-GEMINI_1_5_ACCEPTED_FILE_TYPES: Final[set[FileType]] = {
-    # Image
-    FileType.PNG,
-    FileType.JPEG,
-    FileType.WEBP,
-    # Audio
-    FileType.AAC,
-    FileType.FLAC,
-    FileType.MP3,
-    FileType.MPA,
-    FileType.MPEG,
-    FileType.MPGA,
-    FileType.OPUS,
-    FileType.PCM,
-    FileType.WAV,
-    FileType.WEBM,
-    # Video
-    FileType.FLV,
-    FileType.MOV,
-    FileType.MPEG,
-    FileType.MPEGPS,
-    FileType.MPG,
-    FileType.MP4,
-    FileType.WEBM,
-    FileType.WMV,
-    FileType.THREE_GPP,
-    # PDF
-    FileType.PDF,
-    FileType.TXT,
-}
+GEMINI_1_5_ACCEPTED_FILE_TYPES: Final[frozenset[FileType]] = frozenset(
+    {
+        # Image
+        FileType.PNG,
+        FileType.JPEG,
+        FileType.WEBP,
+        # Audio
+        FileType.AAC,
+        FileType.FLAC,
+        FileType.MP3,
+        FileType.MPA,
+        FileType.MPEG,
+        FileType.MPGA,
+        FileType.OPUS,
+        FileType.PCM,
+        FileType.WAV,
+        FileType.WEBM,
+        # Video
+        FileType.FLV,
+        FileType.MOV,
+        FileType.MPEG,
+        FileType.MPEGPS,
+        FileType.MPG,
+        FileType.MP4,
+        FileType.WEBM,
+        FileType.WMV,
+        FileType.THREE_GPP,
+        # PDF
+        FileType.PDF,
+        FileType.TXT,
+    }
+)
 
 
 def is_gemini_1_5_accepted_file_type(file_type: FileType) -> bool:
