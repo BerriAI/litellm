@@ -6,7 +6,7 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Invoke
 
 import base64
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -84,7 +84,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         Get the complete url for the request
         """
         ### SET RUNTIME ENDPOINT ###
-        aws_bedrock_runtime_endpoint = optional_params.get(
+        aws_bedrock_runtime_endpoint: Final = optional_params.get(
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         endpoint_url, _ = self.get_runtime_endpoint(
@@ -95,10 +95,10 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         )
 
         agent_id, agent_alias_id = self._get_agent_id_and_alias_id(model)
-        session_id = self._get_session_id(optional_params)
-        encoded_agent_id = encode_url_path_segment(agent_id, field_name="agent_id")
-        encoded_agent_alias_id = encode_url_path_segment(agent_alias_id, field_name="agent_alias_id")
-        encoded_session_id = encode_url_path_segment(session_id, field_name="session_id")
+        session_id: Final = self._get_session_id(optional_params)
+        encoded_agent_id: Final = encode_url_path_segment(agent_id, field_name="agent_id")
+        encoded_agent_alias_id: Final = encode_url_path_segment(agent_alias_id, field_name="agent_alias_id")
+        encoded_session_id: Final = encode_url_path_segment(session_id, field_name="session_id")
 
         endpoint_url = f"{endpoint_url}/agents/{encoded_agent_id}/agentAliases/{encoded_agent_alias_id}/sessions/{encoded_session_id}/text"
 
@@ -134,7 +134,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         agent_alias_id = "MFPSBCXYTW"
         """
         # Split the model string by '/' and extract components
-        parts = model.split("/")
+        parts: Final = model.split("/")
         if len(parts) != 3 or parts[0] != "agent":
             raise ValueError("Invalid model format. Expected format: 'model=agent/AGENT_ID/ALIAS_ID'")
 
@@ -153,7 +153,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         headers: dict,
     ) -> dict:
         # use the last message content as the query
-        query: str = convert_content_list_to_str(messages[-1])
+        query: Final[str] = convert_content_list_to_str(messages[-1])
         return {
             "inputText": query,
             "enableTrace": True,
@@ -171,9 +171,9 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         except ImportError:
             raise ImportError("boto3/botocore is required for AWS event stream parsing")
 
-        events: InvokeAgentEventList = []
-        parser = EventStreamJSONParser()
-        event_stream_buffer = EventStreamBuffer()
+        events: Final[InvokeAgentEventList] = []
+        parser: Final = EventStreamJSONParser()
+        event_stream_buffer: Final = EventStreamBuffer()
 
         # Add the entire response to the buffer
         event_stream_buffer.add_data(raw_content)
@@ -225,22 +225,22 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
     def _parse_message_from_event(self, event, parser) -> str | None:
         """Extract message content from an AWS event, adapted from AWSEventStreamDecoder."""
         try:
-            response_dict = event.to_response_dict()
+            response_dict: Final = event.to_response_dict()
             verbose_logger.debug("Response dict: %s", response_dict)
 
             # Use the same response shape parsing as the existing decoder
-            parsed_response = parser.parse(response_dict, self._get_response_stream_shape())
+            parsed_response: Final = parser.parse(response_dict, self._get_response_stream_shape())
             verbose_logger.debug("Parsed response: %s", parsed_response)
 
             if response_dict["status_code"] != 200:
-                decoded_body = response_dict["body"].decode()
+                decoded_body: Final = response_dict["body"].decode()
                 if isinstance(decoded_body, dict):
                     error_message = decoded_body.get("message")
                 elif isinstance(decoded_body, str):
                     error_message = decoded_body
                 else:
                     error_message = ""
-                exception_status = response_dict["headers"].get(":exception-type")
+                exception_status: Final = response_dict["headers"].get(":exception-type")
                 error_message = exception_status + " " + error_message
                 raise BedrockError(
                     status_code=response_dict["status_code"],
@@ -265,8 +265,8 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
     def _extract_headers_from_event(self, event) -> InvokeAgentEventHeaders:
         """Extract headers from an AWS event for categorization."""
         try:
-            response_dict = event.to_response_dict()
-            headers = response_dict.get("headers", {})
+            response_dict: Final = event.to_response_dict()
+            headers: Final = response_dict.get("headers", {})
 
             # Extract the event-type and content-type headers that we care about
             return InvokeAgentEventHeaders(
@@ -285,7 +285,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def _extract_response_content(self, events: InvokeAgentEventList) -> str:
         """Extract the final response content from parsed events."""
-        response_parts = []
+        response_parts: Final = []
 
         for event in events:
             headers = event.get("headers", {})
@@ -295,7 +295,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
             if event_type == "chunk" and payload:
                 # Extract base64 encoded content from chunk events
-                chunk_payload: InvokeAgentChunkPayload = payload  # type: ignore
+                chunk_payload: InvokeAgentChunkPayload = payload
                 encoded_bytes = chunk_payload.get("bytes", "")
                 if encoded_bytes:
                     try:
@@ -308,7 +308,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def _extract_usage_info(self, events: InvokeAgentEventList) -> InvokeAgentUsage:
         """Extract token usage information from trace events."""
-        usage_info = InvokeAgentUsage(
+        usage_info: Final = InvokeAgentUsage(
             inputTokens=0,
             outputTokens=0,
             model=None,
@@ -341,39 +341,39 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def _is_trace_event(self, event: InvokeAgentEvent) -> bool:
         """Check if the event is a trace event."""
-        headers = event.get("headers", {})
-        event_type = headers.get("event_type")
-        payload = event.get("payload")
+        headers: Final = event.get("headers", {})
+        event_type: Final = headers.get("event_type")
+        payload: Final = event.get("payload")
         return event_type == "trace" and payload is not None
 
     def _get_trace_data(self, event: InvokeAgentEvent) -> InvokeAgentTrace | None:
         """Extract trace data from a trace event."""
-        payload = event.get("payload")
+        payload: Final = event.get("payload")
         if not payload:
             return None
 
-        trace_payload: InvokeAgentTracePayload = payload  # type: ignore
+        trace_payload: Final[InvokeAgentTracePayload] = payload
         return trace_payload.get("trace", {})
 
     def _extract_and_update_preprocessing_usage(
         self, trace_data: InvokeAgentTrace, usage_info: InvokeAgentUsage
     ) -> None:
         """Extract usage information from preprocessing trace."""
-        pre_processing: InvokeAgentPreProcessingTrace | None = trace_data.get("preProcessingTrace")
+        pre_processing: Final[InvokeAgentPreProcessingTrace | None] = trace_data.get("preProcessingTrace")
         if not pre_processing:
             return
 
-        model_output: InvokeAgentModelInvocationOutput | None = (
+        model_output: Final[InvokeAgentModelInvocationOutput | None] = (
             pre_processing.get("modelInvocationOutput") or InvokeAgentModelInvocationOutput()
         )
         if not model_output:
             return
 
-        metadata: InvokeAgentMetadata | None = model_output.get("metadata") or InvokeAgentMetadata()
+        metadata: Final[InvokeAgentMetadata | None] = model_output.get("metadata") or InvokeAgentMetadata()
         if not metadata:
             return
 
-        usage: InvokeAgentUsage | dict | None = metadata.get("usage", {})
+        usage: Final[InvokeAgentUsage | dict | None] = metadata.get("usage", {})
         if not usage:
             return
 
@@ -382,11 +382,11 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def _extract_orchestration_model(self, trace_data: InvokeAgentTrace) -> str | None:
         """Extract model information from orchestration trace."""
-        orchestration_trace: InvokeAgentOrchestrationTrace | None = trace_data.get("orchestrationTrace")
+        orchestration_trace: Final[InvokeAgentOrchestrationTrace | None] = trace_data.get("orchestrationTrace")
         if not orchestration_trace:
             return None
 
-        model_invocation: InvokeAgentModelInvocationInput | None = (
+        model_invocation: Final[InvokeAgentModelInvocationInput | None] = (
             orchestration_trace.get("modelInvocationInput") or InvokeAgentModelInvocationInput()
         )
         if not model_invocation:
@@ -404,10 +404,10 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         """Build the final ModelResponse object."""
 
         # Create the message content
-        message = Message(content=content, role="assistant")
+        message: Final = Message(content=content, role="assistant")
 
         # Create choices
-        choice = Choices(finish_reason="stop", index=0, message=message)
+        choice: Final = Choices(finish_reason="stop", index=0, message=message)
 
         # Update model response
         model_response.choices = [choice]
@@ -417,7 +417,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         if usage_info:
             from litellm.types.utils import Usage
 
-            usage = Usage(
+            usage: Final = Usage(
                 prompt_tokens=usage_info.get("inputTokens", 0),
                 completion_tokens=usage_info.get("outputTokens", 0),
                 total_tokens=usage_info.get("inputTokens", 0) + usage_info.get("outputTokens", 0),
@@ -442,18 +442,18 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
     ) -> ModelResponse:
         try:
             # Get the raw binary content
-            raw_content = raw_response.content
+            raw_content: Final = raw_response.content
             verbose_logger.debug("Processing %s bytes of AWS event stream data", len(raw_content))
 
             # Parse the AWS event stream format
-            events = self._parse_aws_event_stream(raw_content)
+            events: Final = self._parse_aws_event_stream(raw_content)
             verbose_logger.debug("Parsed %s events from stream", len(events))
 
             # Extract response content from chunk events
-            content = self._extract_response_content(events)
+            content: Final = self._extract_response_content(events)
 
             # Extract usage information from trace events
-            usage_info = self._extract_usage_info(events)
+            usage_info: Final = self._extract_usage_info(events)
 
             # Build and return the model response
             return self._build_model_response(

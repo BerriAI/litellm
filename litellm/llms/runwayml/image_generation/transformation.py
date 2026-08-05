@@ -1,6 +1,6 @@
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -66,7 +66,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        final_api_key: str | None = (
+        final_api_key: Final[str | None] = (
             api_key or get_secret_str("RUNWAYML_API_SECRET") or get_secret_str("RUNWAYML_API_KEY")
         )
         if not final_api_key:
@@ -114,7 +114,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
 
         # Handle RunwayML response format
         # Response contains task.output with image URL(s)
-        output = response_data.get("output", [])
+        output: Final = response_data.get("output", [])
 
         if isinstance(output, list):
             for image_item in output:
@@ -168,15 +168,15 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         Raises:
             ValueError: If task failed or status is unknown
         """
-        status = response_data.get("status", "").upper()
+        status: Final = response_data.get("status", "").upper()
 
         verbose_logger.debug("RunwayML task status: %s", status)
 
         if status == "SUCCEEDED":
             return "succeeded"
         elif status == "FAILED":
-            failure_reason = response_data.get("failure", "Unknown error")
-            failure_code = response_data.get("failureCode", "unknown")
+            failure_reason: Final = response_data.get("failure", "Unknown error")
+            failure_code: Final = response_data.get("failureCode", "unknown")
             raise ValueError(f"RunwayML image generation failed: {failure_reason} (code: {failure_code})")
         elif status == "CANCELLED":
             raise ValueError("RunwayML image generation was cancelled")
@@ -209,12 +209,12 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         """
         from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
-        client = _get_httpx_client()
-        start_time = time.time()
+        client: Final = _get_httpx_client()
+        start_time: Final = time.time()
 
         # Build task status URL
         api_base = api_base.rstrip("/")
-        task_url = f"{api_base}/v1/tasks/{task_id}"
+        task_url: Final = f"{api_base}/v1/tasks/{task_id}"
 
         verbose_logger.debug("Polling RunwayML task: %s", task_url)
 
@@ -258,12 +258,12 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         import litellm
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
-        client = get_async_httpx_client(llm_provider=litellm.LlmProviders.RUNWAYML)
-        start_time = time.time()
+        client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.RUNWAYML)
+        start_time: Final = time.time()
 
         # Build task status URL
         api_base = api_base.rstrip("/")
-        task_url = f"{api_base}/v1/tasks/{task_id}"
+        task_url: Final = f"{api_base}/v1/tasks/{task_id}"
 
         verbose_logger.debug("Polling RunwayML task (async): %s", task_url)
 
@@ -331,12 +331,12 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         verbose_logger.debug("RunwayML starting polling...")
 
         # Get task ID
-        task_id = response_data.get("id")
+        task_id: Final = response_data.get("id")
         if not task_id:
             raise ValueError("RunwayML response missing task ID")
 
         # Get headers for polling (need auth)
-        poll_headers = {
+        poll_headers: Final = {
             "Authorization": raw_response.request.headers.get("Authorization", ""),
             "X-Runway-Version": raw_response.request.headers.get("X-Runway-Version", RUNWAYML_DEFAULT_API_VERSION),
         }
@@ -391,12 +391,12 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         verbose_logger.debug("RunwayML starting polling (async)...")
 
         # Get task ID
-        task_id = response_data.get("id")
+        task_id: Final = response_data.get("id")
         if not task_id:
             raise ValueError("RunwayML response missing task ID")
 
         # Get headers for polling (need auth)
-        poll_headers = {
+        poll_headers: Final = {
             "Authorization": raw_response.request.headers.get("Authorization", ""),
             "X-Runway-Version": raw_response.request.headers.get("X-Runway-Version", RUNWAYML_DEFAULT_API_VERSION),
         }
@@ -435,13 +435,13 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
         # Map OpenAI 'size' parameter to RunwayML 'ratio' parameter
         if "size" in non_default_params:
-            size = non_default_params["size"]
+            size: Final = non_default_params["size"]
             # Map common OpenAI sizes to RunwayML ratios
-            size_to_ratio_map = {
+            size_to_ratio_map: Final = {
                 "1024x1024": "1024:1024",
                 "1792x1024": "1792:1024",
                 "1024x1792": "1024:1792",
@@ -479,7 +479,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         - promptText: The text prompt
         - ratio: The aspect ratio (e.g., '1920:1080', '1080:1920', '1024:1024')
         """
-        runwayml_request_body = {
+        runwayml_request_body: Final = {
             "model": model or "gen4_image",
             "promptText": prompt,
         }

@@ -1,5 +1,5 @@
 import enum
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Literal, Optional, TYPE_CHECKING, Union
 
 from pydantic import BaseModel
 from typing_extensions import TypedDict
@@ -47,7 +47,7 @@ class MCPAuth(str, enum.Enum):
 # "use this default"; it is applied at every egress build site via this single
 # constant rather than a DB-level DEFAULT (Prisma writes explicit values on
 # insert, so a column default would rarely apply anyway).
-DEFAULT_SUBJECT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
+DEFAULT_SUBJECT_TOKEN_TYPE: Final = "urn:ietf:params:oauth:token-type:access_token"
 
 # MCP Literals
 MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.stdio]
@@ -222,7 +222,7 @@ class MCPCredentials(TypedDict, total=False):
     """
 
 
-MCP_ADMIN_CONFIG_CREDENTIAL_KEYS: tuple[str, ...] = ("upstream_resource",)
+MCP_ADMIN_CONFIG_CREDENTIAL_KEYS: Final[tuple[str, ...]] = ("upstream_resource",)
 """Non-secret credential keys returned on read so the admin form can show and clear them. Mirrors
 ``ADMIN_CONFIG_CREDENTIAL_KEYS`` in ``ui/litellm-dashboard/src/components/mcp_tools/types.tsx``."""
 

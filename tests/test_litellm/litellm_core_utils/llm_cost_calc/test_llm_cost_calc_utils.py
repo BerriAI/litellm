@@ -757,11 +757,11 @@ def test_generic_cost_per_token_gpt56_terra_cache_costs_by_tier_and_context(
     [
         ("azure/gpt-5.6", 5e-6, 3e-5, 5e-7),
         ("azure/gpt-5.6-sol", 5e-6, 3e-5, 5e-7),
-        ("azure/gpt-5.6-terra", 2.5e-6, 1.5e-5, 2.5e-7),
-        ("azure/gpt-5.6-luna", 1e-6, 6e-6, 1e-7),
+        ("azure/gpt-5.6-terra", 2e-6, 1.2e-5, 2e-7),
+        ("azure/gpt-5.6-luna", 2e-7, 1.2e-6, 2e-8),
         ("azure/us/gpt-5.6", 5.5e-6, 3.3e-5, 5.5e-7),
-        ("azure/eu/gpt-5.6-terra", 2.75e-6, 1.65e-5, 2.75e-7),
-        ("azure/eu/gpt-5.6-luna", 1.1e-6, 6.6e-6, 1.1e-7),
+        ("azure/eu/gpt-5.6-terra", 2.2e-6, 1.32e-5, 2.2e-7),
+        ("azure/eu/gpt-5.6-luna", 2.2e-7, 1.32e-6, 2.2e-8),
     ],
 )
 def test_generic_cost_per_token_azure_gpt56(
@@ -2233,6 +2233,32 @@ def test_generic_cost_per_token_openai_cache_write_tokens_gpt_5_6():
     assert prompt_cost > 1000 * info["input_cost_per_token"]
 
 
+def test_generic_cost_per_token_backs_out_cache_write_tokens_from_text_tokens():
+    """
+    Regression for #34801: when a provider reports text_tokens covering the whole
+    prompt alongside cache-write tokens (and no cache reads), the cache-write tokens
+    must be backed out of the text total instead of being billed twice.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gpt-5.6"
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        total_tokens=1010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=0, cache_write_tokens=800, text_tokens=1000
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="openai")
+
+    info = litellm.get_model_info(model=model, custom_llm_provider="openai")
+    expected_prompt = 200 * info["input_cost_per_token"] + 800 * info["cache_creation_input_token_cost"]
+    assert prompt_cost == pytest.approx(expected_prompt)
+
+
 def test_token_type_cost_breakdown_reconciles_with_generic_total():
     """
     Both-ways check: the reasoning subset must sum with the remaining (text) output
@@ -2490,6 +2516,47 @@ def test_generic_cost_per_token_gemini_35_flash_lite():
     )
     assert prompt_cost == pytest.approx(0.0003)
     assert completion_cost == pytest.approx(0.00125)
+
+
+@pytest.mark.parametrize(
+    "service_tier,input_rate,cache_read_rate,cache_write_rate,output_rate",
+    [
+        ("flex", 2.5e-6, 2.5e-7, 3.125e-6, 1.5e-5),
+        ("priority", 1e-5, 1e-6, 1.25e-5, 6e-5),
+    ],
+)
+def test_service_tier_cache_creation_rates_for_gpt_5_6(
+    _local_model_cost_map,
+    service_tier,
+    input_rate,
+    cache_read_rate,
+    cache_write_rate,
+    output_rate,
+):
+    """Regression: gpt-5.6 publishes cache_creation_input_token_cost_flex/_priority, so a
+    flex or priority request must bill cache writes at that tier's rate instead of falling
+    back to the standard 6.25e-6 rate."""
+    usage = Usage(
+        prompt_tokens=10_000,
+        completion_tokens=500,
+        total_tokens=10_500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=6_000,
+            cache_write_tokens=3_000,
+            text_tokens=1_000,
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gpt-5.6-sol",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier=service_tier,
+    )
+
+    expected_prompt = 1_000 * input_rate + 6_000 * cache_read_rate + 3_000 * cache_write_rate
+    assert prompt_cost == pytest.approx(expected_prompt, rel=1e-9)
+    assert completion_cost == pytest.approx(500 * output_rate, rel=1e-9)
 
 
 def test_fast_service_tier_bills_at_the_priority_rate(_local_model_cost_map):

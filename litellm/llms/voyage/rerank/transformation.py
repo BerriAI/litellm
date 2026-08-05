@@ -4,7 +4,7 @@ Transformation logic for Voyage AI's /v1/rerank endpoint.
 Docs - https://docs.voyageai.com/docs/reranker
 """
 
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -42,7 +42,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         instruction: str | None = None,
     ) -> dict:
         # Voyage AI uses 'top_k' instead of 'top_n'
-        optional_params: dict[str, Any] = {"query": query, "documents": documents}
+        optional_params: Final[dict[str, Any]] = {"query": query, "documents": documents}
         if top_n is not None:
             optional_params["top_k"] = top_n
         if return_documents is not None:
@@ -93,7 +93,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         try:
-            _json_response = raw_response.json()
+            _json_response: Final = raw_response.json()
         except Exception:
             raise VoyageError(
                 message=f"Failed to parse response: {raw_response.text}",
@@ -101,12 +101,12 @@ class VoyageRerankConfig(BaseRerankConfig):
             )
 
         # Voyage AI returns results in "data" key, not "results"
-        _results: list[dict] | None = _json_response.get("data")
+        _results: Final[list[dict] | None] = _json_response.get("data")
         if _results is None:
             raise ValueError(f"No results found in the response={_json_response}")
 
         # Transform to LiteLLM format
-        transformed_results = []
+        transformed_results: Final = []
         for result in _results:
             transformed_result: dict[str, Any] = {
                 "index": result["index"],
@@ -119,15 +119,15 @@ class VoyageRerankConfig(BaseRerankConfig):
                     transformed_result["document"] = result["document"]
             transformed_results.append(transformed_result)
 
-        usage = _json_response.get("usage", {})
-        total_tokens = usage.get("total_tokens", 0)
-        _billed_units = RerankBilledUnits(total_tokens=total_tokens)
-        _tokens = RerankTokens(input_tokens=total_tokens, output_tokens=0)
-        rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+        usage: Final = _json_response.get("usage", {})
+        total_tokens: Final = usage.get("total_tokens", 0)
+        _billed_units: Final = RerankBilledUnits(total_tokens=total_tokens)
+        _tokens: Final = RerankTokens(input_tokens=total_tokens, output_tokens=0)
+        rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
         return RerankResponse(
             id=_json_response.get("id", f"voyage-rerank-{model}"),
-            results=transformed_results,  # type: ignore
+            results=transformed_results,
             meta=rerank_meta,
         )
 
@@ -161,7 +161,7 @@ class VoyageRerankConfig(BaseRerankConfig):
             or billed_units is None
         ):
             return 0.0, 0.0
-        total_tokens = billed_units.get("total_tokens")
+        total_tokens: Final = billed_units.get("total_tokens")
         if total_tokens is None:
             return 0.0, 0.0
         return model_info["input_cost_per_token"] * total_tokens, 0.0

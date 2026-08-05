@@ -9,7 +9,7 @@ import random
 import traceback
 from collections.abc import Callable
 from functools import partial
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_router_logger
 
@@ -38,8 +38,8 @@ class SearchAPIRouter:
         Returns:
             Tuple of (api_key, api_base) from tool configuration
         """
-        resolved_api_key: str | None = tool_litellm_params.get("api_key")
-        resolved_api_base: str | None = tool_litellm_params.get("api_base")
+        resolved_api_key: Final[str | None] = tool_litellm_params.get("api_key")
+        resolved_api_base: Final[str | None] = tool_litellm_params.get("api_base")
 
         return resolved_api_key, resolved_api_base
 
@@ -60,10 +60,10 @@ class SearchAPIRouter:
             verbose_router_logger.debug("Adding %s search tools to router", len(search_tools))
 
             # Convert search tools to the format expected by the router
-            router_search_tools: list = []
+            router_search_tools: Final[list] = []
             for tool in search_tools:
                 # Create dict that matches SearchToolTypedDict structure
-                router_search_tool: SearchToolTypedDict = {  # type: ignore
+                router_search_tool: SearchToolTypedDict = {
                     "search_tool_id": tool.get("search_tool_id"),
                     "search_tool_name": tool.get("search_tool_name"),
                     "litellm_params": tool.get("litellm_params", {}),
@@ -98,7 +98,7 @@ class SearchAPIRouter:
         Raises:
             ValueError: If no matching search tools are found
         """
-        matching_tools = [
+        matching_tools: Final = [
             tool for tool in router_instance.search_tools if tool.get("search_tool_name") == search_tool_name
         ]
 
@@ -126,7 +126,7 @@ class SearchAPIRouter:
             SearchResponse from the search API
         """
         try:
-            search_tool_name = kwargs.get("search_tool_name", kwargs.get("model"))
+            search_tool_name: Final = kwargs.get("search_tool_name", kwargs.get("model"))
 
             if not search_tool_name:
                 raise ValueError("search_tool_name or model parameter is required for search")
@@ -147,7 +147,7 @@ class SearchAPIRouter:
                 metadata_variable_name="litellm_metadata",
             )
 
-            available_search_tool_names = [tool.get("search_tool_name") for tool in router_instance.search_tools]
+            available_search_tool_names: Final = [tool.get("search_tool_name") for tool in router_instance.search_tools]
             verbose_router_logger.debug(
                 "Inside SearchAPIRouter.async_search_with_fallbacks() - search_tool_name: %s, Available Search Tools: %s, kwargs: %s",
                 search_tool_name,
@@ -156,7 +156,7 @@ class SearchAPIRouter:
             )
 
             # Use the existing retry/fallback infrastructure
-            response = await router_instance.async_function_with_fallbacks(**kwargs)
+            response: Final = await router_instance.async_function_with_fallbacks(**kwargs)
             return response
 
         except Exception as e:
@@ -192,22 +192,22 @@ class SearchAPIRouter:
         Returns:
             SearchResponse from the selected search provider
         """
-        search_tool_name = model  # model field contains the search_tool_name
+        search_tool_name: Final = model  # model field contains the search_tool_name
 
         try:
             # Find matching search tools
-            matching_tools = SearchAPIRouter.get_matching_search_tools(
+            matching_tools: Final = SearchAPIRouter.get_matching_search_tools(
                 router_instance=router_instance,
                 search_tool_name=search_tool_name,
             )
 
             # Simple random selection for load balancing across multiple providers with same name
             # For search tools, we use simple random choice since they don't have TPM/RPM constraints
-            selected_tool = random.choice(matching_tools)
+            selected_tool: Final = random.choice(matching_tools)
 
             # Extract search provider and other params from litellm_params
-            litellm_params = selected_tool.get("litellm_params", {})
-            search_provider = litellm_params.get("search_provider")
+            litellm_params: Final = selected_tool.get("litellm_params", {})
+            search_provider: Final = litellm_params.get("search_provider")
             if not search_provider:
                 raise ValueError(f"search_provider not found in litellm_params for search tool '{search_tool_name}'")
 
@@ -218,7 +218,7 @@ class SearchAPIRouter:
             verbose_router_logger.debug("Selected search tool with provider: %s", search_provider)
 
             # Call the original search function with the provider config
-            response = await original_generic_function(
+            response: Final = await original_generic_function(
                 search_provider=search_provider,
                 api_key=api_key,
                 api_base=api_base,

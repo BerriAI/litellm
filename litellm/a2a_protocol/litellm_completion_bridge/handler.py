@@ -11,7 +11,7 @@ A2A Streaming Events (in order):
 """
 
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -27,10 +27,10 @@ from litellm.types.utils import ModelResponse
 # litellm_params key carrying the authenticated principal (hashed virtual key) so
 # A2A provider configs can scope provider-side state (e.g. LangFlow session memory)
 # per key instead of trusting the client-supplied A2A contextId.
-A2A_USER_API_KEY_HASH_PARAM = "litellm_a2a_user_api_key_hash"
+A2A_USER_API_KEY_HASH_PARAM: Final = "litellm_a2a_user_api_key_hash"
 
 # Agent metadata fields stored in litellm_params that are not valid litellm.acompletion() kwargs
-_AGENT_ONLY_PARAMS = frozenset(
+_AGENT_ONLY_PARAMS: Final = frozenset(
     {
         "is_public",
         "agent_name",
@@ -56,14 +56,14 @@ class A2ACompletionBridgeHandler:
         stream: bool,
     ) -> Mapping[str, Any]:
         # Extract message from params
-        message = params.get("message", {})
+        message: Final = params.get("message", {})
 
         # Transform A2A message to OpenAI format
-        openai_messages = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
+        openai_messages: Final = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
 
         # Get completion params
-        custom_llm_provider = litellm_params.get("custom_llm_provider")
-        model = litellm_params.get("model", "agent")
+        custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+        model: Final = litellm_params.get("model", "agent")
 
         # Build full model string if provider specified
         # Skip prepending if model already starts with the provider prefix
@@ -78,14 +78,14 @@ class A2ACompletionBridgeHandler:
             verbose_logger.info("A2A completion bridge: model=%s, api_base=%s", full_model, api_base)
 
         # Build completion params dict
-        completion_params: dict[str, Any] = {
+        completion_params: Final[dict[str, Any]] = {
             "model": full_model,
             "messages": openai_messages,
             "api_base": api_base,
             "stream": stream,
         }
         # Add litellm_params (contains api_key, client_id, client_secret, tenant_id, etc.)
-        litellm_params_to_add = {
+        litellm_params_to_add: Final = {
             k: v
             for k, v in litellm_params.items()
             if k not in ("model", "custom_llm_provider") and k not in _AGENT_ONLY_PARAMS
@@ -136,9 +136,9 @@ class A2ACompletionBridgeHandler:
         Returns:
             A2A SendMessageResponse dict
         """
-        custom_llm_provider = litellm_params.get("custom_llm_provider")
+        custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
         if not _skip_a2a_provider_routing:
-            a2a_provider_config = A2AProviderConfigManager.get_provider_config(
+            a2a_provider_config: Final = A2AProviderConfigManager.get_provider_config(
                 custom_llm_provider=custom_llm_provider,
                 model=litellm_params.get("model"),
             )
@@ -154,7 +154,7 @@ class A2ACompletionBridgeHandler:
                     agent_extra_headers=agent_extra_headers,
                 )
 
-        completion_params = A2ACompletionBridgeHandler._build_completion_params(
+        completion_params: Final = A2ACompletionBridgeHandler._build_completion_params(
             params=params,
             litellm_params=litellm_params,
             api_base=api_base,
@@ -163,10 +163,10 @@ class A2ACompletionBridgeHandler:
         )
 
         # Call litellm.acompletion
-        response = await A2ACompletionBridgeHandler._acompletion(completion_params)
+        response: Final = await A2ACompletionBridgeHandler._acompletion(completion_params)
 
         # Transform response to A2A format
-        a2a_response = A2ACompletionBridgeTransformation.openai_response_to_a2a_response(
+        a2a_response: Final = A2ACompletionBridgeTransformation.openai_response_to_a2a_response(
             response=response,
             request_id=request_id,
         )
@@ -205,9 +205,9 @@ class A2ACompletionBridgeHandler:
         Yields:
             A2A streaming response events
         """
-        custom_llm_provider = litellm_params.get("custom_llm_provider")
+        custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
         if not _skip_a2a_provider_routing:
-            a2a_provider_config = A2AProviderConfigManager.get_provider_config(
+            a2a_provider_config: Final = A2AProviderConfigManager.get_provider_config(
                 custom_llm_provider=custom_llm_provider,
                 model=litellm_params.get("model"),
             )
@@ -227,12 +227,12 @@ class A2ACompletionBridgeHandler:
                 return
 
         # Create streaming context
-        ctx = A2AStreamingContext(
+        ctx: Final = A2AStreamingContext(
             request_id=request_id,
             input_message=params.get("message", {}),
         )
 
-        completion_params = A2ACompletionBridgeHandler._build_completion_params(
+        completion_params: Final = A2ACompletionBridgeHandler._build_completion_params(
             params=params,
             litellm_params=litellm_params,
             api_base=api_base,
@@ -241,11 +241,11 @@ class A2ACompletionBridgeHandler:
         )
 
         # 1. Emit initial task event (kind: "task", status: "submitted")
-        task_event = A2ACompletionBridgeTransformation.create_task_event(ctx)
+        task_event: Final = A2ACompletionBridgeTransformation.create_task_event(ctx)
         yield task_event
 
         # 2. Emit status update (kind: "status-update", status: "working")
-        working_event = A2ACompletionBridgeTransformation.create_status_update_event(
+        working_event: Final = A2ACompletionBridgeTransformation.create_status_update_event(
             ctx=ctx,
             state="working",
             final=False,
@@ -254,12 +254,12 @@ class A2ACompletionBridgeHandler:
         yield working_event
 
         # Call litellm.acompletion with streaming
-        response = await A2ACompletionBridgeHandler._acompletion(completion_params)
+        response: Final = await A2ACompletionBridgeHandler._acompletion(completion_params)
 
         # 3. Accumulate content and emit artifact update
         accumulated_text = ""
         chunk_count = 0
-        async for chunk in response:  # type: ignore[union-attr]
+        async for chunk in response:
             chunk_count += 1
 
             # Extract delta content
@@ -274,14 +274,14 @@ class A2ACompletionBridgeHandler:
 
         # Emit artifact update with accumulated content
         if accumulated_text:
-            artifact_event = A2ACompletionBridgeTransformation.create_artifact_update_event(
+            artifact_event: Final = A2ACompletionBridgeTransformation.create_artifact_update_event(
                 ctx=ctx,
                 text=accumulated_text,
             )
             yield artifact_event
 
         # 4. Emit final status update (kind: "status-update", status: "completed", final: true)
-        completed_event = A2ACompletionBridgeTransformation.create_status_update_event(
+        completed_event: Final = A2ACompletionBridgeTransformation.create_status_update_event(
             ctx=ctx,
             state="completed",
             final=True,

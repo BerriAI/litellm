@@ -17,7 +17,7 @@ import asyncio
 import time
 from collections import OrderedDict
 from dataclasses import asdict, dataclass
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -54,8 +54,8 @@ from litellm.types.utils import StandardLoggingRoutingDecision
 
 # Sweep session-state cache when it exceeds this many live entries. Expired
 # entries are dropped in bulk; amortizes to O(1) per insert.
-_SESSION_STATE_SWEEP_THRESHOLD: int = 1024
-_FEEDBACK_CONTEXT_MAX_ENTRIES: int = 1024
+_SESSION_STATE_SWEEP_THRESHOLD: Final[int] = 1024
+_FEEDBACK_CONTEXT_MAX_ENTRIES: Final[int] = 1024
 from litellm.repositories.table_repositories import AdaptiveRouterStateRepository
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import (
@@ -127,7 +127,7 @@ class AdaptiveRouter:
         if prisma_client is None:
             return
         try:
-            rows = await AdaptiveRouterStateRepository(prisma_client).table.find_many(
+            rows: Final = await AdaptiveRouterStateRepository(prisma_client).table.find_many(
                 where={"router_name": self.router_name}
             )
             loaded = 0
@@ -174,11 +174,11 @@ class AdaptiveRouter:
         Routing is stateless per-turn: every call Thompson-samples fresh,
         regardless of any prior pick for the same session.
         """
-        user_text = get_last_user_message(cast(list[AllMessageValues], messages or [])) or ""
+        user_text: Final = get_last_user_message(cast(list[AllMessageValues], messages or [])) or ""
 
-        request_type = classify_prompt(user_text)
-        min_quality_tier = self._extract_min_quality_tier(request_kwargs)
-        chosen_model = await self.pick_model(request_type=request_type, min_quality_tier=min_quality_tier)
+        request_type: Final = classify_prompt(user_text)
+        min_quality_tier: Final = self._extract_min_quality_tier(request_kwargs)
+        chosen_model: Final = await self.pick_model(request_type=request_type, min_quality_tier=min_quality_tier)
         verbose_router_logger.debug(
             "AdaptiveRouter[%s]: classified=%s -> chose %s",
             self.router_name,
@@ -190,7 +190,7 @@ class AdaptiveRouter:
         # it as the `x-litellm-adaptive-router-model` response header. We use
         # `metadata` (not a top-level kwarg) so the value doesn't leak into
         # `litellm.acompletion(**input_kwargs)`.
-        kwargs_metadata = request_kwargs.setdefault("metadata", {})
+        kwargs_metadata: Final = request_kwargs.setdefault("metadata", {})
         if isinstance(kwargs_metadata, dict):
             kwargs_metadata[ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY] = chosen_model
 
@@ -214,12 +214,12 @@ class AdaptiveRouter:
         min_quality_tier: int | None = None,
     ) -> str:
         """Thompson-sample across eligible models. Stateless per-turn."""
-        eligible = self._eligible_models(min_quality_tier)
+        eligible: Final = self._eligible_models(min_quality_tier)
         if not eligible:
             raise ValueError(f"AdaptiveRouter[{self.router_name}]: no models meet min_quality_tier={min_quality_tier}")
 
-        cells = {m: self._cells[(request_type, m)] for m in eligible}
-        costs = {m: self.model_to_cost.get(m, 0.0) for m in eligible}
+        cells: Final = {m: self._cells[(request_type, m)] for m in eligible}
+        costs: Final = {m: self.model_to_cost.get(m, 0.0) for m in eligible}
         return pick_best(
             cells,
             costs,
@@ -229,7 +229,7 @@ class AdaptiveRouter:
 
     async def get_state_snapshot(self) -> dict[str, Any]:
         """In-memory snapshot for the introspection endpoint. Cheap; no DB hit."""
-        cells = []
+        cells: Final = []
         for (rt, model), cell in sorted(self._cells.items(), key=lambda kv: (kv[0][0].value, kv[0][1])):
             total = cell.alpha + cell.beta
             cells.append(
@@ -246,8 +246,8 @@ class AdaptiveRouter:
                     "quality_mean": cell.alpha / total if total > 0 else 0.0,
                 }
             )
-        queue = await self.queue.queue_size()
-        now = time.time()
+        queue: Final = await self.queue.queue_size()
+        now: Final = time.time()
         feedback_contexts_live = sum(1 for context in self._feedback_contexts.values() if context.expires_at > now)
         return {
             "router_name": self.router_name,
@@ -278,7 +278,7 @@ class AdaptiveRouter:
         (treated as "not set") rather than raising — a bad header shouldn't
         fail the request.
         """
-        headers = request_kwargs.get("headers") or {}
+        headers: Final = request_kwargs.get("headers") or {}
         if isinstance(headers, dict):
             for k, v in headers.items():
                 if isinstance(k, str) and k.lower() == MIN_QUALITY_TIER_HEADER:
@@ -287,9 +287,9 @@ class AdaptiveRouter:
                     except (TypeError, ValueError):
                         return None
 
-        metadata = request_kwargs.get("metadata") or {}
+        metadata: Final = request_kwargs.get("metadata") or {}
         if isinstance(metadata, dict):
-            raw = metadata.get(MIN_QUALITY_TIER_METADATA_KEY)
+            raw: Final = metadata.get(MIN_QUALITY_TIER_METADATA_KEY)
             if raw is not None:
                 try:
                     return int(raw)
@@ -314,8 +314,8 @@ class AdaptiveRouter:
         model_name: str,
         request_type: RequestType,
     ) -> SessionState:
-        key = (session_id, model_name)
-        now = time.time()
+        key: Final = (session_id, model_name)
+        now: Final = time.time()
 
         # Opportunistic bulk sweep when the cache grows past the threshold.
         # Cheap relative to the alternative of a bounded LRU — conversations
@@ -338,7 +338,7 @@ class AdaptiveRouter:
     def _evict_expired_session_states(self, now: float) -> None:
         """Drop session states whose TTL has passed. O(n) but amortized O(1)
         per insert thanks to `_SESSION_STATE_SWEEP_THRESHOLD`."""
-        expired = [k for k, exp in self._session_states_expiry.items() if exp <= now]
+        expired: Final = [k for k, exp in self._session_states_expiry.items() if exp <= now]
         for k in expired:
             self._session_states.pop(k, None)
             self._session_states_expiry.pop(k, None)
@@ -352,23 +352,23 @@ class AdaptiveRouter:
     ) -> SignalDelta:
         """Attribute feedback to the previous response and response signals to the current model."""
         async with self._lock:
-            now = time.time()
+            now: Final = time.time()
             while self._feedback_contexts:
                 oldest_context = next(iter(self._feedback_contexts.values()))
                 if oldest_context.expires_at > now:
                     break
                 self._feedback_contexts.popitem(last=False)
-            previous = self._feedback_contexts.pop(session_id, None)
+            previous: Final = self._feedback_contexts.pop(session_id, None)
 
-            effective_request_type = (
+            effective_request_type: Final = (
                 previous.request_type if previous is not None and request_type == RequestType.GENERAL else request_type
             )
-            current_state = self.get_or_create_session_state(
+            current_state: Final = self.get_or_create_session_state(
                 session_id,
                 model_name,
                 effective_request_type,
             )
-            feedback_delta = detect_user_feedback(
+            feedback_delta: Final = detect_user_feedback(
                 previous.user_content if previous else None,
                 turn.user_content,
                 turn.tool_results,
@@ -378,8 +378,8 @@ class AdaptiveRouter:
                     and previous.turn_count + 1 >= MIN_TURNS_FOR_CLEAN_CREDIT
                 ),
             )
-            previous_assistant = previous.assistant_content if previous else None
-            response_delta = detect_response_signals(
+            previous_assistant: Final = previous.assistant_content if previous else None
+            response_delta: Final = detect_response_signals(
                 previous_assistant,
                 turn.assistant_content,
                 current_state.tool_call_history,
@@ -387,11 +387,11 @@ class AdaptiveRouter:
                 turn.tool_results,
                 turn.response_status,
             )
-            states_to_persist: dict[str, SessionState] = {model_name: current_state}
-            bandit_deltas: dict[tuple[RequestType, str], SignalDelta] = {}
+            states_to_persist: Final[dict[str, SessionState]] = {model_name: current_state}
+            bandit_deltas: Final[dict[tuple[RequestType, str], SignalDelta]] = {}
 
             if previous is not None:
-                feedback_state = self.get_or_create_session_state(
+                feedback_state: Final = self.get_or_create_session_state(
                     session_id,
                     previous.model_name,
                     previous.request_type,
@@ -408,21 +408,21 @@ class AdaptiveRouter:
             else:
                 if feedback_delta.any_fired():
                     self._feedback_without_context_total += 1
-                initial_failure = SignalDelta(failure=feedback_delta.failure)
+                initial_failure: Final = SignalDelta(failure=feedback_delta.failure)
                 apply_signal_delta(current_state, initial_failure)
                 bandit_deltas[(effective_request_type, model_name)] = initial_failure
 
             apply_signal_delta(current_state, response_delta)
             if self._compute_bandit_delta(response_delta) != (0.0, 0.0):
                 self._response_signal_updates_total += 1
-            current_key = (effective_request_type, model_name)
+            current_key: Final = (effective_request_type, model_name)
             bandit_deltas[current_key] = merge_signal_deltas(
                 bandit_deltas.get(current_key, SignalDelta()),
                 response_delta,
             )
             advance_session_state(current_state, turn)
 
-            next_turn_count = (previous.turn_count if previous else 0) + 1
+            next_turn_count: Final = (previous.turn_count if previous else 0) + 1
             clean_credit_awarded = bool((previous and previous.clean_credit_awarded) or feedback_delta.satisfaction)
             if len(self._feedback_contexts) >= _FEEDBACK_CONTEXT_MAX_ENTRIES:
                 self._feedback_contexts.popitem(last=False)
@@ -475,7 +475,7 @@ class AdaptiveRouter:
 
     @staticmethod
     def _persistable_session_snapshot(state: SessionState) -> dict[str, Any]:
-        snapshot = asdict(state)
+        snapshot: Final = asdict(state)
         for sensitive in (
             "last_user_content",
             "last_assistant_content",
@@ -497,6 +497,6 @@ class AdaptiveRouter:
         - loop                       -> +0.5 beta (weak; could be model OR user)
         - exhaustion                 -> 0 (uptime issue, tracked separately later)
         """
-        d_alpha = float(delta.satisfaction)
+        d_alpha: Final = float(delta.satisfaction)
         d_beta = float(delta.misalignment + delta.stagnation + delta.disengagement + delta.failure) + 0.5 * delta.loop
         return d_alpha, d_beta

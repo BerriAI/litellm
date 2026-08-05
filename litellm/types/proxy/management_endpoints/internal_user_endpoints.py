@@ -1,7 +1,6 @@
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Final, List, Optional
 
-from fastapi import HTTPException
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, field_validator
 
 from litellm.proxy._types import (
     LiteLLM_UserTableWithKeyCount,
@@ -33,13 +32,13 @@ class BulkUpdateUserRequest(BaseModel):
     @classmethod
     def validate_request(cls, v, info):
         # Get all field values for validation
-        values = info.data if hasattr(info, "data") else {}
+        values: Final = info.data if hasattr(info, "data") else {}
 
         # After all fields are set, validate the combination
         if info.field_name == "user_updates":  # This is the last field, do validation here
-            users = values.get("users")
-            all_users = values.get("all_users", False)
-            user_updates = v
+            users: Final = values.get("users")
+            all_users: Final = values.get("all_users", False)
+            user_updates: Final = v
 
             # Must specify either users list OR all_users with user_updates
             if not users and not (all_users and user_updates):

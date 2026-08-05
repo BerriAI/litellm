@@ -4,7 +4,7 @@ Type definitions for AWS Bedrock Invoke Agent API responses.
 https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_InvokeAgent.html
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Final, List, Optional, Union
 
 from typing_extensions import TypedDict
 
@@ -125,5 +125,5 @@ class InvokeAgentEvent(TypedDict, total=False):
 
 # Type aliases for convenience
 InvokeAgentEventList = List[InvokeAgentEvent]
-InvokeAgentTraceEvent = InvokeAgentEvent  # When headers.event_type == 'trace'
-InvokeAgentChunkEvent = InvokeAgentEvent  # When headers.event_type == 'chunk'
+InvokeAgentTraceEvent: Final = InvokeAgentEvent  # When headers.event_type == 'trace'
+InvokeAgentChunkEvent: Final = InvokeAgentEvent  # When headers.event_type == 'chunk'

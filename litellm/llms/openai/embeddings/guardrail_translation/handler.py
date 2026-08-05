@@ -5,7 +5,7 @@ This module provides guardrail translation support for OpenAI's embeddings endpo
 The handler processes the 'input' parameter for guardrails.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -48,7 +48,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         Returns:
             Modified data with guardrails applied to input
         """
-        input_data = data.get("input")
+        input_data: Final = data.get("input")
         if input_data is None:
             verbose_proxy_logger.debug("OpenAI Embeddings: No input found in request data")
             return data
@@ -73,11 +73,11 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         litellm_logging_obj: Any | None,
     ) -> dict:
         """Process a single string input through the guardrail."""
-        inputs = GenericGuardrailAPIInputs(texts=[input_data])
+        inputs: Final = GenericGuardrailAPIInputs(texts=[input_data])
         if model := data.get("model"):
             inputs["model"] = model
 
-        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+        guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
             request_data=data,
             input_type="request",
@@ -105,7 +105,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         if len(input_data) == 0:
             return data
 
-        first_item = input_data[0]
+        first_item: Final = input_data[0]
 
         # Skip non-text inputs (token IDs)
         if isinstance(first_item, (int, list)):
@@ -120,11 +120,11 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
             return data
 
         # List of strings - apply guardrail
-        inputs = GenericGuardrailAPIInputs(texts=input_data)  # type: ignore
+        inputs: Final = GenericGuardrailAPIInputs(texts=input_data)
         if model := data.get("model"):
             inputs["model"] = model
 
-        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+        guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
             request_data=data,
             input_type="request",

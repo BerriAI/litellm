@@ -17,8 +17,9 @@ Vertex Documentation for using the OpenAI /chat/completions endpoint: https://gi
 """
 
 from collections.abc import Callable
+from typing import Final
 
-import httpx  # type: ignore
+import httpx
 
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.utils import ModelResponse
@@ -46,7 +47,7 @@ def create_vertex_url(
     api_base: str | None = None,
 ) -> str:
     """Return the api base for vertex model garden (without /chat/completions)."""
-    base_url = get_vertex_base_url(vertex_location)
+    base_url: Final = get_vertex_base_url(vertex_location)
     if _vertex_model_garden_model_id_in_json_body(model):
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
     return f"{base_url}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
@@ -106,13 +107,13 @@ class VertexAIModelGardenModels(VertexBase):
                 custom_llm_provider="vertex_ai",
             )
 
-            openai_like_chat_completions = OpenAILikeChatHandler()
+            openai_like_chat_completions: Final = OpenAILikeChatHandler()
 
             ## CONSTRUCT API BASE
             # Skip _check_custom_proxy: its ":verb" URL construction corrupts a
             # user-supplied api_base (e.g. Vertex MG dedicated endpoint), and
             # OpenAILikeChatHandler already appends "/chat/completions".
-            stream: bool = optional_params.get("stream", False) or False
+            stream: Final[bool] = optional_params.get("stream", False) or False
             optional_params["stream"] = stream
             if api_base is None:
                 api_base = create_vertex_url(

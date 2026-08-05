@@ -7,10 +7,10 @@ import json
 import os
 import random
 import types
-from typing import Any
+from typing import Any, Final
 
 import httpx
-from pydantic import BaseModel  # type: ignore
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
@@ -29,7 +29,7 @@ from litellm.types.utils import StandardLoggingPayload
 
 
 def is_serializable(value):
-    non_serializable_types = (
+    non_serializable_types: Final = (
         types.CoroutineType,
         types.FunctionType,
         types.GeneratorType,
@@ -56,13 +56,13 @@ class ArgillaLogger(CustomBatchLogger):
             argilla_base_url=argilla_base_url,
         )
         self.sampling_rate: float = (
-            float(os.getenv("ARGILLA_SAMPLING_RATE"))  # type: ignore
-            if os.getenv("ARGILLA_SAMPLING_RATE") is not None and os.getenv("ARGILLA_SAMPLING_RATE").strip().isdigit()  # type: ignore
+            float(os.getenv("ARGILLA_SAMPLING_RATE"))
+            if os.getenv("ARGILLA_SAMPLING_RATE") is not None and os.getenv("ARGILLA_SAMPLING_RATE").strip().isdigit()
             else 1.0
         )
 
         self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
-        _batch_size = os.getenv("ARGILLA_BATCH_SIZE", None) or litellm.argilla_batch_size
+        _batch_size: Final = os.getenv("ARGILLA_BATCH_SIZE", None) or litellm.argilla_batch_size
         if _batch_size:
             self.batch_size = int(_batch_size)
         asyncio.create_task(self.periodic_flush())
@@ -85,11 +85,11 @@ class ArgillaLogger(CustomBatchLogger):
         argilla_dataset_name: str | None,
         argilla_base_url: str | None,
     ) -> ArgillaCredentialsObject:
-        _credentials_api_key = argilla_api_key or os.getenv("ARGILLA_API_KEY")
+        _credentials_api_key: Final = argilla_api_key or os.getenv("ARGILLA_API_KEY")
         if _credentials_api_key is None:
             raise Exception("Invalid Argilla API Key given. _credentials_api_key=None.")
 
-        _credentials_base_url = argilla_base_url or os.getenv("ARGILLA_BASE_URL") or "http://localhost:6900/"
+        _credentials_base_url: Final = argilla_base_url or os.getenv("ARGILLA_BASE_URL") or "http://localhost:6900/"
         if _credentials_base_url is None:
             raise Exception("Invalid Argilla Base URL given. _credentials_base_url=None.")
 
@@ -97,11 +97,11 @@ class ArgillaLogger(CustomBatchLogger):
         if _credentials_dataset_name is None:
             raise Exception("Invalid Argilla Dataset give. Value=None.")
         else:
-            dataset_response = litellm.module_level_client.get(
+            dataset_response: Final = litellm.module_level_client.get(
                 url=f"{_credentials_base_url}/api/v1/me/datasets?name={_credentials_dataset_name}",
                 headers={"X-Argilla-Api-Key": _credentials_api_key},
             )
-            json_response = dataset_response.json()
+            json_response: Final = dataset_response.json()
             if (
                 "items" in json_response
                 and isinstance(json_response["items"], list)
@@ -116,7 +116,7 @@ class ArgillaLogger(CustomBatchLogger):
         )
 
     def get_chat_messages(self, payload: StandardLoggingPayload) -> list[dict[str, Any]]:
-        payload_messages = payload.get("messages", None)
+        payload_messages: Final = payload.get("messages", None)
 
         if payload_messages is None:
             raise Exception("No chat messages found in payload.")
@@ -129,7 +129,7 @@ class ArgillaLogger(CustomBatchLogger):
             raise Exception(f"Invalid chat messages format: {payload_messages}")
 
     def get_str_response(self, payload: StandardLoggingPayload) -> str:
-        response = payload["response"]
+        response: Final = payload["response"]
 
         if response is None:
             raise Exception("No response found in payload.")
@@ -144,14 +144,14 @@ class ArgillaLogger(CustomBatchLogger):
     def _prepare_log_data(self, kwargs, response_obj, start_time, end_time) -> ArgillaItem | None:
         try:
             # Ensure everything in the payload is converted to str
-            payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
+            payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
             if payload is None:
                 raise Exception("Error logging request payload. Payload=none.")
 
-            argilla_message = self.get_chat_messages(payload)
-            argilla_response = self.get_str_response(payload)
-            argilla_item: ArgillaItem = {"fields": {}}
+            argilla_message: Final = self.get_chat_messages(payload)
+            argilla_response: Final = self.get_str_response(payload)
+            argilla_item: Final[ArgillaItem] = {"fields": {}}
             for k, v in self.argilla_transformation_object.items():
                 if v == "messages":
                     argilla_item["fields"][k] = argilla_message
@@ -168,17 +168,17 @@ class ArgillaLogger(CustomBatchLogger):
         if not self.log_queue:
             return
 
-        argilla_api_base = self.default_credentials["ARGILLA_BASE_URL"]
-        argilla_dataset_name = self.default_credentials["ARGILLA_DATASET_NAME"]
+        argilla_api_base: Final = self.default_credentials["ARGILLA_BASE_URL"]
+        argilla_dataset_name: Final = self.default_credentials["ARGILLA_DATASET_NAME"]
 
-        url = f"{argilla_api_base}/api/v1/datasets/{argilla_dataset_name}/records/bulk"
+        url: Final = f"{argilla_api_base}/api/v1/datasets/{argilla_dataset_name}/records/bulk"
 
-        argilla_api_key = self.default_credentials["ARGILLA_API_KEY"]
+        argilla_api_key: Final = self.default_credentials["ARGILLA_API_KEY"]
 
-        headers = {"X-Argilla-Api-Key": argilla_api_key}
+        headers: Final = {"X-Argilla-Api-Key": argilla_api_key}
 
         try:
-            response = litellm.module_level_client.post(
+            response: Final = litellm.module_level_client.post(
                 url=url,
                 json=self.log_queue,
                 headers=headers,
@@ -195,13 +195,13 @@ class ArgillaLogger(CustomBatchLogger):
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            sampling_rate = (
-                float(os.getenv("LANGSMITH_SAMPLING_RATE"))  # type: ignore
+            sampling_rate: Final = (
+                float(os.getenv("LANGSMITH_SAMPLING_RATE"))
                 if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
-                and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()  # type: ignore
+                and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()
                 else 1.0
             )
-            random_sample = random.random()
+            random_sample: Final = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
                     "Skipping Langsmith logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
@@ -212,7 +212,7 @@ class ArgillaLogger(CustomBatchLogger):
                 kwargs,
                 response_obj,
             )
-            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            data: Final = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
             if data is None:
                 return
 
@@ -227,8 +227,8 @@ class ArgillaLogger(CustomBatchLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            sampling_rate = self.sampling_rate
-            random_sample = random.random()
+            sampling_rate: Final = self.sampling_rate
+            random_sample: Final = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
                     "Skipping Langsmith logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
@@ -239,7 +239,7 @@ class ArgillaLogger(CustomBatchLogger):
                 kwargs,
                 response_obj,
             )
-            payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
+            payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
             data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
 
@@ -268,8 +268,8 @@ class ArgillaLogger(CustomBatchLogger):
             verbose_logger.exception("Argilla Layer Error - error logging async success event.")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        sampling_rate = self.sampling_rate
-        random_sample = random.random()
+        sampling_rate: Final = self.sampling_rate
+        random_sample: Final = random.random()
         if random_sample > sampling_rate:
             verbose_logger.info(
                 "Skipping Langsmith logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
@@ -277,7 +277,7 @@ class ArgillaLogger(CustomBatchLogger):
             return  # Skip logging
         verbose_logger.info("Langsmith Failure Event Logging!")
         try:
-            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            data: Final = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
             self.log_queue.append(data)
             verbose_logger.debug(
                 "Langsmith logging: queue length %s, batch size %s",
@@ -302,17 +302,17 @@ class ArgillaLogger(CustomBatchLogger):
         if not self.log_queue:
             return
 
-        argilla_api_base = self.default_credentials["ARGILLA_BASE_URL"]
-        argilla_dataset_name = self.default_credentials["ARGILLA_DATASET_NAME"]
+        argilla_api_base: Final = self.default_credentials["ARGILLA_BASE_URL"]
+        argilla_dataset_name: Final = self.default_credentials["ARGILLA_DATASET_NAME"]
 
-        url = f"{argilla_api_base}/api/v1/datasets/{argilla_dataset_name}/records/bulk"
+        url: Final = f"{argilla_api_base}/api/v1/datasets/{argilla_dataset_name}/records/bulk"
 
-        argilla_api_key = self.default_credentials["ARGILLA_API_KEY"]
+        argilla_api_key: Final = self.default_credentials["ARGILLA_API_KEY"]
 
-        headers = {"X-Argilla-Api-Key": argilla_api_key}
+        headers: Final = {"X-Argilla-Api-Key": argilla_api_key}
 
         try:
-            response = await self.async_httpx_client.put(
+            response: Final = await self.async_httpx_client.put(
                 url=url,
                 data=json.dumps(
                     {

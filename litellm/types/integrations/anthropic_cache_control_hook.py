@@ -1,4 +1,4 @@
-from typing import Literal, Optional, Union
+from typing import Final, Literal, Optional, Union
 
 from typing_extensions import NotRequired, TypedDict
 
