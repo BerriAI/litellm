@@ -9,7 +9,8 @@
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety pre-commit \
-	lint-install lint-fetch-base bootstrap
+	lint-install lint-fetch-base bootstrap \
+	check-spend-logs-query-budget spend-logs-query-budget-update
 
 # Default target
 help:
@@ -35,6 +36,8 @@ help:
 	@echo "  make lint-gate        - Strict ruff gate in CI-parity mode (fetches staging, simulates the merge)"
 	@echo "  make lint-ruff-budget-update - Ratchet ruff-strict-budget.json limits down by what this branch fixed"
 	@echo "  make lint-budget-update - Ratchet all budgets down (ruff + type-discipline + basedpyright)"
+	@echo "  make check-spend-logs-query-budget - Gate new LiteLLM_SpendLogs / daily aggregate queries"
+	@echo "  make spend-logs-query-budget-update - Rewrite spend-logs-query-budget.json from the working tree"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -210,6 +213,12 @@ lint-type-discipline-budget-update: install-dev lint-fetch-base
 
 # Ratchet all budgets in one shot (ruff strict + type-discipline + basedpyright)
 lint-budget-update: lint-ruff-budget-update lint-type-discipline-budget-update lint-basedpyright-budget-update
+
+check-spend-logs-query-budget: $(LINT_DEP_INSTALL)
+	$(UV_RUN) python tests/code_coverage_tests/check_spend_logs_query_budget.py
+
+spend-logs-query-budget-update: $(LINT_DEP_INSTALL)
+	$(UV_RUN) python tests/code_coverage_tests/check_spend_logs_query_budget.py --update
 
 check-circular-imports: $(LINT_DEP_INSTALL)
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..

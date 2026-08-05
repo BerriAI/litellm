@@ -1,3 +1,13 @@
 /ui/ @yuneng-jiang @ryan-crabbe-berri
 /litellm/proxy/_experimental/out/ @yuneng-jiang @ryan-crabbe-berri
 /ui/litellm-dashboard/src/lib/http/schema.d.ts
+
+/spend-logs-query-budget.json @krrishdholakia @ishaan-jaff @yuneng-jiang
+/tests/code_coverage_tests/check_spend_logs_query_budget.py @krrishdholakia @ishaan-jaff @yuneng-jiang
+/litellm/proxy/schema.prisma @krrishdholakia @ishaan-jaff @yuneng-jiang
+/litellm/models/spend_logs.py @krrishdholakia @ishaan-jaff @yuneng-jiang
+/litellm/proxy/spend_tracking/ @krrishdholakia @ishaan-jaff @yuneng-jiang
+/litellm/proxy/db/db_transaction_queue/ @krrishdholakia @ishaan-jaff @yuneng-jiang
+/litellm/proxy/db/db_spend_update_writer.py @krrishdholakia @ishaan-jaff @yuneng-jiang
+/litellm/proxy/db/create_views.py @krrishdholakia @ishaan-jaff @yuneng-jiang
+/litellm/proxy/management_endpoints/common_daily_activity.py @krrishdholakia @ishaan-jaff @yuneng-jiang
