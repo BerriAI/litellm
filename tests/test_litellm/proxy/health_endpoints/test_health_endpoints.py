@@ -2379,12 +2379,14 @@ class TestConfigBaseForHealthCheck:
         "rpm": 100,
     }
 
-    def _base(self, config, request):
+    def _base(self, config, request, allow_client_side_credentials=False):
         from litellm.proxy.health_endpoints._health_endpoints import (
             _config_base_for_health_check,
         )
 
-        return _config_base_for_health_check(config, request)
+        return _config_base_for_health_check(
+            config, request, allow_client_side_credentials=allow_client_side_credentials
+        )
 
     def test_request_without_connection_fields_inherits_config(self):
         base = self._base(self.CONFIG, {"model": "openai/gpt-4o"})
@@ -2426,3 +2428,13 @@ class TestConfigBaseForHealthCheck:
         )
         assert "api_key" not in base
         assert "aws_secret_access_key" not in base
+
+    def test_opt_in_restores_configured_credentials_under_a_request_endpoint(self):
+        """With general_settings.allow_client_side_credentials enabled, a request
+        may pair its own endpoint with the configured credentials, as before."""
+        base = self._base(
+            self.CONFIG,
+            {"api_base": "https://caller.example/v1"},
+            allow_client_side_credentials=True,
+        )
+        assert base["api_key"] == "sk-configured"
