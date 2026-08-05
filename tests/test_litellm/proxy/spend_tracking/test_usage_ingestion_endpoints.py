@@ -31,11 +31,15 @@ class RecordingDeps:
         existing_ids: frozenset[str] = frozenset(),
         compute_cost_result: float = 0.05,
         compute_cost_error: Exception | None = None,
+        reserve_outcome: str = "reserved",
+        reserve_raises: Exception | None = None,
     ):
         self._key = key
         self._existing_ids = existing_ids
         self._compute_cost_result = compute_cost_result
         self._compute_cost_error = compute_cost_error
+        self._reserve_outcome = reserve_outcome
+        self._reserve_raises = reserve_raises
         self.spend_calls: list[dict[str, Any]] = []
         self.reserve_calls: list[dict[str, Any]] = []
         self.compute_cost_calls: list[tuple[Any, str]] = []
@@ -51,7 +55,7 @@ class RecordingDeps:
             hashed_token: str,
             key: KeyAttribution,
             cost: float,
-        ) -> bool:
+        ) -> Any:
             self.reserve_calls.append(
                 {
                     "record": record,
@@ -61,7 +65,11 @@ class RecordingDeps:
                     "cost": cost,
                 }
             )
-            return request_id not in self._existing_ids
+            if self._reserve_raises is not None:
+                raise self._reserve_raises
+            if self._reserve_outcome == "disabled":
+                return "disabled"
+            return "duplicate" if request_id in self._existing_ids else "reserved"
 
         async def record_spend(**kwargs: Any) -> None:
             self.spend_calls.append(kwargs)
@@ -230,3 +238,21 @@ def test_record_without_idempotency_key_still_flows_tags_to_funnel_kwargs():
     assert metadata["tags"] == ["batch:job-42"]
     assert metadata["user_api_key_end_user_id"] == "tenant-a"
     assert deps.spend_calls[0]["end_user_id"] == "tenant-a"
+
+
+def test_disabled_spend_updates_reports_error_instead_of_fake_recorded():
+    deps = RecordingDeps(reserve_outcome="disabled")
+    result = run(process_external_usage_record(make_record(cost=0.01, idempotency_key="k-9"), deps.as_deps()))
+    assert result.status == "error"
+    assert "disabled" in (result.error or "")
+    assert result.spend is None
+    assert deps.spend_calls == []
+
+
+def test_failed_booking_is_retry_safe_error_not_permanent_duplicate():
+    deps = RecordingDeps(reserve_raises=RuntimeError("db gone mid-tx"))
+    result = run(process_external_usage_record(make_record(cost=0.01, idempotency_key="k-10"), deps.as_deps()))
+    assert result.status == "error"
+    assert "safe to retry" in (result.error or "")
+    assert result.spend is None
+    assert deps.spend_calls == []

@@ -4,7 +4,15 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, NamedTuple
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Final,
+    Literal,
+    NamedTuple,
+    TypeAlias,
+    cast,  # noqa: TID251  # untyped tx boundary needs cast for the shim
+)
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, model_validator
@@ -65,10 +73,13 @@ class KeyAttribution(NamedTuple):
     organization_id: str | None
 
 
+ReservationOutcome: TypeAlias = Literal["reserved", "duplicate", "disabled"]
+
+
 @dataclass(frozen=True, slots=True)
 class UsageIngestionDeps:
     lookup_key: Callable[[str], Awaitable[KeyAttribution | None]]
-    reserve_spend_log: Callable[[ExternalUsageRecord, str, str, KeyAttribution, float], Awaitable[bool]]
+    reserve_spend_log: Callable[[ExternalUsageRecord, str, str, KeyAttribution, float], Awaitable[ReservationOutcome]]
     record_spend: Callable[..., Awaitable[None]]
     compute_cost: Callable[[litellm.ModelResponse, str], float]
     generate_request_id: Callable[[], str]
@@ -161,9 +172,23 @@ async def process_external_usage_record(
         )
 
     if record.idempotency_key is not None:
-        reserved: Final = await deps.reserve_spend_log(record, request_id, hashed_token, key, cost)
-        if reserved is False:
+        try:
+            reservation: Final = await deps.reserve_spend_log(record, request_id, hashed_token, key, cost)
+        except Exception as e:  # noqa: BLE001  # booking raises arbitrary persistence errors; an aborted transaction means nothing was booked, so telling the caller to retry is safe
+            verbose_proxy_logger.info("ingest usage: transactional booking failed for %s: %s", request_id, e)
+            return UsageIngestRecordResult(
+                request_id=request_id,
+                status="error",
+                error="booking failed transactionally, nothing was recorded, safe to retry",
+            )
+        if reservation == "duplicate":
             return UsageIngestRecordResult(request_id=request_id, status="duplicate")
+        if reservation == "disabled":
+            return UsageIngestRecordResult(
+                request_id=request_id,
+                status="error",
+                error="spend updates are disabled on this proxy, nothing was recorded",
+            )
         return UsageIngestRecordResult(request_id=request_id, status="recorded", spend=cost)
 
     await deps.record_spend(
@@ -189,60 +214,53 @@ def _attribution_of(key_row: object) -> KeyAttribution:
     )
 
 
+if TYPE_CHECKING:
+    from prisma.client import TransactionManager
+
+
+class _TransactionClientShim:
+    def __init__(self, tx: "TransactionManager") -> None:
+        self.db: Final = tx
+
+
 async def reserve_spend_log_atomic(
     record: ExternalUsageRecord,
     request_id: str,
     hashed_token: str,
     key: KeyAttribution,
     cost: float,
-) -> bool:
+) -> ReservationOutcome:
     from litellm.proxy.proxy_server import litellm_proxy_budget_name, prisma_client, proxy_logging_obj
-    from litellm.proxy.utils import ProxyUpdateSpend
+    from litellm.proxy.utils import PrismaClient, ProxyUpdateSpend
     from litellm.repositories.table_repositories import SpendLogsRepository
 
     if ProxyUpdateSpend.disable_spend_updates() is True:
-        return True
+        return "disabled"
 
     payload: Final = prisma_client.jsonify_object(build_spend_log_payload(record, request_id, hashed_token, key, cost))
     from prisma.errors import UniqueViolationError
 
-    try:
-        await SpendLogsRepository(prisma_client).table.create(data=payload)
-    except UniqueViolationError:
-        return False
-
     writer: Final = proxy_logging_obj.db_spend_update_writer
-    counter_calls: Final = (
-        writer._update_key_db(
-            response_cost=cost,
-            hashed_token=hashed_token,
-            prisma_client=prisma_client,
-        ),
-        writer._update_user_db(
-            response_cost=cost,
-            user_id=key.user_id,
-            prisma_client=prisma_client,
-            litellm_proxy_budget_name=litellm_proxy_budget_name,
-            end_user_id=record.end_user_id,
-        ),
-        writer._update_team_db(
-            response_cost=cost,
-            team_id=key.team_id,
-            user_id=key.user_id,
-            prisma_client=prisma_client,
-        ),
-        writer._update_org_db(
-            response_cost=cost,
-            org_id=key.organization_id,
-            prisma_client=prisma_client,
-        ),
-    )
 
-    results: Final = await asyncio.gather(*counter_calls, return_exceptions=True)
-    for counter_result in results:
-        if isinstance(counter_result, Exception):
-            verbose_proxy_logger.debug("ingest usage: spend counter update failed: %s", counter_result)
-    return True
+    try:
+        async with prisma_client.tx() as tx:
+            shim: Final = cast(PrismaClient, _TransactionClientShim(tx))  # cast-ok: helper uses only .db (untyped)
+            await SpendLogsRepository(shim).table.create(data=payload)
+            await writer._update_key_db(response_cost=cost, hashed_token=hashed_token, prisma_client=shim)
+            await writer._update_user_db(
+                response_cost=cost,
+                user_id=key.user_id,
+                prisma_client=shim,
+                litellm_proxy_budget_name=litellm_proxy_budget_name,
+                end_user_id=record.end_user_id,
+            )
+            await writer._update_team_db(
+                response_cost=cost, team_id=key.team_id, user_id=key.user_id, prisma_client=shim
+            )
+            await writer._update_org_db(response_cost=cost, org_id=key.organization_id, prisma_client=shim)
+    except UniqueViolationError:
+        return "duplicate"
+    return "reserved"
 
 
 def default_ingestion_deps() -> UsageIngestionDeps:
