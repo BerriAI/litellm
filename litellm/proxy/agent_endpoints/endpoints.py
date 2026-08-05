@@ -8,15 +8,19 @@ Follows the A2A Spec.
 3. Get specific agent via GET `/v1/agents/{agent_id}`
 """
 
+import asyncio
+import os
 import uuid
 from collections.abc import Mapping, Sequence
-from typing import Final
+from typing import Final, TypedDict
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from typing_extensions import Required
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     CommonProxyErrors,
     LitellmUserRoles,
@@ -41,6 +45,7 @@ from litellm.types.agents import (
     MakeAgentsPublicRequest,
     PatchAgentRequest,
 )
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
     SpendAnalyticsPaginatedResponse,
@@ -153,6 +158,50 @@ def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> Non
         )
 
 
+AGENT_HEALTH_CHECK_TIMEOUT_SECONDS: Final = float(os.environ.get("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", "5.0"))
+AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS = float(os.environ.get("LITELLM_AGENT_HEALTH_CHECK_GATHER_TIMEOUT", "30.0"))
+
+
+class _AgentHealthResult(TypedDict, total=False):
+    agent_id: Required[str]
+    healthy: Required[bool]
+    error: str
+
+
+async def _check_agent_url_health(
+    agent: AgentResponse,
+) -> _AgentHealthResult:
+    """
+    Perform a GET request against the agent's URL and return the health result.
+
+    Returns a dict with ``agent_id``, ``healthy`` (bool), and an optional
+    ``error`` message.
+    """
+    url: Final = (agent.agent_card_params or {}).get("url")
+    if not url:
+        return {"agent_id": agent.agent_id, "healthy": True}
+
+    try:
+        client: Final = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.AgentHealthCheck,
+            params={"timeout": AGENT_HEALTH_CHECK_TIMEOUT_SECONDS},
+        )
+        response: Final = await client.get(url)
+        if response.status_code >= 500:
+            return {
+                "agent_id": agent.agent_id,
+                "healthy": False,
+                "error": f"HTTP {response.status_code}",
+            }
+        return {"agent_id": agent.agent_id, "healthy": True}
+    except Exception as exc:
+        return {
+            "agent_id": agent.agent_id,
+            "healthy": False,
+            "error": str(exc),
+        }
+
+
 @router.get(
     "/v1/agents",
     tags=["[beta] A2A Agents"],
@@ -161,12 +210,23 @@ def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> Non
 )
 async def get_agents(
     request: Request,
+    health_check: bool = Query(
+        False,
+        description="When true, performs a GET request to each agent's URL. Agents with reachable URLs (HTTP status < 500) and agents without a URL are returned; unreachable agents are filtered out.",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # Used for auth
 ):
     """
     Example usage:
     ```
     curl -X GET "http://localhost:4000/v1/agents" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer your-key" \
+    ```
+
+    Pass `?health_check=true` to filter out agents whose URL is unreachable:
+    ```
+    curl -X GET "http://localhost:4000/v1/agents?health_check=true" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer your-key" \
     ```
@@ -185,7 +245,10 @@ async def get_agents(
         returned_agents: list[AgentResponse] = []
 
         # Admin users get all agents
-        if user_api_key_has_admin_view(user_api_key_dict):
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        ):
             returned_agents = global_agent_registry.get_agent_list()
         else:
             # Get allowed agents from object_permission (key/team level)
@@ -229,6 +292,30 @@ async def get_agents(
         )
         if not is_admin:
             returned_agents = _redact_sensitive_agent_fields(returned_agents)
+
+        if health_check:
+            agents_with_url: Final = [agent for agent in returned_agents if (agent.agent_card_params or {}).get("url")]
+            agents_without_url = [agent for agent in returned_agents if not (agent.agent_card_params or {}).get("url")]
+            try:
+                health_results: Sequence[_AgentHealthResult] = await asyncio.wait_for(
+                    asyncio.gather(*[_check_agent_url_health(agent) for agent in agents_with_url]),
+                    timeout=AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                verbose_proxy_logger.warning(
+                    "Agent health check gather timed out after %s seconds",
+                    AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS,
+                )
+                health_results = [
+                    {
+                        "agent_id": agent.agent_id,
+                        "healthy": False,
+                        "error": "Health check timed out",
+                    }
+                    for agent in agents_with_url
+                ]
+            healthy_ids: Final = {result["agent_id"] for result in health_results if result["healthy"]}
+            returned_agents = [agent for agent in agents_with_url if agent.agent_id in healthy_ids] + agents_without_url
 
         return returned_agents
     except HTTPException:

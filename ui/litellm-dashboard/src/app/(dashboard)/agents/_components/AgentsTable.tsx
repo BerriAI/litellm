@@ -1,11 +1,13 @@
 "use client";
 
 import { SortingState } from "@tanstack/react-table";
-import { Bot } from "lucide-react";
+import { Bot, CircleCheck } from "lucide-react";
 import React, { useMemo, useState } from "react";
 
 import { Agent } from "@/components/agents/types";
 import { DataTable } from "@/components/shared/DataTable";
+import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { getAgentsTableColumns } from "./AgentsTableColumns";
 
@@ -13,6 +15,9 @@ interface AgentsTableProps {
   agents: Agent[];
   isLoading: boolean;
   isAdmin: boolean;
+  healthCheckEnabled: boolean;
+  isHealthCheckLoading: boolean;
+  onHealthCheckToggle: (checked: boolean) => void;
   onAgentClick: (agentId: string) => void;
   onDeleteClick: (agentId: string, agentName: string) => void;
 }
@@ -31,7 +36,16 @@ function EmptyState() {
   );
 }
 
-const AgentsTable: React.FC<AgentsTableProps> = ({ agents, isLoading, isAdmin, onAgentClick, onDeleteClick }) => {
+const AgentsTable: React.FC<AgentsTableProps> = ({
+  agents,
+  isLoading,
+  isAdmin,
+  healthCheckEnabled,
+  isHealthCheckLoading,
+  onHealthCheckToggle,
+  onAgentClick,
+  onDeleteClick,
+}) => {
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
 
   const columns = useMemo(
@@ -51,6 +65,31 @@ const AgentsTable: React.FC<AgentsTableProps> = ({ agents, isLoading, isAdmin, o
       loadingMessage="Loading agents…"
       noDataMessage={<EmptyState />}
       size="compact"
+      toolbar={() => (
+        <div className="flex items-center justify-end">
+          <TooltipProvider delay={300}>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <div className="flex items-center gap-2">
+                    <CircleCheck
+                      className={healthCheckEnabled ? "size-4 text-green-500" : "size-4 text-muted-foreground"}
+                    />
+                    <span className="text-sm text-muted-foreground">Health Check</span>
+                    <Switch
+                      size="sm"
+                      checked={healthCheckEnabled}
+                      onCheckedChange={onHealthCheckToggle}
+                      disabled={isHealthCheckLoading}
+                    />
+                  </div>
+                }
+              />
+              <TooltipContent>When enabled, only agents with reachable URLs are shown</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+      )}
     />
   );
 };
