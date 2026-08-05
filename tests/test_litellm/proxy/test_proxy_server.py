@@ -11018,3 +11018,85 @@ def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
         ProxyStartupEvent._warn_if_mock_testing_params_enabled(general_settings={})
 
     assert MOCK_TESTING_CONFIG_KEY not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_rejected_request_non_streaming_chat_response_carries_model():
+    """A pre-call hook that short-circuits with ``RejectedRequestError`` returns a
+    200 chat completion, so the payload has to satisfy the OpenAI schema: a null
+    ``model`` makes ``ChatCompletion.model_validate`` raise in every strict client."""
+    from openai.types.chat import ChatCompletion
+
+    from fastapi import Request, Response
+
+    from litellm.exceptions import RejectedRequestError
+    from litellm.proxy.proxy_server import chat_completion
+
+    request_data = {"model": "my-model", "messages": [{"role": "user", "content": "hello"}]}
+    exception = RejectedRequestError(
+        message="cached answer",
+        model="my-model",
+        llm_provider="openai",
+        request_data=request_data,
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server._read_request_body",
+        new_callable=AsyncMock,
+        return_value=dict(request_data),
+    ), patch(
+        "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+        new_callable=AsyncMock,
+        side_effect=exception,
+    ), patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj"
+    ) as mock_proxy_logging:
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+        response = await chat_completion(
+            request=MagicMock(spec=Request),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+    assert response.model == "my-model"
+    ChatCompletion.model_validate(response.model_dump())
+
+
+@pytest.mark.asyncio
+async def test_rejected_request_non_streaming_text_completion_carries_model():
+    """Same contract on /v1/completions: the rejection replay is a 200 the SDK parses
+    as a ``Completion``, which also requires a string ``model``."""
+    from fastapi import Request, Response
+
+    from litellm.exceptions import RejectedRequestError
+    from litellm.proxy.proxy_server import completion
+
+    request_data = {"model": "my-model", "prompt": "hello"}
+    exception = RejectedRequestError(
+        message="cached answer",
+        model="my-model",
+        llm_provider="openai",
+        request_data=request_data,
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server._read_request_body",
+        new_callable=AsyncMock,
+        return_value=dict(request_data),
+    ), patch(
+        "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+        new_callable=AsyncMock,
+        side_effect=exception,
+    ), patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj"
+    ) as mock_proxy_logging:
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+        response = await completion(
+            request=MagicMock(spec=Request),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+    assert response.model == "my-model"
