@@ -536,7 +536,7 @@ async def new_user(
             user_api_key_dict=user_api_key_dict,
         )
 
-        data_json = data.json()  # type: ignore
+        data_json = data.json()
         data_json = _update_internal_new_user_params(data_json, data)
         # Persist the requested grants as their own row and link it, mirroring key/team creation.
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
@@ -1816,7 +1816,7 @@ async def bulk_user_update(
             for user in all_users_in_db:
                 user_update_request = data.user_updates.model_copy()
                 user_update_request.user_id = user.user_id
-                users_to_update.append(user_update_request)  # type: ignore
+                users_to_update.append(user_update_request)
 
         if successful_updates > 0:
             return BulkUpdateUserResponse(

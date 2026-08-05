@@ -46,7 +46,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 api_version=api_version,
                 is_async=False,
             )
-            azure_openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
+            azure_openai_client = AzureOpenAI(**azure_client_params)
         else:
             azure_openai_client = client
 
@@ -74,7 +74,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             )
 
             azure_openai_client = AsyncAzureOpenAI(**azure_client_params)
-            # azure_openai_client = AsyncAzureOpenAI(**data)  # type: ignore
+            # azure_openai_client = AsyncAzureOpenAI(**data)
         else:
             azure_openai_client = client
 
@@ -204,9 +204,9 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        thread_message: Final[OpenAIMessage] = await openai_client.beta.threads.messages.create(  # type: ignore
+        thread_message: Final[OpenAIMessage] = await openai_client.beta.threads.messages.create(
             thread_id,
-            **message_data,  # type: ignore
+            **message_data,
         )
 
         response_obj: OpenAIMessage | None = None
@@ -293,9 +293,9 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        thread_message: Final[OpenAIMessage] = openai_client.beta.threads.messages.create(  # type: ignore
+        thread_message: Final[OpenAIMessage] = openai_client.beta.threads.messages.create(
             thread_id,
-            **message_data,  # type: ignore
+            **message_data,
         )
 
         response_obj: OpenAIMessage | None = None
@@ -437,11 +437,11 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         data: Final = {}
         if messages is not None:
-            data["messages"] = messages  # type: ignore
+            data["messages"] = messages
         if metadata is not None:
-            data["metadata"] = metadata  # type: ignore
+            data["metadata"] = metadata
 
-        message_thread: Final = await openai_client.beta.threads.create(**data)  # type: ignore
+        message_thread: Final = await openai_client.beta.threads.create(**data)
 
         return Thread(**message_thread.dict())
 
@@ -533,11 +533,11 @@ class AzureAssistantsAPI(BaseAzureLLM):
 
         data: Final = {}
         if messages is not None:
-            data["messages"] = messages  # type: ignore
+            data["messages"] = messages
         if metadata is not None:
-            data["metadata"] = metadata  # type: ignore
+            data["metadata"] = metadata
 
-        message_thread: Final = azure_openai_client.beta.threads.create(**data)  # type: ignore
+        message_thread: Final = azure_openai_client.beta.threads.create(**data)
 
         return Thread(**message_thread.dict())
 
@@ -679,12 +679,12 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response: Final = await openai_client.beta.threads.runs.create_and_poll(  # type: ignore
+        response: Final = await openai_client.beta.threads.runs.create_and_poll(
             thread_id=thread_id,
             assistant_id=assistant_id,
             additional_instructions=additional_instructions,
             instructions=instructions,
-            metadata=metadata,  # type: ignore
+            metadata=metadata,
             model=model,
             tools=tools,
         )
@@ -715,7 +715,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         }
         if event_handler is not None:
             data["event_handler"] = event_handler
-        return client.beta.threads.runs.stream(**data)  # type: ignore
+        return client.beta.threads.runs.stream(**data)
 
     def run_thread_stream(
         self,
@@ -741,7 +741,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         }
         if event_handler is not None:
             data["event_handler"] = event_handler
-        return client.beta.threads.runs.stream(**data)  # type: ignore
+        return client.beta.threads.runs.stream(**data)
 
     # fmt: off
 
@@ -841,7 +841,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 assistant_id=assistant_id,
                 additional_instructions=additional_instructions,
                 instructions=instructions,
-                metadata=metadata,  # type: ignore
+                metadata=metadata,
                 model=model,
                 stream=stream,
                 tools=tools,
@@ -879,12 +879,12 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 litellm_params=litellm_params,
             )
 
-        response: Final = openai_client.beta.threads.runs.create_and_poll(  # type: ignore
+        response: Final = openai_client.beta.threads.runs.create_and_poll(
             thread_id=thread_id,
             assistant_id=assistant_id,
             additional_instructions=additional_instructions,
             instructions=instructions,
-            metadata=metadata,  # type: ignore
+            metadata=metadata,
             model=model,
             tools=tools,
         )

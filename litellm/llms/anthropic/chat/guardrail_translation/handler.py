@@ -469,7 +469,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             openai_tools: Final = self.adapter.translate_anthropic_tools_to_openai(
                 tools=cast(list[AllAnthropicToolsValues], tools)
             )
-            tools_to_check.extend(openai_tools)  # type: ignore
+            tools_to_check.extend(openai_tools)
 
     async def _apply_guardrail_responses_to_input(
         self,
