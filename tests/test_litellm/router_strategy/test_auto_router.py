@@ -425,6 +425,23 @@ class TestAutoRouterAlwaysResolvesARoutableModel:
         assert result.model == "fallback-model"
 
     @pytest.mark.asyncio
+    async def test_should_route_to_the_first_choice_when_the_route_layer_returns_a_populated_list(self):
+        from semantic_router.schema import RouteChoice
+
+        auto_router: Final = _auto_router(
+            FixedRouteLayer([RouteChoice(name="code-model"), RouteChoice(name="chat-model")])
+        )
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "fix this stack trace"}],
+        )
+
+        assert result is not None
+        assert result.model == "code-model"
+
+    @pytest.mark.asyncio
     async def test_should_still_route_to_the_matched_route_when_one_matches(self):
         from semantic_router.schema import RouteChoice
 
