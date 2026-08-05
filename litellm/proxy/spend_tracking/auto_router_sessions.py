@@ -228,10 +228,6 @@ def _started_at(start_time: object) -> float | None:
     return None
 
 
-def _str_or_none(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
 def build_turn_facts(
     payload: Mapping[str, object],
     metadata: Mapping[str, object],
