@@ -12,11 +12,11 @@ import { ModelGroup } from "@/components/llm_calls/fetch_models";
 // either preset; dropping any one greys out the preset that names it.
 const ALL_FAMILY_MODELS: ModelGroup[] = [
   { model_group: "claude-haiku-4-5", mode: "chat" },
-  { model_group: "claude-sonnet-4-5", mode: "chat" },
+  { model_group: "claude-sonnet-5", mode: "chat" },
   { model_group: "claude-opus-5", mode: "chat" },
-  { model_group: "gpt-5-nano", mode: "chat" },
-  { model_group: "gpt-5-mini", mode: "chat" },
-  { model_group: "gpt-5", mode: "chat" },
+  { model_group: "gpt-5.4-nano", mode: "chat" },
+  { model_group: "gpt-5.4-mini", mode: "chat" },
+  { model_group: "gpt-5.4", mode: "chat" },
   { model_group: "o3", mode: "chat" },
 ];
 
@@ -458,7 +458,7 @@ describe("AddAutoRouterTab", () => {
       expect(screen.queryByText("Advanced: Keyword/Semantic Matching")).not.toBeInTheDocument();
       expect(
         screen.getByText(
-          "Simple: claude-haiku-4-5 · Medium: claude-sonnet-4-5 · Complex: claude-opus-5 · Reasoning: claude-opus-5",
+          "Simple: claude-haiku-4-5 · Medium: claude-sonnet-5 · Complex: claude-opus-5 · Reasoning: claude-opus-5",
         ),
       ).toBeInTheDocument();
     });
@@ -500,11 +500,11 @@ describe("AddAutoRouterTab", () => {
 
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
       expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
-        auto_router_default_model: "claude-sonnet-4-5",
+        auto_router_default_model: "claude-sonnet-5",
         complexity_router_config: {
           tiers: {
             SIMPLE: ["claude-haiku-4-5"],
-            MEDIUM: ["claude-sonnet-4-5"],
+            MEDIUM: ["claude-sonnet-5"],
             COMPLEX: ["claude-opus-5"],
             REASONING: ["claude-opus-5"],
           },

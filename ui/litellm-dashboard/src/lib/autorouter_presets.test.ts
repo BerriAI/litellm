@@ -57,12 +57,15 @@ describe("autorouter_presets", () => {
     expect(getMissingModelsInPreset(preset, new Set(required))).toEqual([]);
   });
 
-  // Admins spell version numbers with either "-" or "." (claude-sonnet-4-5 vs claude-sonnet-4.5);
-  // a caller who only registered one form still satisfies a preset that names the other.
+  // Admins spell version numbers with either "-" or "." (claude-haiku-4-5 vs claude-haiku-4.5);
+  // a caller who only registered one form still satisfies a preset that names the other. Only the
+  // haiku entry actually differs by separator here (sonnet/opus have no dot-digit pattern in the
+  // preset), but that's enough to prove the normalization is applied against a real preset rather
+  // than only via getMissingModels directly.
   it("treats a preset's model as available under either version-separator spelling", () => {
     const preset = getPresetByKey("anthropic_family")!;
     expect(
-      getMissingModelsInPreset(preset, new Set(["claude-haiku-4.5", "claude-sonnet-4.5", "claude-opus-5"])),
+      getMissingModelsInPreset(preset, new Set(["claude-haiku-4.5", "claude-sonnet-5", "claude-opus-5"])),
     ).toEqual([]);
   });
 
