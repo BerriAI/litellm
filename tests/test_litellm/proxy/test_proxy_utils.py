@@ -17,7 +17,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm.proxy.utils import get_custom_url, join_paths
 
@@ -1085,3 +1085,71 @@ async def test_post_mcp_call_hook_propagates_guardrail_block(restore_callbacks):
             request_data={"mcp_tool_name": "echo"},
             user_api_key_dict=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_get_data_normalizes_pydantic_model():
+    """Verify get_data handles a Pydantic BaseModel response without raising TypeError: object is not subscriptable."""
+    from litellm.proxy._types import LiteLLM_VerificationTokenView
+    from litellm.proxy.proxy_server import PrismaClient
+
+    prisma_client = PrismaClient.__new__(PrismaClient)
+    prisma_client.db = MagicMock()
+    mock_token_view = LiteLLM_VerificationTokenView(
+        token="hash_123",
+        user_id="user_123",
+        team_models=[],
+        team_blocked=False,
+    )
+
+    with patch.object(
+        prisma_client,
+        "_query_first_with_cached_plan_fallback",
+        new=AsyncMock(return_value=mock_token_view),
+    ):
+        result = await prisma_client.get_data(
+            token="sk-test-123",
+            table_name="combined_view",
+            query_type="find_unique",
+            check_deprecated=False,
+        )
+        assert isinstance(result, LiteLLM_VerificationTokenView)
+        assert result.token == "hash_123"
+        assert result.team_models == []
+        assert result.team_blocked is False
+
+
+
+@pytest.mark.asyncio
+async def test_get_data_deprecated_key_grace_period():
+    """Verify get_data gracefully resolves deprecated key lookup during rotation grace period."""
+    from litellm.proxy._types import LiteLLM_VerificationTokenView
+    from litellm.proxy.proxy_server import PrismaClient
+
+    prisma_client = PrismaClient.__new__(PrismaClient)
+    prisma_client.db = MagicMock()
+
+    active_token_view = LiteLLM_VerificationTokenView(
+        token="active_hash_456",
+        user_id="user_456",
+        team_models=[],
+        team_blocked=False,
+    )
+
+    async def mock_query_first(sql, param):
+        if param == "deprecated_hash_123":
+            return None
+        return active_token_view
+
+    with patch.object(prisma_client, "_query_first_with_cached_plan_fallback", side_effect=mock_query_first), \
+         patch("litellm.proxy.utils._lookup_deprecated_key", new=AsyncMock(return_value="active_hash_456")):
+        result = await prisma_client.get_data(
+            token="sk-deprecated-key",
+            table_name="combined_view",
+            query_type="find_unique",
+            check_deprecated=True,
+        )
+        assert isinstance(result, LiteLLM_VerificationTokenView)
+        assert result.token == "active_hash_456"
+
+
