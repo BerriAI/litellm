@@ -1168,13 +1168,23 @@ async def rewrite_body_ids(
 ) -> list[object]: ...
 
 
+@overload
 async def rewrite_body_ids(
-    body: dict[str, object] | list[object] | None,
+    body: object,
     provider: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient | None,
     managed_files_hook: CustomLogger | None,
-) -> dict[str, object] | list[object] | None:
+) -> object: ...
+
+
+async def rewrite_body_ids(
+    body: object,
+    provider: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    managed_files_hook: CustomLogger | None,
+) -> object:
     """
     Recursively walk a request body dict/list and resolve any passthrough
     managed IDs.  Skips litellm internal keys (``litellm_*``).
@@ -1219,7 +1229,7 @@ async def rewrite_body_ids(
             return node
         return node
 
-    rewritten = await _walk_sequence(body, 0) if isinstance(body, list) else await _walk_mapping(body, 0)
+    rewritten = await _walk(body, 0)
     if rewritten is not body:
         verbose_proxy_logger.debug("managed_id_rewriter: body ids rewritten provider=%s", provider)
     return rewritten
