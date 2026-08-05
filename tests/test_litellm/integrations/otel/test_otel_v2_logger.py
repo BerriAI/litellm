@@ -560,6 +560,28 @@ def test_mcp_tool_call_names_its_rpc_system_and_upstream():
     assert span.attributes["server.port"] == 443
 
 
+def test_mcp_tool_call_omits_rpc_system_without_a_resolved_upstream():
+    """A tool call with no resolvable upstream drops the RPC system with the address.
+
+    ``mcp_server_resource`` is absent whenever the tool name resolves to no registered
+    server, and it is ``None`` for a transport with no host to log at all (stdio). It
+    also parses to no host today for an IPv6 origin, which the redactor rebuilds
+    without its brackets. Stamping ``rpc.system`` on its own in any of those cases is
+    what names the dependency ``:0``, so the pairing is enforced here rather than left
+    to the two extractors happening to agree.
+    """
+    logger, exporter = _logger()
+    payload = _mcp_payload()
+    del payload["metadata"]["mcp_tool_call_metadata"]["mcp_server_resource"]
+    asyncio.run(
+        logger.async_log_success_event({"standard_logging_object": payload}, None, None, None)
+    )
+    (span,) = exporter.get_finished_spans()
+    assert "rpc.system" not in span.attributes
+    assert "server.address" not in span.attributes
+    assert span.attributes["mcp.method.name"] == "tools/call"
+
+
 def test_mcp_list_tools_omits_rpc_system_without_an_upstream():
     """The discovery span carries no upstream identity, so it must not claim to be RPC.
 
