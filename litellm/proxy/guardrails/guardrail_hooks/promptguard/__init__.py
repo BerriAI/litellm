@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -14,7 +14,7 @@ def initialize_guardrail(
 ):
     import litellm
 
-    _cb = PromptGuardGuardrail(
+    _cb: Final = PromptGuardGuardrail(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         block_on_error=litellm_params.block_on_error,
@@ -32,11 +32,11 @@ def initialize_guardrail(
     return _cb
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.PROMPTGUARD.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.PROMPTGUARD.value: PromptGuardGuardrail,
 }

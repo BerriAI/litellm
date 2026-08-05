@@ -3,7 +3,7 @@
 ## Allows jina ai embedding calls - which don't allow 'encoding_format' in payload.
 
 import json
-from typing import Optional
+from typing import Final
 
 import httpx
 
@@ -52,7 +52,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
 
                 response.raise_for_status()
 
-                response_json = response.json()
+                response_json: Final = response.json()
             except httpx.HTTPStatusError as e:
                 raise OpenAILikeError(
                     status_code=e.response.status_code,
@@ -86,14 +86,14 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         input: list,
         timeout: float,
         logging_obj,
-        api_key: Optional[str],
-        api_base: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
         optional_params: dict,
-        model_response: Optional[EmbeddingResponse] = None,
+        model_response: EmbeddingResponse | None = None,
         client=None,
         aembedding=None,
-        custom_endpoint: Optional[bool] = None,
-        headers: Optional[dict] = None,
+        custom_endpoint: bool | None = None,
+        headers: dict | None = None,
     ) -> EmbeddingResponse:
         api_base, headers = self._validate_environment(
             api_base=api_base,
@@ -103,8 +103,8 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             custom_endpoint=custom_endpoint,
         )
         model = model
-        filtered_optional_params = {k: v for k, v in optional_params.items() if v not in (None, "")}
-        data = {"model": model, "input": input, **filtered_optional_params}
+        filtered_optional_params: Final = {k: v for k, v in optional_params.items() if v not in (None, "")}
+        data: Final = {"model": model, "input": input, **filtered_optional_params}
 
         ## LOGGING
         logging_obj.pre_call(
@@ -132,7 +132,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
 
         ## EMBEDDING CALL
         try:
-            response = self.client.post(
+            response: Final = self.client.post(
                 api_base,
                 headers=headers,
                 data=json.dumps(data),
@@ -140,7 +140,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
 
             response.raise_for_status()  # type: ignore
 
-            response_json = response.json()  # type: ignore
+            response_json: Final = response.json()  # type: ignore
         except httpx.HTTPStatusError as e:
             raise OpenAILikeError(
                 status_code=e.response.status_code,

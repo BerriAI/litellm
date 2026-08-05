@@ -7,19 +7,8 @@ import importlib
 import json
 import os
 import re
-from collections.abc import MutableMapping, MutableSequence
-from typing import (
-    Any,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
-    Mapping,
-    Optional,
-    Set,
-    Tuple,
-    Union,
-)
+from collections.abc import Iterable, Iterator, Mapping, MutableMapping, MutableSequence
+from typing import Any, Final
 from urllib.parse import quote
 
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -32,11 +21,11 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 # module is reloaded (e.g. ``importlib.reload``). Tests that override these
 # variables must reload this module — see
 # ``tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_identity_env.py``.
-LITELLM_MCP_SERVER_NAME = os.environ.get("LITELLM_MCP_SERVER_NAME", "litellm-mcp-server")
-LITELLM_MCP_SERVER_VERSION = "1.0.0"
-LITELLM_MCP_SERVER_DESCRIPTION = os.environ.get("LITELLM_MCP_SERVER_DESCRIPTION", "MCP Server for LiteLLM")
-MCP_TOOL_PREFIX_SEPARATOR = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR", "-")
-MCP_TOOL_PREFIX_FORMAT = "{server_name}{separator}{tool_name}"
+LITELLM_MCP_SERVER_NAME: Final = os.environ.get("LITELLM_MCP_SERVER_NAME", "litellm-mcp-server")
+LITELLM_MCP_SERVER_VERSION: Final = "1.0.0"
+LITELLM_MCP_SERVER_DESCRIPTION: Final = os.environ.get("LITELLM_MCP_SERVER_DESCRIPTION", "MCP Server for LiteLLM")
+MCP_TOOL_PREFIX_SEPARATOR: Final = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR", "-")
+MCP_TOOL_PREFIX_FORMAT: Final = "{server_name}{separator}{tool_name}"
 
 # ---------------------------------------------------------------------------
 # Short-ID tool prefix (opt-in)
@@ -72,11 +61,11 @@ MCP_TOOL_PREFIX_FORMAT = "{server_name}{separator}{tool_name}"
 #
 # This flag is intentionally opt-in for the first release so customers can
 # migrate.  It will become the default in a future release.
-SHORT_MCP_TOOL_PREFIX_LENGTH = 3
-_BASE62_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+SHORT_MCP_TOOL_PREFIX_LENGTH: Final = 3
+_BASE62_ALPHABET: Final = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 # Subset of _BASE62_ALPHABET used for the *first* character only, to
 # guarantee the prefix never starts with a digit.
-_BASE52_ALPHA_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+_BASE52_ALPHA_ALPHABET: Final = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 
 def is_short_mcp_tool_prefix_enabled() -> bool:
@@ -85,7 +74,7 @@ def is_short_mcp_tool_prefix_enabled() -> bool:
     Read at call time (not import time) so tests and runtime config changes
     take effect without reimporting the module.
     """
-    raw = os.environ.get("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "")
+    raw: Final = os.environ.get("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "")
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
@@ -105,15 +94,15 @@ def compute_short_server_prefix(server_id: str, attempt: int = 0) -> str:
     if not server_id:
         raise ValueError("compute_short_server_prefix requires a non-empty server_id")
 
-    seed = server_id if attempt == 0 else f"{server_id}#{attempt}"
-    digest = hashlib.sha256(seed.encode("utf-8")).digest()
+    seed: Final = server_id if attempt == 0 else f"{server_id}#{attempt}"
+    digest: Final = hashlib.sha256(seed.encode("utf-8")).digest()
     value = int.from_bytes(digest[:8], "big")
 
     # Build chars from least-significant to most-significant; we reverse
     # at the end so the first emitted char comes from the high-order
     # bits of the digest (which is the position we constrain to be
     # alphabetic).
-    chars = []
+    chars: Final = []
     for position in range(SHORT_MCP_TOOL_PREFIX_LENGTH):
         is_first_char = position == SHORT_MCP_TOOL_PREFIX_LENGTH - 1
         alphabet = _BASE52_ALPHA_ALPHABET if is_first_char else _BASE62_ALPHABET
@@ -140,7 +129,7 @@ def normalize_server_name(server_name: str) -> str:
     return server_name.replace(" ", "_")
 
 
-_MCP_ALIAS_HEADER_INVALID_RE = re.compile(r"[^a-z0-9_]")
+_MCP_ALIAS_HEADER_INVALID_RE: Final = re.compile(r"[^a-z0-9_]")
 
 
 def sanitize_mcp_alias_for_header(alias: str) -> str:
@@ -155,11 +144,11 @@ def sanitize_mcp_alias_for_header(alias: str) -> str:
 
 
 def lookup_mcp_server_auth_in_headers(
-    mcp_server_auth_headers: Mapping[str, Union[str, Dict[str, str]]],
+    mcp_server_auth_headers: Mapping[str, str | dict[str, str]],
     *,
-    alias: Optional[str] = None,
-    server_name: Optional[str] = None,
-) -> Optional[Union[str, Dict[str, str]]]:
+    alias: str | None = None,
+    server_name: str | None = None,
+) -> str | dict[str, str] | None:
     """
     Resolve server-specific auth headers with case-insensitive matching.
 
@@ -169,7 +158,7 @@ def lookup_mcp_server_auth_in_headers(
     if not mcp_server_auth_headers:
         return None
 
-    normalized_headers = {k.lower(): v for k, v in mcp_server_auth_headers.items()}
+    normalized_headers: Final = {k.lower(): v for k, v in mcp_server_auth_headers.items()}
 
     for identifier in (alias, server_name):
         if not identifier:
@@ -184,17 +173,17 @@ def lookup_mcp_server_auth_in_headers(
     return None
 
 
-MCP_TOOL_ALLOWLIST_ENFORCED_KEY = "tool_allowlist_enforced"
+MCP_TOOL_ALLOWLIST_ENFORCED_KEY: Final = "tool_allowlist_enforced"
 
 
-def _parse_mcp_info_dict(mcp_info: Any) -> Optional[Dict[str, Any]]:
+def _parse_mcp_info_dict(mcp_info: Any) -> dict[str, Any] | None:
     if mcp_info is None:
         return None
     if isinstance(mcp_info, dict):
         return mcp_info
     if isinstance(mcp_info, str):
         try:
-            parsed = json.loads(mcp_info)
+            parsed: Final = json.loads(mcp_info)
         except (ValueError, TypeError):
             return None
         return parsed if isinstance(parsed, dict) else None
@@ -202,7 +191,7 @@ def _parse_mcp_info_dict(mcp_info: Any) -> Optional[Dict[str, Any]]:
 
 
 def is_server_tool_allowlist_enforced(mcp_server: Any) -> bool:
-    mcp_info = _parse_mcp_info_dict(getattr(mcp_server, "mcp_info", None))
+    mcp_info: Final = _parse_mcp_info_dict(getattr(mcp_server, "mcp_info", None))
     if not mcp_info:
         return False
     return bool(mcp_info.get(MCP_TOOL_ALLOWLIST_ENFORCED_KEY))
@@ -210,7 +199,7 @@ def is_server_tool_allowlist_enforced(mcp_server: Any) -> bool:
 
 def server_applies_tool_allowlist(mcp_server: Any) -> bool:
     """Whether server-level allowed_tools whitelist filtering is active."""
-    allowed_tools = getattr(mcp_server, "allowed_tools", None) or []
+    allowed_tools: Final = getattr(mcp_server, "allowed_tools", None) or []
     return is_server_tool_allowlist_enforced(mcp_server) or bool(allowed_tools)
 
 
@@ -245,7 +234,7 @@ def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
 
     # Alias normalization and defaulting
     alias = getattr(payload, "alias", None)
-    server_name = getattr(payload, "server_name", None)
+    server_name: Final = getattr(payload, "server_name", None)
 
     if not alias and server_name:
         alias = normalize_server_name(server_name)
@@ -259,7 +248,7 @@ def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
 
 def add_server_prefix_to_name(name: str, server_name: str) -> str:
     """Add server name prefix to any MCP resource name."""
-    formatted_server_name = normalize_server_name(server_name)
+    formatted_server_name: Final = normalize_server_name(server_name)
 
     return MCP_TOOL_PREFIX_FORMAT.format(
         server_name=formatted_server_name,
@@ -281,10 +270,10 @@ def get_server_prefix(server: Any) -> str:
     alias if present, else server_name, else server_id.
     """
     if is_short_mcp_tool_prefix_enabled():
-        cached = getattr(server, "short_prefix", None)
+        cached: Final = getattr(server, "short_prefix", None)
         if cached:
             return cached
-        server_id = getattr(server, "server_id", None)
+        server_id: Final = getattr(server, "server_id", None)
         if server_id:
             return compute_short_server_prefix(server_id)
 
@@ -305,9 +294,9 @@ def iter_known_server_prefixes(server: Any) -> Iterator[str]:
     short-ID forms so the routing layer can resolve tool names regardless of
     which prefix mode was active when the client first observed them.
     """
-    seen = set()
+    seen: Final = set()
 
-    def _emit(value: Optional[str]) -> Iterator[str]:
+    def _emit(value: str | None) -> Iterator[str]:
         if value and value not in seen:
             seen.add(value)
             yield value
@@ -315,7 +304,7 @@ def iter_known_server_prefixes(server: Any) -> Iterator[str]:
     yield from _emit(get_server_prefix(server))
     yield from _emit(getattr(server, "short_prefix", None))
 
-    server_id = getattr(server, "server_id", None)
+    server_id: Final = getattr(server, "server_id", None)
     if server_id:
         try:
             yield from _emit(compute_short_server_prefix(server_id))
@@ -365,12 +354,12 @@ def match_known_tool_name(tool_name: str, server: MCPServer, names: Iterable[str
     Callers read the returned entry rather than testing a container's values, which is what
     stops an explicitly empty ``allowed_params`` list from reading as "nothing configured".
     """
-    normalize = openapi_tool_name if getattr(server, "spec_path", None) else str
-    spellings = {normalize(spelling) for spelling in iter_known_tool_name_spellings(tool_name, server)}
+    normalize: Final = openapi_tool_name if getattr(server, "spec_path", None) else str
+    spellings: Final = {normalize(spelling) for spelling in iter_known_tool_name_spellings(tool_name, server)}
     return next((name for name in names if normalize(name) in spellings), None)
 
 
-def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:
+def split_server_prefix_from_name(prefixed_name: str) -> tuple[str, str]:
     """Return the unprefixed name plus the server name used as prefix.
 
     Cuts at the FIRST separator, so the two halves are only trustworthy as a
@@ -381,7 +370,7 @@ def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:
     :func:`match_known_server_prefix` or :func:`strip_known_server_prefix`.
     """
     if MCP_TOOL_PREFIX_SEPARATOR in prefixed_name:
-        parts = prefixed_name.split(MCP_TOOL_PREFIX_SEPARATOR, 1)
+        parts: Final = prefixed_name.split(MCP_TOOL_PREFIX_SEPARATOR, 1)
         if len(parts) == 2:
             return parts[1], parts[0]
     return prefixed_name, ""
@@ -396,7 +385,7 @@ def match_known_server_prefix(name: str, known_prefixes: Iterable[str]) -> tuple
     prefix that is merely its leading segment. Returns ``None`` when no candidate
     matches, i.e. ``name`` carries none of these prefixes.
     """
-    candidates = sorted(
+    candidates: Final = sorted(
         {normalize_server_name(prefix) for prefix in known_prefixes if prefix},
         key=len,
         reverse=True,
@@ -408,7 +397,7 @@ def match_known_server_prefix(name: str, known_prefixes: Iterable[str]) -> tuple
     return None
 
 
-def strip_known_server_prefix(name: str, server: Optional[Any]) -> str:
+def strip_known_server_prefix(name: str, server: Any | None) -> str:
     """Strip ``server``'s registered prefix from a prefixed tool/resource name.
 
     Unlike :func:`split_server_prefix_from_name`, which guesses the boundary at
@@ -425,13 +414,13 @@ def strip_known_server_prefix(name: str, server: Optional[Any]) -> str:
     """
     if server is None:
         return split_server_prefix_from_name(name)[0]
-    matched = match_known_server_prefix(name, iter_known_server_prefixes(server))
+    matched: Final = match_known_server_prefix(name, iter_known_server_prefixes(server))
     return name if matched is None else matched[1]
 
 
 def is_tool_name_prefixed(
     tool_name: str,
-    known_server_prefixes: Optional[set] = None,
+    known_server_prefixes: set | None = None,
 ) -> bool:
     """
     Check if tool name has a known MCP server prefix.
@@ -486,17 +475,17 @@ def validate_mcp_server_name(server_name: str, raise_http_exception: bool = Fals
             raise Exception(error_message)
 
 
-def extract_mcp_tool_result_error_message(result: object) -> Optional[str]:
+def extract_mcp_tool_result_error_message(result: object) -> str | None:
     """The first text content of an ``isError=True`` tool result, or ``None``
     when the result is not an error.
 
     Accepts both ``mcp.types.CallToolResult`` objects and their dict
     equivalents, duck-typed so the ``mcp`` package is not required.
     """
-    is_error: object = result.get("isError") if isinstance(result, Mapping) else getattr(result, "isError", None)
+    is_error: Final[object] = result.get("isError") if isinstance(result, Mapping) else getattr(result, "isError", None)
     if is_error is not True:
         return None
-    content: object = result.get("content") if isinstance(result, Mapping) else getattr(result, "content", None)
+    content: Final[object] = result.get("content") if isinstance(result, Mapping) else getattr(result, "content", None)
     if isinstance(content, (list, tuple)):
         for item in content:
             text: object = item.get("text") if isinstance(item, Mapping) else getattr(item, "text", None)
@@ -516,7 +505,7 @@ def mcp_tool_result_content_list(result: object) -> MutableSequence[object] | No
     Accepts both ``mcp.types.CallToolResult`` objects and their dict
     equivalents, duck-typed so the ``mcp`` package is not required.
     """
-    content: object = result.get("content") if isinstance(result, Mapping) else getattr(result, "content", None)
+    content: Final[object] = result.get("content") if isinstance(result, Mapping) else getattr(result, "content", None)
     if isinstance(content, MutableSequence):
         return content
     return None
@@ -549,16 +538,16 @@ def with_mcp_content_item_text(item: object, text: str) -> object:
     """
     if isinstance(item, Mapping):
         return {**item, "text": text}
-    model_copy = getattr(item, "model_copy", None)
+    model_copy: Final = getattr(item, "model_copy", None)
     if callable(model_copy):
         return model_copy(update={"text": text})
     return item
 
 
-TOOL_DISPLAY_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+TOOL_DISPLAY_NAME_PATTERN: Final = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
-def validate_tool_display_names(tool_name_to_display_name: Optional[Mapping[str, str]]) -> None:
+def validate_tool_display_names(tool_name_to_display_name: Mapping[str, str] | None) -> None:
     """
     Validate tool display name overrides against Bedrock's tool-name constraint.
 
@@ -603,17 +592,17 @@ class MCPMissingUserEnvVarsError(Exception):
         self,
         *,
         server_id: str,
-        server_name: Optional[str],
-        missing: List[str],
+        server_name: str | None,
+        missing: list[str],
         setup_url: str,
     ) -> None:
         self.server_id = server_id
         self.server_name = server_name
         self.missing = missing
         self.setup_url = setup_url
-        label = server_name or server_id
-        bullet_list = "\n".join(f"- {name}" for name in missing)
-        message = (
+        label: Final = server_name or server_id
+        bullet_list: Final = "\n".join(f"- {name}" for name in missing)
+        message: Final = (
             f'Cannot connect to MCP server "{label}".\n\n'
             f"Your administrator configured this server to require per-user "
             f"variables, but you haven't set the following yet:\n"
@@ -626,12 +615,12 @@ class MCPMissingUserEnvVarsError(Exception):
 
 # Pattern for ``${NAME}`` substitution. Matches the standard env-var
 # identifier rules — letters, digits, underscores, can't start with a digit.
-_ENV_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_ENV_VAR_PATTERN: Final = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def parse_admin_env_vars(
-    env_vars: Optional[Iterable[Any]],
-) -> Tuple[Dict[str, str], List[Dict[str, Any]]]:
+    env_vars: Iterable[Any] | None,
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
     """Split admin-configured env var entries into globals and per-user specs.
 
     Accepts the raw value of ``MCPServer.env_vars`` (list of dicts or Pydantic
@@ -643,8 +632,8 @@ def parse_admin_env_vars(
 
     Unknown / malformed entries are skipped silently.
     """
-    global_values: Dict[str, str] = {}
-    user_specs: List[Dict[str, Any]] = []
+    global_values: Final[dict[str, str]] = {}
+    user_specs: Final[list[dict[str, Any]]] = []
     if not env_vars:
         return global_values, user_specs
     for raw in env_vars:
@@ -668,16 +657,16 @@ def parse_admin_env_vars(
     return global_values, user_specs
 
 
-def find_env_var_references(value: str) -> Set[str]:
+def find_env_var_references(value: str) -> set[str]:
     """Return the set of ``${NAME}`` identifiers referenced inside ``value``."""
     if not value:
         return set()
     return set(_ENV_VAR_PATTERN.findall(value))
 
 
-def collect_env_var_references(*, strings: Iterable[str]) -> Set[str]:
+def collect_env_var_references(*, strings: Iterable[str]) -> set[str]:
     """Union of every ``${NAME}`` reference across a collection of strings."""
-    refs: Set[str] = set()
+    refs: set[str] = set()
     for s in strings:
         if isinstance(s, str):
             refs |= find_env_var_references(s)
@@ -693,7 +682,7 @@ def interpolate_env_vars(value: str, variables: Mapping[str, str]) -> str:
         return value
 
     def _sub(match: "re.Match[str]") -> str:
-        name = match.group(1)
+        name: Final = match.group(1)
         if name in variables:
             return variables[name]
         return match.group(0)
@@ -701,23 +690,23 @@ def interpolate_env_vars(value: str, variables: Mapping[str, str]) -> str:
     return _ENV_VAR_PATTERN.sub(_sub, value)
 
 
-def interpolate_headers(headers: Mapping[str, str], variables: Mapping[str, str]) -> Dict[str, str]:
+def interpolate_headers(headers: Mapping[str, str], variables: Mapping[str, str]) -> dict[str, str]:
     """Return a copy of ``headers`` with every value passed through ``interpolate_env_vars``."""
     return {k: interpolate_env_vars(v, variables) for k, v in headers.items()}
 
 
 def build_env_var_setup_url(server_id: str) -> str:
     """The frontend URL where a user can fill in their per-user env vars."""
-    base = os.environ.get("PROXY_BASE_URL", "").rstrip("/")
-    path = f"/ui/?page=mcp-servers&fill_env_vars={quote(server_id, safe='')}"
+    base: Final = os.environ.get("PROXY_BASE_URL", "").rstrip("/")
+    path: Final = f"/ui/?page=mcp-servers&fill_env_vars={quote(server_id, safe='')}"
     return f"{base}{path}" if base else path
 
 
 def merge_mcp_headers(
     *,
-    extra_headers: Optional[Mapping[str, str]] = None,
-    static_headers: Optional[Mapping[str, str]] = None,
-) -> Optional[Dict[str, str]]:
+    extra_headers: Mapping[str, str] | None = None,
+    static_headers: Mapping[str, str] | None = None,
+) -> dict[str, str] | None:
     """Merge outbound HTTP headers for MCP calls.
 
     This is used when calling out to external MCP servers (or OpenAPI-based MCP tools).
@@ -730,7 +719,7 @@ def merge_mcp_headers(
     behavior in `MCPServerManager` where `server.static_headers` is applied after
     any caller-provided headers.
     """
-    merged: Dict[str, str] = {}
+    merged: Final[dict[str, str]] = {}
 
     if extra_headers:
         merged.update({str(k): str(v) for k, v in extra_headers.items()})
@@ -743,7 +732,7 @@ def merge_mcp_headers(
 
 # Local rather than litellm.constants: this module deliberately imports no litellm
 # package, so pulling one in for a single integer would drag in litellm/__init__.
-MAX_STRUCTURED_CONTENT_SCAN_DEPTH = 100
+MAX_STRUCTURED_CONTENT_SCAN_DEPTH: Final = 100
 
 
 JSONLeafPath = tuple[str | int, ...]
@@ -753,7 +742,7 @@ def _flatten_leaf_groups(
     groups: Iterable[tuple[tuple[JSONLeafPath, str], ...] | None],
 ) -> tuple[tuple[JSONLeafPath, str], ...] | None:
     """Concatenate child leaf groups, propagating the too-deep sentinel."""
-    materialized = tuple(groups)
+    materialized: Final = tuple(groups)
     if any(group is None for group in materialized):
         return None
     return tuple(leaf for group in materialized if group is not None for leaf in group)
@@ -811,7 +800,7 @@ def json_unrewritable_labels(value: object, path_depth: int = 0) -> tuple[str, .
     if isinstance(value, (int, float)):
         return (str(value),)
     if isinstance(value, dict):
-        own = tuple(key for key in value if isinstance(key, str))
+        own: Final = tuple(key for key in value if isinstance(key, str))
         nested = tuple(json_unrewritable_labels(item, path_depth + 1) for item in value.values())
         if any(group is None for group in nested):
             return None
