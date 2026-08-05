@@ -78,6 +78,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
     _team_member_has_permission,
+    _user_has_admin_view,
     validate_finite_spend,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -214,7 +215,7 @@ async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
         )
 
 
-def _is_team_key(data: Union[GenerateKeyRequest, LiteLLM_VerificationToken]):
+def _is_team_key(data: GenerateKeyRequest | LiteLLM_VerificationToken):
     return data.team_id is not None
 
 
@@ -441,7 +442,7 @@ def _personal_key_generation_check(user_api_key_dict: UserAPIKeyAuth, data: Gene
     ):
         return True
 
-    _personal_key_generation: Final = litellm.key_generation_settings["personal_key_generation"]  # type: ignore
+    _personal_key_generation: Final = litellm.key_generation_settings["personal_key_generation"]
 
     _personal_key_membership_check(
         user_api_key_dict,
@@ -497,7 +498,7 @@ def key_generation_check(
 
 def common_key_access_checks(
     user_api_key_dict: UserAPIKeyAuth,
-    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    data: GenerateKeyRequest | UpdateKeyRequest,
     llm_router: Router | None,
     premium_user: bool,
     user_id: str | None = None,
@@ -751,7 +752,7 @@ _BUDGET_NUMERIC_KEYS = frozenset(["max_budget", "soft_budget", "max_parallel_req
 
 
 def _enforce_upperbound_key_params(
-    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    data: GenerateKeyRequest | UpdateKeyRequest,
     fill_defaults: bool = True,
 ) -> None:
     """
@@ -955,7 +956,7 @@ async def _common_key_generation_helper(
 
         _budget: Final = await BudgetRepository(prisma_client).table.create(
             data={
-                **new_budget,  # type: ignore
+                **new_budget,
                 "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                 "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
             }
@@ -982,7 +983,7 @@ async def _common_key_generation_helper(
             )
             delattr(data, field)
 
-    data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
+    data_json = data.model_dump(exclude_unset=True, exclude_none=True)
 
     data_json = handle_key_type(data, data_json)
 
@@ -1160,7 +1161,7 @@ async def _common_key_generation_helper(
 
 def _check_key_model_specific_limits(
     keys: list[LiteLLM_VerificationToken],
-    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    data: GenerateKeyRequest | UpdateKeyRequest,
     entity_rpm_limit: int | None,
     entity_tpm_limit: int | None,
     entity_model_rpm_limit_dict: dict[str, int],
@@ -1231,7 +1232,7 @@ def _check_key_model_specific_limits(
 
 def _check_key_rpm_tpm_limits(
     keys: list[LiteLLM_VerificationToken],
-    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    data: GenerateKeyRequest | UpdateKeyRequest,
     entity_rpm_limit: int | None,
     entity_tpm_limit: int | None,
     entity_type: str,  # "team" or "organization"
@@ -1270,7 +1271,7 @@ def _check_key_rpm_tpm_limits(
 def check_team_key_model_specific_limits(
     keys: list[LiteLLM_VerificationToken],
     team_table: LiteLLM_TeamTableCachedObj,
-    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    data: GenerateKeyRequest | UpdateKeyRequest,
 ) -> None:
     """
     Check if the team key is allocating model specific limits. If so, raise an error if we're overallocating.
@@ -1295,7 +1296,7 @@ def check_team_key_model_specific_limits(
 def check_team_key_rpm_tpm_limits(
     keys: list[LiteLLM_VerificationToken],
     team_table: LiteLLM_TeamTableCachedObj,
-    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    data: GenerateKeyRequest | UpdateKeyRequest,
 ) -> None:
     """
     Check if the team key is allocating rpm/tpm limits. If so, raise an error if we're overallocating.
@@ -1311,7 +1312,7 @@ def check_team_key_rpm_tpm_limits(
 
 async def _check_team_key_limits(
     team_table: LiteLLM_TeamTableCachedObj,
-    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    data: GenerateKeyRequest | UpdateKeyRequest,
     prisma_client: PrismaClient,
 ) -> None:
     """
@@ -1347,7 +1348,7 @@ async def _check_team_key_limits(
 
 async def _check_project_key_limits(
     project_id: str,
-    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    data: GenerateKeyRequest | UpdateKeyRequest,
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
@@ -1397,7 +1398,7 @@ async def _check_project_key_limits(
 def check_org_key_model_specific_limits(
     keys: list[LiteLLM_VerificationToken],
     org_table: LiteLLM_OrganizationTable,
-    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    data: GenerateKeyRequest | UpdateKeyRequest,
 ) -> None:
     """
     Check if the organization key is allocating model specific limits. If so, raise an error if we're overallocating.
@@ -1430,7 +1431,7 @@ def check_org_key_model_specific_limits(
 def check_org_key_rpm_tpm_limits(
     keys: list[LiteLLM_VerificationToken],
     org_table: LiteLLM_OrganizationTable,
-    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    data: GenerateKeyRequest | UpdateKeyRequest,
 ) -> None:
     """
     Check if the organization key is allocating rpm/tpm limits. If so, raise an error if we're overallocating.
@@ -1486,7 +1487,7 @@ async def _validate_caller_can_assign_key_org(
 
 async def _check_org_key_limits(
     org_table: LiteLLM_OrganizationTable,
-    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    data: GenerateKeyRequest | UpdateKeyRequest,
     prisma_client: PrismaClient,
 ) -> None:
     """
@@ -1651,7 +1652,7 @@ async def generate_key_fn(
 
         if user_custom_key_generate is not None:
             if inspect.iscoroutinefunction(user_custom_key_generate):
-                result: Final = await user_custom_key_generate(data)  # type: ignore
+                result: Final = await user_custom_key_generate(data)
             else:
                 raise ValueError("user_custom_key_generate must be a coroutine")
             decision: Final = result.get("decision", True)
@@ -1848,7 +1849,7 @@ async def generate_service_account_key_fn(
 
     if user_custom_key_generate is not None:
         if inspect.iscoroutinefunction(user_custom_key_generate):
-            result: Final = await user_custom_key_generate(data)  # type: ignore
+            result: Final = await user_custom_key_generate(data)
         else:
             raise ValueError("user_custom_key_generate must be a coroutine")
         decision: Final = result.get("decision", True)
@@ -1943,7 +1944,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
 
 
 async def prepare_key_update_data(
-    data: Union[UpdateKeyRequest, RegenerateKeyRequest],
+    data: UpdateKeyRequest | RegenerateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
 ):
     data_json: Final[dict] = data.model_dump(exclude_unset=True)
@@ -3559,7 +3560,7 @@ async def info_key_fn(
         if key is not None:
             hashed_key = _hash_token_if_needed(token=key)
         key_info = await VerificationTokenRepository(prisma_client).table.find_unique(
-            where={"token": hashed_key},  # type: ignore
+            where={"token": hashed_key},
             include={"litellm_budget_table": True},
         )
         if key_info is None:
@@ -3873,8 +3874,8 @@ async def generate_key_helper_fn(
                     if user_row is None:
                         raise Exception("Failed to create user")
                     ## use default user model list if no key-specific model list provided
-                    if len(user_row.models) > 0 and len(key_data["models"]) == 0:  # type: ignore
-                        key_data["models"] = user_row.models  # type: ignore
+                    if len(user_row.models) > 0 and len(key_data["models"]) == 0:
+                        key_data["models"] = user_row.models
                 elif query_type == "update_data":
                     user_row = await prisma_client.update_data(
                         data=user_data,
@@ -4278,8 +4279,8 @@ async def _rotate_master_key(
             )
             if new_model:
                 _dumped = new_model.model_dump(exclude_none=True)
-                _dumped["litellm_params"] = prisma.Json(_dumped["litellm_params"])  # type: ignore[attr-defined]
-                _dumped["model_info"] = prisma.Json(_dumped["model_info"])  # type: ignore[attr-defined]
+                _dumped["litellm_params"] = prisma.Json(_dumped["litellm_params"])
+                _dumped["model_info"] = prisma.Json(_dumped["model_info"])
                 new_models.append(_dumped)
         verbose_proxy_logger.debug("Resetting proxy model table")
         async with prisma_client.db.tx() as tx:
@@ -4314,7 +4315,7 @@ async def _rotate_master_key(
             if encrypted_env_vars:
                 await _config_table(prisma_client).update(
                     where={"param_name": "environment_variables"},
-                    data={"param_value": prisma.Json(encrypted_env_vars)},  # type: ignore[attr-defined]
+                    data={"param_value": prisma.Json(encrypted_env_vars)},
                 )
 
     # 4. process MCP server table
@@ -4372,13 +4373,9 @@ async def _rotate_master_key(
                 )
                 _cred_data = encrypted_cred.model_dump(exclude_none=True)
                 if "credential_values" in _cred_data:
-                    _cred_data["credential_values"] = prisma.Json(  # type: ignore[attr-defined]
-                        _cred_data["credential_values"]
-                    )
+                    _cred_data["credential_values"] = prisma.Json(_cred_data["credential_values"])
                 if "credential_info" in _cred_data:
-                    _cred_data["credential_info"] = prisma.Json(  # type: ignore[attr-defined]
-                        _cred_data["credential_info"]
-                    )
+                    _cred_data["credential_info"] = prisma.Json(_cred_data["credential_info"])
                 await _credentials_table(prisma_client).update(
                     where={"credential_name": cred.credential_name},
                     data={
@@ -4622,7 +4619,7 @@ async def _execute_virtual_key_regeneration(
 
     updated_token: Final = await VerificationTokenRepository(prisma_client).table.update(
         where={"token": hashed_api_key},
-        data=update_data,  # type: ignore
+        data=update_data,
     )
     updated_token_dict: Final = dict(updated_token) if updated_token is not None else {}
     updated_token_dict["key"] = new_token
@@ -5106,7 +5103,7 @@ async def validate_key_list_check(
     key_hash: str | None,
     prisma_client: PrismaClient,
 ) -> LiteLLM_UserTable | None:
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+    if _user_has_admin_view(user_api_key_dict):
         return None
 
     if user_api_key_dict.user_id is None:
@@ -5675,7 +5672,7 @@ def _build_key_filter_conditions(
     agent_id: str | None = None,
     use_substring_matching: bool = False,
     expires_filter: str | None = None,
-) -> dict[str, Union[str, dict[str, Any], list[dict[str, Any]]]]:
+) -> dict[str, str | dict[str, Any] | list[dict[str, Any]]]:
     """Build filter conditions for key listing.
 
     Visibility rules:
@@ -5687,7 +5684,7 @@ def _build_key_filter_conditions(
       so former members cannot see service accounts they created after leaving.
     """
     # Prepare filter conditions
-    where: dict[str, Union[str, dict[str, Any], list[dict[str, Any]]]] = {}
+    where: dict[str, str | dict[str, Any] | list[dict[str, Any]]] = {}
     where.update(_get_condition_to_filter_out_ui_session_tokens())
 
     # Build the OR conditions for user's keys and admin team keys
@@ -5869,9 +5866,9 @@ async def _list_key_helper(
     # Fetch keys with pagination
     if use_deleted_table:
         keys = await DeletedVerificationTokenRepository(prisma_client).table.find_many(
-            where=where,  # type: ignore
-            skip=skip,  # type: ignore
-            take=size,  # type: ignore
+            where=where,
+            skip=skip,
+            take=size,
             order=(
                 order_by
                 if order_by
@@ -5883,9 +5880,9 @@ async def _list_key_helper(
         )
     else:
         keys = await VerificationTokenRepository(prisma_client).table.find_many(
-            where=where,  # type: ignore
-            skip=skip,  # type: ignore
-            take=size,  # type: ignore
+            where=where,
+            skip=skip,
+            take=size,
             order=(
                 order_by
                 if order_by
@@ -5901,13 +5898,9 @@ async def _list_key_helper(
 
     # Get total count of keys
     if use_deleted_table:
-        total_count = await _deleted_verification_token_table(prisma_client).count(
-            where=where  # type: ignore
-        )
+        total_count = await _deleted_verification_token_table(prisma_client).count(where=where)
     else:
-        total_count = await _prisma_table(VerificationTokenRepository(prisma_client)).count(
-            where=where  # type: ignore
-        )
+        total_count = await _prisma_table(VerificationTokenRepository(prisma_client)).count(where=where)
 
     verbose_proxy_logger.debug("Total count of keys: %s", total_count)
 
@@ -5925,7 +5918,7 @@ async def _list_key_helper(
             user_map = {user.user_id: user for user in users}
 
     # Prepare response
-    key_list: Final[list[Union[str, UserAPIKeyAuth, LiteLLM_DeletedVerificationToken]]] = []
+    key_list: Final[list[str | UserAPIKeyAuth | LiteLLM_DeletedVerificationToken]] = []
     for key in keys:
         # Convert Prisma model to dict (supports both Pydantic v1 and v2)
         try:
@@ -6136,7 +6129,7 @@ async def block_key(
 
     record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
         where={"token": hashed_token},
-        data={"blocked": True},  # type: ignore
+        data={"blocked": True},
     )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
@@ -6249,7 +6242,7 @@ async def unblock_key(
 
     record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
         where={"token": hashed_token},
-        data={"blocked": False},  # type: ignore
+        data={"blocked": False},
     )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB

@@ -25,7 +25,7 @@ async def forward_messages(client_ws: Any, backend_ws: Any):
         while True:
             message = await backend_ws.recv()
             await client_ws.send_text(message)
-    except websockets.exceptions.ConnectionClosed:  # type: ignore
+    except websockets.exceptions.ConnectionClosed:
         pass
 
 
@@ -119,10 +119,10 @@ class AzureOpenAIRealtime(AzureChatCompletion):
 
         try:
             ssl_context: Final = get_shared_realtime_ssl_context()
-            async with websockets.connect(  # type: ignore
+            async with websockets.connect(
                 url,
                 additional_headers={
-                    "api-key": api_key,  # type: ignore
+                    "api-key": api_key,
                 },
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_context,
@@ -141,7 +141,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                 )
                 await realtime_streaming.bidirectional_forward()
 
-        except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+        except websockets.exceptions.InvalidStatusCode as e:
             await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception:
             verbose_proxy_logger.exception("Error in AzureOpenAIRealtime.async_realtime")

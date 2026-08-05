@@ -27,12 +27,14 @@ The router scores each request across 7 dimensions:
 
 The weighted sum is mapped to tiers using configurable boundaries:
 
-| Tier | Score Range | Typical Use |
-|------|-------------|-------------|
-| SIMPLE | < 0.15 | Basic questions, greetings |
-| MEDIUM | 0.15 - 0.35 | Standard queries |
-| COMPLEX | 0.35 - 0.60 | Technical, multi-part requests |
-| REASONING | > 0.60 | Chain-of-thought, analysis |
+| Tier | Score Range | Boundary key below it | Typical Use |
+|------|-------------|-----------------------|-------------|
+| SIMPLE | < 0.15 | - | Basic questions, greetings |
+| MEDIUM | 0.15 - 0.35 | `simple_medium` | Standard queries |
+| COMPLEX | 0.35 - 0.60 | `medium_complex` | Technical, multi-part requests |
+| REASONING | > 0.60 | `complex_reasoning` | Chain-of-thought, analysis |
+
+Tier names are defaults you can rename with [`tier_labels`](#renaming-the-tiers). The three `tier_boundaries` keys are named after those defaults but they are scorer knobs, not tiers: each one names the gap between two rungs and is persisted by name on every routing decision, so they stay `simple_medium` / `medium_complex` / `complex_reasoning` no matter what you call the tiers. The column above tells a renamed deployment which knob it is turning.
 
 ## Configuration
 
@@ -51,6 +53,34 @@ model_list:
           REASONING: o1-preview
 ```
 
+### Renaming the tiers
+
+`tier_labels` puts your own vocabulary on the four tiers:
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        tier_labels:
+          SIMPLE: Cheap
+          MEDIUM: Standard
+          COMPLEX: Premium
+          REASONING: Deep
+        tiers:
+          SIMPLE: gpt-5-nano
+          MEDIUM: gpt-5-mini
+          COMPLEX: gpt-5
+          REASONING: o3
+```
+
+Labels are display-only. Every config key stays canonical, so `tiers`, `keyword_tier_rules[].tier`, and `tier_boundaries` are written exactly as they are without labels. A partial map is fine and any tier you leave out keeps its default name. Two tiers can't share a label, and a label can't be another tier's canonical name, since either would make a log row ambiguous.
+
+Where the names show up depends on your classifier. Under the default heuristic scorer they are cosmetic: the scorer maps a weighted score to a rung and never reads a tier name, so renaming changes what you see in the dashboard and your spend logs and nothing else. Under `classifier_type: llm` the labels are also the names in the rubric the classifier reasons with and the values it must return, so clearer names can sharpen its choices. Either way the names are operator-facing, and an API caller never sees them.
+
+Spend logs keep `routing_decision.tier` canonical so rows from before and after a rename stay comparable, and gain `routing_decision.tier_label` on the tiers you renamed.
+
 ### Full Configuration
 
 ```yaml
@@ -59,6 +89,13 @@ model_list:
     litellm_params:
       model: auto_router/complexity_router
       complexity_router_config:
+        # Display names for the tiers (optional, config keys stay canonical)
+        tier_labels:
+          SIMPLE: Cheap
+          MEDIUM: Standard
+          COMPLEX: Premium
+          REASONING: Deep
+
         # Tier to model mapping
         tiers:
           SIMPLE: gpt-4o-mini

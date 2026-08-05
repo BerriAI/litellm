@@ -14,10 +14,11 @@ import asyncio
 import datetime
 import json
 from collections.abc import Mapping, Sequence
+from json import JSONDecodeError
 from typing import Any, Final, Literal, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -59,12 +60,19 @@ from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import ModelTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
+from litellm.router_strategy.complexity_router import (
+    DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+    ComplexityRouterConfig,
+    ComplexityTier,
+    classification_system_prompt,
+)
 from litellm.router_utils.auto_router_model_naming import (
     STRATEGY_ROUTER_PARAM_FIELDS,
     validate_complexity_router_config_write,
     validate_strategy_router_model_write,
 )
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+    AutoRouterClassifierDefaultPromptResponse,
     UpdateUsefulLinksRequest,
 )
 from litellm.types.router import (
@@ -160,9 +168,7 @@ def _raise_on_strategy_router_write_violation(
 def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
     merged_deployment_dict: Final = DeploymentTypedDict(
         model_name=db_model.model_name,
-        litellm_params=LiteLLMParamsTypedDict(
-            **db_model.litellm_params.model_dump(exclude_none=True)  # type: ignore
-        ),
+        litellm_params=LiteLLMParamsTypedDict(**db_model.litellm_params.model_dump(exclude_none=True)),
         model_info=db_model.model_info.model_dump(exclude_none=True),
     )
     # update model name
@@ -176,7 +182,7 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
             k: encrypt_value_helper(v) for k, v in updated_patch.litellm_params.model_dump(exclude_none=True).items()
         }
 
-        merged_deployment_dict["litellm_params"].update(encrypted_params)  # type: ignore
+        merged_deployment_dict["litellm_params"].update(encrypted_params)
 
     # update model info
     if updated_patch.model_info:
@@ -196,13 +202,13 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     if updated_patch.litellm_params:
         for field in updated_patch.litellm_params.model_fields_set:
             if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.litellm_params, field) is None:
-                merged_deployment_dict["litellm_params"].pop(field, None)  # type: ignore
+                merged_deployment_dict["litellm_params"].pop(field, None)
                 merged_deployment_dict.get("model_info", {}).pop(field, None)
     if updated_patch.model_info:
         for field in updated_patch.model_info.model_fields_set:
             if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.model_info, field) is None:
-                merged_deployment_dict["model_info"].pop(field, None)  # type: ignore
-                merged_deployment_dict.get("litellm_params", {}).pop(field, None)  # type: ignore
+                merged_deployment_dict["model_info"].pop(field, None)
+                merged_deployment_dict.get("litellm_params", {}).pop(field, None)
 
     # convert to prisma compatible format
 
@@ -565,19 +571,15 @@ async def _add_model_to_db(
     _data: Final[dict] = {
         "model_id": model_params.model_info.id,
         "model_name": model_params.model_name,
-        "litellm_params": model_params.litellm_params.model_dump_json(exclude_none=True),  # type: ignore
-        "model_info": model_params.model_info.model_dump_json(  # type: ignore
-            exclude_none=True
-        ),
+        "litellm_params": model_params.litellm_params.model_dump_json(exclude_none=True),
+        "model_info": model_params.model_info.model_dump_json(exclude_none=True),
         "created_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
     }
     if model_params.model_info.id is not None:
         _data["model_id"] = model_params.model_info.id
     if should_create_model_in_db:
-        model_response = await ModelRepository(prisma_client).table.create(
-            data=_data  # type: ignore
-        )
+        model_response = await ModelRepository(prisma_client).table.create(data=_data)
     else:
         model_response = LiteLLM_ProxyModelTable(**_data)
     return model_response
@@ -925,7 +927,7 @@ async def _remove_unbacked_team_models(
     updated_team_row: Final[LiteLLM_TeamTable] = await prisma_client.db.litellm_teamtable.update(
         where={"team_id": team_id},
         data={"models": [model for model in existing_team_row.models if model not in names_to_remove]},
-        include={"object_permission": True},  # type: ignore
+        include={"object_permission": True},
     )
     await _refresh_cached_team(
         team_row=updated_team_row,
@@ -1550,12 +1552,12 @@ async def update_model(
                     pass
 
             _data: Final[dict] = {
-                "litellm_params": json.dumps(merged_dictionary),  # type: ignore
+                "litellm_params": json.dumps(merged_dictionary),
                 "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             }
             model_response: Final = await ModelRepository(prisma_client).table.update(
                 where={"model_id": _model_id},
-                data=_data,  # type: ignore
+                data=_data,
             )
 
             # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
@@ -1764,6 +1766,70 @@ async def update_useful_links(
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             param=None,
         )
+
+
+def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[ComplexityTier, str], ...] | None:
+    """Resolve the tier_labels query param into the labeled tiers the rubric is built from.
+
+    Validated through ComplexityRouterConfig so the editor prefills what the router would send: the
+    same field validators that reject a blank, duplicated, or canonical-name-stealing label on the
+    write path reject it here, rather than this returning a rubric no router could be configured to
+    use. A malformed value is the caller's error, so it surfaces as a 400.
+
+    None when unset, letting classification_system_prompt apply its own default names.
+    """
+    if not tier_labels:
+        return None
+    try:
+        return ComplexityRouterConfig(tier_labels=json.loads(tier_labels)).labeled_tiers()
+    except (JSONDecodeError, ValidationError) as e:
+        raise ProxyException(
+            message=f"tier_labels must be a JSON object of tier name to display name: {e}",
+            type=ProxyErrorTypes.bad_request_error,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="tier_labels",
+        ) from e
+
+
+@router.get(
+    "/auto_router/classifier/default_prompt",
+    description="Get the built-in system prompt used by an auto-router's LLM classifier",
+    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+)
+async def get_auto_router_classifier_default_prompt(
+    context_window_size: int = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+    tier_labels: str | None = None,
+) -> AutoRouterClassifierDefaultPromptResponse:
+    """
+    Get the default classifier system prompt, so the dashboard's prompt editor can prefill it.
+
+    The prompt's closing line depends on whether prior conversation turns are quoted to the
+    classifier, and its tier bullets are named by the router's tier_labels, so the caller passes both
+    to get the text that router would actually send rather than a rubric it does not use.
+
+    Parameters:
+    - context_window_size: int - The router's classifier_context_window_size. Defaults to the
+      built-in default.
+    - tier_labels: str | None - The router's tier_labels as a JSON object of canonical tier name to
+      display name, e.g. `{"SIMPLE": "Cheap"}`. Omit or pass an empty object for the default names.
+    """
+    if context_window_size < 0:
+        raise ProxyException(
+            message="context_window_size must be non-negative",
+            type=ProxyErrorTypes.bad_request_error,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="context_window_size",
+        )
+
+    labeled_tiers: Final = _labeled_tiers_from_query(tier_labels)
+    return AutoRouterClassifierDefaultPromptResponse(
+        system_prompt=(
+            classification_system_prompt(context_window_size)
+            if labeled_tiers is None
+            else classification_system_prompt(context_window_size, labeled_tiers=labeled_tiers)
+        )
+    )
 
 
 def _deduplicate_litellm_router_models(models: list[dict]) -> list[dict]:

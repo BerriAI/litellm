@@ -169,7 +169,7 @@ def completion(
             logging_obj=logging_obj,
             print_verbose=print_verbose,
             headers=headers,
-        )  # type: ignore
+        )
     ## COMPLETION CALL
     model_response.created = int(time.time())  # for pricing this must remain right before calling api
 
@@ -203,7 +203,7 @@ def completion(
             headers=headers,
             http_client=httpx_client,
         )
-        return CustomStreamWrapper(_response, model, logging_obj=logging_obj, custom_llm_provider="replicate")  # type: ignore
+        return CustomStreamWrapper(_response, model, logging_obj=logging_obj, custom_llm_provider="replicate")
     else:
         for retry in range(litellm.DEFAULT_REPLICATE_POLLING_RETRIES):
             time.sleep(
@@ -272,7 +272,7 @@ async def async_completion(
             headers=headers,
             http_client=async_handler,
         )
-        return CustomStreamWrapper(_response, model, logging_obj=logging_obj, custom_llm_provider="replicate")  # type: ignore
+        return CustomStreamWrapper(_response, model, logging_obj=logging_obj, custom_llm_provider="replicate")
 
     for retry in range(litellm.DEFAULT_REPLICATE_POLLING_RETRIES):
         await asyncio.sleep(

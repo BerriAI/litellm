@@ -22,9 +22,14 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.router_strategy.complexity_router.complexity_router import (
+    _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
+    _CLASSIFICATION_WITH_CONVERSATION,
+    TIER_SEVERITY_ORDER_LABELED,
     ComplexityRouter,
     DimensionScore,
     KeywordOverride,
+    _classification_system_rubric,
+    classification_system_prompt,
 )
 from litellm.router_strategy.complexity_router.config import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
@@ -746,7 +751,7 @@ class TestSingletonMutation:
     def test_default_config_not_mutated(self, mock_router_instance):
         """Test that creating routers without config doesn't mutate defaults."""
         from litellm.router_strategy.complexity_router.config import (
-    DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+            DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
             ComplexityRouterConfig,
         )
 
@@ -1377,6 +1382,143 @@ class TestLLMClassifierConfig:
         assert config.classifier_llm_config is None
 
 
+CUSTOM_TIER_LABELS: Dict[str, str] = {
+    "SIMPLE": "Cheap",
+    "MEDIUM": "Standard",
+    "COMPLEX": "Premium",
+    "REASONING": "Deep",
+}
+
+
+class TestTierLabels:
+    """tier_labels renames the tiers an operator sees, and nothing else.
+
+    Config keys, the heuristic scorer, and the model actually routed to are all defined by the
+    canonical tier, so a rename must be provably inert on the routing path.
+    """
+
+    def test_default_labels_are_the_canonical_names(self):
+        config = ComplexityRouterConfig()
+        assert config.labeled_tiers() == (
+            (ComplexityTier.SIMPLE, "SIMPLE"),
+            (ComplexityTier.MEDIUM, "MEDIUM"),
+            (ComplexityTier.COMPLEX, "COMPLEX"),
+            (ComplexityTier.REASONING, "REASONING"),
+        )
+
+    def test_a_partial_map_leaves_unlisted_tiers_canonical(self):
+        """Renaming one tier must not force an operator to restate the other three."""
+        config = ComplexityRouterConfig(tier_labels={"SIMPLE": "Cheap"})
+        assert config.tier_label(ComplexityTier.SIMPLE) == "Cheap"
+        assert config.tier_label(ComplexityTier.MEDIUM) == "MEDIUM"
+        assert config.tier_label(ComplexityTier.REASONING) == "REASONING"
+
+    def test_labels_are_stripped(self):
+        config = ComplexityRouterConfig(tier_labels={"SIMPLE": "  Cheap  "})
+        assert config.tier_label(ComplexityTier.SIMPLE) == "Cheap"
+
+    def test_labeled_tiers_is_in_ascending_severity_order(self):
+        """Order is what makes escalation ('bump one tier') coherent, so it is pinned here.
+
+        The rubric and the classifier's response-format enum are both rendered from this, and a
+        model reads an ordered list as ordered, so a reordering would change classification.
+        """
+        config = ComplexityRouterConfig(tier_labels=CUSTOM_TIER_LABELS)
+        assert [label for _, label in config.labeled_tiers()] == ["Cheap", "Standard", "Premium", "Deep"]
+
+    @pytest.mark.parametrize(
+        "labels,reason",
+        [
+            pytest.param({"SIMPLE": ""}, "empty", id="empty-label"),
+            pytest.param({"SIMPLE": "   "}, "blank after strip", id="whitespace-only-label"),
+            pytest.param({"SIMPLE": "Deep", "MEDIUM": "Deep"}, "two tiers share a label", id="duplicate-labels"),
+            pytest.param({"SIMPLE": "deep", "MEDIUM": "Deep"}, "case-insensitive duplicate", id="duplicate-casefold"),
+            pytest.param({"SIMPLE": "Cheap", "MEDIUM": "CHEAP"}, "case-insensitive duplicate", id="duplicate-upper"),
+            pytest.param({"SIMPLE": "COMPLEX"}, "shadows another tier's canonical name", id="shadow-canonical"),
+            pytest.param({"MEDIUM": "simple"}, "shadows another canonical name, any case", id="shadow-lowercase"),
+            pytest.param({"SIMPLE": "Medium"}, "collides with an unrenamed tier's name", id="collide-with-default"),
+        ],
+    )
+    def test_ambiguous_or_empty_labels_are_rejected(self, labels, reason):
+        """A label that is blank, duplicated, or another tier's name makes a log row unreadable.
+
+        Under classifier_type='llm' it is worse than cosmetic: {"SIMPLE": "COMPLEX"} would render the
+        rubric line '- COMPLEX: greetings, chitchat...' and teach the classifier the wrong criteria.
+        """
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(tier_labels=labels)
+
+    def test_a_tier_labelled_with_its_own_canonical_name_is_a_no_op(self):
+        """The shadowing check must reject only OTHER tiers' names.
+
+        Kills an over-broad check that would refuse a config which spells out all four labels and
+        leaves one of them alone.
+        """
+        config = ComplexityRouterConfig(tier_labels={"SIMPLE": "SIMPLE", "MEDIUM": "Standard"})
+        assert config.tier_label(ComplexityTier.SIMPLE) == "SIMPLE"
+        assert config.tier_label(ComplexityTier.MEDIUM) == "Standard"
+
+    def test_tier_for_label_resolves_labels_then_canonical_names(self):
+        config = ComplexityRouterConfig(tier_labels={"REASONING": "Deep"})
+        assert config.tier_for_label("Deep") == ComplexityTier.REASONING
+        assert config.tier_for_label("deep") == ComplexityTier.REASONING
+        # A renamed tier's canonical name still resolves, so a classifier that ignores the rubric
+        # and emits REASONING costs a tier lookup rather than a fallback to the heuristic.
+        assert config.tier_for_label("REASONING") == ComplexityTier.REASONING
+        assert config.tier_for_label("SIMPLE") == ComplexityTier.SIMPLE
+        assert config.tier_for_label("nonsense") is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "prompt,expected_model",
+        [
+            pytest.param("Hello!", "gpt-4o-mini", id="simple"),
+            pytest.param("Let's think step by step and prove the theorem.", "o1-preview", id="reasoning"),
+        ],
+    )
+    async def test_labels_never_change_which_model_is_routed_to(
+        self, mock_router_instance, basic_config, prompt, expected_model
+    ):
+        """The heuristic scorer never reads a tier name, so a rename must be inert end to end.
+
+        Kills any mutation that lets a label leak into tier lookup or model selection, which would
+        silently repoint traffic (and spend) the moment an operator renamed a tier.
+        """
+        renamed = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "tier_labels": CUSTOM_TIER_LABELS},
+        )
+        canonical = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+
+        renamed_response = await renamed.async_pre_routing_hook(
+            model="test-complexity-router", request_kwargs={}, messages=[{"role": "user", "content": prompt}]
+        )
+        canonical_response = await canonical.async_pre_routing_hook(
+            model="test-complexity-router", request_kwargs={}, messages=[{"role": "user", "content": prompt}]
+        )
+
+        assert renamed_response.model == canonical_response.model == expected_model
+        assert renamed_response.routing_decision["tier"] == canonical_response.routing_decision["tier"]
+
+    def test_tiers_and_tier_boundaries_keys_stay_canonical_under_a_rename(self):
+        """Renaming is display-only: the config keys an operator writes do not move.
+
+        tier_boundaries especially, since those three keys name the gaps between tiers and are
+        persisted by name on every scored routing decision.
+        """
+        config = ComplexityRouterConfig(
+            tiers={"SIMPLE": "gpt-4o-mini", "REASONING": "o1-preview"},
+            tier_labels=CUSTOM_TIER_LABELS,
+        )
+        assert set(config.tiers) == {"SIMPLE", "REASONING"}
+        assert set(config.tier_boundaries) == {"simple_medium", "medium_complex", "complex_reasoning"}
+
+
 class TestLLMClassifier:
     """Test the LLM-based classifier path (aclassify) and its fallback behavior."""
 
@@ -1588,6 +1730,106 @@ class TestLLMClassifier:
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
         for key in ("litellm_session_id", "litellm_trace_id"):
             assert call_kwargs.get(key) == expected.get(key)
+
+    def test_generated_response_format_without_labels_matches_the_shipped_pydantic_schema(self):
+        """The wire shape a default deployment sends must not drift now that the enum is spliced in.
+
+        TierClassification's Literal cannot carry runtime labels, so the model handed to
+        type_to_response_format_param is rebuilt from labeled_tiers() instead of being the shipped
+        class. This pins the two together: an unrenamed router must still send byte-identical
+        structured-output JSON, since providers validate it and a silent drift would break
+        classification for every existing deployment at once.
+        """
+        from litellm.llms.base_llm.base_utils import type_to_response_format_param
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            TierClassification,
+            _tier_classification_model,
+        )
+
+        generated = type_to_response_format_param(_tier_classification_model(ComplexityRouterConfig().labeled_tiers()))
+        assert generated == type_to_response_format_param(TierClassification)
+
+    @pytest.mark.asyncio
+    async def test_renamed_tiers_reach_the_rubric_and_the_response_format(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        """The classifier is told to emit the operator's labels, and told what each one means.
+
+        Two failure modes are killed together: labels never threaded into the call at all, and labels
+        threaded in while the criteria that define each tier are dropped along with the canonical name.
+        """
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**llm_classifier_config, "tier_labels": CUSTOM_TIER_LABELS},
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "Deep"}'))
+
+        await router.aclassify("hi")
+
+        body = mock_router_instance.acompletion.call_args.kwargs["proxy_server_request"]["body"]
+        rubric = body["messages"][0]["content"]
+        assert "- Deep:" in rubric
+        assert "- Cheap:" in rubric
+        assert "- REASONING:" not in rubric
+        assert "- SIMPLE:" not in rubric
+        # The label is only the token the model emits; the criteria stay pinned to the canonical tier.
+        assert "proofs" in rubric
+        assert "greetings, chitchat" in rubric
+        assert body["response_format"]["json_schema"]["schema"]["properties"]["tier"]["enum"] == [
+            "Cheap",
+            "Standard",
+            "Premium",
+            "Deep",
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "verdict,expected_model",
+        [
+            pytest.param("Deep", "o1-preview", id="label-the-rubric-asked-for"),
+            pytest.param("deep", "o1-preview", id="label-in-a-different-case"),
+            # A model that ignores the rubric and answers in LiteLLM's vocabulary should still be
+            # understood: falling back to the heuristic there would quietly undo the rename's effect.
+            pytest.param("REASONING", "o1-preview", id="canonical-name-under-a-rename"),
+            pytest.param("Cheap", "gpt-4o-mini", id="renamed-bottom-tier"),
+        ],
+    )
+    async def test_a_labelled_verdict_resolves_to_its_tier(
+        self, mock_router_instance, llm_classifier_config, verdict, expected_model
+    ):
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**llm_classifier_config, "tier_labels": CUSTOM_TIER_LABELS},
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "%s"}' % verdict))
+
+        outcome = await router.aclassify("hi")
+
+        assert outcome.cause == "llm_classifier"
+        assert router.get_model_for_tier(outcome.tier) == expected_model
+
+    @pytest.mark.asyncio
+    async def test_a_verdict_matching_no_label_falls_back_to_the_heuristic(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        """An unrecognized string must degrade to scoring rather than route on a guess.
+
+        Renaming widens what the classifier can return, so this is the path a typo'd or hallucinated
+        label takes, and it must land on the same safe fallback as unparseable output.
+        """
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**llm_classifier_config, "tier_labels": CUSTOM_TIER_LABELS},
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "Expensive"}'))
+
+        outcome = await router.aclassify("Hello!")
+
+        assert outcome.cause == "heuristic_scorer"
+        assert outcome.tier == ComplexityTier.SIMPLE
 
     @pytest.mark.asyncio
     async def test_aclassify_falls_back_to_heuristic_on_llm_exception(
@@ -2163,6 +2405,84 @@ class TestLexicalKeywordTierRules:
         assert router._lexical_tier_override("what is a k8scluster thing") is None
 
 
+class TestCjkKeywordTierRules:
+    """CJK keyword_tier_rules must fire mid-sentence, where regex word boundaries cannot."""
+
+    def _router(self, mock_router_instance, basic_config, keywords: List[str]) -> ComplexityRouter:
+        return ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "keyword_tier_rules": [{"keywords": keywords, "tier": "REASONING"}],
+            },
+        )
+
+    @pytest.mark.parametrize(
+        "keyword, prompt",
+        [
+            ("发票", "我需要开发票"),
+            ("退款", "我要退款，谢谢"),
+            ("账单查询", "我的账单查询怎么做"),
+            ("API文档", "请问在哪里看API文档"),
+            ("請求", "這個請求要怎麼處理"),
+            ("見積", "見積をお願いします"),
+            ("キャンセル", "注文をキャンセルしたい"),
+            ("\U00030000", "这个\U00030000很少见"),
+        ],
+    )
+    def test_cjk_keyword_matches_without_surrounding_whitespace(
+        self, mock_router_instance, basic_config, keyword, prompt
+    ):
+        """CJK is written without spaces, so `\\b<kw>\\b` never fires between two CJK characters."""
+        router = self._router(mock_router_instance, basic_config, [keyword])
+        assert router._lexical_tier_override(prompt) == KeywordOverride(
+            tier=ComplexityTier.REASONING, matched_keyword=keyword
+        )
+
+    def test_cjk_keyword_does_not_match_unrelated_prompt(self, mock_router_instance, basic_config):
+        """Substring matching must still be a real test, not a match-all."""
+        router = self._router(mock_router_instance, basic_config, ["发票"])
+        assert router._lexical_tier_override("我想查一下订单状态") is None
+
+    @pytest.mark.asyncio
+    async def test_cjk_keyword_overrides_scoring_end_to_end(self, mock_router_instance, basic_config):
+        """The whole hook, not just the matcher: a Chinese prompt reaches the tier it was mapped to."""
+        prompt = "我需要开发票"
+        router = self._router(mock_router_instance, basic_config, ["发票"])
+        scored_tier, _, _ = router.classify(prompt)
+        assert scored_tier != ComplexityTier.REASONING
+
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        assert result is not None
+        assert result.model == "o1-preview"
+
+    def test_latin_keywords_keep_word_boundary_matching(self, mock_router_instance, basic_config):
+        """The CJK gate reads the keyword, so a Latin keyword is unaffected by the prompt's script."""
+        router = self._router(mock_router_instance, basic_config, ["k8s"])
+        assert router._lexical_tier_override("what is a k8scluster thing") is None
+        assert router._lexical_tier_override("running my k8s cluster") == KeywordOverride(
+            tier=ComplexityTier.REASONING, matched_keyword="k8s"
+        )
+
+    def test_latin_keyword_against_cjk_prompt_still_needs_a_boundary(self, mock_router_instance, basic_config):
+        """A Latin keyword glued to CJK characters is still a substring false positive."""
+        router = self._router(mock_router_instance, basic_config, ["api"])
+        assert router._lexical_tier_override("请解释一下rapid这个词") is None
+        assert router._lexical_tier_override("请问 api 怎么调用") == KeywordOverride(
+            tier=ComplexityTier.REASONING, matched_keyword="api"
+        )
+
+    def test_accented_latin_keeps_word_boundary_semantics(self, complexity_router):
+        """Guards the alternative fix (ASCII-only lookarounds), which would break diacritics."""
+        assert complexity_router._keyword_matches("un café apiculteur", "api") is False
+        assert complexity_router._keyword_matches("appelle l' api maintenant", "api") is True
+
+
 def _make_embedding_response(vectors: List[List[float]]) -> "litellm.EmbeddingResponse":
     return litellm.EmbeddingResponse(
         model="fake-embed",
@@ -2606,6 +2926,26 @@ class TestSemanticConfigValidation:
         )
         assert config.keyword_tier_rules is not None
         assert config.keyword_tier_rules[0].keywords == ["deploy to k8s", "kubernetes"]
+
+    def test_reminder_markers_unset_defaults_to_none(self):
+        """Unset means the router falls back to the built-in <system-reminder> markers."""
+        config = ComplexityRouterConfig()
+        assert config.reminder_markers is None
+
+    def test_reminder_markers_are_normalized(self):
+        """Markers are stripped and lowercased, matching how the built-in constants are compared."""
+        config = ComplexityRouterConfig(
+            reminder_markers=("  <<<BEGIN_CTX>>>  ", "<<<END_CTX>>>"),
+        )
+        assert config.reminder_markers == ("<<<begin_ctx>>>", "<<<end_ctx>>>")
+
+    def test_reminder_markers_reject_blank_entry(self):
+        with pytest.raises(ValidationError, match="must not be blank"):
+            ComplexityRouterConfig(reminder_markers=("", "<<<END_CTX>>>"))
+
+    def test_reminder_markers_reject_identical_open_and_close(self):
+        with pytest.raises(ValidationError, match="must be different"):
+            ComplexityRouterConfig(reminder_markers=("<<<CTX>>>", "<<<CTX>>>"))
 
 
 class _StubEncoder:
@@ -3871,6 +4211,69 @@ class TestRoutingDecisionContents:
         assert decision["score"] < decision["tier_boundaries"]["complex_reasoning"]
 
 
+    @pytest.mark.asyncio
+    async def test_an_unrenamed_router_writes_no_tier_label(self, complexity_router):
+        """Renaming is opt-in, so a deployment that never renamed must gain no new key.
+
+        Kills an always-emit mutation, which would put a key repeating `tier` verbatim on every
+        auto-routed spend row for every deployment that never asked for one.
+        """
+        response = await complexity_router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        decision = response.routing_decision
+        assert decision["tier"] == "SIMPLE"
+        assert "tier_label" not in decision
+
+    @pytest.mark.asyncio
+    async def test_a_renamed_tier_is_logged_beside_its_canonical_name(self, mock_router_instance, basic_config):
+        """The row carries both: canonical for analytics continuity, the label for the reader.
+
+        Putting the label in `tier` instead would break every dashboard query and every historical
+        comparison the moment an operator renamed a tier, so both keys are asserted together.
+        """
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "tier_labels": CUSTOM_TIER_LABELS},
+        )
+        response = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        decision = response.routing_decision
+        assert decision["tier"] == "SIMPLE"
+        assert decision["tier_label"] == "Cheap"
+        # Boundary keys name the gaps between tiers and are not renameable, so they stay canonical
+        # even on a row whose tier was renamed.
+        assert set(decision["tier_boundaries"]) == {"simple_medium", "medium_complex", "complex_reasoning"}
+
+    @pytest.mark.asyncio
+    async def test_only_the_renamed_tiers_carry_a_label(self, mock_router_instance, basic_config):
+        """A partial map must not stamp a redundant label on the tiers it left alone."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "tier_labels": {"REASONING": "Deep"}},
+        )
+        simple = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        reasoning = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Let's think step by step and prove the theorem."}],
+        )
+        assert "tier_label" not in simple.routing_decision
+        assert reasoning.routing_decision["tier"] == "REASONING"
+        assert reasoning.routing_decision["tier_label"] == "Deep"
+
+
 class TestSignalsNeverQuoteTheSystemPrompt:
     """Signals are persisted to the caller-readable spend log, so they may name a matched
     term only when the caller supplied it. A term matched solely in the system prompt is
@@ -4030,18 +4433,14 @@ class TestRoutingDecisionIsPerAttempt:
         {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}},
     ]
 
-    @pytest.mark.parametrize(
-        "seed, bucket", [({}, "metadata"), ({"litellm_metadata": {}}, "litellm_metadata")]
-    )
+    @pytest.mark.parametrize("seed, bucket", [({}, "metadata"), ({"litellm_metadata": {}}, "litellm_metadata")])
     @pytest.mark.asyncio
     async def test_fallback_to_plain_model_group_clears_the_earlier_decision(self, seed, bucket):
         router = Router(model_list=self.MODEL_LIST)
         request_kwargs: Dict = dict(seed)
         messages = [{"role": "user", "content": "Hello!"}]
 
-        await router.async_pre_routing_hook(
-            model="smart-router", request_kwargs=request_kwargs, messages=messages
-        )
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=request_kwargs, messages=messages)
         assert "routing_decision" in request_kwargs[bucket]
 
         # The fallback attempt reuses the same kwargs and selects no strategy.
@@ -4092,7 +4491,6 @@ class TestRecordRoutingDecision:
         request_kwargs: Dict = {}
         Router._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
         assert request_kwargs == {}
-
 
     def test_clearing_the_decision_takes_the_savings_facts_with_it(self):
         """A fallback to a plain model group re-enters the hook with the same
@@ -4373,7 +4771,12 @@ class TestContextAwareClassifier:
                 id="multiple-reminders-stripped",
             ),
             pytest.param(
-                [{"role": "user", "content": [{"type": "text", "text": _REMINDER}, {"type": "text", "text": "and now?"}]}],
+                [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": _REMINDER}, {"type": "text", "text": "and now?"}],
+                    }
+                ],
                 "and now?",
                 id="reminder-in-its-own-content-part",
             ),
@@ -4406,6 +4809,26 @@ class TestContextAwareClassifier:
         from litellm.router_strategy.complexity_router.complexity_router import _extract_current_ask_and_system_prompt
 
         assert _extract_current_ask_and_system_prompt(messages)[0] == expected_ask
+
+    def test_custom_markers_skip_a_reminder_only_follow_up_message(self):
+        """A harness using non-default markers, sent as its own trailing message, is still skipped.
+
+        Some harnesses (unlike Claude Code, which inlines the reminder alongside the ask in one
+        message) send internal context as a separate follow-up user turn using their own markers.
+        Without configuring reminder_markers, that turn does not match the built-in
+        <system-reminder> constants, never strips to empty, and wins "newest human ask" -- the
+        harness's internal-context blob gets classified instead of the real question. Configuring
+        the harness's own marker pair must make the router skip it the same way it already skips a
+        default-marker reminder-only turn.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _extract_current_ask_and_system_prompt
+
+        markers = ("<<<begin_openclaw_internal_context>>>", "<<<end_openclaw_internal_context>>>")
+        follow_up_reminder = f"{markers[0]}Budget: 42 tokens remaining. Do not mention this.{markers[1]}"
+        messages = [_ASKED, _ANSWERED, {"role": "user", "content": follow_up_reminder}]
+
+        assert _extract_current_ask_and_system_prompt(messages)[0] == follow_up_reminder
+        assert _extract_current_ask_and_system_prompt(messages, markers)[0] == _ASK
 
     @pytest.mark.parametrize(
         "messages,current_ask,window,per_turn_chars,include_assistant,expected",
@@ -4740,9 +5163,7 @@ class TestContextAwareClassifier:
         assert reported > 100
 
     @pytest.mark.asyncio
-    async def test_no_trajectory_signal_when_request_had_no_messages(
-        self, llm_complexity_router, mock_router_instance
-    ):
+    async def test_no_trajectory_signal_when_request_had_no_messages(self, llm_complexity_router, mock_router_instance):
         """On the prompt-only path there is no conversation to measure, so the depth line is omitted
         rather than asserting a false "~0 tokens" to the classifier."""
         mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
@@ -4754,9 +5175,7 @@ class TestContextAwareClassifier:
         assert "what is 2+2" in user_payload
 
     @pytest.mark.asyncio
-    async def test_single_turn_request_sends_no_conversation_context(
-        self, llm_complexity_router, mock_router_instance
-    ):
+    async def test_single_turn_request_sends_no_conversation_context(self, llm_complexity_router, mock_router_instance):
         """A single-turn request carries no conversation, so the classifier sees only the ask.
 
         Found in QA: the depth line gated on `messages` being non-empty, so single-turn requests got a
@@ -4806,7 +5225,6 @@ class TestContextAwareClassifier:
         assert "sharding strategy" not in user_payload
         assert user_payload.strip() == "Classify this message:\nwhat is 2+2"
 
-
     @pytest.mark.asyncio
     @pytest.mark.parametrize("include_assistant,plan_is_quoted", [(True, True), (False, False)])
     async def test_assistant_turn_carrying_the_difficulty_reaches_the_classifier(
@@ -4847,7 +5265,6 @@ class TestContextAwareClassifier:
         assert (f"[1] user: {ask}" in user_payload) is plan_is_quoted
         assert (f"[1] {ask}" in user_payload) is not plan_is_quoted
         assert user_payload.endswith("Classify this message:\nyes.")
-
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("include_assistant", [True, False])
@@ -4945,7 +5362,7 @@ class TestClassifierTrustBoundary:
         how the LLM-as-a-judge guardrail assembles its call: a static system constant, all caller
         content quoted in the user turn.
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+        from litellm.router_strategy.complexity_router.complexity_router import classification_system_prompt
 
         router = ComplexityRouter(
             model_name="test-router",
@@ -4966,12 +5383,9 @@ class TestClassifierTrustBoundary:
         )
 
         system_message, user_message = mock_router_instance.acompletion.call_args.kwargs["messages"]
-        assert system_message["content"] == _classification_system_prompt(router.config.classifier_context_window_size)
+        assert system_message["content"] == classification_system_prompt(router.config.classifier_context_window_size)
         assert hostile not in system_message["content"]
         assert hostile in user_message["content"]
-
-
-
 
     @pytest.mark.parametrize(
         "window_size,conversation_is_quoted",
@@ -4991,14 +5405,13 @@ class TestClassifierTrustBoundary:
         invites it to guess high. Above 0 the window is quoted but nothing otherwise tells the model it
         exists or that its view is bounded.
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+        from litellm.router_strategy.complexity_router.complexity_router import classification_system_prompt
 
-        system_prompt = _classification_system_prompt(window_size)
+        system_prompt = classification_system_prompt(window_size)
 
         assert ("using the earlier turns quoted above it as context" in system_prompt) is conversation_is_quoted
         assert ('short reply such as "yes" or "continue"' in system_prompt) is conversation_is_quoted
         assert ("Classify only the current message" in system_prompt) is not conversation_is_quoted
-
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("include_assistant", [True, False])
@@ -5011,7 +5424,7 @@ class TestClassifierTrustBoundary:
         pre-context sentence, which is the exact configuration the reported misclassification was
         raised against: window at its default, assistant turns off.
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+        from litellm.router_strategy.complexity_router.complexity_router import classification_system_prompt
 
         router = ComplexityRouter(
             model_name="test-complexity-router",
@@ -5026,7 +5439,7 @@ class TestClassifierTrustBoundary:
         await router.aclassify("yes.", messages=[{"role": "user", "content": "yes."}])
 
         system_content = mock_router_instance.acompletion.call_args.kwargs["messages"][0]["content"]
-        assert system_content == _classification_system_prompt(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
+        assert system_content == classification_system_prompt(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
 
     def test_a_window_of_zero_still_sends_the_original_wording(self):
         """With no conversation quoted, the original line is the correct one and must stay reachable.
@@ -5035,9 +5448,9 @@ class TestClassifierTrustBoundary:
         was handed a window and told in the same breath to disregard it, so a request whose difficulty
         was established earlier came back SIMPLE on the word "yes".
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+        from litellm.router_strategy.complexity_router.complexity_router import classification_system_prompt
 
-        assert _classification_system_prompt(0).endswith(
+        assert classification_system_prompt(0).endswith(
             "Classify only the current message; use the other sections to disambiguate its difficulty."
         )
 
@@ -5049,9 +5462,9 @@ class TestClassifierTrustBoundary:
         the model to disregard buys nothing, so the replacement is pinned here rather than left to be
         rediscovered.
         """
-        from litellm.router_strategy.complexity_router.complexity_router import _classification_system_prompt
+        from litellm.router_strategy.complexity_router.complexity_router import classification_system_prompt
 
-        system_prompt = _classification_system_prompt(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
+        system_prompt = classification_system_prompt(DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
 
         assert "Classify only the current message" not in system_prompt
         assert "using the earlier turns quoted above it as context" in system_prompt
@@ -5169,7 +5582,10 @@ class TestConversationShapeDiscriminator:
     def test_a_system_prompt_does_not_make_a_first_turn_look_continued(self):
         from litellm.router_strategy.complexity_router.complexity_router import _conversation_is_continuing
 
-        assert _conversation_is_continuing([{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}]) is False
+        assert (
+            _conversation_is_continuing([{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}])
+            is False
+        )
 
     def test_unreadable_messages_stay_conservative(self):
         """No messages says nothing about the baseline's cache, so it keeps charging the
@@ -5193,5 +5609,489 @@ class TestConversationShapeDiscriminator:
         )
         builds = source.split("self._build_routing_decision(")[1:]
         assert builds
-        missing = [i for i, block in enumerate(builds) if "conversation_continuing=conversation_continuing" not in block.split("),")[0]]
+        missing = [
+            i
+            for i, block in enumerate(builds)
+            if "conversation_continuing=conversation_continuing" not in block.split("),")[0]
+        ]
         assert not missing, f"routing decisions {missing} do not carry the conversation shape"
+
+
+class TestCustomClassifierSystemPrompt:
+    """An operator-supplied classifier prompt replaces the built-in rubric entirely."""
+
+    def test_default_prompt_carries_rubric_and_conversation_closing(self):
+        prompt = classification_system_prompt(5)
+        assert _classification_system_rubric(TIER_SEVERITY_ORDER_LABELED) in prompt
+        assert _CLASSIFICATION_WITH_CONVERSATION in prompt
+        assert _CLASSIFICATION_CURRENT_MESSAGE_ONLY not in prompt
+
+    def test_default_prompt_uses_single_message_closing_without_context_window(self):
+        prompt = classification_system_prompt(0)
+        assert _classification_system_rubric(TIER_SEVERITY_ORDER_LABELED) in prompt
+        assert _CLASSIFICATION_CURRENT_MESSAGE_ONLY in prompt
+        assert _CLASSIFICATION_WITH_CONVERSATION not in prompt
+
+    def test_explicit_none_is_byte_identical_to_omitting_the_argument(self):
+        assert classification_system_prompt(5, None) == classification_system_prompt(5)
+
+    @pytest.mark.parametrize("context_window_size", [0, 5])
+    def test_custom_prompt_replaces_rubric_and_closing_at_any_window_size(self, context_window_size):
+        """Full replacement: neither the rubric nor either closing line may be appended, or the
+        system role would argue with itself about what it is grading."""
+        custom = "Grade the data sensitivity of the request."
+        prompt = classification_system_prompt(context_window_size, custom)
+        assert prompt == custom
+        assert _classification_system_rubric(TIER_SEVERITY_ORDER_LABELED) not in prompt
+        assert _CLASSIFICATION_WITH_CONVERSATION not in prompt
+        assert _CLASSIFICATION_CURRENT_MESSAGE_ONLY not in prompt
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\n\t "])
+    def test_blank_system_prompt_is_rejected(self, blank):
+        """A blank string would send an empty system role, leaving the classifier no rubric at
+        all; omitting the field is how you ask for the default."""
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(
+                classifier_type="llm",
+                classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400, "system_prompt": blank},
+            )
+
+    def test_unset_system_prompt_defaults_to_none(self):
+        config = ComplexityRouterConfig(
+            classifier_type="llm", classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400}
+        )
+        assert config.classifier_llm_config is not None
+        assert config.classifier_llm_config.system_prompt is None
+
+    @pytest.mark.asyncio
+    async def test_custom_prompt_is_sent_verbatim_as_the_system_role(self, mock_router_instance, llm_classifier_config):
+        custom = "Classify the data sensitivity: SIMPLE=public, MEDIUM=internal, COMPLEX=confidential, REASONING=regulated."
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_llm_config": {
+                    **llm_classifier_config["classifier_llm_config"],
+                    "system_prompt": custom,
+                },
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+        outcome = await router.aclassify("my ssn is 000-00-0000")
+        assert outcome.tier == ComplexityTier.COMPLEX
+        messages = mock_router_instance.acompletion.call_args.kwargs["messages"]
+        assert messages[0] == {"role": "system", "content": custom}
+        assert "Tiers:" not in messages[0]["content"]
+        # The user role still carries the request being classified.
+        assert "000-00-0000" in messages[1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_a_prompt_that_invents_tier_names_falls_back_instead_of_raising(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        """The most likely custom-prompt mistake: renaming the buckets. The four names are pinned by
+        the structured-output schema, so an off-schema tier has to land on the configured fallback
+        rather than escaping as an exception to the caller's request."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_llm_config": {
+                    **llm_classifier_config["classifier_llm_config"],
+                    "system_prompt": "Answer with PUBLIC, INTERNAL, or SECRET.",
+                },
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o",
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SECRET"}'))
+        outcome = await router.aclassify("my ssn is 000-00-0000")
+        assert outcome.cause == "default_model_fallback"
+
+    @pytest.mark.asyncio
+    async def test_no_custom_prompt_keeps_the_built_in_rubric_on_the_wire(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        await llm_complexity_router.aclassify("hi")
+        messages = mock_router_instance.acompletion.call_args.kwargs["messages"]
+        assert messages[0]["content"] == classification_system_prompt(
+            llm_complexity_router.config.classifier_context_window_size
+        )
+
+
+class TestClassifierFallbackChoice:
+    """classifier_fallback decides what runs when the LLM classifier fails."""
+
+    @pytest.fixture
+    def default_model_fallback_router(self, mock_router_instance, llm_classifier_config):
+        return ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o",
+            },
+        )
+
+    def test_fallback_defaults_to_heuristic(self):
+        assert ComplexityRouterConfig().classifier_fallback == "heuristic"
+
+    def test_default_model_fallback_requires_a_default_model(self, mock_router_instance, llm_classifier_config):
+        """Without one there is nowhere to route, so this must fail at config time rather than
+        at the first classifier timeout in production."""
+        with pytest.raises(ValueError, match="requires a default model"):
+            ComplexityRouter(
+                model_name="test-complexity-router",
+                litellm_router_instance=mock_router_instance,
+                complexity_router_config={**llm_classifier_config, "classifier_fallback": "default_model"},
+            )
+
+    def test_deployment_level_default_model_satisfies_the_requirement(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        """complexity_router_default_model arrives outside complexity_router_config, so a config-model
+        validator would have rejected this valid deployment."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**llm_classifier_config, "classifier_fallback": "default_model"},
+            default_model="gpt-4o",
+        )
+        assert router.config.default_model == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_classifier_failure_routes_to_default_model_without_scoring(
+        self, default_model_fallback_router, mock_router_instance
+    ):
+        """A classifier on some other taxonomy has no use for a complexity score, so the heuristic
+        scorer must not run at all."""
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        with patch.object(
+            ComplexityRouter, "_score_and_classify", side_effect=AssertionError("heuristic scorer must not run")
+        ):
+            outcome = await default_model_fallback_router.aclassify("Hello!")
+        assert outcome.cause == "default_model_fallback"
+        assert outcome.score is None
+
+    @pytest.mark.asyncio
+    async def test_heuristic_fallback_still_scores(self, llm_complexity_router, mock_router_instance):
+        """The pre-existing default must be unchanged by the new option."""
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        outcome = await llm_complexity_router.aclassify("Hello!")
+        assert outcome.cause == "heuristic_scorer"
+        assert outcome.score is not None
+
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_routes_to_default_model_on_classifier_failure(
+        self, default_model_fallback_router, mock_router_instance
+    ):
+        """The tier pool for the resolved tier must not get a say: a multi-model pool would
+        otherwise land somewhere other than the known destination the operator asked for."""
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        response = await default_model_fallback_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "prove the Riemann hypothesis step by step"}],
+        )
+        assert response is not None
+        assert response.model == "gpt-4o"
+        assert response.routing_decision is not None
+        assert response.routing_decision["cause"] == "default_model_fallback"
+        # No tier was decided, so the provenance record must not claim one. The internal
+        # outcome carries a tier only because the plugin path needs a pool to pick from.
+        assert "tier" not in response.routing_decision
+
+    @pytest.mark.asyncio
+    async def test_a_classifier_failure_does_not_pin_the_session_to_the_default_model(self, mock_router_instance):
+        """One transient timeout must not hold a session on default_model for the whole affinity TTL:
+        that turn was never classified, so there is nothing worth pinning and the next turn retries."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {
+                    "SIMPLE": "gpt-4o-mini",
+                    "MEDIUM": "gpt-4o",
+                    "COMPLEX": "claude-sonnet-4-20250514",
+                    "REASONING": "o1-preview",
+                },
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o",
+                "session_affinity": True,
+            },
+        )
+        mock_router_instance.cache = DualCache()
+        request_kwargs: Dict = {"metadata": {"session_id": "session-flaky"}}
+
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        first = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert first is not None
+        assert first.model == "gpt-4o"
+
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+        second = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "prove the Riemann hypothesis"}],
+        )
+        assert second is not None
+        assert second.model == "o1-preview"
+        assert second.routing_decision is not None
+        assert second.routing_decision["cause"] == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_a_successful_classification_still_pins_the_session(self, mock_router_instance):
+        """Guard on the fix above: only the failed-classifier cause is unpinnable, so an ordinary
+        turn on a default_model-fallback router must still pin exactly as it did before."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": "o1-preview"},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o",
+                "session_affinity": True,
+            },
+        )
+        mock_router_instance.cache = DualCache()
+        request_kwargs: Dict = {"metadata": {"session_id": "session-steady"}}
+
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+        first = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "prove the Riemann hypothesis"}],
+        )
+        assert first is not None
+        assert first.model == "o1-preview"
+
+        with patch.object(router, "aclassify", side_effect=AssertionError("pinned turn must not reclassify")):
+            second = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=request_kwargs,
+                messages=[{"role": "user", "content": "Hello!"}],
+            )
+        assert second is not None
+        assert second.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_default_model_fallback_does_not_bypass_routing_plugins(self, mock_router_instance):
+        """A failed classifier must not become a way around a policy plugin: default_model is never
+        checked against the plugin pipeline, so with plugins configured this path has to fall through
+        to the tier pool, which does run them. Mirrors the no-user-message path's guard."""
+
+        class ExcludeDefaultModel:
+            async def run(self, context):
+                context.candidate_models = [m for m in context.candidate_models if m != "gpt-4o-default"]
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"MEDIUM": ["gpt-4o-default", "gpt-4o-nano"]},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o-default",
+                "plugins": [ExcludeDefaultModel()],
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        response = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        assert response is not None
+        assert response.model == "gpt-4o-nano"
+        # The plugin path needs a pool to filter, but no tier was ever classified: the
+        # classifier failed. Recording MEDIUM as the request's tier would attribute a
+        # classification that never happened, so the pool is reported as a signal instead.
+        assert response.routing_decision is not None
+        assert response.routing_decision["cause"] == "default_model_fallback"
+        assert "tier" not in response.routing_decision
+        assert "plugin-filtered-pool:MEDIUM" in response.routing_decision["signals"]
+
+    @pytest.mark.asyncio
+    async def test_default_model_fallback_with_plugins_reports_the_empty_tier_not_the_plugins(
+        self, mock_router_instance
+    ):
+        """default_model in no tier pool resolves to MEDIUM, so an empty MEDIUM pool used to raise
+        'No candidate models left for tier MEDIUM after routing-plugin filtering' and send the
+        operator hunting for a policy plugin that never narrowed anything. Flagged by Greptile."""
+
+        class AllowAll:
+            async def run(self, context):
+                return context
+
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"COMPLEX": ["o1-preview"]},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+                "classifier_fallback": "default_model",
+                "default_model": "gpt-4o-default",
+                "plugins": [AllowAll()],
+            },
+        )
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        with pytest.raises(ValueError, match="No models configured for tier MEDIUM"):
+            await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "hello"}],
+            )
+
+    @pytest.mark.asyncio
+    async def test_successful_classification_ignores_the_fallback_setting(
+        self, default_model_fallback_router, mock_router_instance
+    ):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+        response = await default_model_fallback_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert response is not None
+        assert response.model == "o1-preview"
+        assert response.routing_decision is not None
+        assert response.routing_decision["cause"] == "llm_classifier"
+
+
+class TestSavingsBaselineOnDecision:
+    """The derived counterfactual rides on every routing decision, recorded by the
+    deciding instance because tag-scoped routers under one model name make a
+    spend-write-time lookup ambiguous."""
+
+    @staticmethod
+    def _router_with_tiers(tiers: dict, **kwargs) -> ComplexityRouter:
+        parent = Router(
+            model_list=[
+                {"model_name": "cheap", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
+                {"model_name": "mid", "litellm_params": {"model": "anthropic/claude-sonnet-5"}},
+                {"model_name": "top", "litellm_params": {"model": "anthropic/claude-fable-5"}},
+            ]
+        )
+        return ComplexityRouter(
+            model_name="savings-router",
+            litellm_router_instance=parent,
+            complexity_router_config={"tiers": tiers},
+            **kwargs,
+        )
+
+    def test_derives_the_priciest_model_of_the_reasoning_tier(self):
+        router = self._router_with_tiers({"SIMPLE": "cheap", "MEDIUM": "mid", "REASONING": ["cheap", "top"]})
+        assert router.savings_baseline.model == "anthropic/claude-fable-5"
+
+    def test_falls_back_to_the_hardest_configured_tier_when_reasoning_is_absent(self):
+        """A router defining only SIMPLE and MEDIUM is measured against the best it
+        could actually have picked, not a tier it never had."""
+        router = self._router_with_tiers({"SIMPLE": "cheap", "MEDIUM": "mid"})
+        assert router.savings_baseline.model == "anthropic/claude-sonnet-5"
+
+    def test_a_configured_proxy_wide_baseline_disables_derivation(self, monkeypatch):
+        monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", "claude-opus-5")
+        router = self._router_with_tiers({"SIMPLE": "cheap", "REASONING": "top"})
+        assert router.savings_baseline is None
+
+    def test_the_decision_record_carries_the_derived_baseline_and_its_deployment(self):
+        """The deployment id is what lets the spend writer price a baseline whose
+        deployment carries a configured rate instead of the public one."""
+        router = self._router_with_tiers({"SIMPLE": "cheap", "REASONING": "top"})
+        expected_id = router.litellm_router_instance.get_model_list(model_name="top")[0]["model_info"]["id"]
+        decision = router._build_routing_decision(routed_model="cheap", cause="heuristic_scorer")
+        assert decision["savings_baseline_model"] == "anthropic/claude-fable-5"
+        assert decision["savings_baseline_deployment_id"] == expected_id
+
+    def test_an_unresolvable_baseline_is_omitted_not_recorded_as_none(self):
+        router = self._router_with_tiers({"SIMPLE": "utter-nonsense-no-provider-owns"})
+        decision = router._build_routing_decision(routed_model="cheap", cause="heuristic_scorer")
+        assert "savings_baseline_model" not in decision
+        assert "savings_baseline_deployment_id" not in decision
+
+    def test_a_router_built_without_derivation_records_nothing(self):
+        """The routing-test preview returns the decision verbatim to callers who are
+        only authorized for the classifier and embedding models, so its router must
+        not resolve tier groups into deployment mappings."""
+        router = self._router_with_tiers({"SIMPLE": "cheap", "REASONING": "top"}, derive_savings_baseline=False)
+        assert router.savings_baseline is None
+        decision = router._build_routing_decision(routed_model="cheap", cause="heuristic_scorer")
+        assert "savings_baseline_model" not in decision
+        assert "savings_baseline_deployment_id" not in decision
+
+    def test_the_routing_test_preview_builds_its_router_without_derivation(self):
+        import inspect
+
+        from litellm.proxy.management_endpoints import auto_router_endpoints
+
+        source = inspect.getsource(auto_router_endpoints.preview_auto_router_routing)
+        assert "derive_savings_baseline=False" in source
+
+
+class TestSavingsBaselinePinnedPerInstance:
+    """Derivation walks and prices the hardest tier's pool, so it runs once per router
+    instance; the create and edit flows rebuild the instance, which re-derives."""
+
+    @staticmethod
+    def _router_and_parent() -> tuple[ComplexityRouter, Router]:
+        parent = Router(
+            model_list=[
+                {"model_name": "cheap", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
+                {"model_name": "top", "litellm_params": {"model": "anthropic/claude-sonnet-5"}},
+            ]
+        )
+        router = ComplexityRouter(
+            model_name="savings-router",
+            litellm_router_instance=parent,
+            complexity_router_config={"tiers": {"SIMPLE": "cheap", "REASONING": ["cheap", "top"]}},
+        )
+        return router, parent
+
+    def test_the_first_derivation_is_pinned_for_the_instance_lifetime(self):
+        router, parent = self._router_and_parent()
+        assert router.savings_baseline.model == "anthropic/claude-sonnet-5"
+        parent.model_name_to_deployment_indices.clear()
+        assert router.savings_baseline.model == "anthropic/claude-sonnet-5"
+
+    def test_a_rebuilt_instance_re_derives_from_the_live_router(self):
+        """Editing a router goes through unregister and re-add, so a fresh instance is
+        what carries a config change into the baseline."""
+        router, parent = self._router_and_parent()
+        assert router.savings_baseline.model == "anthropic/claude-sonnet-5"
+        parent.model_name_to_deployment_indices.clear()
+        rebuilt = ComplexityRouter(
+            model_name="savings-router",
+            litellm_router_instance=parent,
+            complexity_router_config={"tiers": {"SIMPLE": "cheap", "REASONING": ["cheap", "top"]}},
+        )
+        assert rebuilt.savings_baseline is None
+
+    def test_the_configured_setting_bypasses_the_pin(self, monkeypatch):
+        router, _ = self._router_and_parent()
+        assert router.savings_baseline.model == "anthropic/claude-sonnet-5"
+        monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", "claude-opus-5")
+        assert router.savings_baseline is None
+
+    def test_an_unresolvable_pool_is_derived_once_and_pinned_as_none(self):
+        router, parent = self._router_and_parent()
+        parent.model_name_to_deployment_indices.clear()
+        router.config.tiers = {"SIMPLE": "utter-nonsense-no-provider-owns"}
+        assert router.savings_baseline is None
+        assert router._savings_baseline_derived is True
+        router.config.tiers = {"SIMPLE": "claude-haiku-4-5"}
+        assert router.savings_baseline is None

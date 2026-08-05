@@ -382,7 +382,7 @@ class GenericAPILogger(CustomBatchLogger):
                         verbose_logger.debug(
                             "Generic API Logger - sent log %s, status: %s",
                             idx,
-                            result.status_code,  # type: ignore
+                            result.status_code,
                         )
             else:
                 # Format the payload based on log_format

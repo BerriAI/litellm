@@ -177,7 +177,7 @@ async def create_batch(
             }
 
         input_file_id: Final = _create_batch_data.get("input_file_id", None)
-        unified_file_id: Union[str, Literal[False]] = False
+        unified_file_id: str | Literal[False] = False
 
         model_from_file_id = None
         if input_file_id:
@@ -195,14 +195,14 @@ async def create_batch(
             original_file_id: Final = get_original_file_id(input_file_id)
             _create_batch_data["input_file_id"] = original_file_id
             prepare_data_with_credentials(
-                data=_create_batch_data,  # type: ignore
+                data=_create_batch_data,
                 credentials=credentials,
             )
 
             # Create batch using model credentials
             response = await litellm.acreate_batch(
                 custom_llm_provider=credentials["custom_llm_provider"],
-                **_create_batch_data,  # type: ignore
+                **_create_batch_data,
             )
 
             # Encode the batch ID and related file IDs with model information
@@ -241,7 +241,7 @@ async def create_batch(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
-            response = await llm_router.acreate_batch(**_create_batch_data)  # type: ignore
+            response = await llm_router.acreate_batch(**_create_batch_data)
         elif (
             unified_file_id and input_file_id
         ):  # litellm_proxy:application/octet-stream;unified_id,c4843482-b176-4901-8292-7523fd0f2c6e;target_model_names,gpt-4o-mini
@@ -284,14 +284,14 @@ async def create_batch(
                 )
 
                 prepare_data_with_credentials(
-                    data=_create_batch_data,  # type: ignore
+                    data=_create_batch_data,
                     credentials=credentials,
                 )
 
                 # Create batch using model credentials
                 response = await litellm.acreate_batch(
                     custom_llm_provider=credentials["custom_llm_provider"],
-                    **_create_batch_data,  # type: ignore
+                    **_create_batch_data,
                 )
 
                 encode_batch_response_ids(response, model=model_param)
@@ -307,7 +307,7 @@ async def create_batch(
                 )
                 response = await litellm.acreate_batch(
                     custom_llm_provider=custom_llm_provider,
-                    **_create_batch_data,  # type: ignore
+                    **_create_batch_data,
                 )
 
         ### CALL HOOKS ### - modify outgoing data
@@ -502,7 +502,7 @@ async def retrieve_batch(
             # Retrieve batch using model credentials
             response = await litellm.aretrieve_batch(
                 custom_llm_provider=credentials["custom_llm_provider"],
-                **data,  # type: ignore
+                **data,
             )
 
             encode_batch_response_ids(response, model=model_from_id)
@@ -518,7 +518,7 @@ async def retrieve_batch(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
-            response = await llm_router.aretrieve_batch(**data)  # type: ignore
+            response = await llm_router.aretrieve_batch(**data)
             response._hidden_params["unified_batch_id"] = unified_batch_id
             if unified_batch_id:
                 model_id_from_batch: Final = get_model_id_from_unified_batch_id(unified_batch_id)
@@ -541,7 +541,7 @@ async def retrieve_batch(
             )
             response = await litellm.aretrieve_batch(
                 custom_llm_provider=custom_llm_provider,
-                **data,  # type: ignore
+                **data,
             )
 
         # FIX: Update the database with the latest state from provider
@@ -696,7 +696,7 @@ async def list_batches(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 after=after,
                 limit=limit,
-                **data,  # type: ignore
+                **data,
             )
 
             # Encode batch IDs in the list response so clients can use
@@ -737,7 +737,7 @@ async def list_batches(
                 custom_llm_provider=custom_llm_provider,
             )
             response = await litellm.alist_batches(
-                custom_llm_provider=custom_llm_provider,  # type: ignore
+                custom_llm_provider=custom_llm_provider,
                 after=after,
                 limit=limit,
                 **data,
@@ -747,7 +747,7 @@ async def list_batches(
         _response: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
-            response=response,  # type: ignore
+            response=response,
         )
         if _response is not None and type(response) is type(_response):
             response = _response
@@ -883,7 +883,7 @@ async def cancel_batch(
             # Cancel batch using model credentials
             response = await litellm.acancel_batch(
                 custom_llm_provider=credentials["custom_llm_provider"],
-                **data,  # type: ignore
+                **data,
             )
 
             encode_batch_response_ids(response, model=model_from_id)
@@ -908,7 +908,7 @@ async def cancel_batch(
                 )
             data["model"] = model_id_from_batch
             data["batch_id"] = get_batch_id_from_unified_batch_id(unified_batch_id)
-            response = await llm_router.acancel_batch(**data)  # type: ignore
+            response = await llm_router.acancel_batch(**data)
             response._hidden_params["unified_batch_id"] = unified_batch_id
 
             if not response._hidden_params.get("model_id") and data.get("model"):
@@ -934,7 +934,7 @@ async def cancel_batch(
             )
             _cancel_batch_data: Final = CancelBatchRequest(batch_id=batch_id, **data)
             response = await litellm.acancel_batch(
-                custom_llm_provider=custom_llm_provider,  # type: ignore
+                custom_llm_provider=custom_llm_provider,
                 **_cancel_batch_data,
             )
 

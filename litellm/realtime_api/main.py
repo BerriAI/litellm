@@ -109,7 +109,7 @@ async def acreate_realtime_client_secret(
         expires_after=RealtimeExpiresAfter(**expires_after) if expires_after else None,
     )
     model_name = (req.session.model if req.session is not None else None) or req.model or "gpt-4o-realtime-preview"
-    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")  # type: ignore
+    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
     (
@@ -177,7 +177,7 @@ async def acreate_realtime_transcription_session(
         **(transcription_session or {}),
     )
     model_name = req.resolved_model() or "gpt-realtime-whisper"
-    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")  # type: ignore
+    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
     (
@@ -238,7 +238,7 @@ async def arealtime_calls(
     **kwargs,
 ):
     model_name = model or "gpt-4o-realtime-preview"
-    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")  # type: ignore
+    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
     (
@@ -305,7 +305,7 @@ async def _arealtime(
         headers = {}
     if extra_headers is not None:
         headers.update(extra_headers)
-    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")  # type: ignore
+    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
     user: Final = kwargs.get("user", None)
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
@@ -572,7 +572,7 @@ async def _realtime_health_check(
         url = vertex_realtime_config.get_complete_url(api_base=api_base, model=model)
         ssl_context = get_shared_realtime_ssl_context()
         headers: Final = vertex_realtime_config.validate_environment(headers={}, model=model, api_key=None)
-        async with websockets.connect(  # type: ignore
+        async with websockets.connect(
             url,
             additional_headers=headers,
             max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
@@ -582,10 +582,10 @@ async def _realtime_health_check(
     else:
         raise ValueError(f"Unsupported model: {model}")
     ssl_context = get_shared_realtime_ssl_context()
-    async with websockets.connect(  # type: ignore
+    async with websockets.connect(
         url,
         additional_headers={
-            "api-key": api_key,  # type: ignore
+            "api-key": api_key,
         },
         max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
         ssl=ssl_context,
