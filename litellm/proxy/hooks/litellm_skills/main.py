@@ -170,7 +170,7 @@ class SkillsInjectionHook(CustomLogger):
             skill_files = self.prompt_handler.extract_all_files(skill)
             if skill_files:
                 all_skill_files[skill.skill_id] = skill_files
-                for path in skill_files.keys():
+                for path in skill_files:
                     if path.endswith(".py"):
                         all_module_paths.append(path)
 
@@ -238,7 +238,7 @@ class SkillsInjectionHook(CustomLogger):
             if skill_files:
                 all_skill_files[skill.skill_id] = skill_files
                 # Collect Python module paths
-                for path in skill_files.keys():
+                for path in skill_files:
                     if path.endswith(".py"):
                         all_module_paths.append(path)
 

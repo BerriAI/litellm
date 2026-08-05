@@ -237,7 +237,7 @@ def _check_non_standard_fallback_format(fallbacks: list[Any] | None) -> bool:
         return True
     elif all(isinstance(item, dict) for item in fallbacks):
         for item in fallbacks:
-            for key in LiteLLMParamsTypedDict.__annotations__.keys():
+            for key in LiteLLMParamsTypedDict.__annotations__:
                 if key in item:
                     # If the value is a list, it's likely a standard fallback model group mapping
                     # (e.g. {"model": ["backup"]}) rather than a parameter override.
