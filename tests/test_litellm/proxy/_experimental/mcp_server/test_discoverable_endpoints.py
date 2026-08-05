@@ -9241,3 +9241,176 @@ async def test_upstream_resource_sent_on_dcr_bridge_relay_authorize():
     query = await _authorize_query(server)
     assert query["resource"] == ["https://mcp.example.com/mcp"]
     assert query["client_id"] == ["caller-client"]
+
+
+# ---------------------------------------------------------------------------
+# Per-request root_path (SERVER_ROOT_PATHS / PerRequestRootPathMiddleware):
+# one app fronting several client-visible URL path prefixes, each prefix's
+# discovery documents emitting URLs under the prefix the client called
+# (RFC 9728 §3 exact-match). A scalar PROXY_BASE_URL / SERVER_ROOT_PATH can
+# encode at most one prefix per pod; these tests pin the N-prefix case.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _no_proxy_base_url(monkeypatch):
+    """Discovery must derive URLs from the request in these tests, so the
+    scalar env overrides are cleared."""
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+
+
+def _prefixed_discovery_client(prefixes):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy.middleware.per_request_root_path_middleware import (
+        PerRequestRootPathMiddleware,
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    app.add_middleware(PerRequestRootPathMiddleware, root_paths=prefixes)
+    return TestClient(app)
+
+
+class TestPerRequestRootPathDiscovery:
+    def test_prefixed_wellknown_not_routable_without_middleware(self):
+        """Control: on a plain app (the only shape a scalar root_path can
+        express), a prefixed well-known request 404s before any discovery
+        builder runs — the routing gap this feature exists to close."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager.registry.clear()
+        server = _create_oauth2_server(server_id="srv_a", name="server_a", server_name="server_a", alias="server_a")
+        global_mcp_server_manager.registry[server.server_id] = server
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+        try:
+            resp = client.get("/tenant-a/.well-known/oauth-protected-resource/mcp/server_a")
+            assert resp.status_code == 404
+        finally:
+            global_mcp_server_manager.registry.clear()
+
+    def test_two_prefixes_one_app_each_resource_matches_the_called_url(self, _no_proxy_base_url):
+        """The multi-origin case itself: two prefixes served by the same app,
+        each per-server document's ``resource`` equal to the URL its client
+        called — including the prefix."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager.registry.clear()
+        for sid, name in (("srv_a", "server_a"), ("srv_b", "server_b")):
+            global_mcp_server_manager.registry[sid] = _create_oauth2_server(
+                server_id=sid, name=name, server_name=name, alias=name
+            )
+        client = _prefixed_discovery_client(["/tenant-a", "/tenant-b"])
+        try:
+            resp_a = client.get("/tenant-a/.well-known/oauth-protected-resource/mcp/server_a")
+            resp_b = client.get("/tenant-b/.well-known/oauth-protected-resource/mcp/server_b")
+
+            assert resp_a.status_code == 200
+            assert resp_a.json()["resource"] == "http://testserver/tenant-a/mcp/server_a"
+            assert resp_b.status_code == 200
+            assert resp_b.json()["resource"] == "http://testserver/tenant-b/mcp/server_b"
+
+            # Every URL the document advertises stays under the request's
+            # prefix, so it resolves on this same app.
+            for auth_server in resp_a.json()["authorization_servers"]:
+                assert auth_server.startswith("http://testserver/tenant-a/")
+        finally:
+            global_mcp_server_manager.registry.clear()
+
+    def test_unprefixed_requests_unchanged_on_the_same_app(self, _no_proxy_base_url):
+        """Backward compat on the very same app: a root request emits the
+        document byte-identical to a deployment without the middleware."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager.registry.clear()
+        server = _create_oauth2_server(server_id="srv_a", name="server_a", server_name="server_a", alias="server_a")
+        global_mcp_server_manager.registry[server.server_id] = server
+        client = _prefixed_discovery_client(["/tenant-a"])
+        try:
+            resp = client.get("/.well-known/oauth-protected-resource/mcp/server_a")
+            assert resp.status_code == 200
+            assert resp.json()["resource"] == "http://testserver/mcp/server_a"
+        finally:
+            global_mcp_server_manager.registry.clear()
+
+    def test_unlisted_prefix_404s(self, _no_proxy_base_url):
+        client = _prefixed_discovery_client(["/tenant-a"])
+        assert client.get("/tenant-c/.well-known/oauth-protected-resource/mcp/server_a").status_code == 404
+
+    def test_aggregate_documents_and_as_endpoints_under_prefix(self, _no_proxy_base_url):
+        """Aggregate PRM/AS documents carry the prefix, and the advertised
+        authorize endpoint actually resolves under it — the 404 trap that
+        invalidated prefixing discovery URLs without per-request routing
+        (#35226 review round 1)."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager.registry.clear()
+        client = _prefixed_discovery_client(["/tenant-a"])
+
+        prm = client.get("/tenant-a/.well-known/oauth-protected-resource/mcp")
+        asm = client.get("/tenant-a/.well-known/oauth-authorization-server/mcp")
+
+        assert prm.status_code == 200
+        assert prm.json()["resource"] == "http://testserver/tenant-a/mcp"
+        assert prm.json()["authorization_servers"] == ["http://testserver/tenant-a/mcp"]
+
+        assert asm.status_code == 200
+        assert asm.json()["issuer"] == "http://testserver/tenant-a/mcp"
+        assert asm.json()["authorization_endpoint"] == "http://testserver/tenant-a/authorize"
+
+        # The prefixed authorize URL routes to the real handler (not 404):
+        # under per-request root_path the whole app is reachable per-prefix,
+        # so discovery may advertise prefixed AS endpoints safely.
+        assert client.get("/tenant-a/authorize").status_code != 404
+
+    def test_passthrough_challenge_metadata_url_carries_prefix(self, _no_proxy_base_url):
+        """The WWW-Authenticate resource_metadata URL a 401 advertises must
+        land under the request's prefix, or the client is bounced to a
+        document whose ``resource`` cannot match the URL it called."""
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_passthrough_resource_metadata_url,
+        )
+
+        def _scope(path, root_path=None):
+            scope = {
+                "type": "http",
+                "method": "POST",
+                "path": path,
+                "headers": [],
+                "scheme": "http",
+                "server": ("testserver", 80),
+                "client": ("1.2.3.4", 4444),
+            }
+            if root_path is not None:
+                scope["root_path"] = root_path
+            return scope
+
+        prefixed = get_passthrough_resource_metadata_url(
+            scope=_scope("/tenant-a/mcp/github", root_path="/tenant-a"),
+            server_name="github",
+        )
+        assert prefixed == "http://testserver/tenant-a/.well-known/oauth-protected-resource/mcp/github"
+
+        # Regression guard: no root_path → today's URL, unchanged.
+        bare = get_passthrough_resource_metadata_url(
+            scope=_scope("/mcp/github"),
+            server_name="github",
+        )
+        assert bare == "http://testserver/.well-known/oauth-protected-resource/mcp/github"
