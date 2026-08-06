@@ -2,7 +2,7 @@ import json
 import os
 import time
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -75,7 +75,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         typical_p: float | None = None,
         watermark: bool | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -147,7 +147,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             if (tgi_models_cache is not None) and (conv_models_cache is not None):
                 return tgi_models_cache, conv_models_cache
             # If not, read the file and populate the cache
-            tgi_models = set()
+            tgi_models: Final = set()
             script_directory = os.path.dirname(os.path.abspath(__file__))
             script_directory = os.path.dirname(script_directory)
             # Construct the file path relative to the script's directory
@@ -170,7 +170,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                 "huggingface_llms_metadata",
                 "hf_conversational_models.txt",
             )
-            conv_models = set()
+            conv_models: Final = set()
             with open(file_path, "r") as file:
                 for line in file:
                     conv_models.add(line.strip())
@@ -184,8 +184,8 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         # read text file, cast it to set
         # read the file called "huggingface_llms_metadata/hf_text_generation_models.txt"
         if model.split("/")[0] in hf_task_list:
-            split_model = model.split("/", 1)
-            return split_model[0], split_model[1]  # type: ignore
+            split_model: Final = model.split("/", 1)
+            return split_model[0], split_model[1]
         tgi_models, conversational_models = self.read_tgi_conv_models()
 
         if model in tgi_models:
@@ -205,13 +205,13 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        task = litellm_params.get("task", None)
+        task: Final = litellm_params.get("task", None)
         ## VALIDATE API FORMAT
         if task is None or not isinstance(task, str) or task not in hf_task_list:
             raise Exception(f"Invalid hf task - {task}. Valid formats - {hf_tasks}.")
 
         ## Load Config
-        config = litellm.HuggingFaceEmbeddingConfig.get_config()
+        config: Final = litellm.HuggingFaceEmbeddingConfig.get_config()
         for k, v in config.items():
             if (
                 k not in optional_params
@@ -220,10 +220,10 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
 
         ### MAP INPUT PARAMS
         #### HANDLE SPECIAL PARAMS
-        special_params = self.get_special_options_params()
-        special_params_dict = {}
+        special_params: Final = self.get_special_options_params()
+        special_params_dict: Final = {}
         # Create a list of keys to pop after iteration
-        keys_to_pop = []
+        keys_to_pop: Final = []
 
         for k, v in optional_params.items():
             if k in special_params:
@@ -237,8 +237,8 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             inference_params = deepcopy(optional_params)
             inference_params.pop("details")
             inference_params.pop("return_full_text")
-            past_user_inputs = []
-            generated_responses = []
+            past_user_inputs: Final = []
+            generated_responses: Final = []
             text = ""
             for message in messages:
                 if message["role"] == "user":
@@ -270,13 +270,13 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             else:
                 prompt = prompt_factory(model=model, messages=messages)
             data = {
-                "inputs": prompt,  # type: ignore
+                "inputs": prompt,
                 "parameters": optional_params,
-                "stream": (  # type: ignore
+                "stream": (
                     True
                     if "stream" in optional_params
                     and isinstance(optional_params["stream"], bool)
-                    and optional_params["stream"] is True  # type: ignore
+                    and optional_params["stream"] is True
                     else False
                 ),
             }
@@ -300,15 +300,11 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             inference_params.pop("details")
             inference_params.pop("return_full_text")
             data = {
-                "inputs": prompt,  # type: ignore
+                "inputs": prompt,
             }
             if task == "text-generation-inference":
                 data["parameters"] = inference_params
-                data["stream"] = (  # type: ignore
-                    True  # type: ignore
-                    if "stream" in optional_params and optional_params["stream"] is True
-                    else False
-                )
+                data["stream"] = True if "stream" in optional_params and optional_params["stream"] is True else False
 
         ### RE-ADD SPECIAL PARAMS
         if len(special_params_dict.keys()) > 0:
@@ -326,7 +322,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        default_headers = {
+        default_headers: Final = {
             "content-type": "application/json",
         }
         if api_key is not None:
@@ -348,7 +344,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         data: dict,
         api_key: str | None = None,
     ) -> list[dict[str, Any]]:
-        streamed_response = CustomStreamWrapper(
+        streamed_response: Final = CustomStreamWrapper(
             completion_stream=response.iter_lines(),
             model=model,
             custom_llm_provider="huggingface",
@@ -357,7 +353,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         content = ""
         for chunk in streamed_response:
             content += chunk["choices"][0]["delta"]["content"]
-        completion_response: list[dict[str, Any]] = [{"generated_text": content}]
+        completion_response: Final[list[dict[str, Any]]] = [{"generated_text": content}]
         ## LOGGING
         logging_obj.post_call(
             input=data,
@@ -381,10 +377,8 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             task = "text-generation-inference"  # default to tgi
 
         if task == "conversational":
-            if len(completion_response["generated_text"]) > 0:  # type: ignore
-                model_response.choices[0].message.content = completion_response[  # type: ignore
-                    "generated_text"
-                ]
+            if len(completion_response["generated_text"]) > 0:
+                model_response.choices[0].message.content = completion_response["generated_text"]
         elif task == "text-generation-inference":
             if (
                 not isinstance(completion_response, list)
@@ -398,9 +392,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                 )
 
             if len(completion_response[0]["generated_text"]) > 0:
-                model_response.choices[0].message.content = output_parser(  # type: ignore
-                    completion_response[0]["generated_text"]
-                )
+                model_response.choices[0].message.content = output_parser(completion_response[0]["generated_text"])
             ## GETTING LOGPROBS + FINISH REASON
             if "details" in completion_response[0] and "tokens" in completion_response[0]["details"]:
                 model_response.choices[0].finish_reason = completion_response[0]["details"]["finish_reason"]
@@ -408,10 +400,10 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                 for token in completion_response[0]["details"]["tokens"]:
                     if token["logprob"] is not None:
                         sum_logprob += token["logprob"]
-                setattr(model_response.choices[0].message, "_logprob", sum_logprob)  # type: ignore
+                setattr(model_response.choices[0].message, "_logprob", sum_logprob)
             if "best_of" in optional_params and optional_params["best_of"] > 1:
                 if "details" in completion_response[0] and "best_of_sequences" in completion_response[0]["details"]:
-                    choices_list = []
+                    choices_list: Final = []
                     for idx, item in enumerate(completion_response[0]["details"]["best_of_sequences"]):
                         sum_logprob = 0
                         for token in item["tokens"]:
@@ -432,14 +424,10 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                         choices_list.append(choice_obj)
                     model_response.choices.extend(choices_list)
         elif task == "text-classification":
-            model_response.choices[0].message.content = json.dumps(  # type: ignore
-                completion_response
-            )
+            model_response.choices[0].message.content = json.dumps(completion_response)
         else:
             if isinstance(completion_response, list) and len(completion_response[0]["generated_text"]) > 0:
-                model_response.choices[0].message.content = output_parser(  # type: ignore
-                    completion_response[0]["generated_text"]
-                )
+                model_response.choices[0].message.content = output_parser(completion_response[0]["generated_text"])
         ## CALCULATING USAGE
         prompt_tokens = 0
         try:
@@ -447,7 +435,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         except Exception:
             # this should remain non blocking we should not block a response returning if calculating usage fails
             pass
-        output_text = model_response["choices"][0]["message"].get("content", "")
+        output_text: Final = model_response["choices"][0]["message"].get("content", "")
         if output_text is not None and len(output_text) > 0:
             completion_tokens = 0
             try:
@@ -462,7 +450,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
 
         model_response.created = int(time.time())
         model_response.model = model
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
@@ -486,7 +474,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         ## Some servers might return streaming responses even though stream was not set to true. (e.g. Baseten)
-        task = litellm_params.get("task", None)
+        task: Final = litellm_params.get("task", None)
         is_streamed = False
         if raw_response.__dict__["headers"].get("Content-Type", "") == "text/event-stream":
             is_streamed = True
@@ -521,7 +509,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
 
         if isinstance(completion_response, dict) and "error" in completion_response:
             raise HuggingFaceError(
-                message=completion_response["error"],  # type: ignore
+                message=completion_response["error"],
                 status_code=raw_response.status_code,
             )
         return self.convert_to_model_response_object(

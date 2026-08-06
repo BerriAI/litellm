@@ -1,4 +1,5 @@
 import os
+from typing import Final
 
 import httpx
 
@@ -15,7 +16,7 @@ def get_default_headers() -> dict:
     - Default: `User-Agent: litellm/{version}`
     - Override: set `LITELLM_USER_AGENT` to fully override the header value.
     """
-    user_agent = os.environ.get("LITELLM_USER_AGENT")
+    user_agent: Final = os.environ.get("LITELLM_USER_AGENT")
     if user_agent is not None:
         return {"User-Agent": user_agent}
 
@@ -24,7 +25,7 @@ def get_default_headers() -> dict:
 
 class HTTPHandler:
     def __init__(self, concurrent_limit=1000):
-        headers = get_default_headers()
+        headers: Final = get_default_headers()
         # Create a client with a connection pool
         self.client = httpx.AsyncClient(
             limits=httpx.Limits(
@@ -39,7 +40,7 @@ class HTTPHandler:
         await self.client.aclose()
 
     async def get(self, url: str, params: dict | None = None, headers: dict | None = None):
-        response = await self.client.get(url, params=params, headers=headers)
+        response: Final = await self.client.get(url, params=params, headers=headers)
         return response
 
     async def post(
@@ -50,11 +51,11 @@ class HTTPHandler:
         headers: dict | None = None,
     ):
         try:
-            response = await self.client.post(
+            response: Final = await self.client.post(
                 url,
                 data=data,
                 params=params,
-                headers=headers,  # type: ignore
+                headers=headers,
             )
             return response
         except Exception as e:

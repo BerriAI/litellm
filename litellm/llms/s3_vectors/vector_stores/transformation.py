@@ -1,5 +1,5 @@
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -58,7 +58,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         return headers
 
     def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:
-        aws_region_name = litellm_params.get("aws_region_name")
+        aws_region_name: Final = litellm_params.get("aws_region_name")
         if not aws_region_name:
             raise ValueError("aws_region_name is required for S3 Vectors")
         if not re.match(r"^[a-z][a-z0-9-]*$", aws_region_name):
@@ -85,7 +85,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             bucket_name, index_name = vector_store_id.split(":", 1)
         else:
             # Try to get bucket_name from litellm_params
-            bucket_name_from_params = litellm_params.get("vector_bucket_name")
+            bucket_name_from_params: Final = litellm_params.get("vector_bucket_name")
             if not bucket_name_from_params or not isinstance(bucket_name_from_params, str):
                 raise ValueError(
                     "vector_store_id must be in format 'bucket_name:index_name' for S3 Vectors, "
@@ -98,16 +98,16 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             query = " ".join(query)
 
         # Generate embedding for the query
-        embedding_model = litellm_params.get("embedding_model", "text-embedding-3-small")
+        embedding_model: Final = litellm_params.get("embedding_model", "text-embedding-3-small")
 
         import litellm as litellm_module
 
-        embedding_response = litellm_module.embedding(model=embedding_model, input=[query])
-        query_embedding = embedding_response.data[0]["embedding"]
+        embedding_response: Final = litellm_module.embedding(model=embedding_model, input=[query])
+        query_embedding: Final = embedding_response.data[0]["embedding"]
 
-        url = f"{api_base}/QueryVectors"
+        url: Final = f"{api_base}/QueryVectors"
 
-        request_body: dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "vectorBucketName": bucket_name,
             "indexName": index_name,
             "queryVector": {"float32": query_embedding},
@@ -139,7 +139,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             bucket_name, index_name = vector_store_id.split(":", 1)
         else:
             # Try to get bucket_name from litellm_params
-            bucket_name_from_params = litellm_params.get("vector_bucket_name")
+            bucket_name_from_params: Final = litellm_params.get("vector_bucket_name")
             if not bucket_name_from_params or not isinstance(bucket_name_from_params, str):
                 raise ValueError(
                     "vector_store_id must be in format 'bucket_name:index_name' for S3 Vectors, "
@@ -152,16 +152,16 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             query = " ".join(query)
 
         # Generate embedding for the query asynchronously
-        embedding_model = litellm_params.get("embedding_model", "text-embedding-3-small")
+        embedding_model: Final = litellm_params.get("embedding_model", "text-embedding-3-small")
 
         import litellm as litellm_module
 
-        embedding_response = await litellm_module.aembedding(model=embedding_model, input=[query])
-        query_embedding = embedding_response.data[0]["embedding"]
+        embedding_response: Final = await litellm_module.aembedding(model=embedding_model, input=[query])
+        query_embedding: Final = embedding_response.data[0]["embedding"]
 
-        url = f"{api_base}/QueryVectors"
+        url: Final = f"{api_base}/QueryVectors"
 
-        request_body: dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "vectorBucketName": bucket_name,
             "indexName": index_name,
             "queryVector": {"float32": query_embedding},
@@ -194,8 +194,8 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
         try:
-            response_data = response.json()
-            results: list[VectorStoreSearchResult] = []
+            response_data: Final = response.json()
+            results: Final[list[VectorStoreSearchResult]] = []
 
             for item in response_data.get("vectors", []) or []:
                 metadata = item.get("metadata", {}) or {}
