@@ -1,4 +1,4 @@
-# pyright: ignore[reportUnusedVariable]
+# pyright: ignore[reportUnusedVariable]  # required for BaseLLMConfig type signature compatibility
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
