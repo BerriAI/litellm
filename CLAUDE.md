@@ -29,7 +29,7 @@ Never use `pytest` commands or the like as "Screenshots / Proof of Fix". We pref
 
 If you ever make public-facing PR descriptions, comments, issues, commit messages, etc., always follow these guidelines to sound less AI-y:
 - don't use emojis
-- don't use "—". Instead, reach for ",", ".", conjunction words, ":", ";", etc. in descending order of preference: vary among them, weighted toward the front of the list, and skip "," where it would cause a comma splice or the sentence is getting long. Overusing any one of them, ";" especially, also feels AI-y
+- don't use "—". Instead, reach for ",", ".", conjunction words, ":", ";", etc. in descending order of preference: vary among them, weighted toward the front of the list, and skip "," where it would cause a comma splice or the sentence is getting long. Overusing any one of them, ";" especially, also feels AI-y. A word cap is not a one-sentence cap: when writing under tight word budgets (tldrs, 15-25 word review replies), prefer a period split or a conjunction over ";", and keep to at most one ";" per message
 - don't use the pattern "It's not X, it's Y", "You're not X, you're Y", etc.
 - don't use bulleted or numbered lists unless it would be nonsensical not to. Instead, prefer prose
 - don't add a trailing "." at the end of paragraphs (just like this file). That means every paragraph, not just the last one (of the markdown file, PR description, GitHub comment, etc.). Rule of thumb: if you're adding new line(s) before the next sentence, don't add a "."
@@ -59,7 +59,7 @@ Do not add `Co-Authored-By: Claude` or any Claude attribution to commit messages
 
 When working on a PR, keep the PR description in sync with new commits being made
 
-Replies/rebuttals to AI PR review bots must be 15-25 word human-readable replies
+All GitHub comments (issue comments, PR discussion comments, and replies/rebuttals to AI PR review bots) must be 15-25 word human-readable messages, 25 words max
 
 Monkeypatching attributes of a class to do testing is an anti-pattern. Prefer dependency-injecting things into classes. That way, at unit test time, you can pass a mocked dependency in
 
