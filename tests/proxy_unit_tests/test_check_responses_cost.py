@@ -628,6 +628,65 @@ class TestCheckResponsesCost:
         mock_llm_router.aget_responses.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_missing_deployment_falls_back_to_sdk(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """
+        An encoded id whose deployment was removed from the router must fall back
+        to the SDK so provider env credentials can still retrieve it, instead of
+        failing every poll cycle until stale expiration.
+        """
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="deployment-deleted",
+            response_id="resp_upstream_789",
+        )
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = encoded_response_id
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-missing-deployment"
+        mock_job.file_object = {"model": "gpt-5", "id": encoded_response_id}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_llm_router.get_deployment = MagicMock(return_value=None)
+        mock_llm_router.aget_responses = AsyncMock(
+            side_effect=AssertionError("router has no deployment for this model_id")
+        )
+
+        mock_response = ResponsesAPIResponse(
+            id=encoded_response_id,
+            object="response",
+            status="completed",
+            created_at=int(datetime.now().timestamp()),
+            output=[],
+            usage=None,
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_sdk_aget:
+            mock_sdk_aget.return_value = mock_response
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_llm_router.get_deployment.assert_called_once_with(model_id="deployment-deleted")
+        mock_llm_router.aget_responses.assert_not_called()
+        mock_sdk_aget.assert_called_once()
+        assert mock_sdk_aget.call_args[1]["response_id"] == encoded_response_id
+
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        )
+        assert len(calls) == 1
+        assert calls[0][1]["data"]["status"] == "completed"
+        assert calls[0][1]["where"]["id"]["in"] == ["job-missing-deployment"]
+
+    @pytest.mark.asyncio
     async def test_check_responses_cost_with_incomplete_response(
         self, check_responses_cost_instance, mock_prisma_client
     ):
