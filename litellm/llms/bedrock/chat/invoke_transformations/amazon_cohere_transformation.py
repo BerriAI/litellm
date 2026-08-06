@@ -64,10 +64,21 @@ class AmazonCohereConfig(AmazonInvokeConfig, CohereChatConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        return CohereChatConfig.map_openai_params(
+        # Bedrock's Cohere Command models use Cohere's Generate API (not the
+        # Chat API CohereChatConfig otherwise targets), which genuinely
+        # supports `num_generations` -- see
+        # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-cohere-command.html
+        # So `n` is excluded here before delegating, and mapped directly
+        # instead of going through CohereChatConfig's Chat-API-specific
+        # `n` handling (which would incorrectly raise/drop it for Bedrock).
+        non_default_params_without_n = {k: v for k, v in non_default_params.items() if k != "n"}
+        optional_params = CohereChatConfig.map_openai_params(
             self,
-            non_default_params=non_default_params,
+            non_default_params=non_default_params_without_n,
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
         )
+        if "n" in non_default_params:
+            optional_params["num_generations"] = non_default_params["n"]
+        return optional_params
