@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Union
+from collections.abc import Callable
+from typing import Final
 
 import httpx
 
@@ -14,7 +15,7 @@ class CompletionTimeout:
 
     @staticmethod
     def _fallback_when_no_explicit_timeout(
-        global_timeout: Optional[Union[float, str]],
+        global_timeout: float | str | None,
     ) -> float:
         """
         Used when ``model_timeout`` and kwargs timeouts are all unset.
@@ -30,13 +31,13 @@ class CompletionTimeout:
 
     @staticmethod
     def resolve(
-        model_timeout: Optional[Union[float, str, httpx.Timeout]],
+        model_timeout: float | str | httpx.Timeout | None,
         kwargs: dict,
         custom_llm_provider: str,
         *,
-        global_timeout: Optional[Union[float, str]],
+        global_timeout: float | str | None,
         supports_httpx_timeout: Callable[[str], bool],
-    ) -> Union[float, httpx.Timeout]:
+    ) -> float | httpx.Timeout:
         """
         Resolution order (first non-None wins):
 
@@ -48,7 +49,7 @@ class CompletionTimeout:
 
         Coerce :class:`httpx.Timeout` when the provider does not support it.
         """
-        resolved: Union[float, str, httpx.Timeout]
+        resolved: float | str | httpx.Timeout
         if model_timeout is not None:
             resolved = model_timeout
         elif kwargs.get("timeout") is not None:
@@ -59,11 +60,11 @@ class CompletionTimeout:
             resolved = CompletionTimeout._fallback_when_no_explicit_timeout(global_timeout)
 
         if isinstance(resolved, httpx.Timeout) and not supports_httpx_timeout(custom_llm_provider):
-            read_timeout = resolved.read
+            read_timeout: Final = resolved.read
             resolved = (
                 float(read_timeout) if read_timeout is not None else COMPLETION_HTTP_FALLBACK_SECONDS
             )  # default 10 min timeout
         elif not isinstance(resolved, httpx.Timeout):
-            resolved = float(resolved)  # type: ignore
+            resolved = float(resolved)
 
         return resolved

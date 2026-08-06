@@ -22,13 +22,12 @@ import json
 import time
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeGuard
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
 from httpx import Response as HttpxResponse
-from typing_extensions import TypeGuard
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -48,6 +47,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.content_text import (
+    assistant_text_from_response,
     content_to_text,
     is_all_text_parts,
     merge_rewritten_text_parts,
@@ -68,29 +68,29 @@ if TYPE_CHECKING:
         GuardrailConfigModel,
     )
 
-BYPASS_HEADER = "x-compresr-bypass"
-COMPRESR_RETRIEVE_TOOL_NAME = "compresr_retrieve"
-DEFAULT_API_BASE = "https://api.compresr.ai"
-DEFAULT_COMPRESSION_MODEL = "latte_v2"
-DEFAULT_TARGET_COMPRESSION_RATIO = 0.5
-DEFAULT_MIN_CHARS_TO_COMPRESS = 500
-_ORIGINALS_TTL_SECONDS = 15 * 60
-_NO_SCOPE_WARNING_INTERVAL_SECONDS = 15 * 60
-_MAX_TRACKED_CALLS = 256
-_DEFAULT_MAX_BYTES_PER_CALL = 10 * 1024 * 1024
+BYPASS_HEADER: Final = "x-compresr-bypass"
+COMPRESR_RETRIEVE_TOOL_NAME: Final = "compresr_retrieve"
+DEFAULT_API_BASE: Final = "https://api.compresr.ai"
+DEFAULT_COMPRESSION_MODEL: Final = "latte_v2"
+DEFAULT_TARGET_COMPRESSION_RATIO: Final = 0.5
+DEFAULT_MIN_CHARS_TO_COMPRESS: Final = 500
+_ORIGINALS_TTL_SECONDS: Final = 15 * 60
+_NO_SCOPE_WARNING_INTERVAL_SECONDS: Final = 15 * 60
+_MAX_TRACKED_CALLS: Final = 256
+_DEFAULT_MAX_BYTES_PER_CALL: Final = 10 * 1024 * 1024
 # Aggregate ceiling across all recovery-store entries. max_bytes_per_call only
 # bounds a single call; this caps the whole store so many calls cannot exhaust it.
-_MAX_TOTAL_STORE_BYTES = 256 * 1024 * 1024
+_MAX_TOTAL_STORE_BYTES: Final = 256 * 1024 * 1024
 # Max compresr_retrieve calls expanded into a single follow-up (repeats deduped).
-_MAX_RETRIEVALS_PER_LOOP = 8
+_MAX_RETRIEVALS_PER_LOOP: Final = 8
 # The shared client's 600s read timeout is far too long for an on-request
 # guardrail; bound the compress call so a stall hits the fail policy quickly.
-_COMPRESS_TIMEOUT_SECONDS = 60.0
-_SOURCE_TAG = "integration:litellm"
+_COMPRESS_TIMEOUT_SECONDS: Final = 60.0
+_SOURCE_TAG: Final = "integration:litellm"
 # Request-content fields the compression_params passthrough must never
 # override — they carry the actual message content/queries being compressed.
-_RESERVED_COMPRESSION_PARAM_KEYS = frozenset({"context", "query", "inputs"})
-_BLOCKED_METADATA_HOSTS = frozenset(
+_RESERVED_COMPRESSION_PARAM_KEYS: Final = frozenset({"context", "query", "inputs"})
+_BLOCKED_METADATA_HOSTS: Final = frozenset(
     {
         "metadata.google.internal",
         "metadata.goog",
@@ -98,7 +98,7 @@ _BLOCKED_METADATA_HOSTS = frozenset(
         "metadata.azure.internal",
     }
 )
-_BLOCKED_METADATA_IPS = frozenset(
+_BLOCKED_METADATA_IPS: Final = frozenset(
     ipaddress.ip_address(ip) for ip in ("169.254.169.254", "fd00:ec2::254", "100.100.100.200", "168.63.129.16")
 )
 
@@ -129,13 +129,13 @@ def _validate_api_base(url: str) -> str:
     re-resolves DNS (TOCTOU / rebinding); ``api_base`` is trusted operator config,
     so this is an accepted limitation.
     """
-    parsed = urlparse(url)
+    parsed: Final = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError(f"Compresr guardrail api_base must be http or https, got scheme={parsed.scheme!r}")
-    host = (parsed.hostname or "").lower()
+    host: Final = (parsed.hostname or "").lower()
     if not host:
         raise ValueError("Compresr guardrail api_base has no host")
-    ip_literal = _parse_ip_literal(host)
+    ip_literal: Final = _parse_ip_literal(host)
     if host in _BLOCKED_METADATA_HOSTS or (ip_literal is not None and ip_literal in _BLOCKED_METADATA_IPS):
         raise ValueError(f"Compresr guardrail api_base {host!r} is a blocked cloud-metadata host")
     return url
@@ -166,8 +166,8 @@ def _replace_text_in_content(content: object, new_text: str) -> object:
 
 
 def _render_tool_intent(fn: dict[str, object]) -> str:
-    name = str(fn.get("name") or "").strip()
-    args = fn.get("arguments")
+    name: Final = str(fn.get("name") or "").strip()
+    args: Final = fn.get("arguments")
     if isinstance(args, dict):
         try:
             args_str = json.dumps(args, separators=(",", ":"))
@@ -187,12 +187,12 @@ def _query_for_target(messages: list[dict[str, object]], target_idx: int, fallba
     that produced them (found via ``tool_call_id`` on a prior assistant
     message); everything else uses the last user message.
     """
-    msg = messages[target_idx]
+    msg: Final = messages[target_idx]
     if msg.get("role") not in ("tool", "function"):
         return fallback
 
-    tool_call_id = msg.get("tool_call_id")
-    fn_name = msg.get("name")
+    tool_call_id: Final = msg.get("tool_call_id")
+    fn_name: Final = msg.get("name")
     for j in range(target_idx - 1, -1, -1):
         prev = messages[j]
         if prev.get("role") != "assistant":
@@ -237,7 +237,7 @@ def _safe_response_text(response: object, limit: int = 500) -> str:
     ``DecodingError``; if that happened while building a failure detail it would
     turn an already-handled error into an unhandled 500."""
     try:
-        text = getattr(response, "text", "")
+        text: Final = getattr(response, "text", "")
     except httpx.DecodingError:
         return "<undecodable response body>"
     return (text or "")[:limit]
@@ -260,7 +260,7 @@ def _display_hash(hash_value: str) -> str:
     or control-character-laden string, so strip non-printables (no forged log
     lines / ANSI escapes) and cap length before echoing into logs and the
     conversation."""
-    printable = "".join(ch for ch in hash_value if ch.isprintable())
+    printable: Final = "".join(ch for ch in hash_value if ch.isprintable())
     return printable if len(printable) <= 32 else f"{printable[:32]}…"
 
 
@@ -306,7 +306,7 @@ def _merge_retrieve_tool(existing_tools: object) -> list[object] | None:
     inert text)."""
     if existing_tools is not None and not isinstance(existing_tools, list):
         return None
-    retrieve_tool = _build_compresr_retrieve_tool()
+    retrieve_tool: Final = _build_compresr_retrieve_tool()
     if existing_tools is None:
         return [retrieve_tool]
     if has_compresr_retrieve_tool(existing_tools):
@@ -331,7 +331,7 @@ def _resolve_call_id(logging_obj: object) -> str | None:
     partition the recovery store per tenant. Request-body/kwargs call ids are
     deliberately not consulted here.
     """
-    logging_call_id = getattr(logging_obj, "litellm_call_id", None)
+    logging_call_id: Final = getattr(logging_obj, "litellm_call_id", None)
     if isinstance(logging_call_id, str) and logging_call_id:
         return logging_call_id
     return None
@@ -350,10 +350,10 @@ def _caller_scope(logging_obj: object) -> str:
     container. Returns "" when the proxy runs without per-key auth, in which case
     all traffic is a single trust domain and the call id alone suffices.
     """
-    details = getattr(logging_obj, "model_call_details", None)
+    details: Final = getattr(logging_obj, "model_call_details", None)
     if not _is_str_object_dict(details):
         return ""
-    litellm_params = details.get("litellm_params")
+    litellm_params: Final = details.get("litellm_params")
     for container in (litellm_params, details):
         if not _is_str_object_dict(container):
             continue
@@ -376,10 +376,10 @@ def _scoped_store_key(logging_obj: object) -> str | None:
     unforgeable virtual-key hash binds each entry to the tenant that created it.
     Returns None when there is no call id, which disables recovery for the call.
     """
-    call_id = _resolve_call_id(logging_obj)
+    call_id: Final = _resolve_call_id(logging_obj)
     if call_id is None:
         return None
-    scope = _caller_scope(logging_obj)
+    scope: Final = _caller_scope(logging_obj)
     return f"{scope}\x00{call_id}" if scope else call_id
 
 
@@ -389,47 +389,6 @@ def _is_responses_api_response(response: object) -> bool:
 
 def _is_anthropic_messages_response(response: object) -> bool:
     return isinstance(get_attribute_or_key(response, "content", None), list)
-
-
-def _assistant_text_from_response(response: object) -> str | None:
-    """The assistant's natural-language text from a model response, across chat,
-    Anthropic, and Responses shapes. Preserved when the turn is rebuilt for the
-    retrieval follow-up so the model's reasoning is not lost."""
-    choices = get_attribute_or_key(response, "choices", None)
-    if isinstance(choices, list) and choices:
-        message = get_attribute_or_key(choices[0], "message", None)
-        if message is not None:
-            text = content_to_text(get_attribute_or_key(message, "content", None))
-            if text:
-                return text
-    content = get_attribute_or_key(response, "content", None)
-    if isinstance(content, list):
-        parts = [
-            text
-            for block in content
-            if get_attribute_or_key(block, "type", None) == "text"
-            for text in (get_attribute_or_key(block, "text", None),)
-            if isinstance(text, str) and text
-        ]
-        if parts:
-            return "".join(parts)
-    output = get_attribute_or_key(response, "output", None)
-    if isinstance(output, list):
-        parts = []
-        for item in output:
-            if get_attribute_or_key(item, "type", None) != "message":
-                continue
-            item_content = get_attribute_or_key(item, "content", None)
-            if not isinstance(item_content, list):
-                continue
-            for chunk in item_content:
-                if get_attribute_or_key(chunk, "type", None) == "output_text":
-                    text = get_attribute_or_key(chunk, "text", None)
-                    if isinstance(text, str) and text:
-                        parts.append(text)
-        if parts:
-            return "".join(parts)
-    return None
 
 
 def _build_assistant_message_from_response(
@@ -446,7 +405,7 @@ def _build_assistant_message_from_response(
     """
     return {
         "role": "assistant",
-        "content": _assistant_text_from_response(response),
+        "content": assistant_text_from_response(response),
         "tool_calls": [
             {
                 "id": tool_call.get("id"),
@@ -469,8 +428,8 @@ def _build_anthropic_followup_messages(
     message paired with a tool_result block keyed by the same tool_use_id. The
     assistant text is preserved; non-retrieve tool calls are re-planned by the
     follow-up (see _build_assistant_message_from_response)."""
-    assistant_content: list[dict[str, object]] = []
-    text = _assistant_text_from_response(response)
+    assistant_content: Final[list[dict[str, object]]] = []
+    text: Final = assistant_text_from_response(response)
     if text:
         assistant_content.append({"type": "text", "text": text})
     assistant_content.extend(
@@ -482,8 +441,8 @@ def _build_anthropic_followup_messages(
         }
         for tool_call, _ in retrieved
     )
-    assistant_message: dict[str, object] = {"role": "assistant", "content": assistant_content}
-    user_message: dict[str, object] = {
+    assistant_message: Final[dict[str, object]] = {"role": "assistant", "content": assistant_content}
+    user_message: Final[dict[str, object]] = {
         "role": "user",
         "content": [
             {"type": "tool_result", "tool_use_id": tool_call.get("id"), "content": content}
@@ -500,8 +459,8 @@ def _build_responses_followup_items(
     """The Responses API requires the model's function_call echoed back paired
     with a function_call_output keyed by the same call_id. The assistant text is
     preserved; non-retrieve tool calls are re-planned by the follow-up."""
-    items: list[dict[str, object]] = []
-    text = _assistant_text_from_response(response)
+    items: Final[list[dict[str, object]]] = []
+    text: Final = assistant_text_from_response(response)
     if text:
         items.append({"role": "assistant", "content": text})
     for tool_call, content in retrieved:
@@ -559,7 +518,7 @@ class CompresrGuardrail(CustomGuardrail):
         dynamic_max_ratio: float | None = None,
         compression_params: dict[str, object] | None = None,
     ):
-        raw_api_base = (api_base or get_secret_str("COMPRESR_API_BASE") or DEFAULT_API_BASE).rstrip("/")
+        raw_api_base: Final = (api_base or get_secret_str("COMPRESR_API_BASE") or DEFAULT_API_BASE).rstrip("/")
         self.compresr_api_base = _validate_api_base(raw_api_base)
         self.compresr_api_key = api_key or get_secret_str("COMPRESR_API_KEY")
         if not self.compresr_api_key:
@@ -595,7 +554,7 @@ class CompresrGuardrail(CustomGuardrail):
         # Passthrough of extra compression params forwarded verbatim, so a new
         # Compresr feature works without changing this guardrail. Named fields win;
         # request-content fields are stripped.
-        reserved_keys = _RESERVED_COMPRESSION_PARAM_KEYS.intersection(compression_params or {})
+        reserved_keys: Final = _RESERVED_COMPRESSION_PARAM_KEYS.intersection(compression_params or {})
         if reserved_keys:
             verbose_proxy_logger.warning(
                 "Compresr: ignoring reserved compression_params keys %s", sorted(reserved_keys)
@@ -626,10 +585,10 @@ class CompresrGuardrail(CustomGuardrail):
     def _should_bypass(self, request_data: dict) -> bool:
         if not self.allow_bypass_header:
             return False
-        psr = request_data.get("proxy_server_request")
+        psr: Final = request_data.get("proxy_server_request")
         if not _is_str_object_dict(psr):
             return False
-        headers = psr.get("headers")
+        headers: Final = psr.get("headers")
         if not _is_str_object_dict(headers):
             return False
         return str(headers.get(BYPASS_HEADER)).lower() == "true"
@@ -663,8 +622,8 @@ class CompresrGuardrail(CustomGuardrail):
 
     def _prune_originals(self) -> None:
         # Insertion order == expiry order (shared TTL); prune from the front.
-        now = time.monotonic()
-        store = self._originals_by_call_id
+        now: Final = time.monotonic()
+        store: Final = self._originals_by_call_id
         while store and store[next(iter(store))][1] <= now:
             self._evict_oldest()
         while len(store) > _MAX_TRACKED_CALLS:
@@ -683,7 +642,7 @@ class CompresrGuardrail(CustomGuardrail):
 
     def _store_originals(self, store_key: str, originals: dict[str, str]) -> None:
         existing, _ = self._originals_by_call_id.get(store_key, ({}, 0.0))
-        merged = self._bound_call_bytes({**existing, **originals})
+        merged: Final = self._bound_call_bytes({**existing, **originals})
         # Keep the running total in sync: drop the overwritten entry, add the new one.
         self._store_total_bytes += _entry_bytes(merged) - _entry_bytes(existing)
         self._originals_by_call_id[store_key] = (
@@ -702,7 +661,7 @@ class CompresrGuardrail(CustomGuardrail):
         total = _entry_bytes(merged)
         if total <= self.max_bytes_per_call:
             return merged
-        bounded = dict(merged)
+        bounded: Final = dict(merged)
         for key in list(bounded.keys()):
             if total <= self.max_bytes_per_call:
                 break
@@ -730,8 +689,8 @@ class CompresrGuardrail(CustomGuardrail):
         """Resolve compresr_retrieve calls to (call, result_text) pairs, deduping
         repeated hashes and capping the count so the follow-up cannot be amplified.
         The bool is True iff at least one call resolved to real stored content."""
-        retrieved: list[tuple[dict[str, object], str]] = []
-        seen: set[str] = set()
+        retrieved: Final[list[tuple[dict[str, object], str]]] = []
+        seen: Final[set[str]] = set()
         resolved_any = False
         for idx, tc in enumerate(tool_calls):
             arguments = tc.get("arguments", {})
@@ -759,7 +718,7 @@ class CompresrGuardrail(CustomGuardrail):
     ) -> list[dict[str, object]] | None:
         """Compress ``contexts`` (query-aware). Returns one result dict per
         context, or None when the service failed and fail_open applies."""
-        common: dict[str, object] = {
+        common: Final[dict[str, object]] = {
             # Passthrough first so the named fields below always win on collision.
             **self.compression_params,
             "compression_model_name": self.compression_model,
@@ -801,7 +760,7 @@ class CompresrGuardrail(CustomGuardrail):
             # The shared handler calls raise_for_status(), so a non-2xx reply arrives
             # here as an error carrying the upstream body + our API key header; route
             # it through the fail policy so none of that reaches the client.
-            resp = getattr(e, "response", None)
+            resp: Final = getattr(e, "response", None)
             self._handle_compress_failure(
                 "Compresr compression service returned an error",
                 {
@@ -830,7 +789,7 @@ class CompresrGuardrail(CustomGuardrail):
             return None
 
         try:
-            body: object = raw_response.json()
+            body: Final[object] = raw_response.json()
         except (ValueError, httpx.DecodingError, RecursionError):
             # RecursionError: a deeply nested JSON body overflows the parser;
             # route it through the fail policy rather than let it escape as a 500.
@@ -849,7 +808,7 @@ class CompresrGuardrail(CustomGuardrail):
 
         if len(contexts) == 1:
             return [data]
-        results = data.get("results")
+        results: Final = data.get("results")
         if (
             not _is_object_list(results)
             or len(results) != len(contexts)
@@ -866,7 +825,7 @@ class CompresrGuardrail(CustomGuardrail):
 
     def _select_targets(self, messages: list[dict[str, object]], query_idx: int | None) -> list[int]:
         """Indices of messages whose text content should be compressed."""
-        targets: list[int] = []
+        targets: Final[list[int]] = []
         for idx, msg in enumerate(messages):
             if idx == query_idx and not self.compress_last_user:
                 continue
@@ -914,9 +873,9 @@ class CompresrGuardrail(CustomGuardrail):
         differs from the original; identical text is treated as a no-op so an
         untouched request is not needlessly rewritten downstream.
         """
-        out = _CompressionResult(compressed_messages=list(messages))
-        existing = existing_originals or {}
-        cap = self.max_bytes_per_call
+        out: Final = _CompressionResult(compressed_messages=list(messages))
+        existing: Final = existing_originals or {}
+        cap: Final = self.max_bytes_per_call
         # Seed with what is already stored under this store key: markers are
         # attached only while the store (existing + this call's originals) stays
         # within the cap, so _store_originals never has to evict a hash this call
@@ -967,8 +926,8 @@ class CompresrGuardrail(CustomGuardrail):
         """
         if not applied.text_replacements or not isinstance(input_texts, list):
             return None
-        counts = Counter(text for text in input_texts if isinstance(text, str))
-        safe = {
+        counts: Final = Counter(text for text in input_texts if isinstance(text, str))
+        safe: Final = {
             text: replacement
             for text, replacement in applied.text_replacements.items()
             if text not in applied.ambiguous_texts and counts.get(text) == applied.replaced_text_counts.get(text)
@@ -992,16 +951,16 @@ class CompresrGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Compresr: %s header set; skipping compression", BYPASS_HEADER)
             return inputs
 
-        structured_messages = inputs.get("structured_messages")
+        structured_messages: Final = inputs.get("structured_messages")
         if not _is_object_list(structured_messages) or not structured_messages:
             return inputs
-        messages = [m for m in structured_messages if _is_str_object_dict(m)]
+        messages: Final = [m for m in structured_messages if _is_str_object_dict(m)]
         if len(messages) != len(structured_messages):
             return inputs
 
         fallback_query, query_idx = self._extract_fallback_query(messages)
-        targets: list[int] = []
-        queries: list[str] = []
+        targets: Final[list[int]] = []
+        queries: Final[list[str]] = []
         for idx in self._select_targets(messages, query_idx):
             query = _query_for_target(messages, idx, fallback_query)
             # latte models require a non-empty query; leave targets we cannot
@@ -1014,19 +973,19 @@ class CompresrGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Compresr: no messages eligible for compression")
             return inputs
 
-        contexts = [content_to_text(messages[idx].get("content")) for idx in targets]
+        contexts: Final = [content_to_text(messages[idx].get("content")) for idx in targets]
 
-        start_time = time.monotonic()
-        results = await self._call_compress(contexts=contexts, queries=queries)
-        end_time = time.monotonic()
+        start_time: Final = time.monotonic()
+        results: Final = await self._call_compress(contexts=contexts, queries=queries)
+        end_time: Final = time.monotonic()
         if results is None:  # service failed, fail_open configured
             return inputs
 
         # Recovery needs a per-tenant scope; without per-key auth the key would fall
         # back to the client-settable call id (cross-tenant reads), so skip it.
-        store_key = _scoped_store_key(logging_obj)
-        scope = _caller_scope(logging_obj)
-        recovery_enabled = self.enable_retrieval and store_key is not None and bool(scope)
+        store_key: Final = _scoped_store_key(logging_obj)
+        scope: Final = _caller_scope(logging_obj)
+        recovery_enabled: Final = self.enable_retrieval and store_key is not None and bool(scope)
         if self.enable_retrieval and not scope and time.monotonic() >= self._no_scope_warning_expiry:
             # Surface the silent no-recovery case (compressed, but no auth scope
             # to inject the retrieve tool), re-warning once per interval.
@@ -1037,8 +996,8 @@ class CompresrGuardrail(CustomGuardrail):
                 "Configure virtual-key auth to enable recovery."
             )
 
-        existing_originals = self._existing_originals(store_key)
-        applied = self._apply_compression_results(
+        existing_originals: Final = self._existing_originals(store_key)
+        applied: Final = self._apply_compression_results(
             messages, targets, contexts, results, recovery_enabled, existing_originals
         )
         if applied.messages_compressed == 0:
@@ -1048,7 +1007,7 @@ class CompresrGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Compresr: service returned no compressed content; request unchanged")
             return inputs
 
-        stats: dict[str, object] = {
+        stats: Final[dict[str, object]] = {
             "messages_compressed": applied.messages_compressed,
             "tokens_before": applied.tokens_before,
             "tokens_after": applied.tokens_after,
@@ -1071,18 +1030,18 @@ class CompresrGuardrail(CustomGuardrail):
             duration=end_time - start_time,
         )
 
-        compressed_inputs: dict[str, object] = {**inputs, "structured_messages": applied.compressed_messages}
-        mirrored_texts = self._mirror_texts_channel(inputs.get("texts"), applied)
+        compressed_inputs: Final[dict[str, object]] = {**inputs, "structured_messages": applied.compressed_messages}
+        mirrored_texts: Final = self._mirror_texts_channel(inputs.get("texts"), applied)
         if mirrored_texts is not None:
             compressed_inputs["texts"] = mirrored_texts
 
-        originals = applied.originals
+        originals: Final = applied.originals
         if not recovery_enabled or not originals or store_key is None:
             return compressed_inputs  # pyright: ignore[reportReturnType]  # plain dicts satisfy AllMessageValues at runtime
 
         self._store_originals(store_key, originals)
 
-        merged_tools = _merge_retrieve_tool(inputs.get("tools"))
+        merged_tools: Final = _merge_retrieve_tool(inputs.get("tools"))
         if merged_tools is not None:
             compressed_inputs["tools"] = merged_tools
         return compressed_inputs  # pyright: ignore[reportReturnType]  # plain dicts satisfy AllMessageValues at runtime
@@ -1099,7 +1058,7 @@ class CompresrGuardrail(CustomGuardrail):
     ) -> tuple[bool, dict]:
         if not has_compresr_retrieve_tool(tools):
             return False, {}
-        tool_calls = _extract_compresr_tool_calls(response)
+        tool_calls: Final = _extract_compresr_tool_calls(response)
         if not tool_calls:
             return False, {}
         return True, {"tool_calls": tool_calls}
@@ -1119,7 +1078,7 @@ class CompresrGuardrail(CustomGuardrail):
         tool_calls: list[dict[str, object]] = tools.get("tool_calls", [])  # pyright: ignore[reportAssignmentType]  # gate hook builds this dict with list values only
 
         self._prune_originals()
-        store_key = _scoped_store_key(logging_obj)
+        store_key: Final = _scoped_store_key(logging_obj)
         retrieved, resolved_any = self._resolve_retrievals(store_key, tool_calls)
         if not resolved_any:
             # Nothing this guardrail stored resolved; skip the extra provider round-trip.
@@ -1130,22 +1089,22 @@ class CompresrGuardrail(CustomGuardrail):
         elif _is_anthropic_messages_response(response):
             follow_up_messages = list(messages) + _build_anthropic_followup_messages(response, retrieved)
         else:
-            assistant_message = _build_assistant_message_from_response(response, retrieved)
-            tool_results = [
+            assistant_message: Final = _build_assistant_message_from_response(response, retrieved)
+            tool_results: Final = [
                 {"role": "tool", "tool_call_id": tc.get("id"), "content": content} for tc, content in retrieved
             ]
             follow_up_messages = list(messages) + [assistant_message] + tool_results
 
-        anthropic_max = anthropic_messages_optional_request_params.get("max_tokens")
-        max_tokens: int | None = anthropic_max if anthropic_max is not None else kwargs.get("max_tokens")
-        optional_params_without_max_tokens = {
+        anthropic_max: Final = anthropic_messages_optional_request_params.get("max_tokens")
+        max_tokens: Final[int | None] = anthropic_max if anthropic_max is not None else kwargs.get("max_tokens")
+        optional_params_without_max_tokens: Final = {
             k: v for k, v in anthropic_messages_optional_request_params.items() if k != "max_tokens"
         }
 
         full_model_name = model
         if logging_obj is not None:
-            agentic_params = getattr(logging_obj, "model_call_details", {}).get("agentic_loop_params", {})
-            candidate = agentic_params.get("model", model)
+            agentic_params: Final = getattr(logging_obj, "model_call_details", {}).get("agentic_loop_params", {})
+            candidate: Final = agentic_params.get("model", model)
             if isinstance(candidate, str) and candidate:
                 full_model_name = candidate
 
@@ -1166,10 +1125,10 @@ class CompresrGuardrail(CustomGuardrail):
         guardrails' pre-call-executed markers stripped, so input guardrails
         re-inspect the restored originals; only this guardrail's own marker is
         kept, to avoid recompressing what it just retrieved."""
-        out: dict[str, object] = {
+        out: Final[dict[str, object]] = {
             k: v for k, v in kwargs.items() if not k.startswith("_compresr") and k != "litellm_logging_obj"
         }
-        own_marker = self._pre_call_marker()
+        own_marker: Final = self._pre_call_marker()
         for meta_key in ("metadata", "litellm_metadata"):
             meta = out.get(meta_key)
             if not isinstance(meta, dict):

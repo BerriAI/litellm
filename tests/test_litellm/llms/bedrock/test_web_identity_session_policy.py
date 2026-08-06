@@ -117,6 +117,19 @@ class TestWebIdentitySessionPolicyShape:
         ):
             assert required in actions, f"{required} missing from BedrockLiteLLM"
 
+    def test_bedrock_count_tokens_action_present(self):
+        """Regression for #33142: the CountTokens handler authorizes
+        against ``bedrock:CountTokens``, so the session-policy ceiling
+        must grant it or every count-tokens request via OIDC auth 403s
+        even when the role's identity policy allows it."""
+        policy = _captured_policy()
+        bedrock_stmt = _statement_by_sid(policy, "BedrockLiteLLM")
+        actions = set(bedrock_stmt["Action"])
+        assert "bedrock:CountTokens" in actions, (
+            "bedrock:CountTokens missing from BedrockLiteLLM — "
+            "count-tokens requests will 403 on OIDC auth"
+        )
+
 
 class TestClaudePlatformActionsCovered:
     """The #30200 bug: every action in the claude_platform service

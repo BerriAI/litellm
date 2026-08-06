@@ -6,7 +6,8 @@ and signs requests via AmazonAgentCoreConfig (SigV4 or JWT).
 """
 
 import json
-from typing import Any, AsyncIterator, Dict, Mapping, Optional, Tuple
+from collections.abc import AsyncIterator, Mapping
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
@@ -22,21 +23,21 @@ from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreCo
 # ``runtimeSessionId`` / ``runtimeUserId`` in the agent's ``litellm_params``;
 # ``authorization`` is set by the AgentCore signer (JWT or SigV4); ``host`` and
 # the ``x-amz-*`` family are owned by SigV4 itself.
-_RESERVED_EXACT_HEADERS = frozenset(
+_RESERVED_EXACT_HEADERS: Final = frozenset(
     {
         "authorization",
         "host",
     }
 )
-_RESERVED_PREFIX_HEADERS: Tuple[str, ...] = (
+_RESERVED_PREFIX_HEADERS: Final[tuple[str, ...]] = (
     "x-amzn-bedrock-agentcore-runtime-",
     "x-amz-",
 )
 
 
 def _filter_reserved_headers(
-    agent_extra_headers: Optional[Mapping[str, str]],
-) -> Optional[Dict[str, str]]:
+    agent_extra_headers: Mapping[str, str] | None,
+) -> dict[str, str] | None:
     """
     Strip reserved AWS / AgentCore headers from caller-supplied
     ``agent_extra_headers`` before they are merged into the signed request.
@@ -46,8 +47,8 @@ def _filter_reserved_headers(
     if not agent_extra_headers:
         return None
 
-    filtered: Dict[str, str] = {}
-    dropped: list = []
+    filtered: Final[dict[str, str]] = {}
+    dropped: Final[list] = []
     for k, v in agent_extra_headers.items():
         k_lower = k.lower()
         if k_lower in _RESERVED_EXACT_HEADERS or any(k_lower.startswith(prefix) for prefix in _RESERVED_PREFIX_HEADERS):
@@ -76,12 +77,12 @@ class BedrockAgentCoreA2ATransformation:
     @staticmethod
     def get_url_and_signed_request(
         request_id: str,
-        params: Dict[str, Any],
-        litellm_params: Dict[str, Any],
+        params: dict[str, Any],
+        litellm_params: dict[str, Any],
         method: str = "message/send",
         stream: bool = False,
-        agent_extra_headers: Optional[Dict[str, str]] = None,
-    ) -> Tuple[str, dict, bytes]:
+        agent_extra_headers: dict[str, str] | None = None,
+    ) -> tuple[str, dict, bytes]:
         """
         Build the AgentCore URL, construct a JSON-RPC envelope, and sign the request.
 
@@ -106,19 +107,19 @@ class BedrockAgentCoreA2ATransformation:
         """
         # Extract model and strip the "bedrock/" prefix
         # "bedrock/agentcore/arn:aws:..." → "agentcore/arn:aws:..."
-        model = litellm_params.get("model", "")
+        model: Final = litellm_params.get("model", "")
         if model.startswith("bedrock/"):
             agentcore_model = model[len("bedrock/") :]
         else:
             agentcore_model = model
 
         # Build optional_params from litellm_params (everything except model and custom_llm_provider)
-        optional_params = {k: v for k, v in litellm_params.items() if k not in ("model", "custom_llm_provider")}
+        optional_params: Final = {k: v for k, v in litellm_params.items() if k not in ("model", "custom_llm_provider")}
 
-        agentcore_config = AmazonAgentCoreConfig()
+        agentcore_config: Final = AmazonAgentCoreConfig()
 
         # Derive URL from ARN
-        url = agentcore_config.get_complete_url(
+        url: Final = agentcore_config.get_complete_url(
             api_base=optional_params.get("api_base"),
             api_key=optional_params.get("api_key"),
             model=agentcore_model,
@@ -128,7 +129,7 @@ class BedrockAgentCoreA2ATransformation:
         )
 
         # Construct JSON-RPC 2.0 envelope
-        json_rpc_body = {
+        json_rpc_body: Final = {
             "jsonrpc": "2.0",
             "method": method,
             "id": request_id,
@@ -137,17 +138,17 @@ class BedrockAgentCoreA2ATransformation:
 
         # Set required AgentCore session headers (normally set by transform_request,
         # which we skip because it also builds {"prompt": "..."})
-        headers: dict = {}
-        session_id = agentcore_config._get_runtime_session_id(optional_params)
+        headers: Final[dict] = {}
+        session_id: Final = agentcore_config._get_runtime_session_id(optional_params)
         headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] = session_id
-        runtime_user_id = agentcore_config._get_runtime_user_id(optional_params)
+        runtime_user_id: Final = agentcore_config._get_runtime_user_id(optional_params)
         if runtime_user_id:
             headers["X-Amzn-Bedrock-AgentCore-Runtime-User-Id"] = runtime_user_id
 
         # Merge per-request agent headers before signing so SigV4 covers them.
         # Reserved headers are stripped first to prevent client-controlled values
         # from spoofing the AgentCore runtime identity / SigV4 metadata.
-        safe_extra_headers = _filter_reserved_headers(agent_extra_headers)
+        safe_extra_headers: Final = _filter_reserved_headers(agent_extra_headers)
         if safe_extra_headers:
             headers.update(safe_extra_headers)
 
@@ -169,7 +170,7 @@ class BedrockAgentCoreA2ATransformation:
         return url, signed_headers, signed_body
 
     @staticmethod
-    async def parse_sse_events(response: Any) -> AsyncIterator[Dict[str, Any]]:
+    async def parse_sse_events(response: Any) -> AsyncIterator[dict[str, Any]]:
         """
         Parse SSE events from an httpx streaming response.
 
@@ -194,5 +195,5 @@ class BedrockAgentCoreA2ATransformation:
                     event = json.loads(data_str)
                     yield event
                 except json.JSONDecodeError:
-                    verbose_logger.debug(f"BedrockAgentCore A2A: Skipping non-JSON SSE line: {data_str[:100]}")
+                    verbose_logger.debug("BedrockAgentCore A2A: Skipping non-JSON SSE line: %s", data_str[:100])
                     continue

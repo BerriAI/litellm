@@ -6,7 +6,14 @@ import { renderWithProviders } from "../../../tests/test-utils";
 import OrganizationInfoView from "./organization_view";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 
-// Mock networking calls used by the component's mutation handlers
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  usePathname: () => "/organizations",
+  useSearchParams: () => new URLSearchParams(window.location.search),
+}));
+
+// Mock networking calls used by the component's mutation handlers. entityLinks -> migratedPages
+// imports serverRootPath from the same module, so the mock must export it too.
 vi.mock("../networking", () => {
   return {
     __esModule: true,
@@ -14,6 +21,7 @@ vi.mock("../networking", () => {
     organizationMemberUpdateCall: vi.fn(),
     organizationMemberDeleteCall: vi.fn(),
     organizationUpdateCall: vi.fn(),
+    serverRootPath: "",
   };
 });
 
@@ -204,6 +212,58 @@ test("should display team ID as fallback when alias is not found", async () => {
   await waitFor(() => {
     expect(screen.getByText("team_999")).toBeInTheDocument();
   });
+});
+
+test("links each team badge to that team's detail page", async () => {
+  const orgWithTeams = {
+    ...mockOrg,
+    teams: [{ team_id: "team_123" }, { team_id: "team_456" }],
+  };
+  mockUseOrganization.mockReturnValue({ data: orgWithTeams, isLoading: false } as any);
+
+  renderWithProviders(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={false}
+      userModels={[]}
+      editOrg={false}
+    />,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByRole("link", { name: "Engineering Team" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("/teams?team=team_123"),
+    );
+    expect(screen.getByRole("link", { name: "Marketing Team" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("/teams?team=team_456"),
+    );
+  });
+});
+
+test("model badges stay non-clickable", async () => {
+  mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
+
+  renderWithProviders(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={false}
+      userModels={[]}
+      editOrg={false}
+    />,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByText("gpt-4o-mini")).toBeInTheDocument();
+  });
+  expect(screen.queryByRole("link", { name: "gpt-4o-mini" })).not.toBeInTheDocument();
 });
 
 test("should keep unsaved settings edits when switching tabs and back", async () => {

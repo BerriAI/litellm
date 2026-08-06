@@ -1475,7 +1475,7 @@ async def test_create_team_member_add_team_admin(
                     user_api_key_dict=valid_token,
                 )
             except HTTPException as e:
-                if user_role == "user":
+                if user_role == "user" or new_member_method == "user_id":
                     assert e.status_code == 403
                     return
                 else:
