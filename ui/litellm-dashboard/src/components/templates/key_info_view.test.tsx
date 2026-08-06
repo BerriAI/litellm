@@ -1,11 +1,9 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { keyDeleteCall, keyUpdateCall } from "../networking";
 import { QueryClient } from "@tanstack/react-query";
@@ -147,6 +145,10 @@ describe("KeyInfoView", () => {
     showSSOBanner: false,
   };
 
+  const openMoreKeyActions = async () => {
+    await userEvent.click(await screen.findByRole("button", { name: /more key actions/i }));
+  };
+
   it("should render tags", async () => {
     vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
 
@@ -203,8 +205,9 @@ describe("KeyInfoView", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Regenerate Key")).toBeInTheDocument();
-      expect(screen.getByText("Delete Key")).toBeInTheDocument();
     });
+    await openMoreKeyActions();
+    expect(await screen.findByRole("menuitem", { name: /delete key/i })).toBeInTheDocument();
   });
 
   it("should allow team admin to modify key", async () => {
@@ -248,8 +251,9 @@ describe("KeyInfoView", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Regenerate Key")).toBeInTheDocument();
-      expect(screen.getByText("Delete Key")).toBeInTheDocument();
     });
+    await openMoreKeyActions();
+    expect(await screen.findByRole("menuitem", { name: /delete key/i })).toBeInTheDocument();
   });
 
   it("should allow owner to modify their own key", async () => {
@@ -272,8 +276,9 @@ describe("KeyInfoView", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Regenerate Key")).toBeInTheDocument();
-      expect(screen.getByText("Delete Key")).toBeInTheDocument();
     });
+    await openMoreKeyActions();
+    expect(await screen.findByRole("menuitem", { name: /delete key/i })).toBeInTheDocument();
   });
 
   it("should not allow other user to modify key", async () => {
@@ -295,7 +300,7 @@ describe("KeyInfoView", () => {
 
     await waitFor(() => {
       expect(screen.queryByText("Regenerate Key")).not.toBeInTheDocument();
-      expect(screen.queryByText("Delete Key")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /more key actions/i })).not.toBeInTheDocument();
     });
   });
 
@@ -319,7 +324,7 @@ describe("KeyInfoView", () => {
 
     await waitFor(() => {
       expect(screen.queryByText("Regenerate Key")).not.toBeInTheDocument();
-      expect(screen.queryByText("Delete Key")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /more key actions/i })).not.toBeInTheDocument();
     });
   });
 
@@ -363,7 +368,7 @@ describe("KeyInfoView", () => {
 
     await waitFor(() => {
       expect(screen.queryByText("Regenerate Key")).not.toBeInTheDocument();
-      expect(screen.queryByText("Delete Key")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /more key actions/i })).not.toBeInTheDocument();
     });
   });
 
@@ -573,9 +578,8 @@ describe("KeyInfoView", () => {
         />,
       );
 
-      await waitFor(() => {
-        expect(screen.getByRole("button", { name: /reset spend/i })).toBeInTheDocument();
-      });
+      await openMoreKeyActions();
+      expect(await screen.findByRole("menuitem", { name: /reset spend/i })).toBeInTheDocument();
     });
 
     it("should show Reset Spend button for team admin of key's team", async () => {
@@ -614,9 +618,8 @@ describe("KeyInfoView", () => {
         />,
       );
 
-      await waitFor(() => {
-        expect(screen.getByRole("button", { name: /reset spend/i })).toBeInTheDocument();
-      });
+      await openMoreKeyActions();
+      expect(await screen.findByRole("menuitem", { name: /reset spend/i })).toBeInTheDocument();
     });
 
     it("should not show Reset Spend button for regular key owner", async () => {
@@ -638,9 +641,9 @@ describe("KeyInfoView", () => {
         />,
       );
 
-      await waitFor(() => {
-        expect(screen.queryByRole("button", { name: /reset spend/i })).not.toBeInTheDocument();
-      });
+      await openMoreKeyActions();
+      expect(await screen.findByRole("menuitem", { name: /delete key/i })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: /reset spend/i })).not.toBeInTheDocument();
     });
   });
 
@@ -663,11 +666,8 @@ describe("KeyInfoView", () => {
         />,
       );
 
-      await waitFor(() => {
-        expect(screen.getByRole("button", { name: /reset spend/i })).toBeInTheDocument();
-      });
-
-      await userEvent.click(screen.getByRole("button", { name: /reset spend/i }));
+      await openMoreKeyActions();
+      await userEvent.click(await screen.findByRole("menuitem", { name: /reset spend/i }));
 
       await waitFor(() => {
         expect(screen.getByText("Reset Key Spend")).toBeInTheDocument();
@@ -694,11 +694,8 @@ describe("KeyInfoView", () => {
         />,
       );
 
-      await waitFor(() => {
-        expect(screen.getByRole("button", { name: /reset spend/i })).toBeInTheDocument();
-      });
-
-      await userEvent.click(screen.getByRole("button", { name: /reset spend/i }));
+      await openMoreKeyActions();
+      await userEvent.click(await screen.findByRole("menuitem", { name: /reset spend/i }));
 
       await waitFor(() => {
         expect(screen.getByText("Reset Key Spend")).toBeInTheDocument();
@@ -808,7 +805,8 @@ describe("KeyInfoView", () => {
         />,
       );
 
-      await userEvent.click(await screen.findByRole("button", { name: /delete key/i }));
+      await openMoreKeyActions();
+      await userEvent.click(await screen.findByRole("menuitem", { name: /delete key/i }));
 
       const confirmInput = await screen.findByPlaceholderText(MOCK_KEY_DATA.key_alias);
       await userEvent.type(confirmInput, MOCK_KEY_DATA.key_alias);

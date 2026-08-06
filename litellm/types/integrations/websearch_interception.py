@@ -2,7 +2,7 @@
 Type definitions for WebSearch Interception integration.
 """
 
-from typing import List, Optional, TypedDict
+from typing import TypedDict
 
 
 class WebSearchInterceptionConfig(TypedDict, total=False):
@@ -16,8 +16,8 @@ class WebSearchInterceptionConfig(TypedDict, total=False):
             search_tool_name: "my-perplexity-search"
     """
 
-    enabled_providers: List[str]
+    enabled_providers: list[str]
     """List of LLM provider names to enable interception for (e.g., ['bedrock', 'vertex_ai'])"""
 
-    search_tool_name: Optional[str]
+    search_tool_name: str | None
     """Name of search tool configured in router's search_tools. If None, uses first available."""

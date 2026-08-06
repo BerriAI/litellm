@@ -1,3 +1,18 @@
+## TLDR
+
+<!-- Fill in the bullets below and keep each one short and concrete: one line per bullet, roughly 10 words max
+     This section must be extremely human parsable, comprehensible, and readable: its target audience is humans, not AI agents -->
+
+Problem this solves:
+
+- <blah>
+- ...
+
+How it solves it:
+
+- <blah>
+- ...
+
 ## Relevant issues
 
 <!-- e.g., "Fixes #000" -->
@@ -25,6 +40,7 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
      The proof must be completely e2e with no mocks, using, for example, actual LLM calls costing real $. `pytest` commands are not enough
      For bug fixes: show reproduction before the fix and passing behavior after
      Include the commit hash each proof was captured at, for both the before and the after runs
+     If the change applies to all three LLM endpoints (/v1/responses, /v1/chat/completions, /v1/messages), include proof for every single one of them, not just one
      For new features: show the feature working end-to-end
      For UI changes: include before/after screenshots -->
 
