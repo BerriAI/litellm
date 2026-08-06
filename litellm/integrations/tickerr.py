@@ -49,9 +49,7 @@ class TickerrLogger(CustomLogger):
         }
         self.region: Optional[str] = os.environ.get("TICKERR_REGION")
         try:
-            self.sample_rate: float = min(
-                1.0, max(0.0, float(os.environ.get("TICKERR_SAMPLE_RATE", "0")))
-            )
+            self.sample_rate: float = min(1.0, max(0.0, float(os.environ.get("TICKERR_SAMPLE_RATE", "0"))))
         except (ValueError, TypeError):
             self.sample_rate = 0.0
 
