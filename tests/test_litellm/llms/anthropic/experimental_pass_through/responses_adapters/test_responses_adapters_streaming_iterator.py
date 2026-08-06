@@ -6,6 +6,8 @@ Tests for AnthropicResponsesStreamWrapper
 import os
 import sys
 
+import pytest
+
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
 )
@@ -77,3 +79,110 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
             ("content_block_start", 0),
             ("content_block_delta", 0),
         ]
+
+
+class TestProcessEventReasoningDeltaWithoutOutputItemAdded:
+    """Streams that skip response.output_item.added for reasoning items must
+    still open a thinking block before any delta, and must never reuse
+    whatever block happens to be currently open (e.g. a text block), since
+    strict Anthropic SSE clients like Claude Code reject a thinking_delta
+    aimed at a non-thinking block."""
+
+    def test_process_event_synthesizes_thinking_block_start_before_delta(self):
+        chunks = _process_all(
+            [
+                {
+                    "type": "response.reasoning_summary_text.delta",
+                    "item_id": "rs_1",
+                    "delta": "Let me think",
+                },
+            ]
+        )
+        assert [c["type"] for c in chunks] == [
+            "content_block_start",
+            "content_block_delta",
+        ]
+        assert chunks[0]["content_block"] == {"type": "thinking", "thinking": ""}
+        assert [c["index"] for c in chunks] == [0, 0]
+        assert chunks[1]["delta"] == {
+            "type": "thinking_delta",
+            "thinking": "Let me think",
+        }
+
+    def test_process_event_reasoning_delta_does_not_reuse_open_text_block(self):
+        chunks = _process_all(
+            [
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "message", "id": "m1"},
+                },
+                {"type": "response.output_text.delta", "item_id": "m1", "delta": "Hi"},
+                {
+                    "type": "response.reasoning_summary_text.delta",
+                    "item_id": "rs_1",
+                    "delta": "hmm",
+                },
+            ]
+        )
+        thinking_deltas = [
+            c
+            for c in chunks
+            if c["type"] == "content_block_delta"
+            and c["delta"]["type"] == "thinking_delta"
+        ]
+        assert len(thinking_deltas) == 1
+        thinking_block_index = thinking_deltas[0]["index"]
+        text_block_start = next(
+            c
+            for c in chunks
+            if c["type"] == "content_block_start"
+            and c["content_block"]["type"] == "text"
+        )
+        assert thinking_block_index != text_block_start["index"]
+
+    def test_process_event_registered_reasoning_item_id_does_not_synthesize_start(
+        self,
+    ):
+        chunks = _process_all(
+            [
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "reasoning", "id": "rs_1"},
+                },
+                {
+                    "type": "response.reasoning_summary_text.delta",
+                    "item_id": "rs_1",
+                    "delta": "hmm",
+                },
+            ]
+        )
+        assert [(c["type"], c["index"]) for c in chunks] == [
+            ("content_block_start", 0),
+            ("content_block_delta", 0),
+        ]
+
+
+class TestMessageStartEmittedExactlyOnce:
+    """__anext__ pre-emits message_start before consuming the stream; a later
+    response.created event must not append a second one (strict Anthropic SSE
+    clients such as Claude Code reject duplicate message_start)"""
+
+    @pytest.mark.asyncio
+    async def test_response_created_after_fallback_does_not_duplicate_message_start(self):
+        async def stream():
+            yield {"type": "response.created"}
+            yield {"type": "response.output_item.added", "item": {"type": "message", "id": "item_1"}}
+            yield {"type": "response.output_text.delta", "item_id": "item_1", "delta": "hi"}
+            yield {"type": "response.completed"}
+
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=stream(), model="m")
+        events = [chunk async for chunk in wrapper]
+        starts = [c for c in events if c.get("type") == "message_start"]
+        assert len(starts) == 1
+
+    def test_process_event_emits_message_start_when_not_yet_sent(self):
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=None, model="m")
+        wrapper._process_event({"type": "response.created"})
+        assert [c["type"] for c in wrapper._chunk_queue] == ["message_start"]
+        wrapper._process_event({"type": "response.created"})
+        assert [c["type"] for c in wrapper._chunk_queue] == ["message_start"]

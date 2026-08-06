@@ -75,8 +75,11 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- message_start ----
         if event_type == "response.created":
-            self._sent_message_start = True
-            self._chunk_queue.append(self._make_message_start())
+            # __anext__ pre-emits message_start before consuming the stream, so
+            # this must be guarded or every stream double-emits it
+            if not self._sent_message_start:
+                self._sent_message_start = True
+                self._chunk_queue.append(self._make_message_start())
             return
 
         # ---- content_block_start for a new output message item ----
@@ -164,11 +167,24 @@ class AnthropicResponsesStreamWrapper:
         if event_type == "response.reasoning_summary_text.delta":
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
             delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
-            block_idx = (
-                self._item_id_to_block_index.get(item_id, self._current_block_index)
-                if item_id
-                else self._current_block_index
-            )
+            block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else -1
+            if block_idx < 0:
+                # Some providers skip response.output_item.added for reasoning
+                # items, so no thinking block is open yet; synthesize
+                # content_block_start instead of emitting a delta against
+                # whatever block happens to be open (which may not be a
+                # thinking block, and strict Anthropic SSE clients like
+                # Claude Code reject a thinking_delta on a non-thinking block)
+                block_idx = self._next_block_index()
+                if item_id:
+                    self._item_id_to_block_index[item_id] = block_idx
+                self._chunk_queue.append(
+                    {
+                        "type": "content_block_start",
+                        "index": block_idx,
+                        "content_block": {"type": "thinking", "thinking": ""},
+                    }
+                )
             self._chunk_queue.append(
                 {
                     "type": "content_block_delta",
