@@ -383,9 +383,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             }
         )
         return [
-            OpenAIFileObject.model_validate(file_object.file_object)
-            for file_object in file_ids
-            if file_object.file_object is not None
+            OpenAIFileObject.model_validate(row.file_object).model_copy(
+                update={"id": row.unified_file_id}
+            )
+            for row in file_ids
+            if row.file_object is not None
         ]
 
     async def check_managed_file_id_access(
