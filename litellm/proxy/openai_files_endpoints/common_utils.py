@@ -959,8 +959,13 @@ async def ensure_batch_response_managed_file_ids(
         return
 
     unified_file_id: Final = hidden_params.get("unified_file_id")
+    input_file_id: Final = getattr(response, "input_file_id", None)
     model_name: Final = resolve_managed_output_file_model_name(
-        unified_input_file_id=unified_file_id if isinstance(unified_file_id, str) else None,
+        unified_input_file_id=unified_file_id
+        if isinstance(unified_file_id, str)
+        else input_file_id
+        if isinstance(input_file_id, str)
+        else None,
         fallback_model_name=hidden_params.get("model_name"),
     )
 
