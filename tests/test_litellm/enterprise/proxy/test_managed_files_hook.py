@@ -6,6 +6,7 @@ async_post_call_success_hook when processing completed batch responses.
 """
 
 import json
+import logging
 
 import pytest
 from typing import Optional
@@ -152,6 +153,24 @@ async def test_get_user_created_file_ids_skips_rows_without_file_object():
     )
 
     assert [file.id for file in files] == ["file-output-abc"]
+
+
+@pytest.mark.asyncio
+async def test_parse_managed_file_object_warning_omits_rejected_values(caplog):
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _parse_managed_file_object,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        parsed = _parse_managed_file_object(
+            {"id": "file-corrupt", "object": "file", "filename": "confidential.jsonl"},
+            "unified-corrupt",
+        )
+
+    assert parsed is None
+    assert "unified-corrupt" in caplog.text
+    assert "bytes" in caplog.text
+    assert "confidential.jsonl" not in caplog.text
 
 
 @pytest.mark.asyncio
