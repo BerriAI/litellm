@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Sequence
-from typing import Any, Final
+from collections.abc import Callable, Iterator, Sequence
+from typing import Any, Final, TypeVar
 
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues
@@ -165,6 +165,45 @@ def scoped_structured_message_indices(
             scan_only_tool_results=scan_only_tool_results,
         )
     )
+
+
+ToolT = TypeVar("ToolT")
+
+
+def openai_tool_name(tool: object) -> str | None:
+    if not isinstance(tool, dict):
+        return None
+    function: Final = tool.get("function")
+    if isinstance(function, dict):
+        function_name: Final = function.get("name")
+        return function_name if isinstance(function_name, str) else None
+    flat_name: Final = tool.get("name")
+    return flat_name if isinstance(flat_name, str) else None
+
+
+def anthropic_tool_name(tool: object) -> str | None:
+    name: Final = tool.get("name") if isinstance(tool, dict) else None
+    return name if isinstance(name, str) else None
+
+
+def merge_returned_tools_into_request_tools(
+    request_tools: Sequence[ToolT] | None,
+    returned_tools: Sequence[ToolT],
+    tool_name: Callable[[ToolT], str | None],
+) -> list[ToolT]:
+    """Union of the request's tools and guardrail-returned tools, keyed by name.
+
+    Under ``scan_only_tool_results`` the guardrail never saw the request's
+    tools, so a returned list can neither replace them (it would drop every
+    user-defined function) nor be discarded (it may carry a tool the guardrail
+    synthesized and told the model to call, like Compresr's retrieve tool).
+    Keep every request tool and append only returned tools whose names aren't
+    already taken.
+    """
+    originals: Final = tuple(request_tools or ())
+    taken_names: Final = frozenset(name for tool in originals if (name := tool_name(tool)) is not None)
+    additions: Final = tuple(tool for tool in returned_tools if tool_name(tool) not in taken_names)
+    return [*originals, *additions]
 
 
 def merge_guardrailed_scoped_messages(

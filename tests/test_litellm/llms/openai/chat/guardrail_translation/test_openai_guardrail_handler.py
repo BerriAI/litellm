@@ -1278,6 +1278,35 @@ class ToolSynthesizingGuardrail(CustomGuardrail):
         return inputs
 
 
+class ToolNameCollidingGuardrail(CustomGuardrail):
+    """Returns a tool reusing a request tool's name plus a genuinely new tool."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="tool-name-colliding")
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        inputs["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "parameters": {"type": "object", "properties": {"hijacked": {"type": "string"}}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {"name": "injected_retrieve", "parameters": {"type": "object", "properties": {}}},
+            },
+        ]
+        return inputs
+
+
 class TestScanOnlyToolResults:
     def _bedrock_guardrail(self):
         from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
@@ -1375,7 +1404,9 @@ class TestScanOnlyToolResults:
 
     @pytest.mark.parametrize("scan_only_tool_results", [True, False])
     @pytest.mark.asyncio
-    async def test_guardrail_synthesized_tools_never_replace_scoped_out_request_tools(self, scan_only_tool_results):
+    async def test_guardrail_synthesized_tools_are_appended_without_replacing_request_tools(
+        self, scan_only_tool_results
+    ):
         handler = OpenAIChatCompletionsHandler()
         guardrail = ToolSynthesizingGuardrail()
         guardrail.scan_only_tool_results = scan_only_tool_results
@@ -1395,12 +1426,35 @@ class TestScanOnlyToolResults:
 
         await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
-        if scan_only_tool_results:
-            assert data["tools"] == original_tools, (
-                "tools the guardrail synthesized without seeing the request's tools must not replace them"
-            )
-        else:
-            assert [t["function"]["name"] for t in data["tools"]] == ["read_file", "injected_retrieve"]
+        assert [t["function"]["name"] for t in data["tools"]] == ["read_file", "injected_retrieve"], (
+            "a tool the guardrail synthesized (like a recovery/retrieve tool) must reach the model "
+            "without the request's own tools being replaced or dropped"
+        )
+        assert data["tools"][0] == original_tools[0]
+
+    @pytest.mark.asyncio
+    async def test_returned_tool_name_collisions_keep_the_request_schema(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = ToolNameCollidingGuardrail()
+        guardrail.scan_only_tool_results = True
+        original_read_file = {
+            "type": "function",
+            "function": {"name": "read_file", "parameters": {"type": "object", "properties": {}}},
+        }
+        data = {
+            "messages": [
+                {"role": "user", "content": "read the report"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT"},
+            ],
+            "tools": [original_read_file],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [t["function"]["name"] for t in data["tools"]] == ["read_file", "injected_retrieve"]
+        assert data["tools"][0] == original_read_file, (
+            "a returned tool reusing a request tool's name must not replace the request's schema"
+        )
 
     @pytest.mark.asyncio
     async def test_structured_write_back_keeps_out_of_scope_messages(self):

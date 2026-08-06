@@ -883,7 +883,7 @@ class TestAnthropicMessagesScanOnlyToolResults:
         assert data["messages"][2]["content"][0]["text"] == "sibling POISON text"
 
     @pytest.mark.asyncio
-    async def test_guardrail_synthesized_tools_never_replace_scoped_out_request_tools(self):
+    async def test_guardrail_synthesized_tools_are_appended_without_replacing_request_tools(self):
         handler = AnthropicMessagesHandler()
         guardrail = ToolAppendingGuardrail(guardrail_name="tool-appending")
         guardrail.scan_only_tool_results = True
@@ -912,9 +912,11 @@ class TestAnthropicMessagesScanOnlyToolResults:
 
         await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
-        assert data["tools"] == original_tools, (
-            "tools the guardrail synthesized without seeing the request's tools must not replace them"
+        assert [t["name"] for t in data["tools"]] == ["get_weather", "injected_tool"], (
+            "a tool the guardrail synthesized must reach the model, converted to Anthropic format, "
+            "without the request's own tools being replaced or dropped"
         )
+        assert data["tools"][0] == original_tools[0]
 
     @pytest.mark.asyncio
     async def test_guardrail_is_not_called_when_the_request_has_no_tool_results(self):

@@ -27,6 +27,8 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
     merge_guardrailed_scoped_messages,
+    merge_returned_tools_into_request_tools,
+    openai_tool_name,
     role_out_of_guardrail_scope,
     scoped_structured_message_indices,
 )
@@ -143,8 +145,16 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             guardrailed_tool_calls: Final = guardrailed_inputs.get("tool_calls", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
-            if guardrailed_tools is not None and not scan_only_tool_results:
-                data["tools"] = guardrailed_tools
+            if guardrailed_tools is not None:
+                data["tools"] = (
+                    merge_returned_tools_into_request_tools(
+                        request_tools=tools,
+                        returned_tools=guardrailed_tools,
+                        tool_name=openai_tool_name,
+                    )
+                    if scan_only_tool_results
+                    else guardrailed_tools
+                )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")
             if (
