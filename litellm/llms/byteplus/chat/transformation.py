@@ -1,3 +1,4 @@
+# pyright: ignore[reportUnusedVariable]
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 
 

@@ -30,16 +30,13 @@
     "limit": 7
   },
   "reportGeneralTypeIssues": {
-    "limit": 158
+    "limit": 157
   },
   "reportIncompatibleMethodOverride": {
-    "limit": 59
+    "limit": 56
   },
   "reportIncompatibleVariableOverride": {
     "limit": 8
-  },
-  "reportUnusedVariable": {
-    "limit": 294
   },
   "reportInconsistentOverload": {
     "limit": 12

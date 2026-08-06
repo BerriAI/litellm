@@ -1,3 +1,4 @@
+# pyright: ignore[reportUnusedVariable]
 from typing import Final
 
 import httpx

@@ -1,3 +1,4 @@
+# pyright: ignore[reportUnusedVariable]
 import json
 from typing import TYPE_CHECKING, Final
 
