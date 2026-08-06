@@ -6,7 +6,7 @@ import re
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone, tzinfo
-from typing import Any, Final, cast
+from typing import Any, Final, TypedDict, cast
 
 import httpx
 from pydantic import BaseModel, Field
@@ -35,6 +35,17 @@ GALILEO_CLOUD_API_BASE_URL: Final = "https://api.galileo.ai"
 GALILEO_MAX_IN_MEMORY_RECORDS: Final = 1000
 
 
+class GalileoStandardLoggingFields(TypedDict, total=False):
+    call_type: str
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    response_cost: float
+    startTime: float
+    endTime: float
+
+
 class LLMResponse(BaseModel):
     latency_ms: int
     status_code: int
@@ -60,7 +71,7 @@ class LLMResponse(BaseModel):
 
 class GalileoObserve(CustomLogger):
     def __init__(self) -> None:
-        self.in_memory_records: list[dict[str, Any]] = []
+        self.in_memory_records: list[Mapping[str, object]] = []
         self.batch_size = 1
         self.api_key = os.getenv("GALILEO_API_KEY")
         self.project_id = os.getenv("GALILEO_PROJECT_ID")
@@ -648,7 +659,7 @@ class GalileoObserve(CustomLogger):
             )
             return
 
-        slo: Final[Mapping[str, Any] | None] = kwargs.get("standard_logging_object")
+        slo: Final[GalileoStandardLoggingFields | None] = kwargs.get("standard_logging_object")
         if slo is None:
             verbose_logger.debug("Galileo Logger: no standard_logging_object in kwargs, skipping")
             return

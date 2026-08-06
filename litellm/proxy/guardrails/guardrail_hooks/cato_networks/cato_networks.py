@@ -9,7 +9,7 @@ import contextlib
 import json
 import os
 import ssl
-from collections.abc import AsyncGenerator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from ssl import SSLContext
 from typing import TYPE_CHECKING, Any, Final
 
@@ -70,9 +70,13 @@ class _CatoRedactedChat(TypedDict, total=False):
     all_redacted_messages: Sequence[_CatoRedactedMessage]
 
 
+class _CatoAnalysisResult(TypedDict, total=False):
+    policy_drill_down: Mapping[str, object]
+
+
 class _CatoAnalyzeResponse(TypedDict):
-    required_action: _CatoRequiredAction
-    analysis_result: NotRequired[Mapping[str, Mapping[str, object]]]
+    required_action: NotRequired[_CatoRequiredAction | None]
+    analysis_result: NotRequired[_CatoAnalysisResult]
     redacted_chat: NotRequired[_CatoRedactedChat]
 
 
@@ -202,7 +206,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return []
 
     @staticmethod
-    def _iter_schema_string_refs(data: dict):
+    def _iter_schema_string_refs(data: Mapping[str, Any]):
         """Yield ``(container, key)`` for every non-empty schema string the proxy
         forwards to the model inside tool/function and structured-output schemas:
         each ``tools[].function`` and legacy ``functions[]`` entry plus the
@@ -244,7 +248,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 stack.extend(reversed(node))
 
     @classmethod
-    def _extra_inspection_sources(cls, data: dict) -> Sequence[tuple[str, Sequence[Mapping[str, str]]]]:
+    def _extra_inspection_sources(cls, data: Mapping[str, Any]) -> Sequence[tuple[str, Sequence[Mapping[str, str]]]]:
         """Text the proxy forwards to the model outside chat ``messages``:
         Responses-API ``input`` and ``instructions``, legacy completion
         ``prompt`` and tool/function/``response_format`` schema strings. Returned
@@ -305,8 +309,8 @@ class CatoNetworksGuardrail(CustomGuardrail):
 
     def _handle_block_action(
         self,
-        analysis_result: Mapping[str, Mapping[str, object]],
-        required_action: _CatoRequiredAction,
+        analysis_result: _CatoAnalysisResult,
+        required_action: Any,
     ) -> None:
         detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
@@ -420,8 +424,8 @@ class CatoNetworksGuardrail(CustomGuardrail):
 
     def _handle_block_action_on_output(
         self,
-        analysis_result: Mapping[str, Mapping[str, object]],
-        required_action: _CatoRequiredAction,
+        analysis_result: _CatoAnalysisResult,
+        required_action: Any,
     ) -> None:
         detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
@@ -570,7 +574,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: AsyncGenerator[object, None],
+        response: AsyncIterable[object],
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         from litellm.proxy.proxy_server import StreamingCallbackError
@@ -622,7 +626,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
     async def forward_the_stream_to_cato(
         self,
         websocket: ClientConnection,
-        response_iter: AsyncGenerator[object, None],
+        response_iter: AsyncIterable[object],
     ) -> None:
         async for chunk in response_iter:
             if isinstance(chunk, BaseModel):

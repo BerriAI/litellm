@@ -47,11 +47,7 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
 
-_OpenAPIObject: TypeAlias = Mapping[str, Any]
-
-
-class _OpenAPIParameterSchema(TypedDict, total=False):
-    type: str
+_OpenAPIParameter: TypeAlias = Mapping[str, Any]
 
 
 class _OpenAPIJSONSchema(TypedDict, total=False):
@@ -72,16 +68,18 @@ class _OpenAPIOperation(TypedDict, total=False):
     operationId: str
     summary: str
     description: str
-    parameters: Sequence[_OpenAPIObject]
+    parameters: Sequence[_OpenAPIParameter]
     requestBody: _OpenAPIRequestBody
 
 
 class _OpenAPIPathItem(TypedDict, total=False):
-    parameters: Sequence[_OpenAPIObject]
+    summary: str
+    description: str
+    parameters: Sequence[_OpenAPIParameter]
 
 
 class _OpenAPIComponents(TypedDict, total=False):
-    parameters: Mapping[str, _OpenAPIObject]
+    parameters: Mapping[str, _OpenAPIParameter]
 
 
 # Store the base URL and headers globally
@@ -161,7 +159,7 @@ async def load_openapi_spec_async(filepath: str) -> dict[str, Any]:
         return json.load(f)
 
 
-def get_base_url(spec: _OpenAPIObject, spec_path: str | None = None) -> str:
+def get_base_url(spec: Mapping[str, Any], spec_path: str | None = None) -> str:
     """Extract base URL from OpenAPI spec."""
     # OpenAPI 3.x
     if "servers" in spec and spec["servers"]:
@@ -212,7 +210,9 @@ def get_base_url(spec: _OpenAPIObject, spec_path: str | None = None) -> str:
     return ""
 
 
-def _resolve_ref(param: _OpenAPIObject, component_params: Mapping[str, _OpenAPIObject]) -> _OpenAPIObject | None:
+def _resolve_ref(
+    param: _OpenAPIParameter, component_params: Mapping[str, _OpenAPIParameter]
+) -> _OpenAPIParameter | None:
     """Resolve a single parameter, following a $ref if present.
 
     Returns the resolved param dict, or None if the $ref target is absent from
@@ -226,8 +226,8 @@ def _resolve_ref(param: _OpenAPIObject, component_params: Mapping[str, _OpenAPIO
 
 
 def _resolve_param_list(
-    raw: Sequence[_OpenAPIObject], component_params: Mapping[str, _OpenAPIObject]
-) -> list[_OpenAPIObject]:
+    raw: Sequence[_OpenAPIParameter], component_params: Mapping[str, _OpenAPIParameter]
+) -> list[_OpenAPIParameter]:
     """Resolve $refs in a parameter list, dropping any unresolvable entries."""
     result: Final = []
     for p in raw:
@@ -256,7 +256,7 @@ def resolve_operation_params(
        merged with the operation-level params; operation-level wins when the
        same ``name`` + ``in`` combination appears in both.
     """
-    component_params: Final[Mapping[str, _OpenAPIObject]] = components.get("parameters", {})
+    component_params: Final[Mapping[str, _OpenAPIParameter]] = components.get("parameters", {})
     path_level: Final = _resolve_param_list(path_item.get("parameters", []), component_params)
     op_level: Final = _resolve_param_list(operation.get("parameters", []), component_params)
     op_keys: Final = {(p["name"], p.get("in")) for p in op_level}
@@ -266,9 +266,8 @@ def resolve_operation_params(
     return result
 
 
-def extract_parameters(operation: _OpenAPIObject) -> tuple[Sequence[str], Sequence[str], Sequence[str]]:
+def extract_parameters(operation: Mapping[str, Any]) -> tuple[Sequence[str], Sequence[str], Sequence[str]]:
     """Extract parameter names from OpenAPI operation."""
-    param: _OpenAPIObject
     path_params: Final = []
     query_params: Final = []
     body_params: Final = []
@@ -278,7 +277,7 @@ def extract_parameters(operation: _OpenAPIObject) -> tuple[Sequence[str], Sequen
         for param in operation["parameters"]:
             if "name" not in param:
                 continue
-            param_name: str = param["name"]
+            param_name = param["name"]
             if param.get("in") == "path":
                 path_params.append(param_name)
             elif param.get("in") == "query":
@@ -293,9 +292,8 @@ def extract_parameters(operation: _OpenAPIObject) -> tuple[Sequence[str], Sequen
     return path_params, query_params, body_params
 
 
-def build_input_schema(operation: _OpenAPIObject) -> dict[str, Any]:
+def build_input_schema(operation: Mapping[str, Any]) -> dict[str, Any]:
     """Build MCP input schema from OpenAPI operation."""
-    param: _OpenAPIObject
     properties: Final = {}
     required: Final = []
 
@@ -304,9 +302,9 @@ def build_input_schema(operation: _OpenAPIObject) -> dict[str, Any]:
         for param in operation["parameters"]:
             if "name" not in param:
                 continue
-            param_name: str = param["name"]
-            param_schema: _OpenAPIParameterSchema = param.get("schema", {})
-            param_type: str = param_schema.get("type", "string")
+            param_name = param["name"]
+            param_schema = param.get("schema", {})
+            param_type = param_schema.get("type", "string")
 
             properties[param_name] = {
                 "type": param_type,
@@ -391,7 +389,7 @@ def _merge_openapi_tool_request_headers(
 def create_tool_function(
     path: str,
     method: str,
-    operation: _OpenAPIObject,
+    operation: Mapping[str, Any],
     base_url: str,
     headers: dict[str, str] | None = None,
 ):
@@ -492,9 +490,9 @@ def create_tool_function(
     return tool_function
 
 
-def register_tools_from_openapi(spec: _OpenAPIObject, base_url: str) -> None:
+def register_tools_from_openapi(spec: Mapping[str, Any], base_url: str) -> None:
     """Register MCP tools from OpenAPI specification."""
-    paths: Final[Mapping[str, Mapping[str, _OpenAPIOperation]]] = spec.get("paths", {})
+    paths: Final[Mapping[str, Mapping[str, Any]]] = spec.get("paths", {})
     used_names: Final = set()
 
     for path, path_item in paths.items():

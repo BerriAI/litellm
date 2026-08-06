@@ -3,7 +3,7 @@ import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from typing_extensions import NotRequired, TypedDict
 
@@ -270,9 +270,7 @@ class PurviewGuardrailBase:
     # User ID resolution
     # ------------------------------------------------------------------
 
-    def _resolve_user_id(
-        self, data: Mapping[str, Mapping[str, object]], user_api_key_dict: "UserAPIKeyAuth"
-    ) -> str | None:
+    def _resolve_user_id(self, data: Mapping[str, object], user_api_key_dict: "UserAPIKeyAuth") -> str | None:
         """Resolve the Entra user object ID from request data or auth context.
 
         Returns the strongest available identity walking down four sources, in
@@ -295,7 +293,10 @@ class PurviewGuardrailBase:
         if hasattr(user_api_key_dict, "end_user_id") and user_api_key_dict.end_user_id:
             return str(user_api_key_dict.end_user_id)
 
-        metadata: Final[Mapping[str, object]] = data.get("metadata") or data.get("litellm_metadata") or {}
+        metadata_value: Final[object] = data.get("metadata") or data.get("litellm_metadata") or {}
+        if not isinstance(metadata_value, Mapping):
+            return None
+        metadata: Final[Mapping[str, object]] = metadata_value
         uid = metadata.get("user_api_key_user_id")
         if uid:
             return str(uid)
@@ -359,7 +360,7 @@ class PurviewGuardrailBase:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _should_block(response: Mapping[str, Sequence[Mapping[str, str]]]) -> bool:
+    def _should_block(response: dict[str, Any]) -> bool:
         """Return True if any policyAction requires blocking."""
         for action in response.get("policyActions", []):
             odata_type = action.get("@odata.type", "")

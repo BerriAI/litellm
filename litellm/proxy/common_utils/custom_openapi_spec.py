@@ -1,12 +1,7 @@
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, TypedDict
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
-
-
-class _FieldSchema(TypedDict, total=False):
-    type: str
-    anyOf: Sequence["_FieldSchema"]
 
 
 class CustomOpenAPISpec:
@@ -198,7 +193,7 @@ class CustomOpenAPISpec:
             return schema
 
     @staticmethod
-    def _extract_field_schema(field_def: _FieldSchema) -> _FieldSchema:
+    def _extract_field_schema(field_def: dict[str, Any]) -> dict[str, Any]:
         """
         Extract a simple schema from a Pydantic field definition for parameter display.
 

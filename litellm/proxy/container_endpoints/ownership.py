@@ -40,13 +40,6 @@ class _ManagedObjectTable(Protocol):
     async def update(self, *, where: Mapping[str, str], data: Mapping[str, str]) -> _ManagedObjectRow | None: ...
 
 
-class _ContainerListResponse(Protocol):
-    data: Sequence[object]
-    first_id: str | None
-    last_id: str | None
-    has_more: bool
-
-
 CONTAINER_OBJECT_PURPOSE: Final = "container"
 
 # 60s LRU/TTL cache absorbs every container access check before it reaches
@@ -279,7 +272,8 @@ async def _get_container_owner(original_container_id: str, custom_llm_provider: 
     if prisma_client is None:
         return None
 
-    row: Final[_ManagedObjectRow | None] = await ManagedObjectRepository(prisma_client).table.find_first(
+    table: Final[_ManagedObjectTable] = ManagedObjectRepository(prisma_client).table
+    row: Final[_ManagedObjectRow | None] = await table.find_first(
         where={
             "model_object_id": model_object_id,
             "file_purpose": CONTAINER_OBJECT_PURPOSE,
@@ -315,7 +309,8 @@ async def _get_stored_container_id(original_container_id: str, custom_llm_provid
     if prisma_client is None:
         return None
 
-    row: Final[_ManagedObjectRow | None] = await ManagedObjectRepository(prisma_client).table.find_first(
+    table: Final[_ManagedObjectTable] = ManagedObjectRepository(prisma_client).table
+    row: Final[_ManagedObjectRow | None] = await table.find_first(
         where={
             "model_object_id": model_object_id,
             "file_purpose": CONTAINER_OBJECT_PURPOSE,
@@ -359,9 +354,7 @@ def _get_container_list_data(response: object) -> Sequence[object] | None:
     return data if isinstance(data, list) else None
 
 
-def _set_container_list_data(
-    response: _ContainerListResponse, data: list[object], removed_filtered_items: bool = False
-) -> _ContainerListResponse:
+def _set_container_list_data(response: Any, data: list[object], removed_filtered_items: bool = False) -> object:
     if isinstance(response, dict):
         response["data"] = data
         if data:
@@ -401,7 +394,8 @@ async def _get_allowed_container_ids(
     if prisma_client is None:
         return set()
 
-    rows: Final[Sequence[_ManagedObjectRow]] = await ManagedObjectRepository(prisma_client).table.find_many(
+    table: Final[_ManagedObjectTable] = ManagedObjectRepository(prisma_client).table
+    rows: Final[Sequence[_ManagedObjectRow]] = await table.find_many(
         where={
             "file_purpose": CONTAINER_OBJECT_PURPOSE,
             "created_by": {"in": owner_scopes},
@@ -416,10 +410,10 @@ async def _get_allowed_container_ids(
 
 
 async def filter_container_list_response(
-    response: _ContainerListResponse,
+    response: object,
     user_api_key_dict: UserAPIKeyAuth,
     custom_llm_provider: str,
-) -> _ContainerListResponse:
+) -> object:
     if is_proxy_admin(user_api_key_dict):
         return response
 

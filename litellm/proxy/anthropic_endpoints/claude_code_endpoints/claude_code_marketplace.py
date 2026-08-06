@@ -47,7 +47,7 @@ class _PluginRecord(Protocol):
     name: str
     version: str | None
     description: str | None
-    manifest_json: str
+    manifest_json: str | None
     enabled: bool
     created_at: datetime | None
     updated_at: datetime | None
@@ -108,7 +108,7 @@ async def get_marketplace():
         plugin_list: Final = []
         for plugin in plugins:
             try:
-                manifest: Mapping[str, object] = json.loads(plugin.manifest_json)
+                manifest: Mapping[str, object] = json.loads(plugin.manifest_json or "{}")
             except json.JSONDecodeError:
                 verbose_proxy_logger.warning("Plugin %s has invalid manifest JSON, skipping", plugin.name)
                 continue
@@ -431,7 +431,7 @@ async def get_plugin(
                 detail={"error": f"Plugin '{plugin_name}' not found"},
             )
 
-        manifest: Final[Mapping[str, object]] = json.loads(plugin.manifest_json) if plugin.manifest_json else {}
+        manifest: Final[Mapping[str, object]] = json.loads(plugin.manifest_json or "{}") if plugin.manifest_json else {}
 
         return {
             "id": plugin.id,
