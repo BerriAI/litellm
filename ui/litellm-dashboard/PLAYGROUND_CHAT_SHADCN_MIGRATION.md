@@ -51,7 +51,8 @@ Migrate the Playground Chat tab and its rendered component tree from Ant Design,
 
 - [ ] Migrate `MCPToolArgumentsForm.tsx` form controls.
 - [ ] Migrate `ByokCredentialModal.tsx` to shadcn `Dialog`, inputs, and switch.
-- [ ] Migrate `RealtimePlayground.tsx` buttons, inputs, selects, typography, and icons.
+- [x] Migrate `RealtimePlayground.tsx` buttons, inputs, selects, typography, and icons; share ChatComposer; use realtime-safe voice list.
+- [x] Migrate Compare `MessageInput.tsx` to shared ChatComposer.
 - [ ] Migrate `AgentBuilderView.tsx` if it remains in the Chat tab tree.
 - [ ] Remove every `antd`, `@ant-design/icons`, and `@tremor/react` import from the Chat tab render tree (RealtimePlayground, AgentBuilderView, MCP form/modal, and Compare tab are still on legacy UI).
 

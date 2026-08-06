@@ -33,6 +33,39 @@ export const OPEN_AI_VOICE_SELECT_OPTIONS = Object.entries(OPEN_AI_VOICES).map((
   label: OPEN_AI_VOICE_LABELS[key as keyof typeof OPEN_AI_VOICE_LABELS],
 }));
 
+export const OPEN_AI_REALTIME_VOICES = {
+  ALLOY: "alloy",
+  ASH: "ash",
+  BALLAD: "ballad",
+  CORAL: "coral",
+  ECHO: "echo",
+  SAGE: "sage",
+  SHIMMER: "shimmer",
+  VERSE: "verse",
+  MARIN: "marin",
+  CEDAR: "cedar",
+} as const;
+
+export type OpenAIRealtimeVoice = (typeof OPEN_AI_REALTIME_VOICES)[keyof typeof OPEN_AI_REALTIME_VOICES];
+
+export const OPEN_AI_REALTIME_VOICE_LABELS: Record<keyof typeof OPEN_AI_REALTIME_VOICES, string> = {
+  ALLOY: "Alloy - Professional and confident",
+  ASH: "Ash - Casual and relaxed",
+  BALLAD: "Ballad - Smooth and melodic",
+  CORAL: "Coral - Warm and engaging",
+  ECHO: "Echo - Friendly and conversational",
+  SAGE: "Sage - Wise and measured",
+  SHIMMER: "Shimmer - Bright and cheerful",
+  VERSE: "Verse - Expressive and clear",
+  MARIN: "Marin - Calm and natural",
+  CEDAR: "Cedar - Warm and steady",
+};
+
+export const OPEN_AI_REALTIME_VOICE_SELECT_OPTIONS = Object.entries(OPEN_AI_REALTIME_VOICES).map(([key, voice]) => ({
+  value: voice,
+  label: OPEN_AI_REALTIME_VOICE_LABELS[key as keyof typeof OPEN_AI_REALTIME_VOICE_LABELS],
+}));
+
 export const ENDPOINT_OPTIONS = [
   { value: EndpointType.CHAT, label: "/v1/chat/completions" },
   { value: EndpointType.RESPONSES, label: "/v1/responses" },
