@@ -8,11 +8,13 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Final, Literal, TypeVar, Union, cast, get_args, get_origin
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic.fields import FieldInfo
+from typing_extensions import TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -612,11 +614,11 @@ class RegisterGuardrailRequest(BaseModel):
     """Request body for POST /guardrails/register. Follows Generic Guardrail API config."""
 
     guardrail_name: str
-    litellm_params: dict[str, Any]  # guardrail, mode, api_base required; api_key, headers, etc. optional
+    litellm_params: dict[str, object]  # guardrail, mode, api_base required; api_key, headers, etc. optional
     guardrail_info: dict[str, object] | None = None
     team_id: str | None = None
 
-    def get_litellm_params_dict(self) -> dict[str, Any]:
+    def get_litellm_params_dict(self) -> dict[str, object]:
         return dict(self.litellm_params)
 
 
@@ -708,6 +710,11 @@ async def register_guardrail(
             status_code=400,
             detail="litellm_params.api_base is required for generic_guardrail_api",
         )
+    if not isinstance(api_base, str):
+        raise HTTPException(
+            status_code=400,
+            detail="litellm_params.api_base must be a string",
+        )
     parsed: Final = urlparse(api_base)
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(
@@ -772,16 +779,17 @@ async def register_guardrail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _parse_json_field(value: object) -> dict[str, Any] | None:
+def _parse_json_field(value: object) -> dict[str, object] | None:
     if value is None:
         return None
     if isinstance(value, dict):
         return value
     if isinstance(value, str):
         try:
-            return json.loads(value)
+            parsed: Final = json.loads(value)
         except Exception:
             return None
+        return parsed if isinstance(parsed, dict) else None
     return None
 
 
@@ -809,6 +817,10 @@ async def _get_user_team_ids(user_api_key_dict: UserAPIKeyAuth) -> list[str]:
     return [t for t in user_obj.teams if t]
 
 
+def _str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
 def _row_to_submission_item(row: "LiteLLM_GuardrailsTable") -> GuardrailSubmissionItem:
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 
@@ -824,8 +836,8 @@ def _row_to_submission_item(row: "LiteLLM_GuardrailsTable") -> GuardrailSubmissi
         team_guardrail=team_guardrail,
         litellm_params=masked_params,
         guardrail_info=guardrail_info,
-        submitted_by_user_id=guardrail_info.get("submitted_by_user_id"),
-        submitted_by_email=guardrail_info.get("submitted_by_email"),
+        submitted_by_user_id=_str_or_none(guardrail_info.get("submitted_by_user_id")),
+        submitted_by_email=_str_or_none(guardrail_info.get("submitted_by_email")),
         submitted_at=getattr(row, "submitted_at", None),
         reviewed_at=getattr(row, "reviewed_at", None),
         created_at=row.created_at,
@@ -1171,12 +1183,18 @@ async def patch_guardrail(
         )
 
         # Update litellm_params if default_on is provided or pii_entities_config is provided
-        litellm_params = LitellmParams(**dict(existing_guardrail.get("litellm_params", {})))
-        if request.litellm_params is not None:
-            requested_litellm_params: Final = request.litellm_params.model_dump(exclude_unset=True)
-            litellm_params_dict: Final = litellm_params.model_dump(exclude_unset=True)
-            litellm_params_dict.update(requested_litellm_params)
-            litellm_params = LitellmParams(**litellm_params_dict)
+        existing_litellm_params: Final = existing_guardrail.get("litellm_params", {})
+
+        def _merged_litellm_params() -> LitellmParams:
+            base: Final = LitellmParams.model_validate(existing_litellm_params)
+            if request.litellm_params is None:
+                return base
+            requested: Final = request.litellm_params.model_dump(exclude_unset=True)
+            merged: Final = base.model_dump(exclude_unset=True)
+            merged.update(requested)
+            return LitellmParams.model_validate(merged)
+
+        litellm_params: Final = _merged_litellm_params()
 
         # Update guardrail_info if provided
         guardrail_info: Final = (
@@ -1428,6 +1446,15 @@ async def get_category_yaml(category_name: str):
         raise HTTPException(status_code=500, detail=f"Error reading category file: {e}")
 
 
+class _AirlineEntry(TypedDict):
+    id: str
+    match: str
+    tags: list[str]
+
+
+_AIRLINES_ADAPTER: Final = TypeAdapter(list[_AirlineEntry])
+
+
 @router.get(
     "/guardrails/ui/major_airlines",
     tags=["Guardrails"],
@@ -1452,9 +1479,7 @@ async def get_major_airlines():
         )
     try:
         with open(airlines_path, "r", encoding="utf-8") as f:
-            import json
-
-            airlines: Final = json.load(f)
+            airlines: Final = _AIRLINES_ADAPTER.validate_json(f.read())
         return {"airlines": airlines}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading major_airlines.json: {e}") from e
@@ -1551,36 +1576,38 @@ async def validate_blocked_words_file(request: dict[str, str]):
         return {"valid": False, "error": f"Validation error: {e}"}
 
 
-def _get_field_type_from_annotation(field_annotation: Any) -> str:
+def _annotation_origin(annotation: object) -> object | None:
+    return get_origin(annotation)
+
+
+def _annotation_args(annotation: object) -> tuple[object, ...]:
+    return get_args(annotation)
+
+
+def _get_field_type_from_annotation(field_annotation: object) -> str:
     """
     Convert a Python type annotation to a UI-friendly type string
     """
     # Handle Union types (like Optional[T])
-    if (
-        hasattr(field_annotation, "__origin__")
-        and field_annotation.__origin__ is Union
-        and hasattr(field_annotation, "__args__")
-    ):
+    if _annotation_origin(field_annotation) is Union:
         # For Optional[T], get the non-None type
-        args: Final = field_annotation.__args__
-        non_none_args: Final = [arg for arg in args if arg is not type(None)]
+        non_none_args: Final = tuple(arg for arg in _annotation_args(field_annotation) if arg is not type(None))
         if non_none_args:
             field_annotation = non_none_args[0]
 
+    origin: Final = _annotation_origin(field_annotation)
+
     # Handle List types
-    if hasattr(field_annotation, "__origin__") and field_annotation.__origin__ is list:
+    if origin is list:
         return "array"
 
     # Handle Dict types
-    if hasattr(field_annotation, "__origin__") and field_annotation.__origin__ is dict:
+    if origin is dict:
         return "dict"
 
-    # Handle Literal types
-    if hasattr(field_annotation, "__origin__") and hasattr(field_annotation, "__args__"):
-        # Check for Literal types (Python 3.8+)
-        origin: Final = field_annotation.__origin__
-        if hasattr(origin, "__name__") and origin.__name__ == "Literal":
-            return "select"  # For dropdown/select inputs
+    # Handle Literal types (Python 3.8+)
+    if origin is Literal:
+        return "select"  # For dropdown/select inputs
 
     # Handle basic types
     if field_annotation is str:
@@ -1598,66 +1625,49 @@ def _get_field_type_from_annotation(field_annotation: Any) -> str:
     return "string"
 
 
-def _extract_literal_values(annotation: Any) -> list[str]:
+def _extract_literal_values(annotation: object) -> list[str]:
     """
     Extract literal values from a Literal type annotation
     """
-    if hasattr(annotation, "__origin__") and hasattr(annotation, "__args__"):
-        origin: Final = annotation.__origin__
-        if hasattr(origin, "__name__") and origin.__name__ == "Literal":
-            return list(annotation.__args__)
+    if _annotation_origin(annotation) is Literal:
+        return [arg for arg in _annotation_args(annotation) if isinstance(arg, str)]
     return []
 
 
-def _get_dict_key_options(field_annotation: Any) -> list[str] | None:
+def _get_dict_key_options(field_annotation: object) -> list[str] | None:
     """
     Extract key options from Dict[Literal[...], T] types
     """
-    if (
-        hasattr(field_annotation, "__origin__")
-        and field_annotation.__origin__ is dict
-        and hasattr(field_annotation, "__args__")
-    ):
-        args: Final = field_annotation.__args__
+    if _annotation_origin(field_annotation) is dict:
+        args: Final = _annotation_args(field_annotation)
         if len(args) >= 2:
-            key_type: Final = args[0]
-            return _extract_literal_values(key_type)
+            return _extract_literal_values(args[0])
     return None
 
 
-def _get_dict_value_type(field_annotation: Any) -> str:
+def _get_dict_value_type(field_annotation: object) -> str:
     """
     Get the value type from Dict[K, V] types
     """
-    if (
-        hasattr(field_annotation, "__origin__")
-        and field_annotation.__origin__ is dict
-        and hasattr(field_annotation, "__args__")
-    ):
-        args: Final = field_annotation.__args__
+    if _annotation_origin(field_annotation) is dict:
+        args: Final = _annotation_args(field_annotation)
         if len(args) >= 2:
-            value_type: Final = args[1]
-            return _get_field_type_from_annotation(value_type)
+            return _get_field_type_from_annotation(args[1])
     return "string"
 
 
-def _get_list_element_options(field_annotation: Any) -> list[str] | None:
+def _get_list_element_options(field_annotation: object) -> list[str] | None:
     """
     Extract element options from List[Literal[...]] types
     """
-    if (
-        hasattr(field_annotation, "__origin__")
-        and field_annotation.__origin__ is list
-        and hasattr(field_annotation, "__args__")
-    ):
-        args: Final = field_annotation.__args__
+    if _annotation_origin(field_annotation) is list:
+        args: Final = _annotation_args(field_annotation)
         if len(args) >= 1:
-            element_type: Final = args[0]
-            return _extract_literal_values(element_type)
+            return _extract_literal_values(args[0])
     return None
 
 
-def _should_skip_optional_params(field_name: str, field_annotation: Any) -> bool:
+def _should_skip_optional_params(field_name: str, field_annotation: object) -> bool:
     """Check if optional_params field should be skipped (not meaningfully overridden)."""
     if field_name != "optional_params":
         return False
@@ -1666,62 +1676,55 @@ def _should_skip_optional_params(field_name: str, field_annotation: Any) -> bool
         return True
 
     # Check if the annotation is still a generic TypeVar (not specialized)
-    if isinstance(field_annotation, TypeVar) or (
-        hasattr(field_annotation, "__origin__") and field_annotation.__origin__ is TypeVar
-    ):
+    if isinstance(field_annotation, TypeVar) or _annotation_origin(field_annotation) is TypeVar:
         return True
 
     # Also skip if it's a generic type that wasn't specialized
-    if hasattr(field_annotation, "__name__") and field_annotation.__name__ in (
-        "T",
-        "TypeVar",
-    ):
+    if getattr(field_annotation, "__name__", None) in ("T", "TypeVar"):
         return True
 
     # Handle Optional[T] where T is still a TypeVar
-    if hasattr(field_annotation, "__args__"):
-        non_none_args: Final = [arg for arg in field_annotation.__args__ if arg is not type(None)]
-        if non_none_args and isinstance(non_none_args[0], TypeVar):
-            return True
-
-    return False
+    non_none_args: Final = tuple(arg for arg in _annotation_args(field_annotation) if arg is not type(None))
+    return bool(non_none_args and isinstance(non_none_args[0], TypeVar))
 
 
-def _unwrap_optional_type(field_annotation: Any) -> Any:
+def _unwrap_optional_type(field_annotation: object) -> object:
     """Unwrap Optional types to get the actual type."""
-    if (
-        hasattr(field_annotation, "__origin__")
-        and field_annotation.__origin__ is Union
-        and hasattr(field_annotation, "__args__")
-    ):
+    if _annotation_origin(field_annotation) is Union:
         # For Optional[BaseModel], get the non-None type
-        args: Final = field_annotation.__args__
-        non_none_args: Final = [arg for arg in args if arg is not type(None)]
+        non_none_args: Final = tuple(arg for arg in _annotation_args(field_annotation) if arg is not type(None))
         if non_none_args:
             return non_none_args[0]
     return field_annotation
 
 
+def _field_json_schema_extra(field: FieldInfo) -> dict[str, JsonValue] | None:
+    extra: Final = field.json_schema_extra
+    return extra if isinstance(extra, dict) else None
+
+
 def _build_field_dict(
-    field: Any,
-    field_annotation: Any,
+    field: FieldInfo,
+    field_annotation: object,
     description: str,
     required: bool,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build field dictionary for non-nested fields."""
-    # Determine the field type from annotation
-    field_type = _get_field_type_from_annotation(field_annotation)
-
     # Check for custom UI type override
-    field_json_schema_extra: Final = getattr(field, "json_schema_extra", {})
-    if field_json_schema_extra and "ui_type" in field_json_schema_extra:
-        ui_type: Final = field_json_schema_extra["ui_type"]
-        field_type = ui_type.value if hasattr(ui_type, "value") else ui_type
-    elif field_json_schema_extra and "type" in field_json_schema_extra:
-        field_type = field_json_schema_extra["type"]
+    field_json_schema_extra: Final = _field_json_schema_extra(field)
+
+    def _field_type() -> object:
+        if field_json_schema_extra and "ui_type" in field_json_schema_extra:
+            ui_type: Final = field_json_schema_extra["ui_type"]
+            return getattr(ui_type, "value", ui_type)
+        if field_json_schema_extra and "type" in field_json_schema_extra:
+            return field_json_schema_extra["type"]
+        return _get_field_type_from_annotation(field_annotation)
+
+    field_type: Final = _field_type()
 
     # Add the field to the dictionary
-    field_dict: Final = {
+    field_dict: Final[dict[str, object]] = {
         "description": description,
         "required": required,
         "type": field_type,
@@ -1770,7 +1773,7 @@ def _build_field_dict(
 def _extract_fields_recursive(
     model: type[BaseModel],
     depth: int = 0,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     # Check if we've exceeded the maximum recursion depth
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise HTTPException(
@@ -1778,7 +1781,7 @@ def _extract_fields_recursive(
             detail=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing model fields. Please check the model structure for excessive nesting.",
         )
 
-    fields: Final = {}
+    fields: Final[dict[str, object]] = {}
 
     for field_name, field in model.model_fields.items():
         field_annotation = field.annotation
@@ -1798,15 +1801,13 @@ def _extract_fields_recursive(
         required = field.is_required()
 
         # Check if this is a BaseModel subclass
-        is_basemodel_subclass = (
+        if (
             inspect.isclass(field_annotation)
             and issubclass(field_annotation, BaseModel)
             and field_annotation is not BaseModel
-        )
-
-        if is_basemodel_subclass:
+        ):
             # Recursively get fields from the nested model
-            nested_fields = _extract_fields_recursive(cast(type[BaseModel], field_annotation), depth + 1)
+            nested_fields = _extract_fields_recursive(field_annotation, depth + 1)
             fields[field_name] = {
                 "description": description,
                 "required": required,
@@ -1824,7 +1825,7 @@ def _extract_fields_recursive(
     return fields
 
 
-def _get_fields_from_model(model_class: type[BaseModel]) -> dict[str, Any]:
+def _get_fields_from_model(model_class: type[BaseModel]) -> dict[str, object]:
     """
     Get the fields from a Pydantic model as a nested dictionary structure
     """
@@ -1951,6 +1952,10 @@ class TestCustomCodeGuardrailResponse(BaseModel):
     """Type of error: 'compilation' or 'execution'."""
 
 
+def _widen_str_object_dict(mapping: dict[str, object]) -> dict[str, object]:
+    return mapping
+
+
 @router.post(
     "/guardrails/test_custom_code",
     tags=["Guardrails"],
@@ -2042,7 +2047,7 @@ async def test_custom_code_guardrail(
     EXECUTION_TIMEOUT_SECONDS: Final = 5
 
     try:
-        exec_globals: Final = build_sandbox_globals()
+        exec_globals: Final = _widen_str_object_dict(build_sandbox_globals())
 
         try:
             compiled: Final[CodeType] = compile_sandboxed(request.custom_code)
@@ -2069,7 +2074,7 @@ async def test_custom_code_guardrail(
                 error_type="compilation",
             )
 
-        apply_fn: Final[object] = exec_globals["apply_guardrail"]
+        apply_fn: Final = exec_globals["apply_guardrail"]
         if not callable(apply_fn):
             return TestCustomCodeGuardrailResponse(
                 success=False,
@@ -2148,18 +2153,20 @@ def _resolve_guardrail_input_type(active_guardrail: CustomGuardrail, input_type:
     return "response" if input_type == "response" else "request"
 
 
-def _patch_logging_obj_for_guardrail(litellm_logging_obj: Any, request: ApplyGuardrailRequest) -> None:
+def _patch_logging_obj_for_guardrail(litellm_logging_obj: object, request: ApplyGuardrailRequest) -> None:
     """Configure the logging object so Langfuse/OTEL extract input and output correctly."""
-    litellm_logging_obj.call_type = "pass_through_endpoint"
-    litellm_logging_obj.model_call_details["call_type"] = "pass_through_endpoint"
-    litellm_logging_obj.update_messages(
-        request.messages if request.messages else [{"role": "user", "content": request.text}]
-    )
+    setattr(litellm_logging_obj, "call_type", "pass_through_endpoint")  # noqa: B010  # litellm_logging_obj is typed `object` to avoid a logging-module import cycle
+    model_call_details: Final = getattr(litellm_logging_obj, "model_call_details", None)
+    if isinstance(model_call_details, dict):
+        model_call_details["call_type"] = "pass_through_endpoint"
+    update_messages: Final = getattr(litellm_logging_obj, "update_messages", None)
+    if callable(update_messages):
+        update_messages(request.messages if request.messages else [{"role": "user", "content": request.text}])
 
 
 async def _emit_guardrail_success_logs(
-    proxy_logging_obj: Any,
-    litellm_logging_obj: Any,
+    proxy_logging_obj: object,
+    litellm_logging_obj: object | None,
     data: dict,
     user_api_key_dict: UserAPIKeyAuth,
     response: ApplyGuardrailResponse,
@@ -2176,7 +2183,7 @@ async def _emit_guardrail_success_logs(
     )
 
     try:
-        modified: Final = await proxy_logging_obj.post_call_success_hook(
+        modified: Final = await getattr(proxy_logging_obj, "post_call_success_hook")(  # noqa: B009  # proxy_logging_obj is typed `object` to avoid an import cycle
             data=data,
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -2194,7 +2201,7 @@ async def _emit_guardrail_success_logs(
     if litellm_logging_obj is not None:
         end_time: Final = datetime.now(timezone.utc)
         try:
-            await litellm_logging_obj.async_success_handler(
+            await getattr(litellm_logging_obj, "async_success_handler")(  # noqa: B009  # litellm_logging_obj is typed `object | None` to avoid an import cycle
                 result=response_for_logging,
                 start_time=start_time,
                 end_time=end_time,
@@ -2204,7 +2211,7 @@ async def _emit_guardrail_success_logs(
             verbose_proxy_logger.exception("apply_guardrail: async_success_handler failed")
         try:
             thread_pool_executor.submit(
-                litellm_logging_obj.success_handler,
+                getattr(litellm_logging_obj, "success_handler"),  # noqa: B009  # litellm_logging_obj is typed `object | None` to avoid an import cycle
                 response_for_logging,
                 start_time,
                 end_time,

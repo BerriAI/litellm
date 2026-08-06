@@ -10,6 +10,7 @@ from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletionChunk
     from opentelemetry.trace import Span as _Span
 
     from litellm.types.utils import ModelResponseStream
@@ -326,7 +327,8 @@ def process_response_headers(
 
 
 def preserve_upstream_non_openai_attributes(
-    model_response: "ModelResponseStream", original_chunk: "ModelResponseStream"
+    model_response: "ModelResponseStream",
+    original_chunk: "ModelResponseStream | ChatCompletionChunk",
 ):
     """
     Preserve non-OpenAI attributes from the original chunk.

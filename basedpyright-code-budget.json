@@ -1,18 +1,18 @@
 {
   "reportAny": {
-    "limit": 29809
+    "limit": 26731
   },
   "reportArgumentType": {
-    "limit": 2645
+    "limit": 2627
   },
   "reportAssignmentType": {
     "limit": 329
   },
   "reportAttributeAccessIssue": {
-    "limit": 516
+    "limit": 501
   },
   "reportCallIssue": {
-    "limit": 123
+    "limit": 115
   },
   "reportConstantRedefinition": {
     "limit": 40
@@ -24,7 +24,7 @@
     "limit": 24
   },
   "reportExplicitAny": {
-    "limit": 9473
+    "limit": 8505
   },
   "reportFunctionMemberAccess": {
     "limit": 7
@@ -57,7 +57,7 @@
     "limit": 5855
   },
   "reportMissingTypeArgument": {
-    "limit": 15849
+    "limit": 15793
   },
   "reportMissingTypeStubs": {
     "limit": 40
@@ -72,7 +72,7 @@
     "limit": 0
   },
   "reportOptionalMemberAccess": {
-    "limit": 1079
+    "limit": 1042
   },
   "reportOptionalOperand": {
     "limit": 0
@@ -90,7 +90,7 @@
     "limit": 8
   },
   "reportReturnType": {
-    "limit": 219
+    "limit": 213
   },
   "reportTypedDictNotRequiredAccess": {
     "limit": 27
@@ -99,19 +99,19 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 45262
+    "limit": 45217
   },
   "reportUnknownLambdaType": {
-    "limit": 113
+    "limit": 106
   },
   "reportUnknownMemberType": {
-    "limit": 40452
+    "limit": 39883
   },
   "reportUnknownParameterType": {
-    "limit": 20309
+    "limit": 20210
   },
   "reportUnknownVariableType": {
-    "limit": 31978
+    "limit": 31466
   },
   "reportUnnecessaryCast": {
     "limit": 124
@@ -123,10 +123,10 @@
     "limit": 5
   },
   "reportUnnecessaryIsInstance": {
-    "limit": 866
+    "limit": 863
   },
   "reportUntypedBaseClass": {
-    "limit": 165
+    "limit": 164
   },
   "reportUntypedFunctionDecorator": {
     "limit": 33
