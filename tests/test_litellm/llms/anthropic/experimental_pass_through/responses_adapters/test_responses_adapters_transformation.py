@@ -823,11 +823,30 @@ def _make_mock_response(
     model: str = "gpt-4o",
     input_tokens: int = 100,
     output_tokens: int = 50,
+    cache_read_input_tokens: int | None = None,
+    cache_creation_input_tokens: int | None = None,
+    cached_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+    cache_creation_tokens: int | None = None,
 ) -> MagicMock:
     """Build a minimal mock ResponsesAPIResponse."""
     usage = MagicMock()
     usage.input_tokens = input_tokens
     usage.output_tokens = output_tokens
+    usage.cache_read_input_tokens = cache_read_input_tokens
+    usage.cache_creation_input_tokens = cache_creation_input_tokens
+    if (
+        cached_tokens is None
+        and cache_write_tokens is None
+        and cache_creation_tokens is None
+    ):
+        usage.input_tokens_details = None
+    else:
+        details = MagicMock()
+        details.cached_tokens = cached_tokens
+        details.cache_write_tokens = cache_write_tokens
+        details.cache_creation_tokens = cache_creation_tokens
+        usage.input_tokens_details = details
 
     resp = MagicMock()
     resp.id = response_id
@@ -960,6 +979,81 @@ class TestTranslateResponse:
         result: Any = _ADAPTER.translate_response(response)
         assert result["usage"]["input_tokens"] == 200
         assert result["usage"]["output_tokens"] == 75
+        assert result["usage"].get("cache_read_input_tokens", 0) == 0
+        assert result["usage"].get("cache_creation_input_tokens", 0) == 0
+
+    def test_cache_read_from_input_tokens_details_cached_tokens(self):
+        """OpenAI-style input_tokens_details.cached_tokens maps to cache_read_input_tokens."""
+        response = _make_mock_response(
+            output=[_make_output_message(["OK"])],
+            cached_tokens=1664,
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_read_input_tokens"] == 1664
+        assert result["usage"]["cached_tokens"] == 1664
+        assert result["usage"]["cache_write_tokens"] == 0
+
+    def test_cache_read_prefers_direct_cache_read_input_tokens(self):
+        """Direct Anthropic-style cache_read_input_tokens wins over details.cached_tokens."""
+        response = _make_mock_response(
+            output=[_make_output_message(["OK"])],
+            cache_read_input_tokens=900,
+            cached_tokens=1664,
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_read_input_tokens"] == 900
+        assert result["usage"]["cached_tokens"] == 1664
+
+    def test_cache_read_from_direct_field_when_details_absent(self):
+        """Direct cache_read_input_tokens is used when input_tokens_details is missing."""
+        response = _make_mock_response(
+            output=[_make_output_message(["OK"])],
+            cache_read_input_tokens=512,
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_read_input_tokens"] == 512
+        assert "cached_tokens" not in result["usage"]
+        assert "cache_write_tokens" not in result["usage"]
+
+    def test_cache_write_from_input_tokens_details_cache_write_tokens(self):
+        """OpenAI-style cache_write_tokens maps to Anthropic creation and is kept native."""
+        response = _make_mock_response(
+            output=[_make_output_message(["OK"])],
+            cache_write_tokens=1969,
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_creation_input_tokens"] == 1969
+        assert result["usage"]["cache_write_tokens"] == 1969
+        assert result["usage"]["cached_tokens"] == 0
+
+    def test_cache_write_from_input_tokens_details_cache_creation_tokens_alias(self):
+        """LiteLLM cache_creation_tokens alias also maps to cache_creation_input_tokens."""
+        response = _make_mock_response(
+            output=[_make_output_message(["OK"])],
+            cache_creation_tokens=800,
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_creation_input_tokens"] == 800
+        assert result["usage"]["cache_write_tokens"] == 800
+
+    def test_cache_write_prefers_direct_cache_creation_input_tokens(self):
+        """Direct Anthropic-style cache_creation_input_tokens wins over details writes."""
+        response = _make_mock_response(
+            output=[_make_output_message(["OK"])],
+            cache_creation_input_tokens=700,
+            cache_write_tokens=1969,
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_creation_input_tokens"] == 700
+        assert result["usage"]["cache_write_tokens"] == 1969
+
+    def test_cache_creation_field_always_populated(self):
+        """cache_creation_input_tokens is present even when there was no write."""
+        response = _make_mock_response(output=[_make_output_message(["OK"])])
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_creation_input_tokens"] == 0
+        assert "cache_write_tokens" not in result["usage"]
+        assert "cached_tokens" not in result["usage"]
 
     def test_should_populate_cache_creation_input_tokens(self):
         """cache_creation_input_tokens extra on usage is mapped to AnthropicUsage."""

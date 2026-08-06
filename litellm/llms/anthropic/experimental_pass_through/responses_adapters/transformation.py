@@ -468,10 +468,42 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         input_tokens = int(getattr(raw_usage, "input_tokens", 0) or 0)
         output_tokens = int(getattr(raw_usage, "output_tokens", 0) or 0)
 
+        # Prefer direct Anthropic-style cache fields if present, then fall back
+        # to OpenAI-style input_tokens_details (same order as the streaming
+        # iterator). GPT-5.6+ reports writes as cache_write_tokens; older
+        # OpenAI models typically omit writes so creation stays 0.
+        # Also keep OpenAI native cached_tokens / cache_write_tokens on the
+        # wire so proxies can record usage before Anthropic client shaping.
+        cache_read_input_tokens = int(
+            getattr(raw_usage, "cache_read_input_tokens", 0) or 0
+        )
+        cache_creation_input_tokens = int(
+            getattr(raw_usage, "cache_creation_input_tokens", 0) or 0
+        )
+        cached_tokens = 0
+        cache_write_tokens = 0
+        details = getattr(raw_usage, "input_tokens_details", None) if raw_usage else None
+        if details is not None:
+            cached_tokens = int(getattr(details, "cached_tokens", 0) or 0)
+            cache_write_tokens = int(
+                getattr(details, "cache_write_tokens", 0)
+                or getattr(details, "cache_creation_tokens", 0)
+                or 0
+            )
+            if not cache_read_input_tokens:
+                cache_read_input_tokens = cached_tokens
+            if not cache_creation_input_tokens:
+                cache_creation_input_tokens = cache_write_tokens
+
         anthropic_usage = AnthropicUsage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
+            cache_creation_input_tokens=cache_creation_input_tokens,
         )
+        if details is not None:
+            anthropic_usage["cached_tokens"] = cached_tokens
+            anthropic_usage["cache_write_tokens"] = cache_write_tokens
 
         cache_creation = int(getattr(raw_usage, "cache_creation_input_tokens", 0) or 0)
         if cache_creation:
