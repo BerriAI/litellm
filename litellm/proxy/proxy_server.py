@@ -297,10 +297,10 @@ from litellm.proxy.common_request_processing import (
     _should_return_raw_model_name,
     create_response,
 )
-from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
 )
+from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
@@ -6397,7 +6397,7 @@ class ProxyConfig:
         self.auth_cache_invalidation_subscriber = None
         try:
             await subscriber.stop()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # best-effort: a failing stop must not break proxy shutdown
             verbose_proxy_logger.error("Error stopping auth cache invalidation subscriber: %s", e)
 
     async def _init_non_llm_objects_in_db(self, prisma_client: PrismaClient):
