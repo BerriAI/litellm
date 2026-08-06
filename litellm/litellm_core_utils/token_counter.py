@@ -720,7 +720,7 @@ def _count_anthropic_image_tokens(
             mode="high",
             use_default_image_token_count=use_default_image_token_count,
         )
-    except Exception:
+    except (ValueError, TypeError, struct.error):
         return DEFAULT_IMAGE_TOKEN_COUNT
 
 
