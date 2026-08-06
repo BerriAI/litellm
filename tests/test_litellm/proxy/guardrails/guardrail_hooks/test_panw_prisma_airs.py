@@ -1697,6 +1697,34 @@ class TestPanwAirsApplyGuardrail:
             )
 
     @pytest.mark.asyncio
+    async def test_apply_guardrail_warns_when_tool_results_scope_leaves_nothing_scannable(self, handler):
+        """scan_only_tool_results hands PANW a tool-role-only payload, but PANW's role
+        filter only scans user/system/developer rows: the silent no-op must warn."""
+        handler.scan_only_tool_results = True
+        inputs: GenericGuardrailAPIInputs = {
+            "texts": ["TOOL-RESULT"],
+            "structured_messages": [{"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT"}],
+        }
+        request_data = {"litellm_call_id": "test-call-id", "model": "gpt-4"}
+
+        with (
+            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
+            patch(
+                "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.verbose_proxy_logger.warning"
+            ) as mock_warning,
+        ):
+            result = await handler.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
+
+        mock_api.assert_not_called()
+        assert result["texts"] == ["TOOL-RESULT"]
+        warning_text = " ".join(str(arg) for c in mock_warning.call_args_list for arg in c.args)
+        assert "scan_only_tool_results" in warning_text
+
+    @pytest.mark.asyncio
     async def test_apply_guardrail_block(self, handler):
         """Test block action raises HTTPException(400)."""
         inputs: GenericGuardrailAPIInputs = {"texts": ["Malicious content"]}
