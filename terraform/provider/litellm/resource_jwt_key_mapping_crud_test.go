@@ -1,0 +1,370 @@
+package litellm
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+)
+
+type jwtKeyMappingCall struct {
+	Method string
+	Path   string
+	Query  string
+	Body   map[string]interface{}
+}
+
+func jwtKeyMappingTestServer(t *testing.T, mapping JWTKeyMappingResponse) (*httptest.Server, *[]jwtKeyMappingCall) {
+	t.Helper()
+
+	calls := make([]jwtKeyMappingCall, 0)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := map[string]interface{}{}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		calls = append(calls, jwtKeyMappingCall{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Body: body})
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/jwt/key/mapping/delete":
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+		default:
+			_ = json.NewEncoder(w).Encode(mapping)
+		}
+	}))
+
+	return srv, &calls
+}
+
+func jwtKeyMappingFixture() JWTKeyMappingResponse {
+	return JWTKeyMappingResponse{
+		ID:            "map-abc-123",
+		JWTClaimName:  "client_id",
+		JWTClaimValue: "dev-alice",
+		Description:   "dev-alice",
+		IsActive:      true,
+		CreatedAt:     "2026-08-06T10:00:00Z",
+		UpdatedAt:     "2026-08-06T11:00:00Z",
+		CreatedBy:     "admin",
+		UpdatedBy:     "admin",
+	}
+}
+
+func TestJWTKeyMappingCreateSendsClaimAndKey(t *testing.T) {
+	srv, calls := jwtKeyMappingTestServer(t, jwtKeyMappingFixture())
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"key":             "sk-abc123",
+		"description":     "dev-alice",
+		"is_active":       true,
+	})
+
+	if err := resourceLiteLLMJWTKeyMappingCreate(d, client); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	if d.Id() != "map-abc-123" {
+		t.Fatalf("expected id from the API response, got %q", d.Id())
+	}
+
+	create := (*calls)[0]
+	if create.Method != "POST" || create.Path != "/jwt/key/mapping/new" {
+		t.Fatalf("expected POST /jwt/key/mapping/new, got %s %s", create.Method, create.Path)
+	}
+	if create.Body["jwt_claim_name"] != "client_id" || create.Body["jwt_claim_value"] != "dev-alice" {
+		t.Fatalf("claim fields not sent: %v", create.Body)
+	}
+	if create.Body["key"] != "sk-abc123" {
+		t.Fatalf("virtual key not sent: %v", create.Body["key"])
+	}
+	if create.Body["description"] != "dev-alice" {
+		t.Fatalf("description not sent: %v", create.Body["description"])
+	}
+	if _, sent := create.Body["is_active"]; sent {
+		t.Fatalf("is_active is not accepted by /jwt/key/mapping/new but was sent: %v", create.Body)
+	}
+
+	for _, call := range (*calls)[1:] {
+		if call.Path == "/jwt/key/mapping/update" {
+			t.Fatalf("an active mapping must not trigger a follow-up update")
+		}
+	}
+}
+
+func TestJWTKeyMappingCreateOmitsEmptyDescription(t *testing.T) {
+	srv, calls := jwtKeyMappingTestServer(t, jwtKeyMappingFixture())
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"key":             "sk-abc123",
+		"is_active":       true,
+	})
+
+	if err := resourceLiteLLMJWTKeyMappingCreate(d, client); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	if _, sent := (*calls)[0].Body["description"]; sent {
+		t.Fatalf("unset description should be omitted: %v", (*calls)[0].Body)
+	}
+}
+
+func TestJWTKeyMappingCreateDeactivatesWhenNotActive(t *testing.T) {
+	mapping := jwtKeyMappingFixture()
+	mapping.IsActive = false
+	srv, calls := jwtKeyMappingTestServer(t, mapping)
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"key":             "sk-abc123",
+		"is_active":       false,
+	})
+
+	if err := resourceLiteLLMJWTKeyMappingCreate(d, client); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	var update *jwtKeyMappingCall
+	for i := range *calls {
+		if (*calls)[i].Path == "/jwt/key/mapping/update" {
+			update = &(*calls)[i]
+			break
+		}
+	}
+	if update == nil {
+		t.Fatal("expected a follow-up update, since the create endpoint always starts a mapping active")
+	}
+	if update.Body["id"] != "map-abc-123" {
+		t.Fatalf("update must target the new mapping, got %v", update.Body["id"])
+	}
+	if update.Body["is_active"] != false {
+		t.Fatalf("expected is_active false in the follow-up update, got %v", update.Body["is_active"])
+	}
+	if d.Get("is_active").(bool) {
+		t.Fatal("state should reflect the inactive mapping after create")
+	}
+}
+
+func TestJWTKeyMappingReadPopulatesStateAndKeepsKey(t *testing.T) {
+	srv, calls := jwtKeyMappingTestServer(t, jwtKeyMappingFixture())
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"key":             "sk-configured-value",
+	})
+	d.SetId("map-abc-123")
+
+	if err := resourceLiteLLMJWTKeyMappingRead(d, client); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	read := (*calls)[0]
+	if read.Method != "GET" || read.Path != "/jwt/key/mapping/info" {
+		t.Fatalf("expected GET /jwt/key/mapping/info, got %s %s", read.Method, read.Path)
+	}
+	if read.Query != "id=map-abc-123" {
+		t.Fatalf("expected the mapping id in the query, got %q", read.Query)
+	}
+
+	if d.Get("jwt_claim_value").(string) != "dev-alice" {
+		t.Fatalf("claim value not populated: %q", d.Get("jwt_claim_value").(string))
+	}
+	if d.Get("description").(string) != "dev-alice" {
+		t.Fatalf("description not populated: %q", d.Get("description").(string))
+	}
+	if !d.Get("is_active").(bool) {
+		t.Fatal("is_active not populated")
+	}
+	if d.Get("created_at").(string) != "2026-08-06T10:00:00Z" || d.Get("created_by").(string) != "admin" {
+		t.Fatalf("computed audit fields not populated: %v", d.State().Attributes)
+	}
+	if d.Get("key").(string) != "sk-configured-value" {
+		t.Fatalf("the API never returns the key, so the configured value must survive a read, got %q", d.Get("key").(string))
+	}
+}
+
+func TestJWTKeyMappingReadClearsIDWhenMappingIsGone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"detail": "Mapping not found"})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"key":             "sk-abc123",
+	})
+	d.SetId("map-gone")
+
+	if err := resourceLiteLLMJWTKeyMappingRead(d, client); err != nil {
+		t.Fatalf("a deleted mapping must not fail the read: %v", err)
+	}
+	if d.Id() != "" {
+		t.Fatalf("expected the id to be cleared so Terraform plans a recreate, got %q", d.Id())
+	}
+}
+
+func TestJWTKeyMappingUpdateClearsDescriptionAndSendsKey(t *testing.T) {
+	mapping := jwtKeyMappingFixture()
+	mapping.Description = ""
+	srv, calls := jwtKeyMappingTestServer(t, mapping)
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"key":             "sk-rotated",
+		"is_active":       true,
+	})
+	d.SetId("map-abc-123")
+
+	if err := resourceLiteLLMJWTKeyMappingUpdate(d, client); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	update := (*calls)[0]
+	if update.Method != "POST" || update.Path != "/jwt/key/mapping/update" {
+		t.Fatalf("expected POST /jwt/key/mapping/update, got %s %s", update.Method, update.Path)
+	}
+	if update.Body["id"] != "map-abc-123" {
+		t.Fatalf("update must carry the mapping id, got %v", update.Body["id"])
+	}
+	if update.Body["key"] != "sk-rotated" {
+		t.Fatalf("rotated key not sent: %v", update.Body["key"])
+	}
+	description, sent := update.Body["description"]
+	if !sent || description != "" {
+		t.Fatalf("a dropped description must be sent as an empty string, since the proxy ignores absent fields: %v", update.Body)
+	}
+	if d.Get("description").(string) != "" {
+		t.Fatalf("description should be cleared in state, got %q", d.Get("description").(string))
+	}
+}
+
+func TestJWTKeyMappingUpdateOmitsMissingKeyRatherThanBlankingIt(t *testing.T) {
+	srv, calls := jwtKeyMappingTestServer(t, jwtKeyMappingFixture())
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"description":     "dev-alice",
+		"is_active":       true,
+	})
+	d.SetId("map-abc-123")
+
+	if err := resourceLiteLLMJWTKeyMappingUpdate(d, client); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	if _, sent := (*calls)[0].Body["key"]; sent {
+		t.Fatalf("a missing key must be omitted rather than blanking the mapping token: %v", (*calls)[0].Body)
+	}
+}
+
+func TestJWTKeyMappingDeleteToleratesMissingMapping(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"detail": "Mapping not found"})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"key":             "sk-abc123",
+	})
+	d.SetId("map-already-gone")
+
+	if err := resourceLiteLLMJWTKeyMappingDelete(d, client); err != nil {
+		t.Fatalf("deleting an already deleted mapping must succeed: %v", err)
+	}
+	if d.Id() != "" {
+		t.Fatalf("expected the id to be cleared after delete, got %q", d.Id())
+	}
+}
+
+func TestJWTKeyMappingCreateSurfacesDuplicateClaimError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"detail": "A mapping for claim 'client_id' = 'dev-alice' already exists.",
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"key":             "sk-abc123",
+		"is_active":       true,
+	})
+
+	err := resourceLiteLLMJWTKeyMappingCreate(d, client)
+	if err == nil {
+		t.Fatal("expected a duplicate claim pair to fail")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("the proxy explanation must reach the user, got %v", err)
+	}
+	if d.Id() != "" {
+		t.Fatalf("no id should be recorded for a failed create, got %q", d.Id())
+	}
+}
+
+func TestJWTKeyMappingCreateDoesNotLeakKeyInErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"key":    "sk-super-secret",
+			"detail": "The provided key does not match an existing virtual key.",
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"key":             "sk-super-secret",
+		"is_active":       true,
+	})
+
+	err := resourceLiteLLMJWTKeyMappingCreate(d, client)
+	if err == nil {
+		t.Fatal("expected an unknown virtual key to fail")
+	}
+	if !strings.Contains(err.Error(), "does not match an existing virtual key") {
+		t.Fatalf("the proxy explanation must reach the user, got %v", err)
+	}
+	if strings.Contains(err.Error(), "sk-super-secret") {
+		t.Fatalf("the virtual key must be redacted in errors, got %v", err)
+	}
+}
