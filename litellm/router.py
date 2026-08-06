@@ -80,6 +80,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_structure,
 )
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
@@ -902,6 +903,9 @@ class Router:
         selector_ids = {id(s) for s in selectors if s is not None}
         if not selector_ids:
             return
+        for selector in selectors:
+            if isinstance(selector, BaseRoutingStrategy):
+                selector.cancel_sync_task()
         if isinstance(litellm.callbacks, list):
             litellm.callbacks = [c for c in litellm.callbacks if id(c) not in selector_ids]
         if isinstance(litellm.input_callback, list):

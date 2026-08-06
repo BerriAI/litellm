@@ -42,11 +42,15 @@ class BaseRoutingStrategy(ABC):
     async def cleanup(self):
         """Cleanup method to be called when shutting down"""
         if self._sync_task is not None:
-            self._sync_task.cancel()
+            self.cancel_sync_task()
             try:
                 await self._sync_task
             except asyncio.CancelledError:
                 pass
+
+    def cancel_sync_task(self) -> None:
+        if self._sync_task is not None:
+            self._sync_task.cancel()
 
     async def _increment_value_list_in_current_window(
         self, increment_list: List[Tuple[str, int]], ttl: int
