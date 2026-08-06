@@ -88,6 +88,40 @@ class TestPrepareDataWithCredentials:
 
         assert "_litellm_internal_model_credentials" not in data
 
+    def test_routing_model_keeps_alias_over_credentials_model(self):
+        """
+        Two model groups can share one litellm_params.model; router-bound call
+        sites pass routing_model so the group alias survives the merge and the
+        router can still apply per-group access controls (#36103).
+        """
+        data = {"model": "team-a-gpt", "vector_store_id": "vs_1"}
+        credentials = {
+            "api_key": "sk-shared",
+            "custom_llm_provider": "openai",
+            "model": "openai/gpt-4o-mini",
+        }
+
+        prepare_data_with_credentials(
+            data=data, credentials=credentials, routing_model="team-a-gpt"
+        )
+
+        assert data["model"] == "team-a-gpt"
+        assert data["api_key"] == "sk-shared"
+        assert "custom_llm_provider" not in data
+
+    def test_credentials_model_lands_in_data_without_routing_model(self):
+        """Direct-to-SDK call sites still need the deployment model (#25104)."""
+        data = {"model": "bedrock-batch-alias"}
+        credentials = {
+            "aws_region_name": "us-west-2",
+            "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        }
+
+        prepare_data_with_credentials(data=data, credentials=credentials)
+
+        assert data["model"] == "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        assert data["aws_region_name"] == "us-west-2"
+
 
 class TestRoundTrip:
     """Tests for encode -> decode round-trip integrity."""
