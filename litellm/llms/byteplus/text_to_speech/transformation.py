@@ -276,8 +276,8 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
             )
 
         audio_bytes_final: Final = bytes(audio_bytes)
-        content_type = _infer_audio_content_type(audio_bytes_final, self.DEFAULT_FORMAT)
-        mock_http_response = httpx.Response(
+        content_type: Final = _infer_audio_content_type(audio_bytes_final, self.DEFAULT_FORMAT)
+        mock_http_response: Final = httpx.Response(
             status_code=200,
             content=audio_bytes_final,
             headers={"content-type": content_type},

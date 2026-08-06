@@ -6824,21 +6824,18 @@ def embedding(
                 headers=headers,
             )
         elif custom_llm_provider == "byteplus":
-            byteplus_key = (
-                api_key
-                or litellm.api_key
-                or get_secret_str("BYTEPLUS_API_KEY")
-                or get_secret_str("ARK_API_KEY")
+            byteplus_key: Final = (
+                api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")
             )
             if byteplus_key is None:
                 raise ValueError(
                     "Missing API key for BytePlus. Set BYTEPLUS_API_KEY or ARK_API_KEY environment variable or pass api_key parameter."
                 )
             if extra_headers is not None and isinstance(extra_headers, dict):
-                headers = extra_headers
+                headers = extra_headers  # rebind-ok: same pattern as volcengine block above
             else:
-                headers = {}
-            response = base_llm_http_handler.embedding(
+                headers = {}  # rebind-ok: same pattern as volcengine block above
+            response = base_llm_http_handler.embedding(  # rebind-ok: same pattern as volcengine block above
                 model=model,
                 input=input,
                 timeout=timeout,
@@ -7933,8 +7930,7 @@ def speech(
     )
     response: HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent] | None = None
     if (
-        custom_llm_provider == "openai"
-        or custom_llm_provider in litellm.openai_compatible_providers
+        custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers
     ) and custom_llm_provider != "byteplus":
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(

@@ -627,9 +627,9 @@ def _get_openai_compatible_provider_info(
             or get_secret("ARK_API_BASE")
             or "https://ark.ap-southeast.bytepluses.com/api/v3"
         )
-        dynamic_api_key = (
+        dynamic_api_key = (  # rebind-ok: provider-specific fallback chain
             api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")
-        )  # rebind-ok: provider-specific fallback chain
+        )
     elif custom_llm_provider == "codestral":
         # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1
         api_base = api_base or get_secret("CODESTRAL_API_BASE") or "https://codestral.mistral.ai/v1"
