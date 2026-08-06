@@ -30,14 +30,18 @@ class BytePlusResponsesAPIConfig(VolcEngineResponsesAPIConfig):
         )
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
-        params: Final = (
-            GenericLiteLLMParams.model_validate(litellm_params)
-            if isinstance(litellm_params, dict)
-            else (litellm_params or GenericLiteLLMParams())
-        )
+        api_key_from_params: str | None = None
+        if litellm_params is not None:
+            if isinstance(litellm_params, dict):
+                api_key_from_params = litellm_params.get("api_key")
+            elif hasattr(litellm_params, "api_key"):
+                api_key_from_params = getattr(litellm_params, "api_key", None)
 
-        api_key = (
-            params.api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")
+        api_key: Final = (
+            api_key_from_params
+            or litellm.api_key
+            or get_secret_str("BYTEPLUS_API_KEY")
+            or get_secret_str("ARK_API_KEY")
         )
 
         if api_key is None:
