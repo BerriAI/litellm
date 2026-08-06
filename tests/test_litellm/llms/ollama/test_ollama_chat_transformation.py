@@ -527,6 +527,53 @@ class TestOllamaToolCalling:
             result.choices[0].finish_reason == "tool_calls"
         ), f"Expected 'tool_calls' when tool calls were streamed in an earlier chunk, got '{result.choices[0].finish_reason}'"
 
+    def test_finish_reason_length_survives_earlier_tool_call_chunk(self):
+        """Streaming: a truncated stream keeps finish_reason='length' after a tool call.
+
+        Ollama emits tool_calls in an earlier chunk and can then terminate with
+        done_reason='length' once num_predict is reached. The tool call arguments may be
+        cut off, so the terminal reason must survive rather than be upgraded to
+        'tool_calls'. Mirrors the guard in litellm's own streaming finalizer, which only
+        upgrades a 'stop' ending.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        tool_call_chunk = {
+            "model": "qwen3:14b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"location": "San Francisco"},
+                        }
+                    }
+                ],
+            },
+            "done": False,
+        }
+
+        done_chunk = {
+            "model": "qwen3:14b",
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "done_reason": "length",
+            "prompt_eval_count": 100,
+            "eval_count": 51,
+        }
+
+        iterator.chunk_parser(tool_call_chunk)
+        result = iterator.chunk_parser(done_chunk)
+
+        assert (
+            result.choices[0].finish_reason == "length"
+        ), f"Expected 'length' to survive truncation after a tool call chunk, got '{result.choices[0].finish_reason}'"
+
 
 class TestOllamaFinishReasonLength:
     """Tests for done_reason 'length' → finish_reason 'length' mapping.

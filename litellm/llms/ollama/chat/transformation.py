@@ -510,10 +510,12 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
 
             if chunk["done"] is True:
                 finish_reason = chunk.get("done_reason") or "stop"
-                # Override finish_reason when tool_calls were emitted in any chunk of the stream
+                # Override finish_reason when tool_calls were emitted in any chunk of the
+                # stream. Only upgrade a "stop" ending - other terminal reasons such as
+                # "length" mean the tool call may be truncated, so don't report it as complete.
                 # Fixes: https://github.com/BerriAI/litellm/issues/18922
                 #        https://github.com/BerriAI/litellm/issues/35663
-                if self.emitted_tool_calls:
+                if self.emitted_tool_calls and finish_reason == "stop":
                     finish_reason = "tool_calls"
                 choices = [
                     StreamingChoices(
