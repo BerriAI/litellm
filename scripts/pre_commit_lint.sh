@@ -17,6 +17,23 @@
 
 set -eu
 
+if [ -z "${PRE_COMMIT_LINT_INNER:-}" ]; then
+    log_file=$(git rev-parse --path-format=absolute --git-path pre_commit_lint.log)
+    if : > "$log_file" 2>/dev/null; then
+        echo "pre-commit: logging full output to $log_file"
+        PRE_COMMIT_LINT_INNER=1 "$0" "$@" 2>&1 | tee "$log_file"
+        pipe_status=("${PIPESTATUS[@]}")
+        if [ "${pipe_status[1]}" -eq 0 ]; then
+            echo "pre-commit: full log: $log_file"
+        else
+            echo "pre-commit: WARNING - writing $log_file failed; the log may be incomplete" >&2
+        fi
+        exit "${pipe_status[0]}"
+    fi
+    echo "pre-commit: WARNING - cannot write $log_file; output will not be saved" >&2
+    PRE_COMMIT_LINT_INNER=1 exec "$0" "$@"
+fi
+
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 

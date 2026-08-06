@@ -1,7 +1,7 @@
 import os
 import threading
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
     Protocol = _Protocol
     OpenTelemetryConfig = _OpenTelemetryConfig
-    Span = Union[_Span, Any]
+    Span = _Span | Any
     OpenTelemetry = _OpenTelemetry
     LITELLM_TRACER_NAME: str
 else:

@@ -345,7 +345,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client: OpenAI | AsyncOpenAI | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> OpenAI | AsyncOpenAI | None:
-        client_initialization_params: Final[Dict] = locals()
+        client_initialization_params: Final[dict] = locals()
         if client is None:
             if not isinstance(max_retries, int):
                 raise OpenAIError(
@@ -360,11 +360,16 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             if cached_client:
                 if isinstance(cached_client, OpenAI) or isinstance(cached_client, AsyncOpenAI):
                     return cached_client
+            http_client: Final[httpx.Client | httpx.AsyncClient | None] = (
+                OpenAIChatCompletion._get_async_http_client(shared_session=shared_session)
+                if is_async
+                else OpenAIChatCompletion._get_sync_http_client()
+            )
             if is_async:
                 _new_client: OpenAI | AsyncOpenAI = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=OpenAIChatCompletion._get_async_http_client(shared_session=shared_session),
+                    http_client=http_client,
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -373,7 +378,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 _new_client = OpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=OpenAIChatCompletion._get_sync_http_client(),
+                    http_client=http_client,
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -384,6 +389,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 openai_client=_new_client,
                 client_initialization_params=client_initialization_params,
                 client_type="openai",
+                litellm_owned_client=self.owns_wrapped_http_client(http_client),
             )
             return _new_client
 
@@ -402,7 +408,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         data: dict,
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
-    ) -> Tuple[dict, BaseModel]:
+    ) -> tuple[dict, BaseModel]:
         """
         Helper to:
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
@@ -439,7 +445,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         data: dict,
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
-    ) -> Tuple[dict, BaseModel]:
+    ) -> tuple[dict, BaseModel]:
         """
         Helper to:
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
@@ -474,11 +480,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         self,
         response: Any,
         model: str,
-        messages: list[Dict],
-        optional_params: Dict,
+        messages: list[dict],
+        optional_params: dict,
         logging_obj: LiteLLMLoggingObj,
         stream: bool,
-        litellm_params: Dict,
+        litellm_params: dict,
     ) -> Any | None:
         """
         Call agentic completion hooks for all custom loggers (OpenAI Chat Completions API).
@@ -1288,7 +1294,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
 
             ## embedding CALL
-            headers: Dict | None = None
+            headers: dict | None = None
             headers, sync_embedding_response = self.make_sync_openai_embedding_request(
                 openai_client=openai_client,
                 data=data,
@@ -2842,7 +2848,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: Dict | None,
+        metadata: dict | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,
@@ -2881,12 +2887,12 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: Dict | None,
+        metadata: dict | None,
         model: str | None,
         tools: Iterable[AssistantToolParam] | None,
         event_handler: AssistantEventHandler | None,
     ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
-        data: Final[Dict[str, Any]] = {
+        data: Final[dict[str, Any]] = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "additional_instructions": additional_instructions,
@@ -2906,12 +2912,12 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: Dict | None,
+        metadata: dict | None,
         model: str | None,
         tools: Iterable[AssistantToolParam] | None,
         event_handler: AssistantEventHandler | None,
     ) -> AssistantStreamManager[AssistantEventHandler]:
-        data: Final[Dict[str, Any]] = {
+        data: Final[dict[str, Any]] = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "additional_instructions": additional_instructions,
@@ -2933,7 +2939,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: Dict | None,
+        metadata: dict | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,
@@ -2955,7 +2961,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: Dict | None,
+        metadata: dict | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,
@@ -2978,7 +2984,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: Dict | None,
+        metadata: dict | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,

@@ -185,7 +185,8 @@ RUN mkdir -p /nonexistent /app/.cache /var/lib/litellm/assets /var/lib/litellm/u
     chmod -R a+rX /opt/prisma && \
     test -x /opt/prisma/binaries/node_modules/.bin/prisma && \
     test -f /opt/prisma/binaries/node_modules/prisma/build/index.js && \
-    ls /opt/prisma/binaries/node_modules/@prisma/engines/query-engine-* >/dev/null 2>&1
+    ls /opt/prisma/binaries/node_modules/@prisma/engines/query-engine-* >/dev/null 2>&1 && \
+    python -c "from prisma.client import BINARY_PATHS; paths = list(BINARY_PATHS.query_engine.values()); assert paths and all(p.startswith('/opt/prisma/') for p in paths), paths"
 
 USER 65534
 

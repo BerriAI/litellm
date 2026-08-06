@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
@@ -23,6 +24,8 @@ from litellm.types.llms.openai import (
 
 if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
+
+    from litellm.proxy._types import UserAPIKeyAuth
 else:
     MCPTool = Any
 
@@ -31,9 +34,9 @@ MAX_MCP_TOOL_CALL_ROUNDS: Final = 5
 
 async def create_mcp_list_tools_events(
     mcp_tools_with_litellm_proxy: list[ToolParam],
-    user_api_key_auth: Any,
+    user_api_key_auth: "UserAPIKeyAuth | None",
     base_item_id: str,
-    pre_processed_mcp_tools: list[Any],
+    pre_processed_mcp_tools: list[MCPTool],
 ) -> list[ResponsesAPIStreamingResponse]:
     """Create MCP discovery events using pre-processed tools from the parent"""
 
@@ -258,8 +261,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         base_iterator: Any,  # Can be None - will be created internally
         mcp_events: list[ResponsesAPIStreamingResponse],
         tool_server_map: dict[str, str],
-        mcp_tools_with_litellm_proxy: list[Any] | None = None,
-        user_api_key_auth: Any = None,
+        mcp_tools_with_litellm_proxy: Sequence[Mapping[str, object]] | None = None,
+        user_api_key_auth: "UserAPIKeyAuth | None" = None,
         original_request_params: dict[str, Any] | None = None,
     ):
         # MCP setup

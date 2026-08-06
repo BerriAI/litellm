@@ -85,6 +85,8 @@ function describeCause(decision: RoutingDecision): string {
       return "Adaptive bandit";
     case "default_fallback":
       return "Default model, no route matched";
+    case "default_model_fallback":
+      return "Default model, LLM classifier failed";
     default:
       return cause ?? "Unknown";
   }

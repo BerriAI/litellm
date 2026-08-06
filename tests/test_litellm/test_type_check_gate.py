@@ -295,16 +295,27 @@ def test_store_prunes_entries_for_other_branch_points(tmp_path):
     assert gate.load_cached_counts(new) == {"reportAny": 2}
 
 
+def _no_fetch(ref):
+    return None
+
+
+def _never(reason):
+    def callback(ref):
+        raise AssertionError(reason)
+
+    return callback
+
+
 def test_base_counts_cached_returns_the_hit_without_recomputing(tmp_path):
     path = gate.cache_path(tmp_path, "abc123", gate.environment_fingerprints())
     gate.store_counts(tmp_path, path, "abc123", {"reportAny": 7})
 
-    def explode(ref):
-        raise AssertionError("a cache hit must not re-run the base pass")
-
-    assert gate.base_counts_cached("abc123", cache_dir=tmp_path, compute=explode) == {
-        "reportAny": 7
-    }
+    assert gate.base_counts_cached(
+        "abc123",
+        cache_dir=tmp_path,
+        compute=_never("a cache hit must not re-run the base pass"),
+        fetch=_never("a cache hit must not reach for CI"),
+    ) == {"reportAny": 7}
 
 
 def test_base_counts_cached_computes_once_then_hits(tmp_path):
@@ -314,8 +325,12 @@ def test_base_counts_cached_computes_once_then_hits(tmp_path):
         calls.append(ref)
         return {"reportAny": 4}
 
-    first = gate.base_counts_cached("abc123", cache_dir=tmp_path, compute=fake)
-    second = gate.base_counts_cached("abc123", cache_dir=tmp_path, compute=fake)
+    first = gate.base_counts_cached(
+        "abc123", cache_dir=tmp_path, compute=fake, fetch=_no_fetch
+    )
+    second = gate.base_counts_cached(
+        "abc123", cache_dir=tmp_path, compute=fake, fetch=_no_fetch
+    )
     assert first == second == {"reportAny": 4}
     assert calls == ["abc123"]
 
@@ -327,10 +342,202 @@ def test_an_empty_base_pass_is_never_cached(tmp_path):
         calls.append(ref)
         return {}
 
-    assert gate.base_counts_cached("abc123", cache_dir=tmp_path, compute=crashed) == {}
-    assert gate.base_counts_cached("abc123", cache_dir=tmp_path, compute=crashed) == {}
+    assert (
+        gate.base_counts_cached(
+            "abc123", cache_dir=tmp_path, compute=crashed, fetch=_no_fetch
+        )
+        == {}
+    )
+    assert (
+        gate.base_counts_cached(
+            "abc123", cache_dir=tmp_path, compute=crashed, fetch=_no_fetch
+        )
+        == {}
+    )
     assert calls == ["abc123", "abc123"]
     assert list(tmp_path.iterdir()) == []
+
+
+def test_base_counts_cached_uses_fetched_counts_and_persists_them(tmp_path):
+    counts = gate.base_counts_cached(
+        "abc123",
+        cache_dir=tmp_path,
+        compute=_never("fetched counts must skip the local base pass"),
+        fetch=lambda ref: {"reportAny": 9},
+    )
+    assert counts == {"reportAny": 9}
+    path = gate.cache_path(tmp_path, "abc123", gate.environment_fingerprints())
+    assert gate.load_cached_counts(path) == {"reportAny": 9}
+    assert gate.base_counts_cached(
+        "abc123",
+        cache_dir=tmp_path,
+        compute=_never("the persisted fetch must satisfy later runs"),
+        fetch=_never("the persisted fetch must satisfy later runs"),
+    ) == {"reportAny": 9}
+
+
+def test_base_counts_cached_falls_back_to_compute_on_a_fetch_miss(tmp_path):
+    calls = []
+
+    def local(ref):
+        calls.append(ref)
+        return {"reportAny": 4}
+
+    assert gate.base_counts_cached(
+        "abc123", cache_dir=tmp_path, compute=local, fetch=_no_fetch
+    ) == {"reportAny": 4}
+    assert calls == ["abc123"]
+
+
+def test_base_counts_cached_treats_empty_fetched_counts_as_a_miss(tmp_path):
+    assert gate.base_counts_cached(
+        "abc123",
+        cache_dir=tmp_path,
+        compute=lambda ref: {"reportAny": 2},
+        fetch=lambda ref: {},
+    ) == {"reportAny": 2}
+    path = gate.cache_path(tmp_path, "abc123", gate.environment_fingerprints())
+    assert gate.load_cached_counts(path) == {"reportAny": 2}
+
+
+def test_origin_slug_parsing_supports_ssh_and_https_github_forms():
+    assert gate.parse_origin_slug("git@github.com:BerriAI/litellm.git") == "BerriAI/litellm"
+    assert gate.parse_origin_slug("git@github.com:BerriAI/litellm") == "BerriAI/litellm"
+    assert gate.parse_origin_slug("https://github.com/BerriAI/litellm.git") == "BerriAI/litellm"
+    assert gate.parse_origin_slug("https://github.com/BerriAI/litellm") == "BerriAI/litellm"
+    assert gate.parse_origin_slug("https://github.com/BerriAI/litellm/") == "BerriAI/litellm"
+
+
+def test_origin_slug_parsing_rejects_non_github_urls():
+    assert gate.parse_origin_slug("https://gitlab.com/BerriAI/litellm.git") is None
+    assert gate.parse_origin_slug("git@bitbucket.org:BerriAI/litellm.git") is None
+    assert gate.parse_origin_slug("not a url") is None
+    assert gate.parse_origin_slug("") is None
+
+
+def _artifact_zip(payload):
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("basedpyright-counts.json", json.dumps(payload))
+    return buffer.getvalue()
+
+
+def _gh_stub(listing, zip_bytes):
+    def gh_output(args):
+        if args[-1].startswith("repos/"):
+            return json.dumps(listing).encode()
+        return zip_bytes
+
+    return gh_output
+
+
+def _live_listing():
+    return {
+        "artifacts": [
+            {"expired": False, "archive_download_url": "https://api.github.com/x/zip"}
+        ]
+    }
+
+
+def test_fetcher_returns_counts_from_a_matching_artifact(capsys):
+    payload = {"base_point": "abc123", "counts": {"reportAny": 3}}
+    fetched = gate.fetch_ci_base_counts(
+        "abc123", gh_output=_gh_stub(_live_listing(), _artifact_zip(payload))
+    )
+    assert fetched == {"reportAny": 3}
+    assert "fetched from CI artifact" in capsys.readouterr().err
+
+
+def test_fetcher_rejects_an_artifact_for_a_different_base_point():
+    payload = {"base_point": "someothersha", "counts": {"reportAny": 3}}
+    assert (
+        gate.fetch_ci_base_counts(
+            "abc123", gh_output=_gh_stub(_live_listing(), _artifact_zip(payload))
+        )
+        is None
+    )
+
+
+def test_fetcher_rejects_empty_or_misshapen_artifact_counts():
+    for counts in ({}, {"reportAny": "three"}, {"reportAny": True}):
+        payload = {"base_point": "abc123", "counts": counts}
+        assert (
+            gate.fetch_ci_base_counts(
+                "abc123", gh_output=_gh_stub(_live_listing(), _artifact_zip(payload))
+            )
+            is None
+        )
+
+
+def test_fetcher_rejects_an_expired_artifact():
+    listing = {
+        "artifacts": [
+            {"expired": True, "archive_download_url": "https://api.github.com/x/zip"}
+        ]
+    }
+    payload = {"base_point": "abc123", "counts": {"reportAny": 3}}
+    assert (
+        gate.fetch_ci_base_counts(
+            "abc123", gh_output=_gh_stub(listing, _artifact_zip(payload))
+        )
+        is None
+    )
+
+
+def test_fetcher_misses_when_no_artifact_is_published():
+    assert (
+        gate.fetch_ci_base_counts(
+            "abc123", gh_output=_gh_stub({"artifacts": []}, b"")
+        )
+        is None
+    )
+
+
+def test_fetcher_misses_when_gh_is_unusable(capsys):
+    assert gate.fetch_ci_base_counts("abc123", gh_output=lambda args: None) is None
+    assert "computing base counts locally" in capsys.readouterr().err
+
+
+def test_fetcher_misses_on_a_corrupt_artifact_archive():
+    assert (
+        gate.fetch_ci_base_counts(
+            "abc123", gh_output=_gh_stub(_live_listing(), b"not a zip")
+        )
+        is None
+    )
+
+
+def test_emit_writes_the_artifact_json_named_by_the_head_key(tmp_path, capsys):
+    gate.cmd_emit_counts({"reportAny": 3, "aRule": 1}, tmp_path, "deadbeef")
+    key = gate.cache_key("deadbeef", gate.environment_fingerprints())
+    path = tmp_path / f"basedpyright-counts-{key}.json"
+    assert json.loads(path.read_text()) == {
+        "base_point": "deadbeef",
+        "counts": {"aRule": 1, "reportAny": 3},
+    }
+    summary = capsys.readouterr().out
+    assert "deadbeef" in summary
+    assert key in summary
+    assert "4" in summary
+
+
+def test_emit_refuses_to_publish_empty_counts(tmp_path):
+    import pytest
+
+    with pytest.raises(SystemExit):
+        gate.cmd_emit_counts({}, tmp_path, "deadbeef")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_emitted_file_round_trips_through_the_fetch_validation(tmp_path):
+    gate.cmd_emit_counts({"reportAny": 3}, tmp_path, "deadbeef")
+    key = gate.cache_key("deadbeef", gate.environment_fingerprints())
+    payload = json.loads((tmp_path / f"basedpyright-counts-{key}.json").read_text())
+    assert gate.counts_for_base(payload, "deadbeef") == {"reportAny": 3}
+    assert gate.counts_for_base(payload, "someothersha") is None
 
 
 def _git(cwd, *args):

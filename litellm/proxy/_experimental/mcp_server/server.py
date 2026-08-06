@@ -79,6 +79,8 @@ from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
 
 if TYPE_CHECKING:
+    from mcp.server.session import ServerSession as _McpServerSession
+
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
 
 # Short-lived in-memory cache for BYOK credentials.
@@ -144,10 +146,6 @@ try:
 
     # Robust auth lookup keyed by session_object.
     _session_obj_auth_storage: "weakref.WeakKeyDictionary[Any, MCPAuthenticatedUser]" = weakref.WeakKeyDictionary()
-
-    active_mcp_session_var: Final[contextvars.ContextVar[_McpServerSession | None]] = contextvars.ContextVar(
-        "active_mcp_session", default=None
-    )
 except ImportError as e:
     verbose_logger.debug("MCP module not found: %s", e)
     MCP_AVAILABLE = False
@@ -162,6 +160,10 @@ except ImportError as e:
     ResourceTemplate = None
     Server = None
     TextResourceContents = None
+
+active_mcp_session_var: Final[contextvars.ContextVar["_McpServerSession | None"]] = contextvars.ContextVar(
+    "active_mcp_session", default=None
+)
 
 
 # Global variables to track initialization
@@ -1611,7 +1613,7 @@ if MCP_AVAILABLE:
         ``mcp_server_auth_headers``). Either form skips the pre-emptive 401.
         """
         if oauth2_headers:
-            for k in oauth2_headers.keys():
+            for k in oauth2_headers:
                 if k.lower() == "authorization":
                     return True
         return _client_has_per_server_auth_header(server, mcp_server_auth_headers)

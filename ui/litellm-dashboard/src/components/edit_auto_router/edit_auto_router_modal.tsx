@@ -11,6 +11,7 @@ import {
   getSemanticConfigError,
   getTierLabelsError,
   hydrateTierLabels,
+  normalizeClassifierLlmConfig,
   serializeTierLabels,
 } from "../add_model/build_complexity_router_config";
 import { KeywordTierRule } from "../add_model/KeywordTierRules";
@@ -44,6 +45,7 @@ const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classifier_context_window_size",
   "classifier_context_per_turn_chars",
   "classifier_context_include_assistant_turns",
+  "classifier_fallback",
   "session_affinity",
   "adaptive",
   "adaptive_weights",
@@ -99,7 +101,11 @@ export const buildUpdatedComplexityRouterConfig = (
     tiers: value.tiers,
     ...(serializedTierLabels && { tier_labels: serializedTierLabels }),
     classifier_type: value.classifier_type,
-    ...(value.classifier_type === "llm" ? { classifier_llm_config: value.classifier_llm_config } : {}),
+    ...(value.classifier_type === "llm" && value.classifier_llm_config
+      ? { classifier_llm_config: normalizeClassifierLlmConfig(value.classifier_llm_config) }
+      : {}),
+    ...(value.classifier_type === "llm" &&
+      value.classifier_fallback !== undefined && { classifier_fallback: value.classifier_fallback }),
     ...(value.classifier_type === "llm" &&
       value.classifier_context_window_size !== undefined && {
         classifier_context_window_size: value.classifier_context_window_size,
@@ -242,6 +248,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           classifier_context_include_assistant_turns:
             typeof parsedConfig.classifier_context_include_assistant_turns === "boolean"
               ? parsedConfig.classifier_context_include_assistant_turns
+              : undefined,
+          classifier_fallback:
+            parsedConfig.classifier_fallback === "default_model" || parsedConfig.classifier_fallback === "heuristic"
+              ? parsedConfig.classifier_fallback
               : undefined,
           session_affinity:
             typeof parsedConfig.session_affinity === "boolean"
