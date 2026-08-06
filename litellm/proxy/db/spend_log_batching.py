@@ -18,11 +18,12 @@ byte budget tracks what the engine actually allocates.
 
 import json
 from collections.abc import Iterator, Mapping, Sequence
+from typing import Final
 
 SpendLogRow = Mapping[str, object]
 
-_STATEMENT_FRAMING_BYTES = len(json.dumps([]))
-_ROW_SEPARATOR_BYTES = len(json.dumps([0, 0])) - len(json.dumps([0])) - len(json.dumps(0))
+_STATEMENT_FRAMING_BYTES: Final = len(json.dumps([]))
+_ROW_SEPARATOR_BYTES: Final = len(json.dumps([0, 0])) - len(json.dumps([0])) - len(json.dumps(0))
 
 
 def _row_payload_bytes(row: SpendLogRow) -> int:
@@ -74,7 +75,7 @@ def spend_log_write_batches(
     dropped: the budget is a memory guardrail, not an admission filter, and
     losing spend data to protect RSS would be the worse failure.
     """
-    sizes = tuple(_row_payload_bytes(row) for row in rows)
+    sizes: Final = tuple(_row_payload_bytes(row) for row in rows)
     start = 0
     while start < len(rows):
         end = start + 1

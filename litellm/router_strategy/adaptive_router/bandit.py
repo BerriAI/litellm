@@ -12,6 +12,7 @@ Hot path: thompson_sample() — pure function, no I/O.
 
 import random
 from dataclasses import dataclass
+from typing import Final
 
 from litellm.router_strategy.adaptive_router.config import (
     BASE_TIER_WEIGHT,
@@ -33,7 +34,7 @@ class BanditCell:
 
     @property
     def mean(self) -> float:
-        total = self.alpha + self.beta
+        total: Final = self.alpha + self.beta
         return self.alpha / total if total > 0 else 0.5
 
     @property
@@ -50,13 +51,13 @@ def initial_cell(prefs: AdaptiveRouterPreferences, request_type: RequestType) ->
     Total mass = COLD_START_MASS so that ~10 real observations can move it noticeably.
     """
     if prefs.quality_tier not in BASE_TIER_WEIGHT:
-        valid = sorted(BASE_TIER_WEIGHT)
+        valid: Final = sorted(BASE_TIER_WEIGHT)
         raise ValueError(f"quality_tier={prefs.quality_tier} is not supported; valid tiers are {valid}")
-    base = BASE_TIER_WEIGHT[prefs.quality_tier]
-    bonus = STRENGTH_BONUS if request_type in prefs.strengths else 0.0
-    mean = min(0.95, base + bonus)
-    alpha = mean * COLD_START_MASS
-    beta = (1.0 - mean) * COLD_START_MASS
+    base: Final = BASE_TIER_WEIGHT[prefs.quality_tier]
+    bonus: Final = STRENGTH_BONUS if request_type in prefs.strengths else 0.0
+    mean: Final = min(0.95, base + bonus)
+    alpha: Final = mean * COLD_START_MASS
+    beta: Final = (1.0 - mean) * COLD_START_MASS
     return BanditCell(alpha=alpha, beta=beta)
 
 
@@ -67,8 +68,8 @@ def apply_delta(cell: BanditCell, delta_alpha: float, delta_beta: float) -> Band
     SAMPLE_CAP is a HARD cap on (alpha + beta). When the cap would be exceeded,
     we drop the update. (D5: hard cap, no rescaling — keep v0 simple.)
     """
-    new_alpha = cell.alpha + delta_alpha
-    new_beta = cell.beta + delta_beta
+    new_alpha: Final = cell.alpha + delta_alpha
+    new_beta: Final = cell.beta + delta_beta
     if new_alpha + new_beta > SAMPLE_CAP:
         return cell
     return BanditCell(alpha=new_alpha, beta=new_beta)
@@ -76,7 +77,7 @@ def apply_delta(cell: BanditCell, delta_alpha: float, delta_beta: float) -> Band
 
 def thompson_sample(cell: BanditCell, rng: random.Random | None = None) -> float:
     """Draw a sample from Beta(alpha, beta). Returns a quality estimate in [0, 1]."""
-    r = rng if rng is not None else random
+    r: Final = rng if rng is not None else random
     return r.betavariate(cell.alpha, cell.beta)
 
 
@@ -104,7 +105,7 @@ def score(
     Multi-objective score. V0 is a weighted linear sum of (quality, normalized_cost).
     Higher is better. Both inputs are in [0, 1].
     """
-    cost_score = normalized_cost(model_cost, all_costs)
+    cost_score: Final = normalized_cost(model_cost, all_costs)
     return quality_weight * quality_sample + cost_weight * cost_score
 
 
@@ -123,7 +124,7 @@ def pick_best(
     """
     if not cells:
         raise ValueError("pick_best called with no models")
-    all_costs = list(model_costs.values())
+    all_costs: Final = list(model_costs.values())
     best_model: str | None = None
     best_score = float("-inf")
     for model, cell in cells.items():

@@ -11,7 +11,7 @@ import json
 import os
 import re
 import traceback
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import httpx
 
@@ -38,11 +38,11 @@ def load_compatible_callbacks() -> dict:
         Dict: Dictionary of compatible callbacks configuration
     """
     try:
-        json_path = os.path.join(os.path.dirname(__file__), "generic_api_compatible_callbacks.json")
+        json_path: Final = os.path.join(os.path.dirname(__file__), "generic_api_compatible_callbacks.json")
         with open(json_path, "r") as f:
             return json.load(f)
     except Exception as e:
-        verbose_logger.warning(f"Error loading generic_api_compatible_callbacks.json: {e!s}")
+        verbose_logger.warning("Error loading generic_api_compatible_callbacks.json: %s", e)
         return {}
 
 
@@ -56,7 +56,7 @@ def is_callback_compatible(callback_name: str) -> bool:
     Returns:
         bool: True if callback_name exists in the compatible callbacks, False otherwise
     """
-    compatible_callbacks = load_compatible_callbacks()
+    compatible_callbacks: Final = load_compatible_callbacks()
     return callback_name in compatible_callbacks
 
 
@@ -70,7 +70,7 @@ def get_callback_config(callback_name: str) -> dict | None:
     Returns:
         Optional[Dict]: Configuration dict for the callback, or None if not found
     """
-    compatible_callbacks = load_compatible_callbacks()
+    compatible_callbacks: Final = load_compatible_callbacks()
     return compatible_callbacks.get(callback_name)
 
 
@@ -84,10 +84,10 @@ def substitute_env_variables(value: str) -> str:
     Returns:
         str: String with environment variables substituted
     """
-    pattern = r"\{\{environment_variables\.([A-Z_]+)\}\}"
+    pattern: Final = r"\{\{environment_variables\.([A-Z_]+)\}\}"
 
     def replace_env_var(match):
-        env_var_name = match.group(1)
+        env_var_name: Final = match.group(1)
         return os.getenv(env_var_name, "")
 
     return re.sub(pattern, replace_env_var, value)
@@ -124,8 +124,8 @@ class GenericAPILogger(CustomBatchLogger):
         #########################################################
         if callback_name:
             if is_callback_compatible(callback_name):
-                verbose_logger.debug(f"Loading configuration for callback: {callback_name}")
-                callback_config = get_callback_config(callback_name)
+                verbose_logger.debug("Loading configuration for callback: %s", callback_name)
+                callback_config: Final = get_callback_config(callback_name)
 
                 # Use config from JSON if not explicitly provided
                 if callback_config:
@@ -145,7 +145,7 @@ class GenericAPILogger(CustomBatchLogger):
                         log_format = callback_config["log_format"]
             else:
                 verbose_logger.warning(
-                    f"callback_name '{callback_name}' not found in generic_api_compatible_callbacks.json"
+                    "callback_name '%s' not found in generic_api_compatible_callbacks.json", callback_name
                 )
 
         #########################################################
@@ -163,7 +163,7 @@ class GenericAPILogger(CustomBatchLogger):
         self.event_types: list[API_EVENT_TYPES] | None = event_types
         self.callback_name: str | None = callback_name
         self.max_retries = max(0, int(max_retries or 0))
-        retry_delay_value = 0.0 if retry_delay is None else retry_delay
+        retry_delay_value: Final = 0.0 if retry_delay is None else retry_delay
         self.retry_delay = max(0.0, float(retry_delay_value))
         self.timeout = timeout
 
@@ -177,7 +177,12 @@ class GenericAPILogger(CustomBatchLogger):
         self.log_format: LOG_FORMAT_TYPES = log_format or "json_array"
 
         verbose_logger.debug(
-            f"in init GenericAPILogger, callback_name: {self.callback_name}, endpoint {self.endpoint}, headers {self.headers}, event_types: {self.event_types}, log_format: {self.log_format}"
+            "in init GenericAPILogger, callback_name: %s, endpoint %s, headers %s, event_types: %s, log_format: %s",
+            self.callback_name,
+            self.endpoint,
+            self.headers,
+            self.event_types,
+            self.log_format,
         )
 
         #########################################################
@@ -199,22 +204,22 @@ class GenericAPILogger(CustomBatchLogger):
             headers: Optional[dict] = None
         """
         # Process headers from different sources
-        headers_dict = {
+        headers_dict: Final = {
             "Content-Type": "application/json",
         }
 
         # 1. First check for headers from env var
-        env_headers = os.getenv("GENERIC_LOGGER_HEADERS")
+        env_headers: Final = os.getenv("GENERIC_LOGGER_HEADERS")
         if env_headers:
             try:
                 # Parse headers in format "key1=value1,key2=value2" or "key1=value1"
-                header_items = env_headers.split(",")
+                header_items: Final = env_headers.split(",")
                 for item in header_items:
                     if "=" in item:
                         key, value = item.split("=", 1)
                         headers_dict[key.strip()] = value.strip()
             except Exception as e:
-                verbose_logger.warning(f"Error parsing headers from environment variables: {e!s}")
+                verbose_logger.warning("Error parsing headers from environment variables: %s", e)
 
         # 2. Update with litellm generic headers if available
         if litellm.generic_logger_headers:
@@ -239,11 +244,11 @@ class GenericAPILogger(CustomBatchLogger):
         if self.retry_delay <= 0:
             return
 
-        delay = self.retry_delay * (2**attempt)
+        delay: Final = self.retry_delay * (2**attempt)
         await asyncio.sleep(delay)
 
     async def _post_with_retries(self, data: str) -> httpx.Response:
-        post_kwargs: dict[str, Any] = {
+        post_kwargs: Final[dict[str, Any]] = {
             "url": self.endpoint,
             "headers": self.headers,
             "data": data,
@@ -251,7 +256,7 @@ class GenericAPILogger(CustomBatchLogger):
         if self.timeout is not None:
             post_kwargs["timeout"] = self.timeout
 
-        total_attempts = self.max_retries + 1
+        total_attempts: Final = self.max_retries + 1
         for attempt in range(total_attempts):
             try:
                 return await self.async_httpx_client.post(**post_kwargs)
@@ -289,11 +294,11 @@ class GenericAPILogger(CustomBatchLogger):
 
         try:
             verbose_logger.debug("Generic API Logger - Enters logging function for model %s", kwargs)
-            standard_logging_payload = kwargs.get("standard_logging_object", None)
+            standard_logging_payload: Final = kwargs.get("standard_logging_object", None)
 
             # Backwards compatibility with old logging payload
             if litellm.generic_api_use_v1 is True:
-                payload = self._get_v1_logging_payload(
+                payload: Final = self._get_v1_logging_payload(
                     kwargs=kwargs,
                     response_obj=response_obj,
                     start_time=start_time,
@@ -308,7 +313,7 @@ class GenericAPILogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"Generic API Logger Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception("Generic API Logger Error - %s\n%s", e, traceback.format_exc())
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -322,10 +327,10 @@ class GenericAPILogger(CustomBatchLogger):
 
         try:
             verbose_logger.debug("Generic API Logger - Enters logging function for model %s", kwargs)
-            standard_logging_payload = kwargs.get("standard_logging_object", None)
+            standard_logging_payload: Final = kwargs.get("standard_logging_object", None)
 
             if litellm.generic_api_use_v1 is True:
-                payload = self._get_v1_logging_payload(
+                payload: Final = self._get_v1_logging_payload(
                     kwargs=kwargs,
                     response_obj=response_obj,
                     start_time=start_time,
@@ -339,7 +344,7 @@ class GenericAPILogger(CustomBatchLogger):
                 await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"Generic API Logger Error - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception("Generic API Logger Error - %s\n%s", e, traceback.format_exc())
 
     async def async_send_batch(self):
         """
@@ -355,27 +360,29 @@ class GenericAPILogger(CustomBatchLogger):
                 return
 
             verbose_logger.debug(
-                f"Generic API Logger - about to flush {len(self.log_queue)} events in '{self.log_format}' format"
+                "Generic API Logger - about to flush %s events in '%s' format", len(self.log_queue), self.log_format
             )
 
             if self.log_format == "single":
                 # Send each log as individual HTTP request in parallel
-                tasks = []
+                tasks: Final = []
                 for log_entry in self.log_queue:
                     task = self._post_with_retries(data=safe_dumps(log_entry))
                     tasks.append(task)
 
                 # Execute all requests in parallel
-                responses = await asyncio.gather(*tasks, return_exceptions=True)
+                responses: Final = await asyncio.gather(*tasks, return_exceptions=True)
 
                 # Log results
                 for idx, result in enumerate(responses):
                     if isinstance(result, Exception):
-                        verbose_logger.exception(f"Generic API Logger - Error sending log {idx}: {result}")
+                        verbose_logger.exception("Generic API Logger - Error sending log %s: %s", idx, result)
                     else:
                         # result is a Response object
                         verbose_logger.debug(
-                            f"Generic API Logger - sent log {idx}, status: {result.status_code}"  # type: ignore
+                            "Generic API Logger - sent log %s, status: %s",
+                            idx,
+                            result.status_code,
                         )
             else:
                 # Format the payload based on log_format
@@ -387,15 +394,17 @@ class GenericAPILogger(CustomBatchLogger):
                     raise ValueError(f"Unknown log_format: {self.log_format}")
 
                 # Make POST request
-                response = await self._post_with_retries(data=data)
+                response: Final = await self._post_with_retries(data=data)
 
                 verbose_logger.debug(
-                    f"Generic API Logger - sent batch to {self.endpoint}, "
-                    f"status: {response.status_code}, format: {self.log_format}"
+                    "Generic API Logger - sent batch to %s, status: %s, format: %s",
+                    self.endpoint,
+                    response.status_code,
+                    self.log_format,
                 )
 
         except Exception as e:
-            verbose_logger.exception(f"Generic API Logger Error sending batch - {e!s}\n{traceback.format_exc()}")
+            verbose_logger.exception("Generic API Logger Error sending batch - %s\n%s", e, traceback.format_exc())
         finally:
             self.log_queue.clear()
 
@@ -405,22 +414,22 @@ class GenericAPILogger(CustomBatchLogger):
 
         Returns a dict of the payload to send to the Generic API Endpoint
         """
-        verbose_logger.debug(f"GenericAPILogger Logging - Enters logging function for model {kwargs}")
+        verbose_logger.debug("GenericAPILogger Logging - Enters logging function for model %s", kwargs)
 
         # construct payload to send custom logger
         # follows the same params as langfuse.py
-        litellm_params = kwargs.get("litellm_params", {})
-        metadata = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
-        messages = kwargs.get("messages")
-        cost = kwargs.get("response_cost", 0.0)
-        optional_params = kwargs.get("optional_params", {})
-        call_type = kwargs.get("call_type", "litellm.completion")
-        cache_hit = kwargs.get("cache_hit", False)
-        usage = response_obj["usage"]
-        id = response_obj.get("id", str(uuid.uuid4()))
+        litellm_params: Final = kwargs.get("litellm_params", {})
+        metadata: Final = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
+        messages: Final = kwargs.get("messages")
+        cost: Final = kwargs.get("response_cost", 0.0)
+        optional_params: Final = kwargs.get("optional_params", {})
+        call_type: Final = kwargs.get("call_type", "litellm.completion")
+        cache_hit: Final = kwargs.get("cache_hit", False)
+        usage: Final = response_obj["usage"]
+        id: Final = response_obj.get("id", str(uuid.uuid4()))
 
         # Build the initial payload
-        payload = {
+        payload: Final = {
             "id": id,
             "call_type": call_type,
             "cache_hit": cache_hit,
