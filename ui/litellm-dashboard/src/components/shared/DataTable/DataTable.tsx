@@ -18,6 +18,7 @@ import {
   type OnChangeFn,
   type Row,
   type RowData,
+  type RowSelectionState,
   type Table,
   type TableOptions,
   useReactTable,
@@ -47,6 +48,22 @@ const INTERACTIVE_SELECTOR = "button, a, input, select, textarea, [role=checkbox
 
 const noop = () => {};
 
+/**
+ * Height-filling mode. The table still sizes to its rows; the parent's height is only a ceiling, so
+ * a short table keeps its footer under the last row and a long one scrolls its rows instead of the
+ * page. `table-container` is the Table primitive's own overflow-x wrapper; left as a scroll box it
+ * captures the sticky header and the header scrolls away with the rows. And rows pass under that
+ * header, which the semi-transparent header row tint alone would not hide.
+ */
+const FILL_CLASSES = {
+  outer: "flex max-h-full min-h-0 flex-col",
+  frame: "flex min-h-0 flex-col",
+  body: "min-h-0 [&_[data-slot=table-container]]:overflow-visible",
+  header: "bg-background",
+} as const;
+
+const NO_FILL_CLASSES = { outer: "", frame: "", body: "", header: "" } as const;
+
 export class DataTableConfigError extends Error {
   constructor(messages: readonly string[]) {
     super(`DataTable misconfiguration:\n- ${messages.join("\n- ")}`);
@@ -70,6 +87,8 @@ export function validateDataTableConfig<TData extends RowData, TValue>(
   const bothSortingSources = props.defaultSorting !== undefined && props.sorting !== undefined;
   const bothFilterSources = props.defaultColumnFilters !== undefined && props.columnFilters !== undefined;
 
+  const controlledSelectionIncomplete = props.rowSelection !== undefined && props.onRowSelectionChange === undefined;
+
   return [
     serverSortingIncomplete ? "sortingMode='server' requires both `sorting` and `onSortingChange`." : null,
     serverPaginationIncomplete
@@ -79,6 +98,9 @@ export function validateDataTableConfig<TData extends RowData, TValue>(
     bothSortingSources ? "Provide either `defaultSorting` (uncontrolled) or `sorting` (controlled), not both." : null,
     bothFilterSources
       ? "Provide either `defaultColumnFilters` (uncontrolled) or `columnFilters` (controlled), not both."
+      : null,
+    controlledSelectionIncomplete
+      ? "Controlled `rowSelection` requires `onRowSelectionChange`; without it selection changes are dropped."
       : null,
   ].filter((message): message is string => message !== null);
 }
@@ -448,6 +470,9 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
     renderSubComponent,
     expanded,
     onExpandedChange,
+    enableRowSelection,
+    rowSelection,
+    onRowSelectionChange,
   } = props;
 
   const sortingState = useControllable(sorting, onSortingChange, defaultSorting ?? []);
@@ -462,6 +487,7 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
   );
   const globalFilterState = useControllable<string>(globalFilter, onGlobalFilterChange, "");
   const expandedState = useControllable<ExpandedState>(expanded, onExpandedChange, {});
+  const rowSelectionState = useControllable<RowSelectionState>(rowSelection, onRowSelectionChange, {});
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(defaultColumnVisibility ?? {});
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const columnPinning = React.useMemo(() => derivePinning(columns), [columns]);
@@ -476,6 +502,7 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
       columnFilters: filterState.value,
       globalFilter: globalFilterState.value,
       expanded: expandedState.value,
+      rowSelection: rowSelectionState.value,
       columnVisibility,
       columnSizing,
     },
@@ -491,11 +518,13 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
     onColumnFiltersChange: filterState.onChange,
     onGlobalFilterChange: globalFilterState.onChange,
     onExpandedChange: expandedState.onChange,
+    onRowSelectionChange: rowSelectionState.onChange,
     onColumnVisibilityChange: setColumnVisibility,
     onColumnSizingChange: setColumnSizing,
     getCoreRowModel: getCoreRowModel(),
     ...buildRowModels(sortingMode, paginationMode, filterMode, expansionGuard),
     ...(getRowId !== undefined ? { getRowId } : {}),
+    ...(enableRowSelection !== undefined ? { enableRowSelection } : {}),
     ...(paginationMode === "server" && rowCount !== undefined ? { rowCount } : {}),
   };
 
@@ -525,6 +554,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
     rowClassName,
     renderSubComponent,
     maxBodyHeight,
+    fillHeight = false,
     size = "default",
     toolbar,
     paginationSlot,
@@ -535,7 +565,8 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
 
   const rows = table.getRowModel().rows;
   const visibleColumnCount = table.getVisibleLeafColumns().length;
-  const stickyHeader = maxBodyHeight !== undefined;
+  const stickyHeader = maxBodyHeight !== undefined || fillHeight;
+  const fill = fillHeight ? FILL_CLASSES : NO_FILL_CLASSES;
   const tableStyle = enableColumnResizing ? { width: table.getTotalSize(), minWidth: "100%" } : undefined;
 
   const renderPagination = (): React.ReactNode => {
@@ -591,15 +622,15 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
   const paginationNode = renderPagination();
 
   return (
-    <div className="w-full">
-      <div className="overflow-hidden rounded-lg border border-border">
-        {toolbar !== undefined && <div className="border-b border-border px-4 py-3">{toolbar(table)}</div>}
+    <div className={cn("w-full", fill.outer)}>
+      <div className={cn("overflow-hidden rounded-lg border border-border", fill.frame)}>
+        {toolbar !== undefined && <div className="shrink-0 border-b border-border px-4 py-3">{toolbar(table)}</div>}
         <div
-          className={stickyHeader ? "overflow-auto" : "overflow-x-auto"}
-          style={stickyHeader ? { maxHeight: maxBodyHeight } : undefined}
+          className={cn(stickyHeader ? "overflow-auto" : "overflow-x-auto", fill.body)}
+          style={maxBodyHeight !== undefined ? { maxHeight: maxBodyHeight } : undefined}
         >
           <TableRoot className={enableColumnResizing ? "table-fixed" : ""} style={tableStyle}>
-            <TableHeader className={stickyHeader ? "sticky top-0 z-20" : ""}>
+            <TableHeader className={cn(stickyHeader ? "sticky top-0 z-20" : "", fill.header)}>
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id} className="bg-muted/50 hover:bg-muted/50">
                   {headerGroup.headers.map((header) => (
@@ -618,7 +649,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
             {footer !== undefined && <TableFooter>{footer(table)}</TableFooter>}
           </TableRoot>
         </div>
-        {paginationNode !== null && <div className="border-t border-border">{paginationNode}</div>}
+        {paginationNode !== null && <div className="shrink-0 border-t border-border">{paginationNode}</div>}
       </div>
     </div>
   );

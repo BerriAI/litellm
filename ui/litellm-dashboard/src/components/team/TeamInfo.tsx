@@ -14,9 +14,10 @@ import {
   teamMemberUpdateCall,
   teamUpdateCall,
 } from "@/components/networking";
-import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
+import { useGuardrails, GuardrailListItem } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
+import type { ObjectPermission } from "@/components/object_permission_types";
 import { isProxyAdminRole } from "@/utils/roles";
 import {
   EditOutlined,
@@ -34,6 +35,11 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import MetadataKeyValueFields, {
+  metadataObjectToPairs,
+  metadataPairsToObject,
+} from "../common_components/MetadataKeyValueFields";
+import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -46,7 +52,6 @@ import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
 import NotificationsManager from "../molecules/notifications_manager";
-import { fetchMCPAccessGroups } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
@@ -64,6 +69,18 @@ import {
 } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
+
+const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
+  "logging",
+  "secret_manager_settings",
+  "soft_budget_alerting_emails",
+  "model_tpm_limit",
+  "model_rpm_limit",
+  "allowed_passthrough_routes",
+  "guardrails",
+  "opted_out_global_guardrails",
+  "disable_global_guardrails",
+]);
 
 export interface TeamMembership {
   user_id: string;
@@ -118,17 +135,7 @@ export interface TeamData {
     router_settings?: Record<string, any>;
     guardrails?: string[];
     policies?: string[];
-    object_permission?: {
-      object_permission_id: string;
-      mcp_servers: string[];
-      mcp_access_groups?: string[];
-      mcp_tool_permissions?: Record<string, string[]>;
-      mcp_toolsets?: string[];
-      vector_stores: string[];
-      agents?: string[];
-      agent_access_groups?: string[];
-      search_tools?: string[];
-    };
+    object_permission?: ObjectPermission | null;
     team_member_budget_table: {
       max_budget: number;
       budget_duration: string;
@@ -153,29 +160,6 @@ export interface TeamInfoProps {
   premiumUser?: boolean;
 }
 
-const getOrganizationModels = (organization: Organization | null, userModels: string[]) => {
-  let tempModelsToPick = [];
-
-  if (organization) {
-    // Check if organization has "all-proxy-models" in its models array
-    if (organization.models.includes("all-proxy-models")) {
-      // Treat as all-proxy-models (use userModels)
-      tempModelsToPick = userModels;
-    } else if (organization.models.length > 0) {
-      // Organization has specific models
-      tempModelsToPick = organization.models;
-    } else {
-      // Empty array [] is treated as all-proxy-models
-      tempModelsToPick = userModels;
-    }
-  } else {
-    // No organization, show all available models
-    tempModelsToPick = userModels;
-  }
-
-  return unfurlWildcardModelsInList(tempModelsToPick, userModels);
-};
-
 const TeamInfoView: React.FC<TeamInfoProps> = ({
   teamId,
   onClose,
@@ -195,8 +179,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
-  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
@@ -212,6 +194,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, userId } = useAuthorized();
   const { data: userOrganizations = [] } = useOrganizations();
+  const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
   const queryClient = useQueryClient();
 
   // Check if user is org admin for this team's organization
@@ -234,7 +217,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     return unfurlWildcardModelsInList(selected, userModels);
   }, [selectedModelsInForm, teamData, userModels]);
 
-  const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam;
+  const isTeamAdminFromTeamData = useMemo(
+    () =>
+      teamData?.team_info?.members_with_roles?.some(
+        (member) => member.user_id != null && member.user_id === userId && member.role === "admin",
+      ) ?? false,
+    [teamData, userId],
+  );
+
+  const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam || isTeamAdminFromTeamData;
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
 
@@ -275,23 +266,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
     fetchOrganization();
   }, [accessToken, teamData?.team_info?.organization_id]);
-
-  // Compute modelsToPick based on organization and userModels
-  const modelsToPick = useMemo(() => {
-    return getOrganizationModels(organization, userModels);
-  }, [organization, userModels]);
-
-  const fetchMcpAccessGroups = async () => {
-    if (!accessToken) return;
-    if (mcpAccessGroupsLoaded) return;
-    try {
-      const groups = await fetchMCPAccessGroups(accessToken);
-      setMcpAccessGroups(groups);
-      setMcpAccessGroupsLoaded(true);
-    } catch (error) {
-      console.error("Failed to fetch MCP access groups:", error);
-    }
-  };
 
   useEffect(() => {
     const fetchPolicies = async () => {
@@ -462,16 +436,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       if (!accessToken) return;
       setIsTeamSaving(true);
 
-      let parsedMetadata = {};
-      try {
-        const rawMetadata = values.metadata ? JSON.parse(values.metadata) : {};
-        // Exclude soft_budget_alerting_emails from parsed metadata since it's handled separately
-        const { soft_budget_alerting_emails, ...rest } = rawMetadata;
-        parsedMetadata = rest;
-      } catch (e) {
-        NotificationsManager.fromBackend("Invalid JSON in metadata field");
-        return;
-      }
+      const parsedMetadata = metadataPairsToObject(values.metadata);
 
       let secretManagerSettings: Record<string, any> | undefined;
       if (typeof values.secret_manager_settings === "string") {
@@ -645,7 +610,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
-      const response = await teamUpdateCall(accessToken, updateData);
+      await teamUpdateCall(accessToken, updateData);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
 
       NotificationsManager.success("Team settings updated successfully");
@@ -678,6 +643,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const effectiveGuardrails: string[] = initialKillSwitchOn
     ? nonGlobalOptIns
     : [...Array.from(globalGuardrailNames).filter((n) => !optedOutGlobals.has(n)), ...nonGlobalOptIns];
+
+  const allGuardrails: GuardrailListItem[] = guardrailsData?.guardrails ?? [];
+  const globalGuardrails = allGuardrails.filter((g) => g.litellm_params?.default_on);
+  const otherGuardrails = allGuardrails.filter((g) => !g.litellm_params?.default_on);
+
+  const renderGuardrailOption = (g: GuardrailListItem, disabled: boolean) => (
+    <Select.Option key={g.guardrail_name} value={g.guardrail_name} label={g.guardrail_name} disabled={disabled}>
+      {g.guardrail_name}
+    </Select.Option>
+  );
 
   const preventTagMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -971,21 +946,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       soft_budget_alerting_emails: Array.isArray(info.metadata?.soft_budget_alerting_emails)
                         ? info.metadata.soft_budget_alerting_emails.join(", ")
                         : "",
-                      metadata: info.metadata
-                        ? JSON.stringify(
-                            (({
-                              logging,
-                              secret_manager_settings,
-                              soft_budget_alerting_emails,
-                              model_tpm_limit,
-                              model_rpm_limit,
-                              allowed_passthrough_routes,
-                              ...rest
-                            }) => rest)(info.metadata),
-                            null,
-                            2,
-                          )
-                        : "",
+                      metadata: metadataObjectToPairs(info.metadata, UI_MANAGED_METADATA_KEYS),
                       logging_settings: info.metadata?.logging || [],
                       secret_manager_settings: info.metadata?.secret_manager_settings
                         ? JSON.stringify(info.metadata.secret_manager_settings, null, 2)
@@ -1162,6 +1123,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Form.Item>
 
                     <Form.Item
+                      label="Metadata"
+                      help='Values are saved as text. Enter JSON for typed values, e.g. 3, true, or {"region": "us"}.'
+                    >
+                      <MetadataKeyValueFields
+                        form={form}
+                        schemaFields={teamMetadataSchemaFields}
+                        schemaLoading={isTeamMetadataSchemaLoading}
+                      />
+                    </Form.Item>
+
+                    <Form.Item
                       label="Model-Specific Rate Limits"
                       tooltip="Set per-model TPM/RPM limits that apply across the whole team."
                     >
@@ -1264,36 +1236,28 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         optionLabelProp="label"
                         tagRender={renderGuardrailTag}
                       >
-                        <Select.OptGroup
-                          label={
-                            <>
-                              <GlobalOutlined style={{ marginInlineEnd: 4 }} />
-                              Global
-                            </>
-                          }
-                        >
-                          {(guardrailsData?.guardrails ?? [])
-                            .filter((g) => g.litellm_params?.default_on)
-                            .map((g) => (
-                              <Select.Option
-                                key={g.guardrail_name}
-                                value={g.guardrail_name}
-                                label={g.guardrail_name}
-                                disabled={killSwitchOn}
-                              >
-                                {g.guardrail_name}
-                              </Select.Option>
-                            ))}
-                        </Select.OptGroup>
-                        <Select.OptGroup label="Other">
-                          {(guardrailsData?.guardrails ?? [])
-                            .filter((g) => !g.litellm_params?.default_on)
-                            .map((g) => (
-                              <Select.Option key={g.guardrail_name} value={g.guardrail_name} label={g.guardrail_name}>
-                                {g.guardrail_name}
-                              </Select.Option>
-                            ))}
-                        </Select.OptGroup>
+                        {globalGuardrails.length > 0 && otherGuardrails.length > 0 ? (
+                          <>
+                            <Select.OptGroup
+                              label={
+                                <>
+                                  <GlobalOutlined style={{ marginInlineEnd: 4 }} />
+                                  Global
+                                </>
+                              }
+                            >
+                              {globalGuardrails.map((g) => renderGuardrailOption(g, Boolean(killSwitchOn)))}
+                            </Select.OptGroup>
+                            <Select.OptGroup label="Other">
+                              {otherGuardrails.map((g) => renderGuardrailOption(g, false))}
+                            </Select.OptGroup>
+                          </>
+                        ) : (
+                          [
+                            ...globalGuardrails.map((g) => renderGuardrailOption(g, Boolean(killSwitchOn))),
+                            ...otherGuardrails.map((g) => renderGuardrailOption(g, false)),
+                          ]
+                        )}
                       </Select>
                     </Form.Item>
 
@@ -1360,25 +1324,22 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     </Form.Item>
 
-                    <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
-                      <Tooltip
-                        title={
-                          !premiumUser
-                            ? "Premium feature - Upgrade to set allowed pass through routes"
-                            : !is_proxy_admin
-                              ? "Only proxy admins can set allowed pass through routes"
-                              : ""
-                        }
-                        placement="top"
-                      >
-                        <PassThroughRoutesSelector
-                          onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
-                          value={form.getFieldValue("allowed_passthrough_routes")}
-                          accessToken={accessToken || ""}
-                          placeholder="Select pass through routes"
-                          disabled={!premiumUser || !is_proxy_admin}
-                        />
-                      </Tooltip>
+                    <Form.Item
+                      label="Allowed Pass Through Routes"
+                      name="allowed_passthrough_routes"
+                      tooltip={
+                        !premiumUser
+                          ? "Premium feature - Upgrade to set allowed pass through routes"
+                          : !is_proxy_admin
+                            ? "Only proxy admins can set allowed pass through routes"
+                            : undefined
+                      }
+                    >
+                      <PassThroughRoutesSelector
+                        accessToken={accessToken || ""}
+                        placeholder="Select pass through routes"
+                        disabled={!premiumUser || !is_proxy_admin}
+                      />
                     </Form.Item>
 
                     <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
@@ -1493,10 +1454,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
                         disabled={!premiumUser}
                       />
-                    </Form.Item>
-
-                    <Form.Item label="Metadata" name="metadata">
-                      <Input.TextArea rows={10} />
                     </Form.Item>
 
                     <div className="sticky z-10 bg-white p-4 pr-0 border-t border-gray-200 -bottom-6 -inset-x-6">

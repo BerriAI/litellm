@@ -1,7 +1,7 @@
 """Client for the logging e2e suite: team/key/org-scoped Langfuse OTEL callbacks,
 chat (including tools), Prometheus scrape, and Langfuse observation read-back.
 
-Holds the shared Gateway so the ``resources`` fixture cleans up keys, teams,
+Holds the shared ProxyClient so the ``resources`` fixture cleans up keys, teams,
 users, orgs, and models it creates. External Langfuse reads go through
 ``e2e_http`` (the only module allowed to call ``requests.*``).
 
@@ -24,7 +24,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT
-from e2e_gateway import Gateway, build_gateway
+from proxy_client import ProxyClient
 from e2e_http import (
     URL,
     AuthHeaders,
@@ -262,7 +262,7 @@ def observation_has_guardrail(obs: LangfuseObservation, *, guardrail_name: str) 
 
 @dataclass(frozen=True, slots=True)
 class LoggingClient:
-    gateway: Gateway
+    proxy: ProxyClient
 
     def key_with_alias(
         self,
@@ -274,7 +274,7 @@ class LoggingClient:
         organization_id: str | None = None,
         metadata: KeyMetadata | None = None,
     ) -> str:
-        return self.gateway.generate_key(
+        return self.proxy.generate_key(
             KeyGenerateBody(
                 key_alias=alias,
                 models=models,
@@ -286,7 +286,7 @@ class LoggingClient:
         )
 
     def delete_key(self, key: str) -> None:
-        self.gateway.delete_key(key)
+        self.proxy.delete_key(key)
 
     def create_team(
         self,
@@ -296,9 +296,9 @@ class LoggingClient:
         organization_id: str | None = None,
     ) -> str:
         return unwrap(
-            self.gateway.transport.post(
+            self.proxy.transport.post(
                 "/team/new",
-                headers=self.gateway.transport.master,
+                headers=self.proxy.transport.master,
                 json=TeamNewBody(
                     team_alias=alias,
                     models=models,
@@ -309,18 +309,18 @@ class LoggingClient:
         ).team_id
 
     def delete_team(self, team_id: str) -> None:
-        _ = self.gateway.transport.post(
+        _ = self.proxy.transport.post(
             "/team/delete",
-            headers=self.gateway.transport.master,
+            headers=self.proxy.transport.master,
             json=TeamDeleteBody(team_ids=[team_id]),
             response_type=NoBody,
         )
 
     def create_user(self, *, user_email: str, user_id: str | None = None) -> str:
         return unwrap(
-            self.gateway.transport.post(
+            self.proxy.transport.post(
                 "/user/new",
-                headers=self.gateway.transport.master,
+                headers=self.proxy.transport.master,
                 json=UserNewBody(
                     user_email=user_email,
                     user_role="internal_user",
@@ -331,27 +331,27 @@ class LoggingClient:
         ).user_id
 
     def delete_user(self, user_id: str) -> None:
-        _ = self.gateway.transport.post(
+        _ = self.proxy.transport.post(
             "/user/delete",
-            headers=self.gateway.transport.master,
+            headers=self.proxy.transport.master,
             json=UserDeleteBody(user_ids=[user_id]),
             response_type=NoBody,
         )
 
     def create_org(self, alias: str, *, models: list[str]) -> str:
         return unwrap(
-            self.gateway.transport.post(
+            self.proxy.transport.post(
                 "/organization/new",
-                headers=self.gateway.transport.master,
+                headers=self.proxy.transport.master,
                 json=OrgNewBody(organization_alias=alias, models=models),
                 response_type=OrgNewResponse,
             )
         ).organization_id
 
     def delete_org(self, organization_id: str) -> None:
-        _ = self.gateway.transport.delete(
+        _ = self.proxy.transport.delete(
             "/organization/delete",
-            headers=self.gateway.transport.master,
+            headers=self.proxy.transport.master,
             json=OrgDeleteBody(organization_ids=[organization_id]),
             response_type=NoBody,
         )
@@ -364,9 +364,9 @@ class LoggingClient:
         callback_type: Literal["success", "failure", "success_and_failure"] = "success_and_failure",
     ) -> None:
         response = unwrap(
-            self.gateway.transport.post(
+            self.proxy.transport.post(
                 f"/team/{team_id}/callback",
-                headers=self.gateway.transport.master,
+                headers=self.proxy.transport.master,
                 json=TeamCallbackBody(
                     callback_name="langfuse_otel",
                     callback_type=callback_type,
@@ -382,9 +382,9 @@ class LoggingClient:
     def create_tool_permission_guardrail(self, name: str, *, allowed_tool: str) -> str:
         """Register a tool_permission guardrail that allows one tool and denies the rest."""
         response = unwrap(
-            self.gateway.transport.post(
+            self.proxy.transport.post(
                 "/guardrails",
-                headers=self.gateway.transport.master,
+                headers=self.proxy.transport.master,
                 json=CreateGuardrailBody(
                     guardrail=GuardrailSpec(
                         guardrail_name=name,
@@ -412,22 +412,22 @@ class LoggingClient:
         return guardrail_id
 
     def delete_guardrail(self, guardrail_id: str) -> None:
-        _ = self.gateway.transport.delete(
+        _ = self.proxy.transport.delete(
             f"/guardrails/{guardrail_id}",
-            headers=self.gateway.transport.master,
+            headers=self.proxy.transport.master,
             json=NoBody(),
             response_type=NoBody,
         )
 
     def create_model(self, model_name: str, litellm_params: LiteLLMParamsBody) -> str:
-        return self.gateway.create_model(model_name, litellm_params)
+        return self.proxy.create_model(model_name, litellm_params)
 
     def delete_model(self, model_id: str) -> None:
-        self.gateway.delete_model(model_id)
+        self.proxy.delete_model(model_id)
 
     def chat(self, key: str, model: str, text: str) -> ChatResponse:
         return unwrap(
-            self.gateway.chat(
+            self.proxy.chat(
                 key,
                 ChatBody(
                     model=model,
@@ -459,10 +459,10 @@ class LoggingClient:
             guardrails=guardrails,
         )
         if stream:
-            return self.gateway.chat_stream(key, body)
-        return self.gateway.transport.send(
+            return self.proxy.chat_stream(key, body)
+        return self.proxy.transport.send(
             "/chat/completions",
-            headers=self.gateway.transport.bearer(key),
+            headers=self.proxy.transport.bearer(key),
             json=body,
         )
 
@@ -479,11 +479,11 @@ class LoggingClient:
             stream=True if stream else None,
         )
         if stream:
-            return self.gateway.transport.stream(
-                "/v1/messages", headers=self.gateway.transport.bearer(key), json=body
+            return self.proxy.transport.stream(
+                "/v1/messages", headers=self.proxy.transport.bearer(key), json=body
             )
-        return self.gateway.transport.send(
-            "/v1/messages", headers=self.gateway.transport.bearer(key), json=body
+        return self.proxy.transport.send(
+            "/v1/messages", headers=self.proxy.transport.bearer(key), json=body
         )
 
     def responses_raw(
@@ -498,15 +498,15 @@ class LoggingClient:
             model=model, input=text, max_output_tokens=max_output_tokens, stream=True if stream else None
         )
         if stream:
-            return self.gateway.transport.stream(
-                "/v1/responses", headers=self.gateway.transport.bearer(key), json=body
+            return self.proxy.transport.stream(
+                "/v1/responses", headers=self.proxy.transport.bearer(key), json=body
             )
-        return self.gateway.transport.send(
-            "/v1/responses", headers=self.gateway.transport.bearer(key), json=body
+        return self.proxy.transport.send(
+            "/v1/responses", headers=self.proxy.transport.bearer(key), json=body
         )
 
     def scrape_metrics(self) -> str:
-        return self.gateway.probe("/metrics", params=NoBody()).body
+        return self.proxy.probe("/metrics", params=NoBody()).body
 
     def poll_proxy_spend_for_key(
         self,
@@ -529,7 +529,7 @@ class LoggingClient:
                 return False
             return True
 
-        rows = self.gateway.poll_logs_for_key(
+        rows = self.proxy.poll_logs_for_key(
             key, min_rows=1, predicate=lambda rs: any(_matches(r) for r in rs)
         )
         for row in rows:
@@ -623,15 +623,15 @@ def first_ok(client: LoggingClient, send: Callable[[], StreamingResponse]) -> St
     the data plane's auth cache picks it up, so retry on 401 to a deadline; a
     401 is rejected before the LLM call, so it cannot contaminate delivery or
     trace assertions. Any other failure is behavior under test and fails hard."""
-    deadline = time.monotonic() + client.gateway.poll_timeout
+    deadline = time.monotonic() + client.proxy.poll_timeout
     while True:
         outcome = send()
         if outcome.ok:
             return outcome
         if outcome.status_code != 401 or time.monotonic() >= deadline:
             require_successful_call(outcome)
-        time.sleep(client.gateway.poll_interval)
+        time.sleep(client.proxy.poll_interval)
 
 
-def build_logging_client() -> LoggingClient:
-    return LoggingClient(gateway=build_gateway())
+def build_logging_client(proxy: ProxyClient) -> LoggingClient:
+    return LoggingClient(proxy=proxy)
