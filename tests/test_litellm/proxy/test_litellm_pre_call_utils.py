@@ -5130,14 +5130,21 @@ async def test_empty_resolution_clears_a_previous_messages_destinations(monkeypa
     message's destinations standing, and a revoked grant keeps exporting for the life
     of the session. ``_hoist_request_destinations`` already sets unconditionally; this
     is the same contract on the other path.
+
+    The flag is on because that is the only configuration where a stale ContextVar can
+    leak: with v2 off nothing reads it, and the helper returns before publishing so that
+    a ``litellm[proxy]`` install never imports ``opentelemetry`` on the request path.
     """
     import litellm.proxy.litellm_pre_call_utils as pcu
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.integrations.otel.model.destination import OtelDestination
     from litellm.integrations.otel.plumbing.context import (
         _request_destinations,
         request_destinations,
     )
 
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
     stale = (OtelDestination(endpoint="http://revoked.internal/v1/traces", callback_name="generic"),)
 
     async def _grants_nothing(_uapk):
@@ -5150,6 +5157,7 @@ async def test_empty_resolution_clears_a_previous_messages_destinations(monkeypa
         assert request_destinations() == (), "a revoked identity must not inherit the previous message's destinations"
     finally:
         _request_destinations.reset(token)
+        is_otel_v2_enabled.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -6296,3 +6304,79 @@ async def test_resolve_logging_exporters_noop_when_flag_off(monkeypatch):
 
     assert destinations == ()
     assert backends == ()
+
+
+@pytest.mark.asyncio
+async def test_apply_admin_logging_exporters_needs_no_opentelemetry_when_flag_off(monkeypatch):
+    """opentelemetry ships only in the proxy-runtime extra, so a litellm[proxy] install
+    does not have it. Publishing the destination ContextVar imports it, and that call sat
+    outside the resolver's try, so every request raised ModuleNotFoundError over a feature
+    the deployment never enabled. Run in a child process with the package blocked."""
+    import subprocess
+    import textwrap
+
+    program = textwrap.dedent(
+        """
+        import asyncio, sys
+
+        class _Blocker:
+            def find_spec(self, name, path=None, target=None):
+                if name == "opentelemetry" or name.startswith("opentelemetry."):
+                    raise ModuleNotFoundError(f"No module named '{name}'")
+                return None
+
+        sys.meta_path.insert(0, _Blocker())
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.litellm_pre_call_utils import _apply_admin_logging_exporters
+
+        async def main():
+            await _apply_admin_logging_exporters(UserAPIKeyAuth(api_key="k", team_id="t1"))
+            print("REQUEST_PATH_OK")
+
+        asyncio.run(main())
+        """
+    )
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    env = {**os.environ, "PYTHONPATH": repo_root}
+    env.pop("LITELLM_OTEL_V2", None)
+    result = subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, timeout=300, env=env)
+    assert "REQUEST_PATH_OK" in result.stdout, f"request path required opentelemetry:\n{result.stderr[-3000:]}"
+
+
+@pytest.mark.asyncio
+async def test_apply_admin_logging_exporters_degrades_when_flag_on_without_opentelemetry():
+    """Setting the flag without installing the extra exports nothing either way, so the
+    request must degrade with a warning rather than fail."""
+    import subprocess
+    import textwrap
+
+    program = textwrap.dedent(
+        """
+        import asyncio, sys
+
+        class _Blocker:
+            def find_spec(self, name, path=None, target=None):
+                if name == "opentelemetry" or name.startswith("opentelemetry."):
+                    raise ModuleNotFoundError(f"No module named '{name}'")
+                return None
+
+        sys.meta_path.insert(0, _Blocker())
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.litellm_pre_call_utils import _apply_admin_logging_exporters
+
+        async def main():
+            await _apply_admin_logging_exporters(UserAPIKeyAuth(api_key="k", team_id="t1"))
+            print("REQUEST_PATH_OK")
+
+        asyncio.run(main())
+        """
+    )
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    result = subprocess.run(
+        [sys.executable, "-c", program],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        env={**os.environ, "PYTHONPATH": repo_root, "LITELLM_OTEL_V2": "true"},
+    )
+    assert "REQUEST_PATH_OK" in result.stdout, f"flag-on request path raised:\n{result.stderr[-3000:]}"

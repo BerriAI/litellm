@@ -795,7 +795,22 @@ def _request_destination_from_raw(item: object) -> "OtelDestination | None":
 
 
 def _set_request_otel_destinations(destinations: Sequence[object]) -> None:
-    from litellm.integrations.otel.plumbing.context import set_request_destinations
+    """Publish the resolved destinations on the request ContextVar.
+
+    ``ImportError`` is tolerated because the module this reaches imports
+    ``opentelemetry``, which ships only in the proxy-runtime extra. An operator who set
+    the flag without that extra exports nothing either way, so there is nothing to
+    publish; the request must not fail over it. Only ``ImportError`` is caught, so it
+    cannot mask a destination that failed to publish for any other reason.
+    """
+    try:
+        from litellm.integrations.otel.plumbing.context import set_request_destinations
+    except ImportError:
+        verbose_proxy_logger.warning(
+            "LITELLM_OTEL_V2 is enabled but 'opentelemetry' is not installed, so no trace "
+            "destinations are applied. Install litellm[proxy-runtime] to export traces."
+        )
+        return
 
     set_request_destinations(
         tuple(destination for item in destinations if (destination := _request_destination_from_raw(item)) is not None)
@@ -822,8 +837,16 @@ async def _apply_admin_logging_exporters(
     Returning early instead would leave a previous message's destinations standing on
     a ContextVar this request never overwrites: a stateful MCP session runs every
     message on the task its ``initialize`` spawned, so a revoked grant would keep
-    exporting for the life of that session.
+    exporting for the life of that session. With the flag off nothing reads that
+    ContextVar, so the gate below returns before publishing anything: setting it imports
+    the OTel context module, and ``opentelemetry`` ships only in the proxy-runtime extra,
+    so a ``litellm[proxy]`` install would raise on every request over a feature it
+    never enabled.
     """
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    if not is_otel_v2_enabled():
+        return
     if cached_destinations is not None:
         destinations = tuple(cached_destinations)
     else:
