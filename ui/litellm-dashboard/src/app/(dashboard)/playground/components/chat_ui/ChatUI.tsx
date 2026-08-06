@@ -181,6 +181,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
     return disabledPersonalKeyCreation ? "custom" : "session";
   });
   const [apiKey, setApiKey] = useState<string>(() => getSecureItem("apiKey") || "");
+  const [debouncedCustomApiKey, setDebouncedCustomApiKey] = useState<string>(() =>
+    (getSecureItem("apiKey") || "").trim(),
+  );
   const [customProxyBaseUrl, setCustomProxyBaseUrl] = useState<string>(
     () => sessionStorage.getItem("customProxyBaseUrl") || "",
   );
@@ -401,42 +404,64 @@ const ChatUI: React.FC<ChatUIProps> = ({
   ]);
 
   useEffect(() => {
-    const userApiKey = apiKeySource === "session" ? accessToken : apiKey.trim();
+    if (apiKeySource === "session") {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedCustomApiKey(apiKey.trim());
+    }, 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [apiKey, apiKeySource]);
+
+  useEffect(() => {
+    const userApiKey = apiKeySource === "session" ? accessToken : debouncedCustomApiKey;
     if (!userApiKey) {
       setModelInfo([]);
       setModelLoadError(false);
+      setIsLoadingModels(false);
       return;
     }
+
+    let cancelled = false;
 
     const loadModels = async () => {
       setIsLoadingModels(true);
       setModelLoadError(false);
       try {
         const uniqueModels = await fetchAvailableModels(userApiKey);
+        if (cancelled) {
+          return;
+        }
 
         setModelInfo(uniqueModels);
 
-        // check for selection overlap or empty model list
         const hasSelection = uniqueModels.some((m) => m.model_group === selectedModel);
-        if (!uniqueModels.length) {
-          setSelectedModel(undefined);
-        } else if (!hasSelection) {
+        if (!uniqueModels.length || !hasSelection) {
           setSelectedModel(undefined);
         }
       } catch (error) {
+        if (cancelled) {
+          return;
+        }
         console.error("Error fetching model info:", error);
         setModelInfo([]);
         setModelLoadError(true);
       } finally {
-        setIsLoadingModels(false);
+        if (!cancelled) {
+          setIsLoadingModels(false);
+        }
       }
     };
 
     if (!simplified) {
-      loadModels();
+      void loadModels();
     }
     loadMCPServers();
-  }, [accessToken, apiKeySource, apiKey, simplified]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, apiKeySource, debouncedCustomApiKey, simplified]);
 
   // Load tools when MCP direct mode has a server (or toolset) selected
   useEffect(() => {
@@ -1188,15 +1213,30 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     </SelectContent>
                   </ShadcnSelect>
                   {apiKeySource === "custom" && (
-                    <div className="relative mt-2">
-                      <Key className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        className="h-8 pl-8"
-                        placeholder="Enter custom Virtual Key"
-                        type="password"
-                        onChange={(event) => setApiKey(event.target.value)}
-                        value={apiKey}
-                      />
+                    <div className="mt-2 space-y-1">
+                      <div className="relative">
+                        <Key className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          className="h-8 pl-8"
+                          placeholder="Enter custom Virtual Key"
+                          type="password"
+                          autoComplete="off"
+                          spellCheck={false}
+                          onChange={(event) => setApiKey(event.target.value)}
+                          onBlur={() => setDebouncedCustomApiKey(apiKey.trim())}
+                          value={apiKey}
+                          aria-label="Virtual Key"
+                        />
+                      </div>
+                      {isLoadingModels && apiKey.trim() !== "" && (
+                        <p className="text-xs text-muted-foreground">Loading models for this key...</p>
+                      )}
+                      {!isLoadingModels && apiKey.trim() !== "" && modelLoadError && (
+                        <p className="text-xs text-destructive">Unable to load models for this Virtual Key.</p>
+                      )}
+                      {!isLoadingModels && apiKey.trim() !== "" && !modelLoadError && modelInfo.length === 0 && (
+                        <p className="text-xs text-muted-foreground">No models available for this Virtual Key.</p>
+                      )}
                     </div>
                   )}
                 </div>
