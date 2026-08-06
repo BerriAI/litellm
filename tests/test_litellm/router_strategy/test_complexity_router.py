@@ -98,6 +98,8 @@ def test_router_complexity_session_affinity_provider_registers_callback():
 
     assert tuple(_iter_complexity_router_session_affinity_groups(complexity_router)) == (("target-group", 17),)
     assert dict(parent_router._get_complexity_router_session_affinity_group_ttls()) == {"target-group": 17}
+    provider = parent_router._get_complexity_router_session_affinity_group_ttls_provider()
+    assert dict(provider()) == {"target-group": 17}
 
     parent_router._ensure_deployment_affinity_check()
 

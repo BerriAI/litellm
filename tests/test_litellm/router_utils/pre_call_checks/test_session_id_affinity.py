@@ -3,6 +3,7 @@ import gc
 import os
 import sys
 import weakref
+from collections.abc import Callable
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -446,6 +447,43 @@ def test_complexity_router_affinity_provider_does_not_keep_router_alive():
         assert affinity_callback.session_affinity_group_ttls() == {}
     finally:
         litellm.logging_callback_manager.remove_callback_from_all_lists(affinity_callback)
+
+
+def _assert_router_affinity_callback_does_not_keep_router_alive(
+    router_factory: Callable[[], litellm.Router],
+) -> None:
+    router = router_factory()
+    affinity_callback = next(
+        callback for callback in router.optional_callbacks or [] if isinstance(callback, DeploymentAffinityCheck)
+    )
+    router.optional_callbacks = []
+    router.discard()
+    router_ref = weakref.ref(router)
+
+    try:
+        del router
+        gc.collect()
+
+        assert router_ref() is None
+        assert affinity_callback.session_affinity_group_ttls is not None
+        assert affinity_callback.session_affinity_group_ttls() == {}
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_all_lists(affinity_callback)
+
+
+def test_optional_pre_call_checks_affinity_provider_does_not_keep_new_router_alive():
+    _assert_router_affinity_callback_does_not_keep_router_alive(
+        lambda: litellm.Router(model_list=[], optional_pre_call_checks=["session_affinity"])
+    )
+
+
+def test_optional_pre_call_checks_affinity_provider_does_not_keep_existing_router_alive():
+    def build_router() -> litellm.Router:
+        router = _complexity_router()
+        router.add_optional_pre_call_checks(["session_affinity"])
+        return router
+
+    _assert_router_affinity_callback_does_not_keep_router_alive(build_router)
 
 
 @pytest.mark.asyncio

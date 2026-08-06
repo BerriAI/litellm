@@ -1676,6 +1676,9 @@ class Router:
                     break
 
             if existing_affinity_callback is not None:
+                existing_session_affinity_group_ttls_provider: Final = (
+                    self._get_complexity_router_session_affinity_group_ttls_provider()
+                )
                 existing_affinity_callback.enable_user_key_affinity = (
                     existing_affinity_callback.enable_user_key_affinity or enable_user_key_affinity
                 )
@@ -1686,12 +1689,13 @@ class Router:
                     existing_affinity_callback.enable_session_id_affinity or enable_session_id_affinity
                 )
                 existing_affinity_callback.ttl_seconds = self.deployment_affinity_ttl_seconds
-                existing_affinity_callback.session_affinity_group_ttls = (
-                    self._get_complexity_router_session_affinity_group_ttls
-                )
+                existing_affinity_callback.session_affinity_group_ttls = existing_session_affinity_group_ttls_provider
                 if self.model_group_affinity_config:
                     existing_affinity_callback.model_group_affinity_config = self.model_group_affinity_config
             else:
+                new_session_affinity_group_ttls_provider: Final = (
+                    self._get_complexity_router_session_affinity_group_ttls_provider()
+                )
                 affinity_callback: Final = DeploymentAffinityCheck(
                     cache=self.cache,
                     ttl_seconds=self.deployment_affinity_ttl_seconds,
@@ -1699,7 +1703,7 @@ class Router:
                     enable_responses_api_affinity=enable_responses_api_affinity,
                     enable_session_id_affinity=enable_session_id_affinity,
                     model_group_affinity_config=self.model_group_affinity_config,
-                    session_affinity_group_ttls=self._get_complexity_router_session_affinity_group_ttls,
+                    session_affinity_group_ttls=new_session_affinity_group_ttls_provider,
                 )
                 self.optional_callbacks.append(affinity_callback)
                 litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
@@ -7651,6 +7655,17 @@ class Router:
             }
         )
 
+    def _get_complexity_router_session_affinity_group_ttls_provider(self) -> Callable[[], Mapping[str, int]]:
+        router_ref: Final = weakref.ref(self)
+
+        def session_affinity_group_ttls_provider() -> Mapping[str, int]:
+            router: Final = router_ref()
+            if router is None:
+                return MappingProxyType({})
+            return router._get_complexity_router_session_affinity_group_ttls()
+
+        return session_affinity_group_ttls_provider
+
     def _ensure_deployment_affinity_check(self) -> None:
         """
         Ensure deployment affinity exists when explicit group settings or complexity routing require it.
@@ -7661,14 +7676,7 @@ class Router:
         if self.optional_callbacks is None:
             self.optional_callbacks = []
 
-        router_ref: Final = weakref.ref(self)
-
-        def session_affinity_group_ttls_provider() -> Mapping[str, int]:
-            router: Final = router_ref()
-            if router is None:
-                return MappingProxyType({})
-            return router._get_complexity_router_session_affinity_group_ttls()
-
+        session_affinity_group_ttls_provider: Final = self._get_complexity_router_session_affinity_group_ttls_provider()
         existing_affinity_callback: DeploymentAffinityCheck | None = next(
             (callback for callback in self.optional_callbacks if isinstance(callback, DeploymentAffinityCheck)),
             None,
