@@ -109,6 +109,8 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           modelInfoObj[key] = value;
         } else if (key === "team_id") {
           modelInfoObj["team_id"] = value;
+        } else if (key === "routing_strategy") {
+          modelInfoObj["routing_strategy"] = value;
         } else if (key === "model_access_group") {
           modelInfoObj["access_groups"] = value;
         } else if (key == "mode") {

@@ -56,6 +56,26 @@ describe("prepareModelAddRequest", () => {
     expect(deployment.litellmParamsObj.custom_llm_provider).toBe("petals");
   });
 
+  it("routes routing_strategy into model_info, not litellm_params", async () => {
+    const formValues = {
+      model_mappings: [
+        {
+          public_name: "quality",
+          litellm_model: "bedrock/claude-opus",
+        },
+      ],
+      model_name: "bedrock/claude-opus",
+      routing_strategy: "cost-based-routing",
+    };
+
+    const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
+
+    expect(deployments).toHaveLength(1);
+    const [deployment] = deployments!;
+    expect(deployment.modelInfoObj.routing_strategy).toBe("cost-based-routing");
+    expect(deployment.litellmParamsObj.routing_strategy).toBeUndefined();
+  });
+
   it("ignores litellm_credential_name inside LiteLLM Params JSON", async () => {
     const formValues = {
       model_mappings: [

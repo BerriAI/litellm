@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { Button, Card, Flex, Input, Modal, Space, Typography } from "antd";
+import { Alert, Button, Card, Flex, Input, Modal, Space, Typography } from "antd";
 import { PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { useRoutingGroups, useSaveRoutingGroups } from "@/app/(dashboard)/hooks/routingGroups/useRoutingGroups";
 import { useRouterFields } from "@/app/(dashboard)/hooks/router/useRouterFields";
@@ -101,6 +101,12 @@ const RoutingGroups: React.FC = () => {
 
   return (
     <Space direction="vertical" size={16} className="w-full">
+      <Alert
+        type="warning"
+        showIcon
+        message="Deprecated"
+        description="Routing groups only set the load-balancing strategy for their member model names; the group name is not a callable model. Prefer setting a Routing Strategy directly on the model (Models + Endpoints > Add Model > Advanced Settings). Existing groups keep working, and a strategy set on a model overrides its group."
+      />
       <Card bodyStyle={{ padding: 16 }}>
         <Flex justify="space-between" align="center" gap={12} className="mb-4">
           <Input
