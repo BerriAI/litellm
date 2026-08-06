@@ -11,6 +11,7 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 
 export interface MultiSelectOption {
@@ -33,12 +34,13 @@ interface MultiSelectProps {
 
 const matchesQuery = (option: MultiSelectOption, query: string): boolean => {
   const normalizedQuery = query.trim().toLowerCase();
-  return (
-    !normalizedQuery ||
-    option.label.toLowerCase().includes(normalizedQuery) ||
-    option.value.toLowerCase().includes(normalizedQuery) ||
-    (option.description?.toLowerCase().includes(normalizedQuery) ?? false)
-  );
+  if (!normalizedQuery) {
+    return true;
+  }
+  const label = option.label?.toLowerCase() ?? "";
+  const value = option.value?.toLowerCase() ?? "";
+  const description = option.description?.toLowerCase() ?? "";
+  return label.includes(normalizedQuery) || value.includes(normalizedQuery) || description.includes(normalizedQuery);
 };
 
 export function MultiSelect({
@@ -53,10 +55,17 @@ export function MultiSelect({
   className,
 }: MultiSelectProps) {
   const [query, setQuery] = useState("");
-  const safeOptions = options.filter(
-    (option): option is MultiSelectOption =>
-      option != null && typeof option.value === "string" && option.value.length > 0,
-  );
+  const anchor = useComboboxAnchor();
+  const safeOptions = options
+    .filter(
+      (option): option is MultiSelectOption =>
+        option != null && typeof option.value === "string" && option.value.length > 0,
+    )
+    .map((option) => ({
+      value: option.value,
+      label: option.label?.trim() || option.value,
+      description: option.description || undefined,
+    }));
   const selectedOptions = value
     .filter((selectedValue): selectedValue is string => typeof selectedValue === "string" && selectedValue.length > 0)
     .map(
@@ -79,17 +88,18 @@ export function MultiSelect({
       items={items}
       value={selectedOptions}
       onValueChange={(selected: MultiSelectOption[]) => {
-        onValueChange(selected.map((option) => option.value));
+        onValueChange(selected.map((option) => option.value).filter(Boolean));
         setQuery("");
       }}
       inputValue={query}
       onInputValueChange={setQuery}
       isItemEqualToValue={(option: MultiSelectOption, selected: MultiSelectOption) => option.value === selected.value}
       itemToStringLabel={(option: MultiSelectOption) => option.label}
+      itemToStringValue={(option: MultiSelectOption) => option.value}
       filter={matchesQuery}
       disabled={disabled || loading}
     >
-      <ComboboxChips className={`min-h-8 py-1 text-sm ${className ?? ""}`}>
+      <ComboboxChips ref={anchor} className={`min-h-8 w-full py-1 text-sm ${className ?? ""}`}>
         <ComboboxValue>
           {(selected: MultiSelectOption[]) =>
             selected.map((option) => (
@@ -105,16 +115,20 @@ export function MultiSelect({
           aria-label={placeholder}
         />
       </ComboboxChips>
-      <ComboboxContent>
+      <ComboboxContent
+        anchor={anchor}
+        side="bottom"
+        collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}
+      >
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
         <ComboboxList>
           {(option: MultiSelectOption) => (
             <ComboboxItem key={option.value} value={option}>
               <span className="min-w-0">
                 <span className="block truncate">{option.label}</span>
-                {option.description && (
+                {option.description ? (
                   <span className="block truncate text-xs text-muted-foreground">{option.description}</span>
-                )}
+                ) : null}
               </span>
             </ComboboxItem>
           )}
