@@ -1,6 +1,7 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
 import copy
+from collections.abc import Sequence
 from typing import Any, Final
 
 import litellm
@@ -137,7 +138,7 @@ def get_key_models(
 
 
 def get_team_models(
-    team_models: list[str],
+    team_models: Sequence[str],
     proxy_model_list: list[str],
     model_access_groups: dict[str, list[str]],
     include_model_access_groups: bool | None = False,
@@ -177,9 +178,43 @@ def get_team_models(
     return all_models
 
 
+def _ordered_unique_models(models: Sequence[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(models))
+
+
+def _without_no_default_models(models: Sequence[str]) -> tuple[str, ...]:
+    return tuple(model for model in models if model != SpecialModelNames.no_default_models.value)
+
+
+def has_no_default_model_restriction(
+    key_models: Sequence[str],
+    team_models: Sequence[str],
+) -> bool:
+    return any(
+        model == SpecialModelNames.no_default_models.value for models in (key_models, team_models) for model in models
+    )
+
+
+def merge_team_access_group_models(
+    key_models: Sequence[str],
+    team_models: Sequence[str],
+    configured_key_models: Sequence[str],
+    access_group_models: Sequence[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    resolved_key_models: Final = _without_no_default_models(key_models)
+    resolved_team_models: Final = _without_no_default_models(team_models)
+    if not access_group_models:
+        return resolved_key_models, resolved_team_models
+    if SpecialModelNames.all_team_models.value in configured_key_models:
+        return _ordered_unique_models((*resolved_key_models, *access_group_models)), resolved_team_models
+    if configured_key_models:
+        return resolved_key_models, resolved_team_models
+    return resolved_key_models, _ordered_unique_models((*resolved_team_models, *access_group_models))
+
+
 def get_complete_model_list(
-    key_models: list[str],
-    team_models: list[str],
+    key_models: Sequence[str],
+    team_models: Sequence[str],
     proxy_model_list: list[str],
     user_model: str | None,
     infer_model_from_keys: bool | None,
@@ -189,6 +224,7 @@ def get_complete_model_list(
     include_model_access_groups: bool | None = False,
     only_model_access_groups: bool | None = False,
     team_id: str | None = None,
+    fallback_to_proxy_models: bool = True,
 ) -> list[str]:
     """Logic for returning complete model list for a given key + team pair"""
 
@@ -210,7 +246,7 @@ def get_complete_model_list(
         append_unique(key_models)
     elif team_models:
         append_unique(team_models)
-    else:
+    elif fallback_to_proxy_models:
         append_unique(proxy_model_list)
         if include_model_access_groups:
             append_unique(list(model_access_groups.keys()))  # TODO: keys order
