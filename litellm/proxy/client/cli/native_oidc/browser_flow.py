@@ -1,6 +1,9 @@
 """Authorization Code with PKCE S256 for native applications (RFC 8252)."""
 
+import contextlib
 import webbrowser
+from collections.abc import Callable, Sequence
+from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import click
@@ -14,7 +17,7 @@ from .metadata import NativeOIDCMetadata, ProviderMetadata
 from .pkce import PkceChallenge, generate_pkce_challenge
 from .tokens import TokenResponse, describe_token_error, parse_token_response
 
-DEFAULT_LOGIN_TIMEOUT_SECONDS = 300.0
+DEFAULT_LOGIN_TIMEOUT_SECONDS: Final = 300.0
 
 
 def build_authorization_url(
@@ -22,7 +25,7 @@ def build_authorization_url(
     *,
     client_id: str,
     redirect_uri: str,
-    scopes,
+    scopes: Sequence[str],
     challenge: PkceChallenge,
 ) -> str:
     """Build the authorization request URL.
@@ -30,8 +33,8 @@ def build_authorization_url(
     Any query already present on the authorization endpoint is preserved -- some
     providers legitimately publish endpoints carrying parameters.
     """
-    parsed = urlsplit(authorization_endpoint)
-    params = (
+    parsed: Final = urlsplit(authorization_endpoint)
+    params: Final = (
         *parse_qsl(parsed.query, keep_blank_values=True),
         ("response_type", "code"),
         ("client_id", client_id),
@@ -53,7 +56,7 @@ def exchange_code_for_token(
     code_verifier: str,
 ) -> TokenResponse:
     """Redeem an authorization code at the token endpoint as a public client."""
-    response = post_form(
+    response: Final = post_form(
         token_endpoint,
         {  # mutable-ok: form body for the token request
             "grant_type": "authorization_code",
@@ -76,18 +79,18 @@ def run_browser_flow(
     *,
     open_browser: bool = True,
     timeout: float = DEFAULT_LOGIN_TIMEOUT_SECONDS,
-    echo=click.echo,
+    echo: Callable[[str], None] = click.echo,
 ) -> TokenResponse:
     """Run Authorization Code + PKCE S256 against a loopback redirect URI."""
     provider.assert_browser_flow_supported()
-    authorization_endpoint = provider.require_authorization_endpoint()
-    token_endpoint = provider.require_token_endpoint()
+    authorization_endpoint: Final = provider.require_authorization_endpoint()
+    token_endpoint: Final = provider.require_token_endpoint()
 
-    challenge = generate_pkce_challenge()
+    challenge: Final = generate_pkce_challenge()
 
     # Bind before opening the browser so the redirect can never race the listener.
     with LoopbackCallbackListener(expected_state=challenge.state) as listener:
-        authorization_url = build_authorization_url(
+        authorization_url: Final = build_authorization_url(
             authorization_endpoint,
             client_id=metadata.client_id,
             redirect_uri=listener.redirect_uri,
@@ -101,7 +104,7 @@ def run_browser_flow(
             _try_open_browser(authorization_url, echo=echo)
         echo("Waiting for the browser login to complete...")
 
-        code = listener.wait_for_code(timeout=timeout)
+        code: Final = listener.wait_for_code(timeout=timeout)
 
         return exchange_code_for_token(
             token_endpoint,
@@ -112,15 +115,13 @@ def run_browser_flow(
         )
 
 
-def _try_open_browser(url: str, *, echo=click.echo) -> bool | None:
+def _try_open_browser(url: str, *, echo: Callable[[str], None] = click.echo) -> bool | None:
     """Best-effort browser launch; failure is never fatal.
 
     The URL has already been printed, so the user can always continue manually.
     """
-    try:
+    with contextlib.suppress(Exception):
         if webbrowser.open(url):
             return True
-    except Exception:  # noqa: BLE001 - any browser backend failure is non-fatal
-        pass
     echo("Could not open a browser automatically; open the URL above manually.")
     return False

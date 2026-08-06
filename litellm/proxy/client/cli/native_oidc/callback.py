@@ -16,7 +16,10 @@ import socketserver
 import time
 from collections.abc import Mapping, Sequence
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import cast  # noqa: TID251  # stdlib types BaseHTTPRequestHandler.server as BaseServer
+from typing import (
+    Final,
+    cast,  # noqa: TID251  # stdlib types BaseHTTPRequestHandler.server as BaseServer
+)
 from urllib.parse import parse_qs, urlsplit
 
 from litellm.litellm_core_utils.native_oidc_validation import is_numeric_loopback_host
@@ -24,23 +27,23 @@ from litellm.litellm_core_utils.native_oidc_validation import is_numeric_loopbac
 from .errors import NativeOIDCError
 from .pkce import states_match
 
-DEFAULT_CALLBACK_PATH = "/oauth/callback"
+DEFAULT_CALLBACK_PATH: Final = "/oauth/callback"
 
 # Provider-controlled text: bounded and reduced to printable ASCII before it is
 # ever shown. The stable OAuth error code is preferred over the description.
-MAX_ERROR_DESCRIPTION_LENGTH = 200
+MAX_ERROR_DESCRIPTION_LENGTH: Final = 200
 
 # Per-connection read budget. Generous for a browser on loopback, short enough
 # that a peer holding a connection open cannot stall the login for long.
-READ_TIMEOUT_SECONDS = 5
+READ_TIMEOUT_SECONDS: Final = 5
 
-_SUCCESS_PAGE = (
+_SUCCESS_PAGE: Final = (
     b"<!doctype html><html><head><title>LiteLLM</title></head><body>"
     b"<h1>Login complete</h1><p>You can close this window and return to the terminal.</p>"
     b"</body></html>"
 )
 
-_FAILURE_PAGE = (
+_FAILURE_PAGE: Final = (
     b"<!doctype html><html><head><title>LiteLLM</title></head><body>"
     b"<h1>Login failed</h1><p>Return to the terminal for details.</p>"
     b"</body></html>"
@@ -49,18 +52,19 @@ _FAILURE_PAGE = (
 
 def sanitize_provider_error(error: str, description: str | None) -> str:
     """Build a bounded, printable message from a provider error response."""
-    safe_error = "".join(c for c in error if 0x20 <= ord(c) < 0x7F)[:MAX_ERROR_DESCRIPTION_LENGTH]
-    message = safe_error or "unknown_error"
-    if description:
-        safe_description = "".join(c for c in description if 0x20 <= ord(c) < 0x7F)[:MAX_ERROR_DESCRIPTION_LENGTH]
-        if safe_description:
-            message = f"{message}: {safe_description}"
+    safe_error: Final = "".join(c for c in error if 0x20 <= ord(c) < 0x7F)[:MAX_ERROR_DESCRIPTION_LENGTH]
+    message: Final = safe_error or "unknown_error"
+    safe_description: Final = (
+        "".join(c for c in description if 0x20 <= ord(c) < 0x7F)[:MAX_ERROR_DESCRIPTION_LENGTH] if description else ""
+    )
+    if safe_description:
+        return f"{message}: {safe_description}"
     return message
 
 
 def _single_value(params: Mapping[str, Sequence[str]], name: str) -> str | None:
     """Return the sole value for `name`, or raise if it appears more than once."""
-    values = params.get(name)
+    values: Final = params.get(name)
     if not values:
         return None
     if len(values) != 1:
@@ -77,7 +81,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
     # re-checked between requests -- and the real browser callback is never read.
     timeout = READ_TIMEOUT_SECONDS
 
-    def log_message(self, format: str, *args) -> None:
+    def log_message(self, format: str, *args: object) -> None:
         """Suppress request logging.
 
         The default implementation writes the full request line to stderr, which
@@ -94,14 +98,14 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         # The listener only ever constructs this handler with a _CallbackServer.
-        server = cast("_CallbackServer", self.server)  # cast-ok: BaseHTTPRequestHandler types it as BaseServer
+        server: Final = cast("_CallbackServer", self.server)  # cast-ok: BaseHTTPRequestHandler types it as BaseServer
 
-        peer_host = self.client_address[0]
+        peer_host: Final = self.client_address[0]
         if not is_numeric_loopback_host(peer_host):
             self._respond(403, _FAILURE_PAGE)
             return
 
-        host_header = self.headers.get("Host", "")
+        host_header: Final = self.headers.get("Host", "")
         if host_header and host_header != server.expected_host_header:
             self._respond(400, _FAILURE_PAGE)
             return
@@ -119,12 +123,12 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         # process that guesses the ephemeral port could otherwise end the login by
         # sending one. Such requests are rejected without recording a terminal
         # result, so the listener keeps waiting for the real redirect (or times out).
-        params = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+        params: Final = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
         try:
-            state = _single_value(params, "state")
-            code = _single_value(params, "code")
-            error = _single_value(params, "error")
-            description = _single_value(params, "error_description")
+            state: Final = _single_value(params, "state")
+            code: Final = _single_value(params, "code")
+            error: Final = _single_value(params, "error")
+            description: Final = _single_value(params, "error_description")
         except NativeOIDCError:
             self._respond(400, _FAILURE_PAGE)
             return
@@ -162,7 +166,14 @@ class _CallbackServer(HTTPServer):
     # A fresh ephemeral port every time; never inherit a lingering socket.
     allow_reuse_address = False
 
-    def __init__(self, server_address, handler, *, expected_state: str, callback_path: str):
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        handler: type[BaseHTTPRequestHandler],
+        *,
+        expected_state: str,
+        callback_path: str,
+    ) -> None:
         self.expected_state = expected_state
         self.callback_path = callback_path
         self.result: _CallbackResult | None = None
@@ -177,7 +188,7 @@ class _CallbackServer(HTTPServer):
         self.server_name = str(host)
         self.server_port = port
 
-    def handle_error(self, request, client_address) -> None:
+    def handle_error(self, request: socket.socket, client_address: tuple[str, int] | tuple[str, int, int, int]) -> None:
         """Swallow handler tracebacks; they can contain the request path."""
 
 
@@ -188,7 +199,7 @@ class _CallbackServerV6(_CallbackServer):
 class LoopbackCallbackListener:
     """A one-shot loopback listener bound to an OS-assigned ephemeral port."""
 
-    def __init__(self, expected_state: str, callback_path: str = DEFAULT_CALLBACK_PATH):
+    def __init__(self, expected_state: str, callback_path: str = DEFAULT_CALLBACK_PATH) -> None:
         self._server = self._bind(expected_state, callback_path)
         host, port = self._server.server_address[:2]
         self.host = str(host)
@@ -231,14 +242,14 @@ class LoopbackCallbackListener:
 
         Returns the code; the caller redeems it. The code is never logged here.
         """
-        deadline = time.monotonic() + timeout
+        deadline: Final = time.monotonic() + timeout
         self._server.timeout = 0.5
         while time.monotonic() < deadline:
             if self._server.result is not None:
                 break
             self._server.handle_request()
 
-        result = self._server.result
+        result: Final = self._server.result
         if result is None:
             raise NativeOIDCError(f"timed out after {int(timeout)}s waiting for the browser login callback")
         if result.error is not None:
@@ -253,5 +264,5 @@ class LoopbackCallbackListener:
     def __enter__(self) -> "LoopbackCallbackListener":
         return self
 
-    def __exit__(self, *exc_info) -> None:
+    def __exit__(self, *exc_info: object) -> None:
         self.close()

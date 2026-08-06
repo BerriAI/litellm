@@ -5,10 +5,12 @@ displayed nowhere and logged nowhere. Only the user code and verification URI
 are shown.
 """
 
+import contextlib
 import time
 import webbrowser
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Final
 
 import click
 
@@ -29,14 +31,14 @@ from .tokens import (
 )
 
 # RFC 8628 section 3.2: `interval` defaults to 5 seconds when omitted.
-DEFAULT_POLL_INTERVAL_SECONDS = 5
+DEFAULT_POLL_INTERVAL_SECONDS: Final = 5
 # RFC 8628 section 3.5: `slow_down` increases the interval by 5 seconds.
-SLOW_DOWN_INCREMENT_SECONDS = 5
+SLOW_DOWN_INCREMENT_SECONDS: Final = 5
 
-MAX_POLL_INTERVAL_SECONDS = 60
-MAX_DEVICE_CODE_LIFETIME_SECONDS = 30 * 60
-MAX_USER_CODE_LENGTH = 64
-CONNECTION_BACKOFF_SECONDS = 5
+MAX_POLL_INTERVAL_SECONDS: Final = 60
+MAX_DEVICE_CODE_LIFETIME_SECONDS: Final = 30 * 60
+MAX_USER_CODE_LENGTH: Final = 64
+CONNECTION_BACKOFF_SECONDS: Final = 5
 
 
 @dataclass(frozen=True)
@@ -52,7 +54,7 @@ class DeviceAuthorization:
 
 
 def _require_non_empty_string(raw: Mapping[str, object], key: str) -> str:
-    value = raw.get(key)
+    value: Final = raw.get(key)
     if not isinstance(value, str) or not value:
         raise NativeOIDCError(f"device authorization response is missing {key}")
     return value
@@ -66,14 +68,14 @@ def _require_displayable_user_code(raw: Mapping[str, object]) -> str:
     ANSI or OSC escape sequence, so the response is rejected outright rather
     than sanitised: a legitimate provider never sends one.
     """
-    value = _require_non_empty_string(raw, "user_code")
+    value: Final = _require_non_empty_string(raw, "user_code")
     if len(value) > MAX_USER_CODE_LENGTH or not is_printable_ascii(value):
         raise NativeOIDCError("device authorization response user_code is not printable text")
     return value
 
 
 def _optional_safe_uri(raw: Mapping[str, object], key: str) -> str | None:
-    value = raw.get(key)
+    value: Final = raw.get(key)
     if value is None:
         return None
     if not isinstance(value, str):
@@ -85,7 +87,7 @@ def _optional_safe_uri(raw: Mapping[str, object], key: str) -> str | None:
 
 
 def _bounded_positive_int(raw: Mapping[str, object], key: str, maximum: int) -> int | None:
-    value = raw.get(key)
+    value: Final = raw.get(key)
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
@@ -99,15 +101,15 @@ def parse_device_authorization(payload: object) -> DeviceAuthorization:
     if not isinstance(payload, dict):
         raise NativeOIDCError("device authorization endpoint did not return a JSON object")
 
-    verification_uri = _optional_safe_uri(payload, "verification_uri")
+    verification_uri: Final = _optional_safe_uri(payload, "verification_uri")
     if verification_uri is None:
         raise NativeOIDCError("device authorization response is missing verification_uri")
 
-    expires_in = _bounded_positive_int(payload, "expires_in", MAX_DEVICE_CODE_LIFETIME_SECONDS)
+    expires_in: Final = _bounded_positive_int(payload, "expires_in", MAX_DEVICE_CODE_LIFETIME_SECONDS)
     if expires_in is None:
         raise NativeOIDCError("device authorization response is missing expires_in")
 
-    interval = _bounded_positive_int(payload, "interval", MAX_POLL_INTERVAL_SECONDS)
+    interval: Final = _bounded_positive_int(payload, "interval", MAX_POLL_INTERVAL_SECONDS)
 
     return DeviceAuthorization(
         device_code=_require_non_empty_string(payload, "device_code"),
@@ -123,7 +125,7 @@ def request_device_authorization(
     device_authorization_endpoint: str, metadata: NativeOIDCMetadata
 ) -> DeviceAuthorization:
     """Start a device authorization as a public client (no client secret)."""
-    response = post_form(
+    response: Final = post_form(
         device_authorization_endpoint,
         {"client_id": metadata.client_id, "scope": format_scopes(metadata.scopes)},  # mutable-ok: form body
     )
@@ -141,12 +143,11 @@ def poll_for_device_token(
     authorization: DeviceAuthorization,
     metadata: NativeOIDCMetadata,
     *,
-    sleep=time.sleep,
-    monotonic=time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> TokenResponse:
     """Poll the token endpoint per RFC 8628 section 3.5."""
-    interval = authorization.interval
-    deadline = monotonic() + authorization.expires_in
+    interval, deadline = authorization.interval, monotonic() + authorization.expires_in
 
     while True:
         if monotonic() >= deadline:
@@ -195,16 +196,16 @@ def run_device_flow(
     provider: ProviderMetadata,
     *,
     open_browser: bool = True,
-    echo=click.echo,
-    sleep=time.sleep,
-    monotonic=time.monotonic,
+    echo: Callable[[str], None] = click.echo,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> TokenResponse:
     """Run the full device authorization flow."""
     provider.assert_device_flow_supported()
-    device_endpoint = provider.require_device_authorization_endpoint()
-    token_endpoint = provider.require_token_endpoint()
+    device_endpoint: Final = provider.require_device_authorization_endpoint()
+    token_endpoint: Final = provider.require_token_endpoint()
 
-    authorization = request_device_authorization(device_endpoint, metadata)
+    authorization: Final = request_device_authorization(device_endpoint, metadata)
 
     echo(f"Open: {authorization.verification_uri}")
     echo(f"Enter code: {authorization.user_code}")
@@ -212,11 +213,9 @@ def run_device_flow(
         echo(f"Or open directly: {authorization.verification_uri_complete}")
 
     if open_browser:
-        target = authorization.verification_uri_complete or authorization.verification_uri
-        try:
+        target: Final = authorization.verification_uri_complete or authorization.verification_uri
+        with contextlib.suppress(Exception):
             webbrowser.open(target)
-        except Exception:  # noqa: BLE001 - browser launch is best-effort
-            pass
 
     echo("Waiting for approval...")
     return poll_for_device_token(token_endpoint, authorization, metadata, sleep=sleep, monotonic=monotonic)

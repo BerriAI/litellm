@@ -1,4 +1,6 @@
 from collections.abc import Sequence
+from typing import Final
+
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -66,7 +68,10 @@ class UiDiscoveryEndpoints(BaseModel):
     native_oidc: NativeOIDCConfig | None = None
 
     @model_serializer(mode="wrap")
-    def _omit_absent_native_oidc(self, handler: SerializerFunctionWrapHandler):
+    def _omit_absent_native_oidc(  # noqa: ANN202  # a return annotation would override the serialization schema
+        self,
+        handler: SerializerFunctionWrapHandler,
+    ):
         """Drop `native_oidc` entirely when it is unset.
 
         Deliberately narrower than `exclude_none` / `response_model_exclude_none`:
@@ -75,7 +80,7 @@ class UiDiscoveryEndpoints(BaseModel):
         `Field(exclude_if=...)` so the model stays compatible with the declared
         `pydantic>=2.10` floor.
         """
-        serialized = handler(self)
+        serialized: Final = handler(self)
         if isinstance(serialized, dict) and serialized.get("native_oidc") is None:
             serialized.pop("native_oidc", None)
         return serialized

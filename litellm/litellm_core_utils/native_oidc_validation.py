@@ -9,18 +9,19 @@ runtime and the thin ``litellm[cli]`` installation.
 
 import ipaddress
 from collections.abc import Iterable, Sequence
+from typing import Final
 from urllib.parse import urlsplit
 
 # RFC 6749 appendix A: NQCHAR = %x21 / %x23-5B / %x5D-7E
 # i.e. printable ASCII excluding SPACE (%x20), DQUOTE (%x22) and BACKSLASH (%x5C).
 # Both scope-token (section 3.3) and the `error` code (section 5.2) are 1*NQCHAR.
-NQCHAR_ALLOWED_CHARACTERS = frozenset(chr(code) for code in range(0x21, 0x7F) if code not in (0x22, 0x5C))
+NQCHAR_ALLOWED_CHARACTERS: Final = frozenset(chr(code) for code in range(0x21, 0x7F) if code not in (0x22, 0x5C))
 
-PROVIDER_CONFIGURATION_PATH = "/.well-known/openid-configuration"
+PROVIDER_CONFIGURATION_PATH: Final = "/.well-known/openid-configuration"
 
 # The only schemes an issuer or endpoint may use. Plaintext http is accepted here
 # and narrowed to numeric loopback by the caller.
-URL_SCHEMES = frozenset(("http", "https"))
+URL_SCHEMES: Final = frozenset(("http", "https"))
 
 
 def has_control_characters(value: str) -> bool:
@@ -70,7 +71,7 @@ def validate_scope_tokens(scopes: Iterable[object]) -> tuple[str, ...]:
 
     Raises ValueError with a message that never echoes the offending value.
     """
-    validated: list[str] = []
+    validated: Final[list[str]] = []
     for scope in scopes:
         if not isinstance(scope, str) or not is_valid_scope_token(scope):
             raise ValueError("must contain only RFC 6749 scope-tokens")
@@ -92,7 +93,7 @@ def _validate_url_shape(value: object, *, allow_query: bool) -> None:
         raise ValueError("must not contain whitespace or control characters")
 
     try:
-        parsed = urlsplit(value)
+        parsed: Final = urlsplit(value)
         _ = parsed.port
     except ValueError as error:
         raise ValueError("must contain a valid port") from error
@@ -151,7 +152,7 @@ def is_trusted_metadata_origin(base_url: str) -> bool:
     arbitrary remote plaintext channel.
     """
     try:
-        parsed = urlsplit(base_url)
+        parsed: Final = urlsplit(base_url)
         _ = parsed.port
     except ValueError:
         return False

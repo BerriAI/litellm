@@ -619,13 +619,13 @@ def _report_native_login(credential: Mapping[str, Any]) -> None:
     help="Do not open a browser; prefer the device code flow.",
 )
 @click.pass_context
-def login(ctx: click.Context, flow: str, no_browser: bool):
+def login(ctx: click.Context, flow: str, no_browser: bool) -> None:
     """Login to LiteLLM proxy using SSO or native OIDC authentication"""
     base_url: Final = ctx.obj["base_url"]
 
     if flow != FLOW_PROXY:
         try:
-            credential = run_native_login(base_url, flow=flow, open_browser=not no_browser)
+            credential: Final = run_native_login(base_url, flow=flow, open_browser=not no_browser)
         except NativeOIDCUnavailable as unavailable:
             if flow != FLOW_AUTO:
                 click.echo(f"Native OIDC login is not available: {unavailable}")
@@ -723,6 +723,15 @@ def logout():
     click.echo("Logged out successfully. Authentication token cleared.")
 
 
+def _echo_api_key(token_data: Mapping[str, object]) -> None:
+    api_key: Final = token_data.get("key")
+    if not api_key:
+        click.echo("No token available. Run 'lite login'.", err=True)
+        sys.exit(1)
+
+    click.echo(api_key)
+
+
 @click.command(name="print-token")
 @click.pass_context
 def print_token(ctx: click.Context):
@@ -737,7 +746,7 @@ def print_token(ctx: click.Context):
     again. A native OIDC credential carries a refresh token and is refreshed
     in place, so an unattended `apiKeyHelper` invocation keeps working.
     """
-    token_data = load_token()
+    token_data: Final = load_token()
     if not token_data:
         click.echo("Not authenticated. Run 'lite login'.", err=True)
         sys.exit(1)
@@ -758,23 +767,20 @@ def print_token(ctx: click.Context):
         # apiKeyHelper being invoked unattended.
         if needs_refresh(token_data):
             try:
-                token_data = refresh_native_credential(token_data)
+                refreshed_token: Final = refresh_native_credential(token_data)
             except NativeOIDCError as error:
                 click.echo(
                     f"Token expired and could not be refreshed ({error}). Run 'lite login' again.",
                     err=True,
                 )
                 sys.exit(1)
+            _echo_api_key(refreshed_token)
+            return
     elif not is_cli_token_fresh(token_data):
         click.echo("Token expired. Run 'lite login' again.", err=True)
         sys.exit(1)
 
-    api_key: Final = token_data.get("key")
-    if not api_key:
-        click.echo("No token available. Run 'lite login'.", err=True)
-        sys.exit(1)
-
-    click.echo(api_key)
+    _echo_api_key(token_data)
 
 
 @click.command(name="whoami")

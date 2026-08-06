@@ -11,6 +11,7 @@ Two different trust levels are handled here:
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Final
 
 from litellm.litellm_core_utils.native_oidc_validation import (
     derive_provider_configuration_url,
@@ -23,11 +24,11 @@ from litellm.litellm_core_utils.native_oidc_validation import (
 from .errors import NativeOIDCError, NativeOIDCUnavailable
 from .http_client import get_json, get_json_response
 
-LITELLM_DISCOVERY_PATH = "/.well-known/litellm-ui-config"
+LITELLM_DISCOVERY_PATH: Final = "/.well-known/litellm-ui-config"
 
-NATIVE_OIDC_ALLOWED_KEYS = frozenset(("issuer", "client_id", "scopes"))
+NATIVE_OIDC_ALLOWED_KEYS: Final = frozenset(("issuer", "client_id", "scopes"))
 
-DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
+DEVICE_CODE_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:device_code"
 
 
 def build_litellm_discovery_url(base_url: str) -> str:
@@ -53,15 +54,15 @@ def parse_native_oidc_metadata(raw: object) -> NativeOIDCMetadata:
     if not isinstance(raw, dict):
         raise NativeOIDCError("advertised native_oidc metadata is not an object")
 
-    unknown = frozenset(raw) - NATIVE_OIDC_ALLOWED_KEYS
+    unknown: Final = frozenset(raw) - NATIVE_OIDC_ALLOWED_KEYS
     if unknown:
         raise NativeOIDCError(
             "advertised native_oidc metadata contains unsupported field(s): " + ", ".join(sorted(unknown))
         )
 
-    issuer = raw.get("issuer")
-    client_id = raw.get("client_id")
-    scopes = raw.get("scopes")
+    issuer: Final = raw.get("issuer")
+    client_id: Final = raw.get("client_id")
+    scopes: Final = raw.get("scopes")
 
     if not isinstance(issuer, str):
         raise NativeOIDCError("advertised native_oidc issuer is missing or not a string")
@@ -76,7 +77,7 @@ def parse_native_oidc_metadata(raw: object) -> NativeOIDCMetadata:
     if not isinstance(scopes, list):
         raise NativeOIDCError("advertised native_oidc scopes is missing or not a list")
     try:
-        validated_scopes = validate_scope_tokens(scopes)
+        validated_scopes: Final = validate_scope_tokens(scopes)
     except ValueError as error:
         raise NativeOIDCError(f"advertised native_oidc scopes {error}") from error
 
@@ -98,8 +99,8 @@ def fetch_native_oidc_metadata(base_url: str) -> NativeOIDCMetadata:
             "legacy proxy-mediated login."
         )
 
-    url = build_litellm_discovery_url(base_url)
-    response = get_json_response(url)
+    url: Final = build_litellm_discovery_url(base_url)
+    response: Final = get_json_response(url)
 
     if response.status_code in (404, 405):
         raise NativeOIDCUnavailable(f"{url} returned HTTP {response.status_code}; proxy predates native OIDC discovery")
@@ -116,7 +117,7 @@ def fetch_native_oidc_metadata(base_url: str) -> NativeOIDCMetadata:
 
 
 def _optional_string_tuple(raw: Mapping[str, object], key: str) -> tuple[str, ...] | None:
-    value = raw.get(key)
+    value: Final = raw.get(key)
     if value is None:
         return None
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
@@ -125,7 +126,7 @@ def _optional_string_tuple(raw: Mapping[str, object], key: str) -> tuple[str, ..
 
 
 def _optional_endpoint(raw: Mapping[str, object], key: str) -> str | None:
-    value = raw.get(key)
+    value: Final = raw.get(key)
     if value is None:
         return None
     if not isinstance(value, str):
@@ -175,16 +176,12 @@ class ProviderMetadata:
             return False
         if self.response_types_supported is not None and "code" not in self.response_types_supported:
             return False
-        if self.grant_types_supported is not None and "authorization_code" not in self.grant_types_supported:
-            return False
-        return True
+        return self.grant_types_supported is None or "authorization_code" in self.grant_types_supported
 
     def supports_device_flow(self) -> bool:
         if self.device_authorization_endpoint is None or self.token_endpoint is None:
             return False
-        if self.grant_types_supported is not None and DEVICE_CODE_GRANT_TYPE not in self.grant_types_supported:
-            return False
-        return True
+        return self.grant_types_supported is None or DEVICE_CODE_GRANT_TYPE in self.grant_types_supported
 
     def assert_browser_flow_supported(self) -> None:
         """Raise a specific reason why browser login cannot be used."""
@@ -217,7 +214,7 @@ def parse_provider_metadata(raw: object, expected_issuer: str) -> ProviderMetada
     if not isinstance(raw, dict):
         raise NativeOIDCError("provider metadata is not a JSON object")
 
-    issuer = raw.get("issuer")
+    issuer: Final = raw.get("issuer")
     if not isinstance(issuer, str):
         raise NativeOIDCError("provider metadata issuer is missing or not a string")
     if issuer != expected_issuer:

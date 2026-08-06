@@ -17,6 +17,8 @@ Security properties enforced here:
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import reduce
+from typing import Final
 
 import requests
 
@@ -24,12 +26,12 @@ from .errors import NativeOIDCError
 
 # Generous enough for real provider documents (some IdPs publish large
 # `claims_supported` lists) while still bounding memory.
-MAX_RESPONSE_BYTES = 256 * 1024
+MAX_RESPONSE_BYTES: Final = 256 * 1024
 
 # (connect, read) seconds.
-DEFAULT_TIMEOUT: tuple[float, float] = (5.0, 15.0)
+DEFAULT_TIMEOUT: Final[tuple[float, float]] = (5.0, 15.0)
 
-MAX_RETRY_AFTER_SECONDS = 300
+MAX_RETRY_AFTER_SECONDS: Final = 300
 
 
 @dataclass(frozen=True)
@@ -47,7 +49,7 @@ class JsonResponse:
 
 
 def _is_json_content_type(content_type: str) -> bool:
-    media_type = content_type.split(";", 1)[0].strip().lower()
+    media_type: Final = content_type.split(";", 1)[0].strip().lower()
     return media_type == "application/json" or media_type.endswith("+json")
 
 
@@ -56,7 +58,7 @@ def _parse_retry_after(value: str | None) -> int | None:
     if not value:
         return None
     try:
-        seconds = int(value.strip())
+        seconds: Final = int(value.strip())
     except ValueError:
         return None
     if seconds < 0:
@@ -64,15 +66,15 @@ def _parse_retry_after(value: str | None) -> int | None:
     return min(seconds, MAX_RETRY_AFTER_SECONDS)
 
 
+def _append_bounded(body: bytes, chunk: bytes) -> bytes:
+    combined: Final = body + chunk
+    if len(combined) > MAX_RESPONSE_BYTES:
+        raise NativeOIDCError(f"response exceeded the {MAX_RESPONSE_BYTES} byte limit")
+    return combined
+
+
 def _read_bounded_body(response: requests.Response) -> bytes:
-    body = b""
-    for chunk in response.iter_content(chunk_size=8192):
-        if not chunk:
-            continue
-        body += chunk
-        if len(body) > MAX_RESPONSE_BYTES:
-            raise NativeOIDCError(f"response exceeded the {MAX_RESPONSE_BYTES} byte limit")
-    return body
+    return reduce(_append_bounded, response.iter_content(chunk_size=8192), b"")
 
 
 def _decode_json_object(body: bytes, content_type: str) -> Mapping[str, object] | None:
@@ -84,7 +86,7 @@ def _decode_json_object(body: bytes, content_type: str) -> Mapping[str, object] 
     if not _is_json_content_type(content_type):
         return None
     try:
-        decoded = json.loads(body.decode("utf-8"))
+        decoded: Final = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         return None
     return decoded if isinstance(decoded, dict) else None
@@ -98,7 +100,7 @@ def _request(
     headers: Mapping[str, str] | None = None,
     timeout: tuple[float, float] = DEFAULT_TIMEOUT,
 ) -> JsonResponse:
-    request_headers = {"Accept": "application/json", **(headers or {})}  # mutable-ok: header dict for requests
+    request_headers: Final = {"Accept": "application/json", **(headers or {})}  # mutable-ok: header dict for requests
 
     try:
         with requests.request(
@@ -114,7 +116,7 @@ def _request(
                 # Refusing rather than following: a redirect here could move
                 # credentials to another origin or downgrade to plaintext HTTP.
                 raise NativeOIDCError(f"{url} returned HTTP {response.status_code}; redirects are not followed")
-            body = _read_bounded_body(response)
+            body: Final = _read_bounded_body(response)
             return JsonResponse(
                 status_code=response.status_code,
                 payload=_decode_json_object(body, response.headers.get("content-type", "")),
@@ -135,7 +137,7 @@ def get_json_response(url: str, *, timeout: tuple[float, float] = DEFAULT_TIMEOU
 
 def get_json(url: str, *, timeout: tuple[float, float] = DEFAULT_TIMEOUT) -> Mapping[str, object]:
     """GET a JSON object, raising unless the response is 200 with a JSON object."""
-    response = _request("GET", url, timeout=timeout)
+    response: Final = _request("GET", url, timeout=timeout)
     if response.status_code != 200:
         raise NativeOIDCError(f"{url} returned HTTP {response.status_code}")
     if response.payload is None:

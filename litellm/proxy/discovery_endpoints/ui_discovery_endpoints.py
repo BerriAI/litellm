@@ -15,7 +15,7 @@ from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
 
 router: Final = APIRouter()
 
-NATIVE_OIDC_SETTING_KEYS = (
+NATIVE_OIDC_SETTING_KEYS: Final = (
     "native_oidc_issuer",
     "native_oidc_client_id",
     "native_oidc_scopes",
@@ -24,7 +24,7 @@ NATIVE_OIDC_SETTING_KEYS = (
 # Constant on purpose: this is reachable from an unauthenticated public route,
 # so it must never echo the configured issuer, client id, scopes, or the raw
 # Pydantic error (which would embed the rejected input values).
-NATIVE_OIDC_INVALID_MESSAGE = (
+NATIVE_OIDC_INVALID_MESSAGE: Final = (
     "native OIDC metadata was invalid or incomplete and was omitted from "
     "/.well-known/litellm-ui-config. Check general_settings.litellm_jwtauth "
     "native_oidc_issuer / native_oidc_client_id / native_oidc_scopes."
@@ -51,7 +51,7 @@ def _build_native_oidc_config(general_settings: Mapping[str, object]) -> NativeO
     if general_settings.get("enable_jwt_auth") is not True:
         return None
 
-    jwt_auth_settings = general_settings.get("litellm_jwtauth")
+    jwt_auth_settings: Final = general_settings.get("litellm_jwtauth")
     if not isinstance(jwt_auth_settings, dict):
         return None
 

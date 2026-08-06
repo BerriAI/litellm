@@ -5,7 +5,8 @@ proxy contributes only the trust anchor (issuer, client id, scopes); it never
 brokers the exchange and never sees the authorization code or refresh token.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from typing import Final
 
 import click
 
@@ -24,12 +25,12 @@ from .metadata import (
     fetch_provider_metadata,
 )
 
-FLOW_AUTO = "auto"
-FLOW_BROWSER = "browser"
-FLOW_DEVICE = "device"
-FLOW_PROXY = "proxy"
+FLOW_AUTO: Final = "auto"
+FLOW_BROWSER: Final = "browser"
+FLOW_DEVICE: Final = "device"
+FLOW_PROXY: Final = "proxy"
 
-NATIVE_FLOW_CHOICES = (FLOW_AUTO, FLOW_BROWSER, FLOW_DEVICE, FLOW_PROXY)
+NATIVE_FLOW_CHOICES: Final = (FLOW_AUTO, FLOW_BROWSER, FLOW_DEVICE, FLOW_PROXY)
 
 
 def select_flow(provider: ProviderMetadata, requested: str, *, open_browser: bool) -> str:
@@ -62,28 +63,29 @@ def run_native_login(
     *,
     flow: str = FLOW_AUTO,
     open_browser: bool = True,
-    echo=click.echo,
+    echo: Callable[[str], None] = click.echo,
 ) -> Mapping[str, object]:
     """Log in against the proxy's advertised identity provider.
 
     Raises NativeOIDCUnavailable when the proxy offers no native OIDC -- the
     only condition under which the caller may fall back to proxy-mediated SSO.
     """
-    metadata: NativeOIDCMetadata = fetch_native_oidc_metadata(base_url)
-    provider = fetch_provider_metadata(metadata.issuer)
+    metadata: Final[NativeOIDCMetadata] = fetch_native_oidc_metadata(base_url)
+    provider: Final = fetch_provider_metadata(metadata.issuer)
 
-    chosen = select_flow(provider, flow, open_browser=open_browser)
+    chosen: Final = select_flow(provider, flow, open_browser=open_browser)
     echo(f"Signing in via {metadata.issuer} ({chosen} flow)")
 
-    if chosen == FLOW_BROWSER:
-        token = run_browser_flow(metadata, provider, open_browser=open_browser, echo=echo)
-    else:
-        token = run_device_flow(metadata, provider, open_browser=open_browser, echo=echo)
+    token: Final = (
+        run_browser_flow(metadata, provider, open_browser=open_browser, echo=echo)
+        if chosen == FLOW_BROWSER
+        else run_device_flow(metadata, provider, open_browser=open_browser, echo=echo)
+    )
 
     # The identity provider issuing a token does not mean LiteLLM accepts it.
     # Fail here rather than storing a credential that breaks on first use.
     verify_token_with_litellm(base_url, token.access_token)
 
-    credential = build_native_credential(base_url=base_url, metadata=metadata, token=token)
+    credential: Final = build_native_credential(base_url=base_url, metadata=metadata, token=token)
     save_credential(credential)
     return credential
