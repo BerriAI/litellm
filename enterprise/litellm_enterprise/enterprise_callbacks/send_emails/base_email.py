@@ -919,9 +919,9 @@ class BaseEmailLogger(CustomLogger):
         """
         Construct invitation link for the user
 
-        # http://localhost:4000/ui?invitation_id=7a096b3a-37c6-440f-9dd1-ba22e8043f6b
+        # http://localhost:4000/ui/onboarding?invitation_id=7a096b3a-37c6-440f-9dd1-ba22e8043f6b
         """
-        return f"{base_url}/ui?invitation_id={invitation_id}"
+        return f"{base_url}/ui/onboarding?invitation_id={invitation_id}"
 
     async def send_email(
         self,

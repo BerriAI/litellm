@@ -17,10 +17,13 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     AuthSpecKind,
     AwsSigV4Config,
     Byok,
+    ClientSecretAuth,
     CredError,
     Error,
+    IdJagConfig,
     NoneConfig,
     Ok,
+    PrivateKeyJwtAuth,
     ServerSpec,
     SharedKey,
     StaticKeys,
@@ -28,6 +31,14 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
 )
 
 _AUTH_CONFIG = TypeAdapter(AuthConfig)
+
+_ID_JAG_MINIMAL = {
+    "kind": "id_jag",
+    "org_token_endpoint": "https://idp.example.com/token",
+    "resource_token_endpoint": "https://mcp-as.example.com/token",
+    "client_id": "litellm",
+    "client_auth": {"source": "client_secret", "client_secret": "s"},
+}
 
 
 def test_parse_auth_spec_kind_accepts_known_mode():
@@ -148,3 +159,73 @@ def test_secrets_do_not_leak_in_repr():
     key = SharedKey(value=SecretStr("super-secret"))
     assert "super-secret" not in repr(key)
     assert key.value.get_secret_value() == "super-secret"
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["org_token_endpoint", "resource_token_endpoint", "client_id", "client_auth"],
+)
+def test_id_jag_config_requires_each_endpoint_client_and_auth(missing):
+    payload = {k: v for k, v in _ID_JAG_MINIMAL.items() if k != missing}
+    with pytest.raises(ValidationError):
+        _AUTH_CONFIG.validate_python(payload)
+
+
+def test_id_jag_client_auth_discriminates_on_source():
+    by_secret = _AUTH_CONFIG.validate_python(_ID_JAG_MINIMAL)
+    assert isinstance(by_secret, IdJagConfig)
+    assert isinstance(by_secret.client_auth, ClientSecretAuth)
+    assert by_secret.client_auth.client_secret.get_secret_value() == "s"
+
+    by_key = _AUTH_CONFIG.validate_python(
+        {
+            **_ID_JAG_MINIMAL,
+            "client_auth": {
+                "source": "private_key_jwt",
+                "private_key": "PEM",
+                "key_id": "kid-1",
+                "signing_alg": "RS384",
+            },
+        }
+    )
+    assert isinstance(by_key, IdJagConfig)
+    assert isinstance(by_key.client_auth, PrivateKeyJwtAuth)
+    assert by_key.client_auth.private_key.get_secret_value() == "PEM"
+    assert by_key.client_auth.key_id == "kid-1"
+    assert by_key.client_auth.signing_alg == "RS384"
+
+
+def test_id_jag_client_auth_rejects_unknown_source():
+    with pytest.raises(ValidationError):
+        _AUTH_CONFIG.validate_python(
+            {**_ID_JAG_MINIMAL, "client_auth": {"source": "mystery"}}
+        )
+
+
+def test_id_jag_config_defaults_id_token_subject_and_empty_optionals():
+    config = _AUTH_CONFIG.validate_python(_ID_JAG_MINIMAL)
+    assert isinstance(config, IdJagConfig)
+    assert config.subject_token_type == "urn:ietf:params:oauth:token-type:id_token"
+    assert config.audience is None
+    assert config.resource is None
+    assert config.scopes == ()
+
+
+def test_id_jag_secrets_do_not_leak_in_repr():
+    config = IdJagConfig(
+        org_token_endpoint="https://idp.example.com/token",
+        resource_token_endpoint="https://mcp-as.example.com/token",
+        client_id="litellm",
+        client_auth=PrivateKeyJwtAuth(private_key=SecretStr("super-secret-pem")),
+    )
+    assert "super-secret-pem" not in repr(config)
+
+
+def test_id_jag_server_spec_derives_auth_spec_kind():
+    config = _AUTH_CONFIG.validate_python(_ID_JAG_MINIMAL)
+    spec = ServerSpec(
+        server_id="s",
+        resource="https://mcp.example.com/mcp",
+        config=config,
+    )
+    assert spec.auth_spec_kind is AuthSpecKind.id_jag

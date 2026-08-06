@@ -1,6 +1,6 @@
 "use client";
 
-import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
+import APIReferenceView from "./_components/APIReferenceView";
 import { DeprecationBanner } from "@/components/DeprecationBanner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";

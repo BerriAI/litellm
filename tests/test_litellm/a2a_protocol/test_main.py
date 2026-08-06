@@ -104,3 +104,32 @@ async def test_streaming_trace_id_prefers_logging_trace_id():
                 pass
 
     assert captured["extra_headers"]["X-LiteLLM-Trace-Id"] == "trace-from-logging"
+
+
+def test_streaming_logging_obj_carries_call_type_into_model_call_details():
+    """The streaming logging object is built by hand rather than through
+    ``update_environment_variables``, which is the only place ``call_type`` normally
+    reaches ``model_call_details``. Callbacks read the call type from there, so
+    without this the streamed turn arrives at every logger with no call type at all
+    and OTel's GenAI metrics label it ``chat`` instead of ``invoke_agent``."""
+    from a2a.compat.v0_3.types import MessageSendParams, SendStreamingMessageRequest
+
+    from litellm.a2a_protocol.main import _build_streaming_logging_obj
+
+    request = SendStreamingMessageRequest(
+        id="rpc-call-type",
+        params=MessageSendParams(
+            message={"messageId": "m1", "role": "user", "parts": [{"kind": "text", "text": "hi"}]}
+        ),
+    )
+
+    logging_obj = _build_streaming_logging_obj(
+        request=request,
+        agent_name="some-agent",
+        agent_id=None,
+        litellm_params=None,
+        metadata=None,
+        proxy_server_request=None,
+    )
+
+    assert logging_obj.model_call_details["call_type"] == "asend_message_streaming"

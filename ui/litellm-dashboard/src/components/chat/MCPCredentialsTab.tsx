@@ -184,21 +184,23 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
                     </TableCell>
                     <TableCell className="text-right">
                       <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="icon-sm"
-                            disabled={isRevoking}
-                            title="Revoke connection"
-                            className="text-muted-foreground hover:text-destructive hover:border-destructive/50"
-                          >
-                            {isRevoking ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-3.5 w-3.5" />
-                            )}
-                          </Button>
-                        </AlertDialogTrigger>
+                        <AlertDialogTrigger
+                          render={
+                            <Button
+                              variant="outline"
+                              size="icon-sm"
+                              disabled={isRevoking}
+                              title="Revoke connection"
+                              className="text-muted-foreground hover:text-destructive hover:border-destructive/50"
+                            >
+                              {isRevoking ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              )}
+                            </Button>
+                          }
+                        />
                         <AlertDialogContent>
                           <AlertDialogHeader>
                             <AlertDialogTitle>Revoke connection?</AlertDialogTitle>

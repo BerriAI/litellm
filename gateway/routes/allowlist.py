@@ -54,6 +54,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/messages",
     "/v1/skills",
     "/v1/a2a/",
+    "/a2a/",
     # LiteLLM-native LLM surface
     "/v1/rerank",
     "/v2/rerank",
@@ -106,7 +107,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     # Health & ops
     "/health",
     "/metrics",
-    "/watsonx"
+    "/watsonx",
 )
 
 GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
@@ -118,5 +119,11 @@ GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
         "/docs/oauth2-redirect",
         "/redoc",
         "/test",
+    }
+)
+
+GATEWAY_MOUNT_PATHS: frozenset[str] = frozenset(
+    {
+        "/metrics",
     }
 )

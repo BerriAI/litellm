@@ -1084,6 +1084,147 @@ def test_sync_delete_responses_sets_json_content_type():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "litellm_params_kwargs, stream, global_timeout, expected",
+    [
+        ({"timeout": 12.0}, False, None, 12.0),
+        ({"request_timeout": 30.0}, False, None, 30.0),
+        ({}, False, 1500.0, 1500.0),
+        ({"timeout": 5.0, "stream_timeout": 50.0}, True, None, 50.0),
+        ({"timeout": 5.0, "stream_timeout": 50.0}, False, None, 5.0),
+        ({"timeout": 5.0, "request_timeout": 30.0}, False, None, 5.0),
+        ({}, False, None, None),
+        ({}, True, None, None),
+    ],
+)
+def test_resolve_anthropic_messages_timeout(
+    monkeypatch, litellm_params_kwargs, stream, global_timeout, expected
+):
+    from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+    if global_timeout is None:
+        monkeypatch.setattr(
+            "litellm.request_timeout",
+            float(DEFAULT_REQUEST_TIMEOUT_SECONDS),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "litellm.request_timeout_explicitly_set",
+            False,
+            raising=False,
+        )
+    else:
+        monkeypatch.setattr("litellm.request_timeout", global_timeout, raising=False)
+        monkeypatch.setattr(
+            "litellm.request_timeout_explicitly_set", True, raising=False
+        )
+
+    resolved = BaseLLMHTTPHandler._resolve_anthropic_messages_timeout(
+        litellm_params=GenericLiteLLMParams(**litellm_params_kwargs),
+        stream=stream,
+        custom_llm_provider="anthropic",
+    )
+
+    assert resolved == expected
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_forwards_request_timeout(monkeypatch):
+    from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "request_timeout", float(DEFAULT_REQUEST_TIMEOUT_SECONDS))
+    monkeypatch.setattr(litellm, "request_timeout_explicitly_set", False)
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "k"}, "https://api.anthropic.com")
+    )
+    mock_config.should_filter_anthropic_beta_headers = Mock(return_value=False)
+    mock_config.transform_anthropic_messages_request = Mock(
+        return_value={"model": "claude", "messages": []}
+    )
+    mock_config.get_complete_url = Mock(return_value="https://api.anthropic.com/v1/messages")
+    mock_config.sign_request = Mock(return_value=({"x-api-key": "k"}, None))
+    mock_config.max_retry_on_anthropic_messages_http_error = 1
+    expected_response = {"id": "msg_1", "content": []}
+    mock_config.transform_anthropic_messages_response = Mock(return_value=expected_response)
+
+    ok_response = Mock()
+    ok_response.raise_for_status = Mock(return_value=None)
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=ok_response)
+
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+    logging_obj.dynamic_success_callbacks = []
+
+    result = await handler.async_anthropic_messages_handler(
+        model="claude",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_provider_config=mock_config,
+        anthropic_messages_optional_request_params={},
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(request_timeout=0.3),
+        logging_obj=logging_obj,
+        client=mock_client,
+        kwargs={},
+    )
+
+    assert result is expected_response
+    assert mock_client.post.await_args.kwargs["timeout"] == 0.3
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_forwards_stream_timeout(monkeypatch):
+    from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "request_timeout", float(DEFAULT_REQUEST_TIMEOUT_SECONDS))
+    monkeypatch.setattr(litellm, "request_timeout_explicitly_set", False)
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "k"}, "https://api.anthropic.com")
+    )
+    mock_config.should_filter_anthropic_beta_headers = Mock(return_value=False)
+    mock_config.transform_anthropic_messages_request = Mock(
+        return_value={"model": "claude", "messages": []}
+    )
+    mock_config.get_complete_url = Mock(return_value="https://api.anthropic.com/v1/messages")
+    mock_config.sign_request = Mock(return_value=({"x-api-key": "k"}, None))
+    mock_config.max_retry_on_anthropic_messages_http_error = 1
+    mock_config.get_async_streaming_response_iterator = Mock(return_value=Mock())
+
+    ok_response = Mock()
+    ok_response.raise_for_status = Mock(return_value=None)
+    ok_response.headers = httpx.Headers({})
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=ok_response)
+
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+    logging_obj.dynamic_success_callbacks = []
+
+    await handler.async_anthropic_messages_handler(
+        model="claude",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_provider_config=mock_config,
+        anthropic_messages_optional_request_params={},
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(timeout=9.0, stream_timeout=0.7),
+        logging_obj=logging_obj,
+        client=mock_client,
+        stream=True,
+        kwargs={},
+    )
+
+    assert mock_client.post.await_args.kwargs["stream"] is True
+    assert mock_client.post.await_args.kwargs["timeout"] == 0.7
+
+
 @pytest.mark.asyncio
 async def test_anthropic_post_uses_prebuilt_body_without_redumping():
     """When the caller passes a pre-serialized (unsigned) body, attempt 0 must
@@ -1837,3 +1978,96 @@ async def test_alist_input_items_surfaces_upstream_error_status():
         )
 
     assert excinfo.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_request(monkeypatch):
+    """Regression: after Bedrock rejects a replayed thinking block (400 invalid signature),
+    the strip-and-retry re-sign must not inherit attempt 1's SigV4 Authorization/X-Amz-Date;
+    reusing them over the new stripped body makes AWS return 403 SignatureDoesNotMatch."""
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+
+    for env_var in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
+        monkeypatch.delenv(env_var, raising=False)
+
+    handler = BaseLLMHTTPHandler()
+    provider_config = AmazonAnthropicClaudeMessagesConfig()
+    litellm_params = GenericLiteLLMParams(
+        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        aws_region_name="us-east-1",
+    )
+    request_url = "https://bedrock-runtime.us-east-1.amazonaws.com/model/test-model/invoke"
+    request_body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 100,
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "x", "signature": ""},
+                    {"type": "text", "text": "ok"},
+                ],
+            },
+            {"role": "user", "content": "continue"},
+        ],
+    }
+    first_attempt_headers, signed_json_body = provider_config.sign_request(
+        headers={"Content-Type": "application/json"},
+        optional_params=dict(litellm_params),
+        request_data=request_body,
+        api_base=request_url,
+        api_key=None,
+        stream=False,
+        fake_stream=False,
+        model="test-model",
+    )
+
+    posts: list = []
+    invalid_signature_response = httpx.Response(
+        400,
+        text='{"message": "messages.1.content.0: Invalid `signature` in `thinking` block"}',
+        request=httpx.Request("POST", request_url),
+    )
+    ok_response = httpx.Response(200, json={"id": "msg_1"}, request=httpx.Request("POST", request_url))
+
+    class FakeAsyncClient:
+        async def post(
+            self, url, headers, data, stream=False, logging_obj=None, timeout=None
+        ):
+            posts.append({"headers": dict(headers), "data": data})
+            return invalid_signature_response if len(posts) == 1 else ok_response
+
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+
+    response = await handler._async_post_anthropic_messages_with_http_error_retry(
+        async_httpx_client=FakeAsyncClient(),
+        request_url=request_url,
+        headers=dict(first_attempt_headers),
+        signed_json_body=signed_json_body,
+        request_body=request_body,
+        stream=False,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        litellm_params=litellm_params,
+        api_key=None,
+        model="test-model",
+    )
+
+    assert response.status_code == 200
+    assert len(posts) == 2
+    retry_payload = json.loads(posts[1]["data"])
+    retry_blocks = [
+        block
+        for message in retry_payload["messages"]
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+    ]
+    assert retry_blocks and all(block["type"] != "thinking" for block in retry_blocks)
+    retry_authorization = posts[1]["headers"]["Authorization"]
+    assert retry_authorization.startswith("AWS4-HMAC-SHA256")
+    assert retry_authorization != first_attempt_headers["Authorization"]
