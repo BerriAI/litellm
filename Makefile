@@ -124,10 +124,10 @@ lint-fetch-base:
 	git fetch origin litellm_internal_staging
 
 # Mirror test-linting.yml's lint job environment: the proxy-dev group plus a generated
-# Prisma client, so basedpyright resolves the same modules CI does (without the generated
-# client the DB wrappers typed against it degrade to Unknown, drifting the budget from
-# CI's). --inexact tops up the venv instead of pruning the proxy extras gen:api and the
-# running proxy need.
+# Prisma client, so `basedpyright tests/e2e` resolves the same modules CI does. The
+# budget gate itself no longer measures here (scripts/type_check_gate.py provisions its
+# own .venv-typecheck). --inexact tops up the venv instead of pruning the proxy extras
+# gen:api and the running proxy need.
 lint-install:
 	$(UV) sync --inexact --frozen --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
