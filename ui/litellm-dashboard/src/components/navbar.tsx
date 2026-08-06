@@ -3,9 +3,10 @@ import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBounci
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { useWorker } from "@/hooks/useWorker";
 import { getProxyBaseUrl } from "@/components/networking";
+import { migratedHref } from "@/utils/migratedPages";
 import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-import { clearStoredReturnUrl } from "@/utils/returnUrlUtils";
+import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import { DownOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
 import { Tag } from "antd";
@@ -16,6 +17,7 @@ import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/
 import { NAV_PRODUCT_LINK_CLASS } from "./Navbar/navProductLinkClass";
 import { NotificationsBell } from "./Navbar/NotificationsBell/NotificationsBell";
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
+import ViewSwitcher from "./Navbar/ViewSwitcher";
 import WorkerDropdown from "./Navbar/WorkerDropdown/WorkerDropdown";
 
 interface NavbarProps {
@@ -55,14 +57,14 @@ const Navbar: React.FC<NavbarProps> = ({
     clearStoredReturnUrl();
     localStorage.removeItem("litellm_selected_worker_id");
     localStorage.removeItem("litellm_worker_url");
-    window.location.href = `/ui/login?worker=${encodeURIComponent(workerId)}`;
+    window.location.href = `${getLoginUrl()}?worker=${encodeURIComponent(workerId)}`;
   };
 
   return (
     <nav className="sticky top-0 z-10 border-b border-gray-200 bg-white">
       <div className="w-full">
         <div className="flex h-14 items-center px-4">
-          <div className="flex flex-shrink-0 items-center">
+          <div className="flex shrink-0 items-center">
             {onToggleSidebar && (
               <button
                 onClick={onToggleSidebar}
@@ -74,7 +76,7 @@ const Navbar: React.FC<NavbarProps> = ({
             )}
 
             <div className="flex items-center gap-2">
-              <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
+              <Link href={migratedHref("")} className="flex items-center">
                 <div className="relative">
                   <div className="flex h-10 max-w-48 items-center justify-center overflow-hidden">
                     <img
@@ -101,7 +103,7 @@ const Navbar: React.FC<NavbarProps> = ({
                       href="https://docs.litellm.ai/release_notes"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex-shrink-0"
+                      className="shrink-0"
                     >
                       v{version}
                     </a>
@@ -110,6 +112,12 @@ const Navbar: React.FC<NavbarProps> = ({
               )}
             </div>
           </div>
+
+          {!isPublicPage && (
+            <div className="ml-4 flex shrink-0 items-center border-l border-gray-200 pl-4">
+              <ViewSwitcher />
+            </div>
+          )}
 
           <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-4">
             {showWorkerSwitch && (

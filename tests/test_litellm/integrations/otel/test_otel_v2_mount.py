@@ -35,6 +35,13 @@ from litellm.integrations.otel.mount import (  # noqa: E402
 )
 
 
+@pytest.fixture(autouse=True)
+def _clear_otel_v2_flag_cache():
+    is_otel_v2_enabled.cache_clear()
+    yield
+    is_otel_v2_enabled.cache_clear()
+
+
 class _FakeSpan:
     """Minimal recording span capturing what the hook writes."""
 
@@ -70,8 +77,10 @@ def _instrumented_app():
 def test_gate_toggles_with_env(monkeypatch):
     """The startup mount is guarded by this flag."""
     monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
     assert is_otel_v2_enabled() is False
     monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    is_otel_v2_enabled.cache_clear()
     assert is_otel_v2_enabled() is True
 
 

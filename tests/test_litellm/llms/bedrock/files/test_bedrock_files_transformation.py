@@ -4,7 +4,14 @@ Test bedrock files transformation functionality
 
 import json
 import os
+from collections.abc import Mapping
+from unittest.mock import MagicMock
 from urllib.parse import unquote, urlparse
+
+import pytest
+from botocore.auth import S3SigV4Auth, SigV4Auth
+from botocore.awsrequest import AWSRequest
+from botocore.credentials import Credentials
 
 from litellm.llms.bedrock.files.transformation import BedrockJsonlFilesTransformation
 
@@ -1172,4 +1179,448 @@ class TestBedrockFilesEmbeddingTransformation:
         # Arbitrary unknown url - caller's explicit signal still wins
         assert not BedrockFilesConfig._is_embedding_record(
             {"url": "/v1/responses", "body": {"input": "x"}}
+        )
+
+
+class TestBedrockFileContentTransformation:
+    """SigV4-signed S3 GetObject retrieval of Bedrock batch output files."""
+
+    S3_URI = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
+    EXPECTED_URL = "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
+
+    def _litellm_params(self) -> dict:
+        return {
+            "aws_access_key_id": "AKIAEXAMPLE",
+            "aws_secret_access_key": "secret",
+            "aws_region_name": "us-west-2",
+        }
+
+    def test_transform_file_content_request_signs_s3_get(self, monkeypatch):
+        """The request transform must produce the S3 object URL plus SigV4 GET headers."""
+        import hashlib
+
+        from litellm.llms.bedrock.files.transformation import (
+            S3_SIGNED_GET_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = self._litellm_params()
+
+        url, params = BedrockFilesConfig().transform_file_content_request(
+            file_content_request={"file_id": self.S3_URI},
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert url == self.EXPECTED_URL
+        assert params == {}
+
+        signed_headers = litellm_params[S3_SIGNED_GET_HEADERS_PARAM]
+        content_hashes = {
+            value
+            for name, value in signed_headers.items()
+            if name.lower() == "x-amz-content-sha256"
+        }
+        assert content_hashes == {hashlib.sha256(b"").hexdigest()}, (
+            "GET has no payload, so the content hash must be the empty-body hash."
+            " The header name is matched case-insensitively because botocore picks"
+            " its own casing and HTTP header names are case-insensitive"
+        )
+        authorization = signed_headers["Authorization"]
+        assert authorization.startswith("AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE/")
+        assert "/us-west-2/s3/aws4_request" in authorization
+        assert "x-amz-content-sha256" in authorization
+        assert "X-Amz-Date" in signed_headers
+
+    def test_transform_file_content_request_decodes_unified_file_id(self, monkeypatch):
+        """Base64 unified ids carrying llm_output_file_id must resolve to their S3 object."""
+        import base64
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+        from litellm.types.utils import SpecialEnums
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        unified_file_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+            "application/json", "unified-id", "", self.S3_URI, "model-id"
+        )
+        encoded_file_id = (
+            base64.urlsafe_b64encode(unified_file_id.encode()).decode().rstrip("=")
+        )
+
+        url, _ = BedrockFilesConfig().transform_file_content_request(
+            file_content_request={"file_id": encoded_file_id},
+            optional_params={},
+            litellm_params=self._litellm_params(),
+        )
+
+        assert url == self.EXPECTED_URL
+
+    def test_transform_file_content_request_rejects_foreign_bucket(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        with pytest.raises(ValueError, match="configured storage bucket"):
+            BedrockFilesConfig().transform_file_content_request(
+                file_content_request={
+                    "file_id": "s3://other-bucket/litellm-batch-outputs/job/x.jsonl.out"
+                },
+                optional_params={},
+                litellm_params=self._litellm_params(),
+            )
+
+    def test_transform_file_content_request_rejects_unmanaged_key(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        with pytest.raises(ValueError, match="LiteLLM-managed"):
+            BedrockFilesConfig().transform_file_content_request(
+                file_content_request={"file_id": "s3://my-bucket/private/x.jsonl"},
+                optional_params={},
+                litellm_params=self._litellm_params(),
+            )
+
+    def test_extract_s3_uri_rejects_non_managed_file_id(self):
+        """A file id that is neither an s3:// URI nor a unified id must be rejected."""
+        from litellm.llms.bedrock.files.transformation import (
+            extract_s3_uri_from_file_id,
+        )
+
+        with pytest.raises(ValueError, match="managed LiteLLM S3 file id"):
+            extract_s3_uri_from_file_id("file-1234567890")
+
+    def test_transform_file_content_request_requires_configured_bucket(
+        self, monkeypatch
+    ):
+        """Without a server-configured bucket (env or snapshot), the request must fail
+        before any S3 call rather than guessing a bucket from the file id."""
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+
+        with pytest.raises(ValueError, match="S3 bucket_name is required"):
+            BedrockFilesConfig().transform_file_content_request(
+                file_content_request={"file_id": self.S3_URI},
+                optional_params={},
+                litellm_params=self._litellm_params(),
+            )
+
+    def test_transform_file_content_request_requires_file_id(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        with pytest.raises(ValueError, match="file_id is required"):
+            BedrockFilesConfig().transform_file_content_request(
+                file_content_request={},
+                optional_params={},
+                litellm_params=self._litellm_params(),
+            )
+
+    def test_sign_request_without_botocore_raises_helpful_error(self, monkeypatch):
+        """A missing botocore must surface an actionable 'install boto3' error
+        rather than a raw import failure."""
+        import sys
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        monkeypatch.setitem(sys.modules, "botocore.auth", None)
+
+        with pytest.raises(ImportError, match="boto3"):
+            BedrockFilesConfig().transform_file_content_request(
+                file_content_request={"file_id": self.S3_URI},
+                optional_params={},
+                litellm_params=self._litellm_params(),
+            )
+
+    def test_bucket_resolved_from_trusted_model_credentials(self, monkeypatch):
+        """Per-model s3_bucket_name must be honored via the server-side credential snapshot."""
+        from types import MappingProxyType
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        litellm_params = self._litellm_params()
+        litellm_params["_litellm_internal_model_credentials"] = MappingProxyType(
+            {"s3_bucket_name": "my-bucket"}
+        )
+
+        url, _ = BedrockFilesConfig().transform_file_content_request(
+            file_content_request={"file_id": self.S3_URI},
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert url == self.EXPECTED_URL
+
+    def test_s3_region_name_wins_for_content_signing(self, monkeypatch):
+        """s3_region_name must override aws_region_name for both the URL and the signature."""
+        from litellm.llms.bedrock.files.transformation import (
+            S3_SIGNED_GET_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = self._litellm_params()
+        litellm_params["s3_region_name"] = "eu-west-1"
+
+        url, _ = BedrockFilesConfig().transform_file_content_request(
+            file_content_request={"file_id": self.S3_URI},
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert url.startswith("https://s3.eu-west-1.amazonaws.com/")
+        authorization = litellm_params[S3_SIGNED_GET_HEADERS_PARAM]["Authorization"]
+        assert "/eu-west-1/s3/aws4_request" in authorization
+
+    def test_validate_environment_merges_and_pops_signed_get_headers(self):
+        from litellm.llms.bedrock.files.transformation import (
+            S3_SIGNED_GET_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        litellm_params = {
+            S3_SIGNED_GET_HEADERS_PARAM: {"Authorization": "AWS4-HMAC-SHA256 test"}
+        }
+
+        headers = BedrockFilesConfig().validate_environment(
+            headers={"x-custom": "kept"},
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert headers == {
+            "x-custom": "kept",
+            "Authorization": "AWS4-HMAC-SHA256 test",
+        }
+        assert S3_SIGNED_GET_HEADERS_PARAM not in litellm_params
+
+    def test_transform_file_content_response_wraps_binary_content(self):
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+        from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+        raw_response = httpx.Response(
+            status_code=200,
+            content=b'{"recordId": "CALL0000001"}',
+            request=httpx.Request("GET", self.EXPECTED_URL),
+        )
+
+        result = BedrockFilesConfig().transform_file_content_response(
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+            litellm_params={},
+        )
+
+        assert isinstance(result, HttpxBinaryResponseContent)
+        assert result.response.content == b'{"recordId": "CALL0000001"}'
+
+    def test_transform_file_content_response_raises_on_s3_error(self):
+        import httpx
+
+        from litellm.llms.bedrock.common_utils import BedrockError
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        raw_response = httpx.Response(
+            status_code=403,
+            content=b"<Error><Code>AccessDenied</Code></Error>",
+            request=httpx.Request("GET", self.EXPECTED_URL),
+        )
+
+        with pytest.raises(BedrockError, match="AccessDenied"):
+            BedrockFilesConfig().transform_file_content_response(
+                raw_response=raw_response,
+                logging_obj=MagicMock(),
+                litellm_params={},
+            )
+
+    def test_file_content_end_to_end_sends_signed_get(self, monkeypatch):
+        """litellm.file_content must issue a SigV4-signed GET and return the S3 object bytes."""
+        import httpx
+        import respx
+
+        import litellm
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        with respx.mock:
+            route = respx.get(self.EXPECTED_URL).mock(
+                return_value=httpx.Response(200, content=b'{"recordId": "x"}')
+            )
+
+            response = litellm.file_content(
+                file_id=self.S3_URI,
+                custom_llm_provider="bedrock",
+                **self._litellm_params(),
+            )
+
+        assert route.called
+        request = route.calls[0].request
+        assert request.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert "x-amz-content-sha256" in request.headers
+        assert response.content == b'{"recordId": "x"}'
+
+    @pytest.mark.asyncio
+    async def test_afile_content_end_to_end_sends_signed_get(self, monkeypatch):
+        """Async variant: litellm.afile_content over the same signed GET path."""
+        import httpx
+        import respx
+
+        import litellm
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        # respx can only intercept httpx transports
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        with respx.mock:
+            route = respx.get(self.EXPECTED_URL).mock(
+                return_value=httpx.Response(200, content=b'{"recordId": "x"}')
+            )
+
+            response = await litellm.afile_content(
+                file_id=self.S3_URI,
+                custom_llm_provider="bedrock",
+                **self._litellm_params(),
+            )
+
+        assert route.called
+        assert (
+            route.calls[0]
+            .request.headers["Authorization"]
+            .startswith("AWS4-HMAC-SHA256")
+        )
+        assert response.content == b'{"recordId": "x"}'
+
+
+class TestBedrockFilesS3SignatureEncoding:
+    """
+    S3 rebuilds the canonical request from the wire path with single percent-encoding,
+    which botocore models as S3SigV4Auth. Plain SigV4Auth quotes the already encoded
+    path a second time, so an object key holding any character that percent-encodes
+    (a configured bucket prefix with a space) is signed over %2520 while the request
+    carries %20, and S3 answers 403 SignatureDoesNotMatch.
+    """
+
+    ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
+    SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    BUCKET_WITH_SPACED_PREFIX = "my-bucket/LLM AI Projects"
+    REGION = "us-west-2"
+
+    def _credential_params(self) -> dict[str, str]:
+        return {
+            "aws_access_key_id": self.ACCESS_KEY,
+            "aws_secret_access_key": self.SECRET_KEY,
+            "aws_region_name": self.REGION,
+        }
+
+    def _signature_under(
+        self,
+        signer_cls: type[SigV4Auth],
+        method: str,
+        url: str,
+        body: bytes | None,
+        headers: Mapping[str, str],
+    ) -> str:
+        sent = {name.lower(): value for name, value in headers.items()}
+        signed_names = (
+            sent["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
+        )
+        request = AWSRequest(
+            method=method,
+            url=url,
+            data=body,
+            headers={name: sent[name] for name in signed_names if name in sent},
+        )
+        request.context["timestamp"] = sent["x-amz-date"]
+        signer = signer_cls(
+            Credentials(self.ACCESS_KEY, self.SECRET_KEY), "s3", self.REGION
+        )
+        return signer.signature(
+            signer.string_to_sign(request, signer.canonical_request(request)), request
+        )
+
+    def _assert_signed_the_way_s3_reads_it(
+        self,
+        method: str,
+        url: str,
+        body: bytes | None,
+        headers: Mapping[str, str],
+    ) -> None:
+        assert "%20" in url, "the object key must reach the wire percent-encoded"
+        sent_signature = headers["Authorization"].split("Signature=")[1].strip()
+        assert sent_signature == self._signature_under(
+            S3SigV4Auth, method, url, body, headers
+        )
+        assert sent_signature != self._signature_under(
+            SigV4Auth, method, url, body, headers
+        )
+
+    def test_create_file_signs_spaced_object_key_the_way_s3_does(self) -> None:
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        content = json.dumps(
+            {
+                "custom_id": "1",
+                "body": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+            }
+        )
+        signed = BedrockFilesConfig().transform_create_file_request(
+            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            create_file_data={
+                "file": ("batch.jsonl", content.encode("utf-8"), "application/jsonl"),
+                "purpose": "batch",
+            },
+            optional_params=self._credential_params(),
+            litellm_params={
+                "s3_bucket_name": self.BUCKET_WITH_SPACED_PREFIX,
+                "s3_region_name": self.REGION,
+            },
+        )
+
+        self._assert_signed_the_way_s3_reads_it(
+            method="PUT",
+            url=signed["url"],
+            body=signed["data"].encode("utf-8"),
+            headers=signed["headers"],
+        )
+
+    def test_file_content_signs_spaced_object_key_the_way_s3_does(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.llms.bedrock.files.transformation import (
+            S3_SIGNED_GET_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", self.BUCKET_WITH_SPACED_PREFIX)
+        litellm_params = {
+            "s3_bucket_name": self.BUCKET_WITH_SPACED_PREFIX,
+            "s3_region_name": self.REGION,
+            **self._credential_params(),
+        }
+
+        url, _ = BedrockFilesConfig().transform_file_content_request(
+            file_content_request={
+                "file_id": "s3://my-bucket/LLM AI Projects/litellm-bedrock-files-model-abc.jsonl"
+            },
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        self._assert_signed_the_way_s3_reads_it(
+            method="GET",
+            url=url,
+            body=None,
+            headers=litellm_params[S3_SIGNED_GET_HEADERS_PARAM],
         )

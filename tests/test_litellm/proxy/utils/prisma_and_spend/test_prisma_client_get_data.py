@@ -105,6 +105,33 @@ def test_jsonify_team_object_converts_members_to_json_string(
     }
 
 
+def test_jsonify_team_object_converts_budget_limits_to_json_string(
+    prisma_client: PrismaClient,
+) -> None:
+    data = {
+        "team_id": "t1",
+        "budget_limits": [
+            {
+                "budget_duration": "1d",
+                "max_budget": 10.0,
+                "reset_at": "2026-01-01T00:00:00Z",
+            },
+            {
+                "budget_duration": "7d",
+                "max_budget": 50.0,
+                "reset_at": "2026-01-07T00:00:00Z",
+            },
+        ],
+        "models": ["gpt-4"],
+    }
+    result = prisma_client.jsonify_team_object(data)
+    assert result == {
+        "team_id": "t1",
+        "budget_limits": json.dumps(data["budget_limits"]),
+        "models": ["gpt-4"],
+    }
+
+
 def test_jsonify_team_object_error_on_non_dict(prisma_client: PrismaClient) -> None:
     with pytest.raises(AttributeError):
         prisma_client.jsonify_team_object(None)  # type: ignore[arg-type]
@@ -514,3 +541,26 @@ async def test_get_data_combined_view_returns_view_for_deprecated_key(
 
     assert isinstance(response, LiteLLM_VerificationTokenView)
     assert response.token == active_hash
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [5, None])
+async def test_get_data_team_keys_forward_limit_as_take(
+    prisma_client: PrismaClient, limit: Any
+) -> None:
+    """The /team/info ``key_limit`` must reach Prisma as ``take`` so the
+    database caps how many of a team's keys come back.
+    ``limit=None`` leaves ``take`` unset so every key is returned.
+    """
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    await prisma_client.get_data(
+        team_id="team-1",
+        table_name="key",
+        query_type="find_all",
+        limit=limit,
+    )
+    assert prisma_client.db.litellm_verificationtoken.find_many.await_args.kwargs == {
+        "take": limit,
+        "where": {"team_id": "team-1"},
+        "include": {"litellm_budget_table": True},
+    }

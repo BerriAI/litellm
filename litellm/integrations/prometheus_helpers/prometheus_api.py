@@ -5,7 +5,7 @@ Helper functions to query prometheus API
 import json
 import time
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Final
 
 from litellm import get_secret
 from litellm._logging import verbose_logger
@@ -14,11 +14,9 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 
-PROMETHEUS_URL: Optional[str] = get_secret("PROMETHEUS_URL")  # type: ignore
-PROMETHEUS_SELECTED_INSTANCE: Optional[str] = get_secret("PROMETHEUS_SELECTED_INSTANCE")  # type: ignore
-async_http_handler = get_async_httpx_client(
-    llm_provider=httpxSpecialProvider.LoggingCallback
-)
+PROMETHEUS_URL: Final[str | None] = get_secret("PROMETHEUS_URL")
+PROMETHEUS_SELECTED_INSTANCE: Final[str | None] = get_secret("PROMETHEUS_SELECTED_INSTANCE")
+async_http_handler: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
 
 async def get_metric_from_prometheus(
@@ -26,18 +24,16 @@ async def get_metric_from_prometheus(
 ):
     # Get the start of the current day in Unix timestamp
     if PROMETHEUS_URL is None:
-        raise ValueError(
-            "PROMETHEUS_URL not set please set 'PROMETHEUS_URL=<>' in .env"
-        )
+        raise ValueError("PROMETHEUS_URL not set please set 'PROMETHEUS_URL=<>' in .env")
 
-    query = f"{metric_name}[24h]"
-    now = int(time.time())
-    response = await async_http_handler.get(
+    query: Final = f"{metric_name}[24h]"
+    now: Final = int(time.time())
+    response: Final = await async_http_handler.get(
         f"{PROMETHEUS_URL}/api/v1/query", params={"query": query, "time": now}
     )  # End of the day
-    _json_response = response.json()
+    _json_response: Final = response.json()
     verbose_logger.debug("json response from prometheus /query api %s", _json_response)
-    results = response.json()["data"]["result"]
+    results: Final = response.json()["data"]["result"]
     return results
 
 
@@ -46,7 +42,7 @@ async def get_fallback_metric_from_prometheus():
     Gets fallback metrics from prometheus for the last 24 hours
     """
     response_message = ""
-    relevant_metrics = [
+    relevant_metrics: Final = [
         "litellm_deployment_successful_fallbacks_total",
         "litellm_deployment_failed_fallbacks_total",
     ]
@@ -100,7 +96,7 @@ def _quote_promql_string_literal(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-async def get_daily_spend_from_prometheus(api_key: Optional[str]):
+async def get_daily_spend_from_prometheus(api_key: str | None):
     """
     Expected Response Format:
     [
@@ -111,42 +107,36 @@ async def get_daily_spend_from_prometheus(api_key: Optional[str]):
     ...]
     """
     if PROMETHEUS_URL is None:
-        raise ValueError(
-            "PROMETHEUS_URL not set please set 'PROMETHEUS_URL=<>' in .env"
-        )
+        raise ValueError("PROMETHEUS_URL not set please set 'PROMETHEUS_URL=<>' in .env")
 
     # Calculate the start and end dates for the last 30 days
-    end_date = datetime.utcnow()
-    start_date = end_date - timedelta(days=30)
+    end_date: Final = datetime.utcnow()
+    start_date: Final = end_date - timedelta(days=30)
 
     # Format dates as ISO 8601 strings with UTC offset
-    start_str = start_date.isoformat() + "+00:00"
-    end_str = end_date.isoformat() + "+00:00"
+    start_str: Final = start_date.isoformat() + "+00:00"
+    end_str: Final = end_date.isoformat() + "+00:00"
 
-    url = f"{PROMETHEUS_URL}/api/v1/query_range"
+    url: Final = f"{PROMETHEUS_URL}/api/v1/query_range"
 
     if api_key is None:
         query = "sum(delta(litellm_spend_metric_total[1d]))"
     else:
-        quoted_api_key = _quote_promql_string_literal(api_key)
-        query = (
-            "sum(delta(litellm_spend_metric_total{"
-            f"hashed_api_key={quoted_api_key}"
-            "}[1d]))"
-        )
+        quoted_api_key: Final = _quote_promql_string_literal(api_key)
+        query = f"sum(delta(litellm_spend_metric_total{{hashed_api_key={quoted_api_key}}}[1d]))"
 
-    params = {
+    params: Final = {
         "query": query,
         "start": start_str,
         "end": end_str,
         "step": "86400",  # Step size of 1 day in seconds
     }
 
-    response = await async_http_handler.get(url, params=params)
-    _json_response = response.json()
+    response: Final = await async_http_handler.get(url, params=params)
+    _json_response: Final = response.json()
     verbose_logger.debug("json response from prometheus /query api %s", _json_response)
-    results = response.json()["data"]["result"]
-    formatted_results = []
+    results: Final = response.json()["data"]["result"]
+    formatted_results: Final = []
 
     for result in results:
         metric_data = result["values"]

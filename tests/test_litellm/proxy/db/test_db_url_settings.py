@@ -16,7 +16,11 @@ from unittest.mock import patch
 
 import pytest
 
-from litellm.proxy.db.db_url_settings import DatabaseURLSettings
+from litellm.proxy.db.db_url_settings import (
+    DatabaseURLSettings,
+    unsupported_db_scheme,
+    unsupported_db_scheme_message,
+)
 
 
 def _apply() -> bool:
@@ -27,6 +31,7 @@ def _apply() -> bool:
 _MANAGED_DB_ENV_VARS = (
     "IAM_TOKEN_DB_AUTH",
     "DATABASE_URL",
+    "DIRECT_URL",
     "DATABASE_URL_READ_REPLICA",
     "DATABASE_HOST",
     "DATABASE_PORT",
@@ -46,25 +51,21 @@ _MANAGED_DB_ENV_VARS = (
 
 
 @pytest.fixture(autouse=True)
-def _scrub_db_env():
+def _scrub_db_env(monkeypatch):
     """Start each test from a clean slate and restore the original env afterward.
 
-    ``apply_to_env`` writes ``DATABASE_URL`` straight into ``os.environ``, which
-    ``monkeypatch`` cannot undo. Snapshotting and restoring here keeps a
-    synthesized URL (e.g. ``writer.example.com``) from leaking into later tests
-    that read ``DATABASE_URL`` to decide whether to hit a real database.
+    ``apply_to_env`` writes ``DATABASE_URL`` straight into ``os.environ``.
+    Registering a setenv+delenv pair per var gives ``monkeypatch`` a restore
+    record even for previously unset keys, so a synthesized URL (e.g.
+    ``writer.example.com``) cannot leak into later tests that read
+    ``DATABASE_URL`` to decide whether to hit a real database. Restoring via
+    the same ``monkeypatch`` instance the tests use also keeps undo ordering
+    consistent (a hand-rolled snapshot/restore runs before ``monkeypatch``'s
+    own undo and gets clobbered by it).
     """
-    saved = {var: os.environ.get(var) for var in _MANAGED_DB_ENV_VARS}
     for var in _MANAGED_DB_ENV_VARS:
-        os.environ.pop(var, None)
-    try:
-        yield
-    finally:
-        for var, value in saved.items():
-            if value is None:
-                os.environ.pop(var, None)
-            else:
-                os.environ[var] = value
+        monkeypatch.setenv(var, "scrubbed")
+        monkeypatch.delenv(var)
 
 
 def _stub_iam_token(token: str = "FAKE_TOKEN"):
@@ -287,3 +288,87 @@ def test_password_reader_uses_own_credentials(monkeypatch):
         os.environ["DATABASE_URL_READ_REPLICA"]
         == "postgresql://litellm_ro:ro_pw@reader.example.com:5432/litellm_db"
     )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql://u:p@host:5432/db",
+        "postgres://u:p@host:5432/db",
+        "POSTGRESQL://u:p@host:5432/db",
+        "postgresql://host/db?schema=public",
+    ],
+)
+def test_unsupported_db_scheme_accepts_postgres(url):
+    assert unsupported_db_scheme(url) is None
+
+
+@pytest.mark.parametrize(
+    "url,scheme",
+    [
+        ("sqlite:///data/litellm.db", "sqlite"),
+        ("sqlite:///./local.db", "sqlite"),
+        ("mysql://u:p@host:3306/db", "mysql"),
+        ("mssql://host/db", "mssql"),
+    ],
+)
+def test_unsupported_db_scheme_rejects_non_postgres(url, scheme):
+    assert unsupported_db_scheme(url) == scheme
+
+
+def test_unsupported_db_scheme_does_not_echo_schemeless_credentials():
+    """A malformed schemeless DSN must not leak its embedded credentials
+    through the return value (which callers log)."""
+    leaky = "litellm:s3cr3t_password@db.internal:5432/litellm"
+
+    result = unsupported_db_scheme(leaky)
+
+    assert result is not None
+    assert "s3cr3t_password" not in result
+    assert "db.internal" not in result
+
+
+def test_apply_to_env_rejects_pinned_sqlite_writer(monkeypatch):
+    """Componentized entrypoints pin DATABASE_URL and call apply_to_env; a
+    sqlite writer must raise here rather than reach Prisma."""
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///data/litellm.db")
+
+    with pytest.raises(RuntimeError, match="sqlite"):
+        _apply()
+
+    # The bad URL must not have been propagated as a usable connection string.
+    assert os.environ["DATABASE_URL"] == "sqlite:///data/litellm.db"
+
+
+def test_apply_to_env_rejects_pinned_sqlite_direct_url(monkeypatch):
+    """DIRECT_URL reaches Prisma the same way DATABASE_URL does; a non-postgres
+    direct URL must be rejected in apply_to_env, matching the CLI startup guard."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db")
+    monkeypatch.setenv("DIRECT_URL", "sqlite:///data/litellm.db")
+
+    with pytest.raises(RuntimeError, match="DIRECT_URL.*sqlite"):
+        _apply()
+
+
+def test_apply_to_env_rejects_pinned_non_postgres_reader(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db")
+    monkeypatch.setenv(
+        "DATABASE_URL_READ_REPLICA", "mysql://u:p@reader.example.com:3306/db"
+    )
+
+    with pytest.raises(RuntimeError, match="DATABASE_URL_READ_REPLICA.*mysql"):
+        _apply()
+
+
+def test_apply_to_env_accepts_pinned_postgres(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@host:5432/db")
+
+    # Operator-pinned URL: nothing reassembled, no error.
+    assert _apply() is False
+
+
+def test_unsupported_db_scheme_message_names_var_and_scheme():
+    msg = unsupported_db_scheme_message("DIRECT_URL", "sqlite")
+    assert "DIRECT_URL" in msg
+    assert "sqlite" in msg
+    assert "postgresql://" in msg

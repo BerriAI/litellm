@@ -16,9 +16,10 @@ Sent to this route when `model` is in the format `vertex_ai/openai/{MODEL_ID}`
 Vertex Documentation for using the OpenAI /chat/completions endpoint: https://github.com/GoogleCloudPlatform/vertex-ai-samples/blob/main/notebooks/community/model_garden/model_garden_pytorch_llama3_deployment.ipynb
 """
 
-from typing import Callable, Optional, Union
+from collections.abc import Callable
+from typing import Final
 
-import httpx  # type: ignore
+import httpx
 
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.utils import ModelResponse
@@ -41,17 +42,14 @@ def _vertex_model_garden_model_id_in_json_body(model: str) -> bool:
 def create_vertex_url(
     vertex_location: str,
     vertex_project: str,
-    stream: Optional[bool],
+    stream: bool | None,
     model: str,
-    api_base: Optional[str] = None,
+    api_base: str | None = None,
 ) -> str:
     """Return the api base for vertex model garden (without /chat/completions)."""
-    base_url = get_vertex_base_url(vertex_location)
+    base_url: Final = get_vertex_base_url(vertex_location)
     if _vertex_model_garden_model_id_in_json_body(model):
-        return (
-            f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}"
-            "/endpoints/openapi"
-        )
+        return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
     return f"{base_url}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
 
 
@@ -67,11 +65,11 @@ class VertexAIModelGardenModels(VertexBase):
         print_verbose: Callable,
         encoding,
         logging_obj,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
         custom_prompt_dict: dict,
-        headers: Optional[dict],
-        timeout: Union[float, httpx.Timeout],
+        headers: dict | None,
+        timeout: float | httpx.Timeout,
         litellm_params: dict,
         vertex_project=None,
         vertex_location=None,
@@ -95,9 +93,7 @@ class VertexAIModelGardenModels(VertexBase):
                 message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
             )
 
-        if not (
-            hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")
-        ):
+        if not (hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")):
             raise VertexAIError(
                 status_code=400,
                 message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
@@ -111,13 +107,13 @@ class VertexAIModelGardenModels(VertexBase):
                 custom_llm_provider="vertex_ai",
             )
 
-            openai_like_chat_completions = OpenAILikeChatHandler()
+            openai_like_chat_completions: Final = OpenAILikeChatHandler()
 
             ## CONSTRUCT API BASE
             # Skip _check_custom_proxy: its ":verb" URL construction corrupts a
             # user-supplied api_base (e.g. Vertex MG dedicated endpoint), and
             # OpenAILikeChatHandler already appends "/chat/completions".
-            stream: bool = optional_params.get("stream", False) or False
+            stream: Final[bool] = optional_params.get("stream", False) or False
             optional_params["stream"] = stream
             if api_base is None:
                 api_base = create_vertex_url(

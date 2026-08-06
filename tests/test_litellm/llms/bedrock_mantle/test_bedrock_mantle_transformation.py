@@ -131,7 +131,9 @@ class TestBedrockMantleConfig:
                 ),
             )
 
-    def test_get_llm_provider_uses_aws_region_name_for_responses(self, monkeypatch):
+    def test_get_llm_provider_uses_aws_region_name_for_responses(
+        self, monkeypatch, local_cost_map
+    ):
         from litellm.types.router import GenericLiteLLMParams
 
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
@@ -143,7 +145,9 @@ class TestBedrockMantleConfig:
             litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2"),
         )
         assert provider == "bedrock_mantle"
-        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
+        # gpt-5.x carries use_openai_responses_path, so it is served on the
+        # /openai/v1 base per the AWS model card.
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/openai/v1"
 
     def test_default_api_base_fallback_to_us_east_1(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
@@ -159,6 +163,50 @@ class TestBedrockMantleConfig:
         api_base, _ = cfg._get_openai_compatible_provider_info(custom_base, None)
         assert api_base == custom_base
 
+    def test_chat_base_for_gpt_oss_uses_v1(self, monkeypatch):
+        # gpt-oss carries no use_openai_responses_path flag, so it stays on the
+        # standard /v1 base; no regression for existing chat usage now that the
+        # segment is data-driven.
+        monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-east-2")
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        cfg = BedrockMantleChatConfig()
+        api_base, _ = cfg._get_openai_compatible_provider_info(
+            None, None, model="openai.gpt-oss-120b"
+        )
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
+
+    @pytest.mark.parametrize(
+        "model_id",
+        ["google.gemma-4-31b", "google.gemma-4-26b-a4b", "google.gemma-4-e2b"],
+    )
+    def test_chat_base_for_gemma_4_uses_openai_v1(
+        self, monkeypatch, local_cost_map, model_id
+    ):
+        # The chat-config bug the Gemma 4 cards exposed: gemma-4-* is served on the
+        # /openai/v1 base, not the hardcoded /v1. Driven by the price-map
+        # use_openai_responses_path flag (loaded by local_cost_map). Fails before
+        # the data-driven segment lands.
+        monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-east-2")
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        cfg = BedrockMantleChatConfig()
+        api_base, _ = cfg._get_openai_compatible_provider_info(
+            None, None, model=model_id
+        )
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/openai/v1"
+
+    def test_chat_base_explicit_api_base_wins_over_derived(
+        self, monkeypatch, local_cost_map
+    ):
+        # An explicit api_base must not be overridden by the data-driven default,
+        # even for a model whose default differs (gemma-4 -> openai/v1).
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        custom_base = "https://bedrock-mantle.us-west-2.api.aws/v1"
+        cfg = BedrockMantleChatConfig()
+        api_base, _ = cfg._get_openai_compatible_provider_info(
+            custom_base, None, model="google.gemma-4-31b"
+        )
+        assert api_base == custom_base
+
     def test_api_key_from_env(self, monkeypatch):
         monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "test-key-123")
         cfg = BedrockMantleChatConfig()
@@ -171,6 +219,13 @@ class TestBedrockMantleConfig:
         _, api_key = cfg._get_openai_compatible_provider_info(None, "explicit-key")
         assert api_key == "explicit-key"
 
+    def test_api_key_from_aws_bearer_token_bedrock_env(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "standard-bearer")
+        cfg = BedrockMantleChatConfig()
+        _, api_key = cfg._get_openai_compatible_provider_info(None, None)
+        assert api_key == "standard-bearer"
+
     def test_get_supported_openai_params(self):
         cfg = BedrockMantleChatConfig()
         params = cfg.get_supported_openai_params("openai.gpt-oss-120b")
@@ -179,6 +234,260 @@ class TestBedrockMantleConfig:
         assert "temperature" in params
         assert "stream" in params
         assert "max_tokens" in params
+
+
+class TestBedrockMantleChatAuth:
+    """Chat Completions must use the same Bearer-or-SigV4 auth as the Responses
+    backend. These fail on a config that inherits the no-op default sign_request.
+    """
+
+    def _signer_that_forbids_credentials(self):
+        from unittest.mock import MagicMock
+
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(
+            side_effect=AssertionError("SigV4 must not run when a Bearer token exists")
+        )
+        return signer
+
+    def test_bearer_token_skips_sigv4(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        signer = self._signer_that_forbids_credentials()
+        cfg = BedrockMantleChatConfig(aws_signer=signer)
+
+        headers, signed_body = cfg.sign_request(
+            headers={},
+            optional_params={},
+            request_data={"model": "openai.gpt-oss-120b", "messages": []},
+            api_base="https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
+            api_key="bearer-from-arg",
+        )
+
+        assert headers["Authorization"] == "Bearer bearer-from-arg"
+        assert json.loads(signed_body) == {
+            "model": "openai.gpt-oss-120b",
+            "messages": [],
+        }
+        signer.get_credentials.assert_not_called()
+
+    def test_mantle_env_key_used_as_bearer(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "env-mantle-key")
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        signer = self._signer_that_forbids_credentials()
+        cfg = BedrockMantleChatConfig(aws_signer=signer)
+
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params={},
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
+            api_key=None,
+        )
+
+        assert headers["Authorization"] == "Bearer env-mantle-key"
+        signer.get_credentials.assert_not_called()
+
+    def test_aws_bearer_token_bedrock_used_as_bearer(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "standard-bearer")
+        signer = self._signer_that_forbids_credentials()
+        cfg = BedrockMantleChatConfig(aws_signer=signer)
+
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params={},
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
+            api_key=None,
+        )
+
+        assert headers["Authorization"] == "Bearer standard-bearer"
+        signer.get_credentials.assert_not_called()
+
+    def test_no_bearer_signs_with_sigv4(self, monkeypatch):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+
+        cfg = BedrockMantleChatConfig(aws_signer=BaseAWSLLM())
+        headers, signed_body = cfg.sign_request(
+            headers={},
+            optional_params={
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0",
+                "aws_session_token": "session-token-test",
+                "aws_region_name": "us-east-2",
+            },
+            request_data={"model": "openai.gpt-oss-120b", "messages": []},
+            api_base="https://bedrock-mantle.us-east-2.api.aws/v1/chat/completions",
+            api_key=None,
+        )
+
+        assert headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert "Credential=AKIAEXAMPLE/" in headers["Authorization"]
+        assert "/us-east-2/bedrock/aws4_request" in headers["Authorization"]
+        assert headers["X-Amz-Security-Token"] == "session-token-test"
+        assert json.loads(signed_body) == {
+            "model": "openai.gpt-oss-120b",
+            "messages": [],
+        }
+
+    def test_sigv4_region_resolved_from_api_base_host(self, monkeypatch):
+        # Chat passes the OpenAI-mapped optional_params (no aws_region_name) to
+        # sign_request, so the SigV4 credential scope has to come from the already
+        # region-resolved api_base host or it would disagree with the URL -> 401.
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        for var in (
+            "BEDROCK_MANTLE_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "BEDROCK_MANTLE_REGION",
+            "BEDROCK_MANTLE_API_BASE",
+            "AWS_REGION",
+            "AWS_REGION_NAME",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+        cfg = BedrockMantleChatConfig(aws_signer=BaseAWSLLM())
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params={
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0",
+            },
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.eu-west-1.api.aws/v1/chat/completions",
+            api_key=None,
+        )
+
+        assert "/eu-west-1/bedrock/aws4_request" in headers["Authorization"]
+
+    def test_sigv4_scope_matches_api_base_when_aws_region_name_disagrees(
+        self, monkeypatch
+    ):
+        # If a caller (e.g. proxy) passes a stale api_base in one region and an
+        # aws_region_name in a different region, the SigV4 credential scope must
+        # match the URL host or Bedrock rejects the request with 401. Without the
+        # fix, sign_request would prefer aws_region_name and sign for us-west-2
+        # while POSTing to eu-west-1.
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        for var in (
+            "BEDROCK_MANTLE_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "BEDROCK_MANTLE_REGION",
+            "BEDROCK_MANTLE_API_BASE",
+            "AWS_REGION",
+            "AWS_REGION_NAME",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+        cfg = BedrockMantleChatConfig(aws_signer=BaseAWSLLM())
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params={
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0",
+                "aws_region_name": "us-west-2",
+            },
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.eu-west-1.api.aws/v1/chat/completions",
+            api_key=None,
+        )
+
+        assert "/eu-west-1/bedrock/aws4_request" in headers["Authorization"]
+        assert "/us-west-2/bedrock/aws4_request" not in headers["Authorization"]
+
+    def test_no_bearer_and_no_credentials_raises_value_error(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from botocore.exceptions import NoCredentialsError
+
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(side_effect=NoCredentialsError())
+        cfg = BedrockMantleChatConfig(aws_signer=signer)
+
+        with pytest.raises(ValueError) as exc:
+            cfg.sign_request(
+                headers={},
+                optional_params={"aws_region_name": "us-east-2"},
+                request_data={"input": "hi"},
+                api_base="https://bedrock-mantle.us-east-2.api.aws/v1/chat/completions",
+                api_key=None,
+            )
+
+        msg = str(exc.value)
+        assert "Bearer" in msg
+        assert "SigV4" in msg or "IAM" in msg
+
+    def test_completion_no_bearer_signs_with_sigv4_end_to_end(self, monkeypatch):
+        # The full completion chain (not just sign_request in isolation) must reach
+        # the SigV4 path when no Bearer token exists: with api_key=None the parent
+        # validate_environment must not short-circuit before sign_request runs.
+        for var in (
+            "BEDROCK_MANTLE_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "BEDROCK_MANTLE_API_BASE",
+            "BEDROCK_MANTLE_REGION",
+            "AWS_REGION_NAME",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+        monkeypatch.setenv(
+            "AWS_SECRET_ACCESS_KEY", "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0"
+        )
+        monkeypatch.setenv("AWS_REGION", "us-east-2")
+
+        requests = []
+
+        def mock_post(self, url, data=None, headers=None, **kwargs):
+            requests.append({"url": url, "headers": headers or {}})
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 1733529600,
+                    "model": "openai.gpt-oss-120b",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", mock_post
+        ):
+            response = litellm.completion(
+                model="bedrock_mantle/openai.gpt-oss-120b",
+                messages=[{"role": "user", "content": "hello"}],
+            )
+
+        assert response.choices[0].message.content == "ok"
+        assert len(requests) == 1
+        authorization = requests[0]["headers"]["Authorization"]
+        assert authorization.startswith("AWS4-HMAC-SHA256")
+        assert "/us-east-2/bedrock/aws4_request" in authorization
+        assert requests[0]["url"].startswith("https://bedrock-mantle.us-east-2.api.aws")
 
 
 class TestBedrockMantleProjectHeader:

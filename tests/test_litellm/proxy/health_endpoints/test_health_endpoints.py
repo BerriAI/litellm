@@ -697,6 +697,309 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
 
 
 @pytest.mark.asyncio
+async def test_test_model_connection_uses_loaded_deployment_team_id():
+    """
+    /health/test_connection must authorize using the team_id of the
+    deployment it actually loaded (by model_info.id), not the team_id
+    supplied in the request body. Requesting team A's deployment while
+    authenticated as an admin of team B must be denied.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        ModelManagementAuthChecks,
+    )
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    mock_request = MagicMock()
+
+    requester_team_id = "team-b"
+    deployment_owner_team_id = "team-a"
+    deployment_id = "team-a-deployment-id"
+
+    requester_user_api_key_dict = UserAPIKeyAuth(
+        token="requester-token",
+        user_id="team-b-admin-user",
+        team_id=requester_team_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    mock_prisma_client = MagicMock()
+
+    other_team_deployment = Deployment(
+        model_name="team-a-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o",
+            api_base="https://team-a-api.invalid/v1",
+            api_key="TEAM-A-API-KEY",
+        ),
+        model_info=ModelInfo(id=deployment_id, team_id=deployment_owner_team_id),
+    )
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = other_team_deployment
+
+    async def fake_find_unique(*, where):
+        team_id = where["team_id"]
+        if team_id == requester_team_id:
+            return SimpleNamespace(
+                model_dump=lambda: LiteLLM_TeamTable(
+                    team_id=requester_team_id,
+                    members_with_roles=[
+                        {
+                            "user_id": "team-b-admin-user",
+                            "role": "admin",
+                        }
+                    ],
+                ).model_dump()
+            )
+        if team_id == deployment_owner_team_id:
+            return SimpleNamespace(
+                model_dump=lambda: LiteLLM_TeamTable(
+                    team_id=deployment_owner_team_id,
+                    members_with_roles=[],
+                ).model_dump()
+            )
+        return None
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(
+            ModelManagementAuthChecks,
+            "can_user_make_model_call",
+            wraps=ModelManagementAuthChecks.can_user_make_model_call,
+        ) as spy_auth_check,
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.TeamRepository"
+        ) as MockTeamRepo,
+    ):
+        mock_team_repo_instance = MagicMock()
+        mock_team_repo_instance.table.find_unique = AsyncMock(
+            side_effect=fake_find_unique
+        )
+        MockTeamRepo.return_value = mock_team_repo_instance
+
+        with pytest.raises(HTTPException) as exc_info:
+            await health_test_model_connection(
+                request=mock_request,
+                mode="chat",
+                litellm_params={
+                    "model": "openai/gpt-4o",
+                    "api_base": "https://swapped-base.invalid/v1",
+                },
+                model_info={
+                    "id": deployment_id,
+                    "team_id": requester_team_id,
+                },
+                user_api_key_dict=requester_user_api_key_dict,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert spy_auth_check.called
+        passed_model_params = spy_auth_check.call_args.kwargs["model_params"]
+        assert passed_model_params.model_info.team_id == deployment_owner_team_id, (
+            "Auth check must run against the loaded deployment's team_id "
+            f"({deployment_owner_team_id!r}); got "
+            f"{passed_model_params.model_info.team_id!r}."
+        )
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_uses_loaded_deployment_team_id_via_model_name_fallback():
+    """
+    Companion to the id-lookup case: when the caller provides only a model
+    name (no `model_info.id`) and that name resolves via the router's
+    `model_name` fallback to a deployment owned by a different team, the
+    auth check must still run against the loaded deployment's `team_id`,
+    not the caller-supplied one in the request body.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        ModelManagementAuthChecks,
+    )
+
+    mock_request = MagicMock()
+
+    requester_team_id = "team-b-2"
+    deployment_owner_team_id = "team-a-2"
+
+    requester_user_api_key_dict = UserAPIKeyAuth(
+        token="requester-token-2",
+        user_id="team-b-admin-user-2",
+        team_id=requester_team_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    mock_prisma_client = MagicMock()
+
+    other_team_deployment_dict = {
+        "model_name": "shared-model-name",
+        "litellm_params": {
+            "model": "openai/gpt-4o",
+            "api_base": "https://team-a-api-2.invalid/v1",
+            "api_key": "TEAM-A-API-KEY-2",
+        },
+        "model_info": {
+            "id": "team-a-deployment-id-2",
+            "team_id": deployment_owner_team_id,
+        },
+    }
+
+    mock_router = MagicMock()
+    mock_router.get_model_list.return_value = [other_team_deployment_dict]
+
+    async def fake_find_unique(*, where):
+        return SimpleNamespace(
+            model_dump=lambda: LiteLLM_TeamTable(
+                team_id=where["team_id"],
+                members_with_roles=(
+                    [{"user_id": "team-b-admin-user-2", "role": "admin"}]
+                    if where["team_id"] == requester_team_id
+                    else []
+                ),
+            ).model_dump()
+        )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(
+            ModelManagementAuthChecks,
+            "can_user_make_model_call",
+            wraps=ModelManagementAuthChecks.can_user_make_model_call,
+        ) as spy_auth_check,
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.TeamRepository"
+        ) as MockTeamRepo,
+    ):
+        mock_team_repo_instance = MagicMock()
+        mock_team_repo_instance.table.find_unique = AsyncMock(
+            side_effect=fake_find_unique
+        )
+        MockTeamRepo.return_value = mock_team_repo_instance
+
+        with pytest.raises(HTTPException) as exc_info:
+            await health_test_model_connection(
+                request=mock_request,
+                mode="chat",
+                litellm_params={
+                    "model": "shared-model-name",
+                    "api_base": "https://swapped-base-2.invalid/v1",
+                },
+                model_info={"team_id": requester_team_id},
+                user_api_key_dict=requester_user_api_key_dict,
+            )
+
+        assert exc_info.value.status_code == 403
+
+        passed_model_params = spy_auth_check.call_args.kwargs["model_params"]
+        assert passed_model_params.model_info.team_id == deployment_owner_team_id
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_authorized_team_admin_passes_real_auth():
+    """
+    Positive-path companion to the deny tests above. When the caller is a
+    genuine admin of the team that owns the loaded deployment, the real
+    (unmocked) auth check must pass and the endpoint must reach the outbound
+    health probe. Guards against a regression that swaps the auth `team_id`
+    for something deny-all on the legit path.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        ModelManagementAuthChecks,
+    )
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    mock_request = MagicMock()
+
+    owner_team_id = "team-owner"
+    owner_admin_user_id = "team-owner-admin"
+    owned_deployment_id = "owned-deployment-id"
+
+    owner_admin_api_key_dict = UserAPIKeyAuth(
+        token="owner-admin-token",
+        user_id=owner_admin_user_id,
+        team_id=owner_team_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    mock_prisma_client = MagicMock()
+
+    owned_deployment = Deployment(
+        model_name="owner-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            api_base="https://owner-real-api.invalid/v1",
+            api_key="owner-team-api-key",
+        ),
+        model_info=ModelInfo(id=owned_deployment_id, team_id=owner_team_id),
+    )
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = owned_deployment
+
+    async def fake_find_unique(*, where):
+        if where["team_id"] == owner_team_id:
+            return SimpleNamespace(
+                model_dump=lambda: LiteLLM_TeamTable(
+                    team_id=owner_team_id,
+                    members_with_roles=[
+                        {"user_id": owner_admin_user_id, "role": "admin"}
+                    ],
+                ).model_dump()
+            )
+        return None
+
+    health_result = {"status": "healthy", "response_time_ms": 50}
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(
+            ModelManagementAuthChecks,
+            "can_user_make_model_call",
+            wraps=ModelManagementAuthChecks.can_user_make_model_call,
+        ) as spy_auth_check,
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.TeamRepository"
+        ) as MockTeamRepo,
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            AsyncMock(return_value=health_result),
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+            AsyncMock(return_value=health_result),
+        ),
+    ):
+        mock_team_repo_instance = MagicMock()
+        mock_team_repo_instance.table.find_unique = AsyncMock(
+            side_effect=fake_find_unique
+        )
+        MockTeamRepo.return_value = mock_team_repo_instance
+
+        result = await health_test_model_connection(
+            request=mock_request,
+            mode="chat",
+            litellm_params={"model": "openai/gpt-4o-mini"},
+            model_info={"id": owned_deployment_id, "team_id": owner_team_id},
+            user_api_key_dict=owner_admin_api_key_dict,
+        )
+
+        assert result["status"] == "success"
+        passed_model_params = spy_auth_check.call_args.kwargs["model_params"]
+        assert passed_model_params.model_info.team_id == owner_team_id
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "status,error_message",
     [
@@ -2061,3 +2364,96 @@ def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
     assert "aws_access_key_id" not in cleaned
     assert cleaned.get("api_base") == "https://example.test/v1"
     assert cleaned.get("api_version") == "2024-10-21"
+
+
+class TestConfigBaseForHealthCheck:
+    """A request that sets its own connection fields gets a base without the
+    configuration's credentials; anything it leaves unset still comes from
+    the configuration."""
+
+    CONFIG = {
+        "model": "openai/gpt-4o",
+        "api_key": "sk-configured",
+        "api_base": "https://configured.example/v1",
+        "vertex_credentials": "configured-creds",
+        "rpm": 100,
+    }
+
+    def _base(self, config, request, allow_client_side_credentials=False):
+        from litellm.proxy.health_endpoints._health_endpoints import (
+            _config_base_for_health_check,
+        )
+
+        return _config_base_for_health_check(
+            config, request, allow_client_side_credentials=allow_client_side_credentials
+        )
+
+    def test_request_without_connection_fields_inherits_config(self):
+        base = self._base(self.CONFIG, {"model": "openai/gpt-4o"})
+        assert base["api_key"] == "sk-configured"
+        assert base["api_base"] == "https://configured.example/v1"
+
+    def test_request_setting_api_base_does_not_inherit_config_credentials(self):
+        base = self._base(self.CONFIG, {"api_base": "https://caller.example/v1"})
+        assert "api_key" not in base
+        assert "api_base" not in base
+        assert "vertex_credentials" not in base
+        assert base["rpm"] == 100
+
+    def test_add_model_flow_keeps_its_own_credentials(self):
+        """Adding a second deployment for an already-configured name sends a
+        complete connection; it is tested as sent, not as configured."""
+        request = {
+            "model": "openai/gpt-4o",
+            "api_base": "https://new-deployment.example/v1",
+            "api_key": "sk-new-deployment",
+        }
+        merged = {**self._base(self.CONFIG, request), **request}
+        assert merged["api_base"] == "https://new-deployment.example/v1"
+        assert merged["api_key"] == "sk-new-deployment"
+        assert "sk-configured" not in str(merged)
+
+    def test_destination_override_without_own_key_inherits_no_credential(self):
+        """A request that redirects the destination but supplies no credential
+        of its own gets none from the configuration."""
+        request = {"api_base": "https://elsewhere.example"}
+        merged = {**self._base(self.CONFIG, request), **request}
+        assert "api_key" not in merged
+        assert "sk-configured" not in str(merged)
+
+    def test_non_api_base_destination_field_also_drops_credentials(self):
+        base = self._base(
+            {**self.CONFIG, "aws_secret_access_key": "configured-secret"},
+            {"aws_bedrock_runtime_endpoint": "https://caller.example"},
+        )
+        assert "api_key" not in base
+        assert "aws_secret_access_key" not in base
+
+    def test_opt_in_restores_configured_credentials_under_a_request_endpoint(self):
+        """With general_settings.allow_client_side_credentials enabled, a request
+        may pair its own endpoint with the configured credentials, as before."""
+        base = self._base(
+            self.CONFIG,
+            {"api_base": "https://caller.example/v1"},
+            allow_client_side_credentials=True,
+        )
+        assert base["api_key"] == "sk-configured"
+
+    def test_stored_credential_reference_is_dropped_with_the_credentials(self):
+        """A stored-credential name resolves to the same secrets downstream, so a
+        request that redirects the destination must not keep it either."""
+        config = {**self.CONFIG, "litellm_credential_name": "OpenAI-prod"}
+        base = self._base(config, {"api_base": "https://caller.example/v1"})
+        assert "litellm_credential_name" not in base
+        assert "api_key" not in base
+
+    def test_stored_credential_reference_kept_when_request_sets_no_connection(self):
+        """The Admin UI tests a configured model by naming it plus its stored
+        credential and nothing else; that keeps working."""
+        config = {**self.CONFIG, "litellm_credential_name": "OpenAI-prod"}
+        base = self._base(
+            config,
+            {"model": "openai/gpt-4o", "litellm_credential_name": "OpenAI-prod", "custom_llm_provider": "openai"},
+        )
+        assert base["litellm_credential_name"] == "OpenAI-prod"
+        assert base["api_key"] == "sk-configured"

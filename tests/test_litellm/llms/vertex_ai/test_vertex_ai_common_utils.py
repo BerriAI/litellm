@@ -17,8 +17,24 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_project_id_from_url,
     pop_vertex_request_labels,
     set_schema_property_ordering,
+    supports_response_json_schema,
+    validate_vertex_location,
     vertex_request_labels_from_litellm_params,
 )
+
+
+@pytest.mark.parametrize("location", ["us", "eu", "us-central1", "europe-west1", "global"])
+def test_validate_vertex_location_accepts_valid(location):
+    assert validate_vertex_location(location) == location
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["attacker.example/", "evil.com#", "us.attacker.example", "us/../..", "US", "us_central1", "-us", "", None],
+)
+def test_validate_vertex_location_rejects_invalid(location):
+    with pytest.raises(ValueError):
+        validate_vertex_location(location)
 
 
 @pytest.mark.asyncio
@@ -148,6 +164,23 @@ async def test_get_supports_system_message():
         model="random-model-name", custom_llm_provider="vertex_ai"
     )
     assert result == False
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("gemini-2.0-flash", True),
+        ("gemini-1.5-pro", False),
+        ("random-model-name", False),
+        ("gemini-3-flash-preview", True),
+        ("gemini-123-pro", True),
+        ("vertex_ai/gemini-3.1-pro-preview", True),
+    ],
+)
+def test_supports_response_json_schema(model: str, expected: bool):
+    """Test supports_response_json_schema correctly detects Gemini 2.0+ model names"""
+
+    assert supports_response_json_schema(model) == expected
 
 
 def test_set_schema_property_ordering_with_excessive_nesting():
@@ -1526,11 +1559,7 @@ def test_vertex_request_labels_from_litellm_params_extracts_requester_metadata()
 
 
 def test_vertex_request_labels_from_litellm_params_accepts_litellm_metadata():
-    lp = {
-        "litellm_metadata": {
-            "requester_metadata": {"team": "platform", "count": 3}
-        }
-    }
+    lp = {"litellm_metadata": {"requester_metadata": {"team": "platform", "count": 3}}}
     assert vertex_request_labels_from_litellm_params(lp) == {"team": "platform"}
 
 

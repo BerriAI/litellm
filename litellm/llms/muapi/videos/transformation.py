@@ -14,8 +14,7 @@ LiteLLM model IDs:  muapi/<model-id>
   e.g. muapi/veo3-fast, muapi/kling-master, muapi/wan2.7
 """
 
-import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx

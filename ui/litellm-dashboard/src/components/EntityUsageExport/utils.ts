@@ -126,6 +126,8 @@ export const generateDailyData = (
         "Total Tokens": data.metrics.total_tokens,
         "Prompt Tokens": data.metrics.prompt_tokens || 0,
         "Completion Tokens": data.metrics.completion_tokens || 0,
+        "Cache Read Input Tokens": data.metrics.cache_read_input_tokens || 0,
+        "Cache Creation Input Tokens": data.metrics.cache_creation_input_tokens || 0,
       });
     });
   });
@@ -154,6 +156,8 @@ export const generateDailyWithKeysData = (
         total_tokens: number;
         prompt_tokens: number;
         completion_tokens: number;
+        cache_read_input_tokens: number;
+        cache_creation_input_tokens: number;
       };
     };
   } = {};
@@ -186,6 +190,8 @@ export const generateDailyWithKeysData = (
               total_tokens: keyData.metrics?.total_tokens || 0,
               prompt_tokens: keyData.metrics?.prompt_tokens || 0,
               completion_tokens: keyData.metrics?.completion_tokens || 0,
+              cache_read_input_tokens: keyData.metrics?.cache_read_input_tokens || 0,
+              cache_creation_input_tokens: keyData.metrics?.cache_creation_input_tokens || 0,
             },
           };
         } else {
@@ -197,6 +203,9 @@ export const generateDailyWithKeysData = (
           aggregatedData[uniqueKey].metrics.total_tokens += keyData.metrics?.total_tokens || 0;
           aggregatedData[uniqueKey].metrics.prompt_tokens += keyData.metrics?.prompt_tokens || 0;
           aggregatedData[uniqueKey].metrics.completion_tokens += keyData.metrics?.completion_tokens || 0;
+          aggregatedData[uniqueKey].metrics.cache_read_input_tokens += keyData.metrics?.cache_read_input_tokens || 0;
+          aggregatedData[uniqueKey].metrics.cache_creation_input_tokens +=
+            keyData.metrics?.cache_creation_input_tokens || 0;
         }
       });
     });
@@ -216,6 +225,8 @@ export const generateDailyWithKeysData = (
     "Total Tokens": item.metrics.total_tokens,
     "Prompt Tokens": item.metrics.prompt_tokens,
     "Completion Tokens": item.metrics.completion_tokens,
+    "Cache Read Input Tokens": item.metrics.cache_read_input_tokens,
+    "Cache Creation Input Tokens": item.metrics.cache_creation_input_tokens,
   }));
 
   return dailyKeyBreakdown.sort((a, b) => new Date(a.Date).getTime() - new Date(b.Date).getTime());
@@ -237,9 +248,13 @@ export const generateDailyWithModelsData = (
       }
 
       Object.entries(day.breakdown.models || {}).forEach(([model, modelData]: [string, any]) => {
-        const apiKeyBreakdown = entityData.api_key_breakdown || {};
+        const entityApiKeys = entityData.api_key_breakdown || {};
+        const modelApiKeys = modelData.api_key_breakdown || {};
 
-        Object.entries(apiKeyBreakdown).forEach(([apiKey, apiKeyData]: [string, any]) => {
+        Object.keys(entityApiKeys).forEach((apiKey) => {
+          const keyMetrics = modelApiKeys[apiKey]?.metrics;
+          if (!keyMetrics) return;
+
           if (!dailyEntityModels[entity][model]) {
             dailyEntityModels[entity][model] = {
               spend: 0,
@@ -247,13 +262,21 @@ export const generateDailyWithModelsData = (
               successful: 0,
               failed: 0,
               tokens: 0,
+              promptTokens: 0,
+              completionTokens: 0,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
             };
           }
-          dailyEntityModels[entity][model].spend += apiKeyData.metrics.spend || 0;
-          dailyEntityModels[entity][model].requests += apiKeyData.metrics.api_requests || 0;
-          dailyEntityModels[entity][model].successful += apiKeyData.metrics.successful_requests || 0;
-          dailyEntityModels[entity][model].failed += apiKeyData.metrics.failed_requests || 0;
-          dailyEntityModels[entity][model].tokens += apiKeyData.metrics.total_tokens || 0;
+          dailyEntityModels[entity][model].spend += keyMetrics.spend || 0;
+          dailyEntityModels[entity][model].requests += keyMetrics.api_requests || 0;
+          dailyEntityModels[entity][model].successful += keyMetrics.successful_requests || 0;
+          dailyEntityModels[entity][model].failed += keyMetrics.failed_requests || 0;
+          dailyEntityModels[entity][model].tokens += keyMetrics.total_tokens || 0;
+          dailyEntityModels[entity][model].promptTokens += keyMetrics.prompt_tokens || 0;
+          dailyEntityModels[entity][model].completionTokens += keyMetrics.completion_tokens || 0;
+          dailyEntityModels[entity][model].cacheReadInputTokens += keyMetrics.cache_read_input_tokens || 0;
+          dailyEntityModels[entity][model].cacheCreationInputTokens += keyMetrics.cache_creation_input_tokens || 0;
         });
       });
     });
@@ -272,6 +295,10 @@ export const generateDailyWithModelsData = (
           Successful: metrics.successful,
           Failed: metrics.failed,
           "Total Tokens": metrics.tokens,
+          "Prompt Tokens": metrics.promptTokens,
+          "Completion Tokens": metrics.completionTokens,
+          "Cache Read Input Tokens": metrics.cacheReadInputTokens,
+          "Cache Creation Input Tokens": metrics.cacheCreationInputTokens,
         });
       });
     });

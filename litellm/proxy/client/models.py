@@ -1,10 +1,13 @@
+import builtins
+from typing import Any, Final
+
 import requests
-from typing import List, Dict, Any, Optional, Union
-from .exceptions import UnauthorizedError, NotFoundError
+
+from .exceptions import NotFoundError, UnauthorizedError
 
 
 class ModelsManagementClient:
-    def __init__(self, base_url: str, api_key: Optional[str] = None):
+    def __init__(self, base_url: str, api_key: str | None = None):
         """
         Initialize the ModelsManagementClient.
 
@@ -15,21 +18,19 @@ class ModelsManagementClient:
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """
         Get the headers for API requests, including authorization if api_key is set.
 
         Returns:
             Dict[str, str]: Headers to use for API requests
         """
-        headers = {}
+        headers: Final = {}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
-    def list(
-        self, return_request: bool = False
-    ) -> Union[List[Dict[str, Any]], requests.Request]:
+    def list(self, return_request: bool = False) -> list[dict[str, Any]] | requests.Request:
         """
         Get the list of models supported by the server.
 
@@ -45,16 +46,16 @@ class ModelsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/models"
-        request = requests.Request("GET", url, headers=self._get_headers())
+        url: Final = f"{self._base_url}/models"
+        request: Final = requests.Request("GET", url, headers=self._get_headers())
 
         if return_request:
             return request
 
         # Prepare and send the request
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()["data"]
         except requests.exceptions.HTTPError as e:
@@ -65,10 +66,10 @@ class ModelsManagementClient:
     def new(
         self,
         model_name: str,
-        model_params: Dict[str, Any],
-        model_info: Optional[Dict[str, Any]] = None,
+        model_params: dict[str, Any],
+        model_info: dict[str, Any] | None = None,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Add a new model to the proxy.
 
@@ -86,24 +87,24 @@ class ModelsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/model/new"
+        url: Final = f"{self._base_url}/model/new"
 
-        data = {
+        data: Final = {
             "model_name": model_name,
             "litellm_params": model_params,
         }
         if model_info:
             data["model_info"] = model_info
 
-        request = requests.Request("POST", url, headers=self._get_headers(), json=data)
+        request: Final = requests.Request("POST", url, headers=self._get_headers(), json=data)
 
         if return_request:
             return request
 
         # Prepare and send the request
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -111,9 +112,7 @@ class ModelsManagementClient:
                 raise UnauthorizedError(e)
             raise
 
-    def delete(
-        self, model_id: str, return_request: bool = False
-    ) -> Union[Dict[str, Any], requests.Request]:
+    def delete(self, model_id: str, return_request: bool = False) -> dict[str, Any] | requests.Request:
         """
         Delete a model from the proxy.
 
@@ -130,18 +129,18 @@ class ModelsManagementClient:
             NotFoundError: If the request fails with a 404 status code or indicates the model was not found
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/model/delete"
-        data = {"id": model_id}
+        url: Final = f"{self._base_url}/model/delete"
+        data: Final = {"id": model_id}
 
-        request = requests.Request("POST", url, headers=self._get_headers(), json=data)
+        request: Final = requests.Request("POST", url, headers=self._get_headers(), json=data)
 
         if return_request:
             return request
 
         # Prepare and send the request
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -153,10 +152,10 @@ class ModelsManagementClient:
 
     def get(
         self,
-        model_id: Optional[str] = None,
-        model_name: Optional[str] = None,
+        model_id: str | None = None,
+        model_name: str | None = None,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Get information about a specific model by its ID or name.
 
@@ -175,20 +174,18 @@ class ModelsManagementClient:
             NotFoundError: If the model is not found
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        if (model_id is None and model_name is None) or (
-            model_id is not None and model_name is not None
-        ):
+        if (model_id is None and model_name is None) or (model_id is not None and model_name is not None):
             raise ValueError("Exactly one of model_id or model_name must be provided")
 
         # If return_request is True, delegate to info
         if return_request:
-            result = self.info(return_request=True)
+            result: Final = self.info(return_request=True)
             assert isinstance(result, requests.Request)
             return result
 
         # Get all models and filter
-        models = self.info()
-        assert isinstance(models, List)
+        models: Final = self.info()
+        assert isinstance(models, list)
 
         # Find the matching model
         for model in models:
@@ -211,9 +208,7 @@ class ModelsManagementClient:
             )
         )
 
-    def info(
-        self, return_request: bool = False
-    ) -> Union[List[Dict[str, Any]], requests.Request]:
+    def info(self, return_request: bool = False) -> builtins.list[dict[str, Any]] | requests.Request:
         """
         Get detailed information about all models from the server.
 
@@ -228,16 +223,16 @@ class ModelsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/v1/model/info"
-        request = requests.Request("GET", url, headers=self._get_headers())
+        url: Final = f"{self._base_url}/v1/model/info"
+        request: Final = requests.Request("GET", url, headers=self._get_headers())
 
         if return_request:
             return request
 
         # Prepare and send the request
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()["data"]
         except requests.exceptions.HTTPError as e:
@@ -248,10 +243,10 @@ class ModelsManagementClient:
     def update(
         self,
         model_id: str,
-        model_params: Dict[str, Any],
-        model_info: Optional[Dict[str, Any]] = None,
+        model_params: dict[str, Any],
+        model_info: dict[str, Any] | None = None,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Update an existing model's configuration.
 
@@ -270,24 +265,24 @@ class ModelsManagementClient:
             NotFoundError: If the model is not found
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/model/update"
+        url: Final = f"{self._base_url}/model/update"
 
-        data = {
+        data: Final = {
             "id": model_id,
             "litellm_params": model_params,
         }
         if model_info:
             data["model_info"] = model_info
 
-        request = requests.Request("POST", url, headers=self._get_headers(), json=data)
+        request: Final = requests.Request("POST", url, headers=self._get_headers(), json=data)
 
         if return_request:
             return request
 
         # Prepare and send the request
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:

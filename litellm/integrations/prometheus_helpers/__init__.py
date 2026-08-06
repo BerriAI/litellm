@@ -6,7 +6,7 @@ Helpers for the Prometheus integration (extracted to keep ``prometheus.py`` smal
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, cast
+from typing import Any, Final, cast
 
 from litellm.types.integrations.prometheus import (
     UserAPIKeyLabelValues,
@@ -38,29 +38,27 @@ class PrometheusLabelFactoryContext:
     """
 
     __slots__ = (
-        "enum_values",
-        "_sanitized_enum",
         "_custom_by_sanitized_key",
-        "_tag_labels",
         "_resolved_end_user",
+        "_sanitized_enum",
+        "_tag_labels",
+        "enum_values",
     )
 
     _END_USER_NOT_COMPUTED = object()
 
     def __init__(self, enum_values: UserAPIKeyLabelValues) -> None:
         self.enum_values = enum_values
-        enum_dict = enum_values.model_dump()
-        self._sanitized_enum: Dict[str, Optional[str]] = {
+        enum_dict: Final = enum_values.model_dump()
+        self._sanitized_enum: dict[str, str | None] = {
             k: _sanitize_prometheus_label_value(v) for k, v in enum_dict.items()
         }
-        self._custom_by_sanitized_key: Dict[str, Optional[str]] = {}
+        self._custom_by_sanitized_key: dict[str, str | None] = {}
         if enum_values.custom_metadata_labels is not None:
             for key, value in enum_values.custom_metadata_labels.items():
                 sk = _sanitize_prometheus_label_name(key)
-                self._custom_by_sanitized_key[sk] = _sanitize_prometheus_label_value(
-                    value
-                )
-        self._tag_labels: Dict[str, Optional[str]] = {}
+                self._custom_by_sanitized_key[sk] = _sanitize_prometheus_label_value(value)
+        self._tag_labels: dict[str, str | None] = {}
         if enum_values.tags is not None:
             # Late import avoids circular import: ``prometheus`` imports this module.
             from litellm.integrations.prometheus import get_custom_labels_from_tags
@@ -70,11 +68,11 @@ class PrometheusLabelFactoryContext:
         # Use a dedicated sentinel so `None` can be cached as a computed result.
         self._resolved_end_user: Any = self._END_USER_NOT_COMPUTED
 
-    def get_resolved_end_user(self) -> Optional[str]:
+    def get_resolved_end_user(self) -> str | None:
         if self._resolved_end_user is self._END_USER_NOT_COMPUTED:
-            fn = _get_cached_end_user_id_for_cost_tracking()
+            fn: Final = _get_cached_end_user_id_for_cost_tracking()
             self._resolved_end_user = fn(
                 litellm_params={"user_api_key_end_user_id": self.enum_values.end_user},
                 service_type="prometheus",
             )
-        return cast(Optional[str], self._resolved_end_user)
+        return cast(str | None, self._resolved_end_user)

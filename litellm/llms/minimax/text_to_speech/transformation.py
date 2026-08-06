@@ -5,7 +5,7 @@ Maps OpenAI TTS spec to MiniMax TTS API (WebSocket-based HTTP API)
 Reference: https://platform.minimax.io/docs
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx import Headers
@@ -33,7 +33,7 @@ class MinimaxException(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Optional[Union[dict, Headers]] = None,
+        headers: dict | Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
@@ -80,19 +80,19 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Normalize the provided voice information into a MiniMax voice_id.
         """
-        normalized_voice = voice.strip()
-        mapped_voice = self.VOICE_MAPPINGS.get(normalized_voice.lower())
+        normalized_voice: Final = voice.strip()
+        mapped_voice: Final = self.VOICE_MAPPINGS.get(normalized_voice.lower())
         return mapped_voice or normalized_voice
 
     def _resolve_voice_id(
         self,
-        voice: Optional[Union[str, Dict[str, Any]]],
-        params: Dict[str, Any],
+        voice: str | dict[str, Any] | None,
+        params: dict[str, Any],
     ) -> str:
         """
         Determine the MiniMax voice_id based on provided voice input or parameters.
         """
-        mapped_voice: Optional[str] = None
+        mapped_voice: str | None = None
 
         if isinstance(voice, str) and voice.strip():
             mapped_voice = self._extract_voice_id(voice)
@@ -106,7 +106,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
             mapped_voice = self._extract_voice_id(str(voice))
 
         if mapped_voice is None:
-            voice_override = params.pop("voice_id", None)
+            voice_override: Final = params.pop("voice_id", None)
             if isinstance(voice_override, str) and voice_override.strip():
                 mapped_voice = self._extract_voice_id(voice_override)
 
@@ -119,32 +119,32 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
     def map_openai_params(
         self,
         model: str,
-        optional_params: Dict,
-        voice: Optional[Union[str, Dict]] = None,
+        optional_params: dict,
+        voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[Optional[str], Dict]:
+        kwargs: dict[str, Any] | None = None,
+    ) -> tuple[str | None, dict]:
         """
         Map OpenAI parameters to MiniMax TTS parameters
         """
-        mapped_params: Dict[str, Any] = {}
+        mapped_params: Final[dict[str, Any]] = {}
 
         # Work on a copy so we don't mutate the caller's dictionary
-        params = dict(optional_params) if optional_params else {}
+        params: Final = dict(optional_params) if optional_params else {}
 
         # Extract voice identifier
-        mapped_voice = self._resolve_voice_id(voice, params)
+        mapped_voice: Final = self._resolve_voice_id(voice, params)
 
         # Response/output format
-        response_format = params.pop("response_format", None)
+        response_format: Final = params.pop("response_format", None)
         if isinstance(response_format, str):
-            mapped_format = self.FORMAT_MAPPINGS.get(response_format, "mp3")
+            mapped_format: Final = self.FORMAT_MAPPINGS.get(response_format, "mp3")
             mapped_params["format"] = mapped_format
         else:
             mapped_params["format"] = "mp3"  # Default format
 
         # Speed parameter (MiniMax supports speed from 0.5 to 2.0)
-        speed = params.pop("speed", None)
+        speed: Final = params.pop("speed", None)
         if speed is not None:
             try:
                 speed_value = float(speed)
@@ -163,7 +163,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         mapped_params["voice_id"] = mapped_voice
 
         # Handle extra_body for additional MiniMax-specific parameters
-        extra_body = params.pop("extra_body", None)
+        extra_body: Final = params.pop("extra_body", None)
         if isinstance(extra_body, dict):
             for key, value in extra_body.items():
                 if value is not None:
@@ -180,8 +180,8 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate MiniMax environment and set up authentication headers
@@ -202,20 +202,16 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
         return headers
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return MinimaxException(
-            message=error_message, status_code=status_code, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+        return MinimaxException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_text_to_speech_request(
         self,
         model: str,
         input: str,
-        voice: Optional[str],
-        optional_params: Dict,
-        litellm_params: Dict,
+        voice: str | None,
+        optional_params: dict,
+        litellm_params: dict,
         headers: dict,
     ) -> TextToSpeechRequestData:
         """
@@ -227,28 +223,26 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         - voice_setting: Voice configuration
         - audio_setting: Audio output configuration
         """
-        params = dict(optional_params) if optional_params else {}
+        params: Final = dict(optional_params) if optional_params else {}
 
         # Extract parameters
-        voice_id = params.pop("voice_id", voice or "male-qn-qingse")
-        speed = params.pop("speed", 1.0)
-        audio_format = params.pop("format", "mp3")
+        voice_id: Final = params.pop("voice_id", voice or "male-qn-qingse")
+        speed: Final = params.pop("speed", 1.0)
+        audio_format: Final = params.pop("format", "mp3")
 
         # Extract additional voice settings
-        vol = params.pop("vol", 1.0)  # Volume (0.1 to 10)
-        pitch = params.pop("pitch", 0)  # Pitch adjustment (-12 to 12)
+        vol: Final = params.pop("vol", 1.0)  # Volume (0.1 to 10)
+        pitch: Final = params.pop("pitch", 0)  # Pitch adjustment (-12 to 12)
 
         # Extract audio settings
-        sample_rate = params.pop("sample_rate", 32000)  # 16000, 24000, 32000
-        bitrate = params.pop(
-            "bitrate", 128000
-        )  # For MP3: 64000, 128000, 192000, 256000
-        channel = params.pop("channel", 1)  # 1 for mono, 2 for stereo
+        sample_rate: Final = params.pop("sample_rate", 32000)  # 16000, 24000, 32000
+        bitrate: Final = params.pop("bitrate", 128000)  # For MP3: 64000, 128000, 192000, 256000
+        channel: Final = params.pop("channel", 1)  # 1 for mono, 2 for stereo
 
         # Output format: 'url' or 'hex' (default is 'hex')
-        output_format = params.pop("output_format", "hex")
+        output_format: Final = params.pop("output_format", "hex")
 
-        request_body: Dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "model": model,
             "text": input,
             "stream": False,  # HTTP endpoint doesn't support streaming
@@ -268,7 +262,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         }
 
         # Handle any remaining parameters from extra_body
-        extra_body = params.pop("extra_body", None)
+        extra_body: Final = params.pop("extra_body", None)
         if isinstance(extra_body, dict):
             for key, value in extra_body.items():
                 if value is not None and key not in request_body:
@@ -304,7 +298,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
         try:
             # Parse JSON response
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
 
             # MiniMax API response format check
             # The API can return different structures:
@@ -313,10 +307,10 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
             # Check for errors - MiniMax uses "status" field in HTTP endpoint response
             # status: 0 = success, 2 = invalid api key, etc.
-            status = response_json.get("status")
+            status: Final = response_json.get("status")
             if status is not None and status != 0:
-                ced = response_json.get("ced", "Unknown error")
-                error_detail = ced if ced else f"API returned status {status}"
+                ced: Final = response_json.get("ced", "Unknown error")
+                error_detail: Final = ced if ced else f"API returned status {status}"
                 raise MinimaxException(
                     status_code=raw_response.status_code,
                     message=f"MiniMax TTS error: {error_detail}",
@@ -325,10 +319,10 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
             # Extract audio data
             # MiniMax returns audio in "data" field
-            data = response_json.get("data", {})
+            data: Final = response_json.get("data", {})
 
             # Check if response contains a URL (output_format='url')
-            audio_url = data.get("audio_url", None)
+            audio_url: Final = data.get("audio_url", None)
             if audio_url:
                 # If URL format is used, we need to fetch the audio from the URL
                 # For now, return a response indicating URL mode (TODO: fetch audio from URL)
@@ -339,7 +333,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
                 )
 
             # Get hex-encoded audio data
-            audio_hex = data.get("audio", "") or response_json.get("audio_file", "")
+            audio_hex: Final = data.get("audio", "") or response_json.get("audio_file", "")
 
             if not audio_hex:
                 raise MinimaxException(
@@ -359,20 +353,20 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
                 except Exception as e:
                     raise MinimaxException(
                         status_code=500,
-                        message=f"Failed to decode audio data: {str(e)}",
+                        message=f"Failed to decode audio data: {e}",
                         headers=dict(raw_response.headers),
                     )
 
             # Create a new response with binary audio content
             # We need to create a response that contains the decoded audio bytes
             # Remove gzip encoding headers to avoid decompression issues
-            clean_headers = dict(raw_response.headers)
+            clean_headers: Final = dict(raw_response.headers)
             clean_headers.pop("content-encoding", None)
             clean_headers.pop("transfer-encoding", None)
             clean_headers["content-length"] = str(len(audio_bytes))
 
             # Create a new response object with the binary content
-            binary_response = httpx.Response(
+            binary_response: Final = httpx.Response(
                 status_code=200,
                 headers=clean_headers,
                 content=audio_bytes,
@@ -384,7 +378,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         except json.JSONDecodeError as e:
             raise MinimaxException(
                 status_code=500,
-                message=f"Failed to parse MiniMax response: {str(e)}",
+                message=f"Failed to parse MiniMax response: {e}",
                 headers=dict(raw_response.headers),
             )
         except Exception as e:
@@ -392,14 +386,14 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
                 raise
             raise MinimaxException(
                 status_code=500,
-                message=f"Error processing MiniMax response: {str(e)}",
+                message=f"Error processing MiniMax response: {e}",
                 headers=dict(raw_response.headers),
             )
 
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -409,6 +403,6 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         base_url = base_url.rstrip("/")
 
         # MiniMax uses a simple endpoint path
-        url = f"{base_url}{self.TTS_ENDPOINT_PATH}"
+        url: Final = f"{base_url}{self.TTS_ENDPOINT_PATH}"
 
         return url

@@ -9,7 +9,7 @@ async API requires multiple HTTP calls and does not fit the single-request
 contract of `base_llm_http_handler.audio_transcriptions`.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Final
 
 from httpx import Headers, Response
 
@@ -34,7 +34,7 @@ from litellm.types.utils import FileTypes, TranscriptionResponse
 
 # Soniox-native kwargs the user can pass through `litellm.transcription(..., **kwargs)`
 # in addition to the standard OpenAI params.
-SONIOX_PASSTHROUGH_PARAMS: List[str] = [
+SONIOX_PASSTHROUGH_PARAMS: Final[list[str]] = [
     "language_hints",
     "language_hints_strict",
     "enable_language_identification",
@@ -50,7 +50,7 @@ SONIOX_PASSTHROUGH_PARAMS: List[str] = [
 ]
 
 # Handler-only kwargs (consumed by the handler, not sent to Soniox).
-SONIOX_HANDLER_ONLY_PARAMS: List[str] = [
+SONIOX_HANDLER_ONLY_PARAMS: Final[list[str]] = [
     "soniox_polling_interval",
     "soniox_max_polling_attempts",
     "soniox_cleanup",
@@ -61,9 +61,7 @@ SONIOX_HANDLER_ONLY_PARAMS: List[str] = [
 class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     """Configuration for Soniox async speech-to-text transcription."""
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         # `language` is mapped onto Soniox's `language_hints`.
         # `response_format` is handled by LiteLLM (Soniox doesn't support
         # SRT/VTT natively but we synthesize them from token timestamps).
@@ -78,8 +76,8 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> dict:
         # Translate the OpenAI `language` param into Soniox `language_hints`.
         if "language" in non_default_params and non_default_params["language"]:
-            language = non_default_params["language"]
-            existing_hints = optional_params.get("language_hints")
+            language: Final = non_default_params["language"]
+            existing_hints: Final = optional_params.get("language_hints")
             if not existing_hints:
                 optional_params["language_hints"] = [language]
             elif language not in existing_hints:
@@ -96,24 +94,20 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         return optional_params
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return SonioxException(
-            message=error_message, status_code=status_code, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+        return SonioxException(message=error_message, status_code=status_code, headers=headers)
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
-        resolved_key = get_soniox_api_key(api_key)
+        resolved_key: Final = get_soniox_api_key(api_key)
         if not resolved_key:
             raise SonioxException(
                 message=(
@@ -124,7 +118,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 headers=None,
             )
 
-        merged_headers: Dict[str, str] = {
+        merged_headers: Final[dict[str, str]] = {
             "Authorization": f"Bearer {resolved_key}",
         }
         if headers:
@@ -133,12 +127,12 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         # The handler builds per-call URLs (uploads, create, poll, fetch, delete);
         # we just return the resolved base.
@@ -158,21 +152,19 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         and for filling in `file_id`/`audio_url`. This method exists so the
         config can be exercised in isolation by unit tests.
         """
-        body: Dict[str, Any] = {"model": model}
+        body: Final[dict[str, Any]] = {"model": model}
 
         for key in SONIOX_PASSTHROUGH_PARAMS:
             value = optional_params.get(key)
             if value is not None:
                 body[key] = value
 
-        return AudioTranscriptionRequestData(
-            data=body, files=None, content_type="application/json"
-        )
+        return AudioTranscriptionRequestData(data=body, files=None, content_type="application/json")
 
     def transform_audio_transcription_response(
         self,
         raw_response: Response,
-        model_response: Optional[TranscriptionResponse] = None,
+        model_response: TranscriptionResponse | None = None,
     ) -> TranscriptionResponse:
         """
         Build a TranscriptionResponse from a Soniox transcript payload.
@@ -183,7 +175,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             produced by the handler so transcription metadata is also available.
         """
         try:
-            payload = raw_response.json()
+            payload: Final = raw_response.json()
         except Exception as exc:
             raise SonioxException(
                 message=f"Failed to parse Soniox response: {exc}",
@@ -195,13 +187,13 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def _build_response_from_payload(
         self,
-        payload: Dict[str, Any],
-        model_response: Optional[TranscriptionResponse] = None,
-        response_format: Optional[str] = None,
+        payload: dict[str, Any],
+        model_response: TranscriptionResponse | None = None,
+        response_format: str | None = None,
     ) -> TranscriptionResponse:
         """Shared response-building logic (also used by the handler)."""
-        transcription_meta: Dict[str, Any] = {}
-        transcript: Dict[str, Any]
+        transcription_meta: dict[str, Any] = {}
+        transcript: dict[str, Any]
 
         if isinstance(payload, dict) and "transcript" in payload:
             transcription_meta = payload.get("transcription") or {}
@@ -209,7 +201,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         else:
             transcript = payload if isinstance(payload, dict) else {}
 
-        tokens: List[Dict[str, Any]] = transcript.get("tokens") or []
+        tokens: Final[list[dict[str, Any]]] = transcript.get("tokens") or []
 
         # Decide what to put in `text` based on response_format:
         #   - "srt": render tokens as SRT subtitles (synthesized from timestamps)
@@ -223,7 +215,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         else:
             # Default text rendering (also used for "json", "text",
             # "verbose_json")
-            has_speaker = any(t.get("speaker") is not None for t in tokens)
+            has_speaker: Final = any(t.get("speaker") is not None for t in tokens)
             has_language = any(t.get("language") is not None for t in tokens)
 
             if (has_speaker or has_language) and tokens:
@@ -235,31 +227,29 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             else:
                 text = ""
 
-        response = model_response or TranscriptionResponse(text=text)
+        response: Final = model_response or TranscriptionResponse(text=text)
         response.text = text
         response["task"] = "transcribe"
 
         # Best-effort metadata fields matching OpenAI's verbose_json shape.
         if transcription_meta.get("audio_duration_ms") is not None:
             try:
-                response["duration"] = (
-                    float(transcription_meta["audio_duration_ms"]) / 1000.0
-                )
+                response["duration"] = float(transcription_meta["audio_duration_ms"]) / 1000.0
             except (TypeError, ValueError):
                 pass
 
         # Surface a representative language if all tokens agree.
         has_language = any(t.get("language") is not None for t in tokens)
         if has_language:
-            languages = {t.get("language") for t in tokens if t.get("language")}
+            languages: Final = {t.get("language") for t in tokens if t.get("language")}
             if len(languages) == 1:
                 response["language"] = next(iter(languages))
 
         # For verbose_json, include word-level timing from tokens.
         if response_format == "verbose_json" and tokens:
-            words: List[Dict[str, Any]] = []
+            words: Final[list[dict[str, Any]]] = []
             for token in tokens:
-                word_entry: Dict[str, Any] = {"word": token.get("text", "")}
+                word_entry: dict[str, Any] = {"word": token.get("text", "")}
                 if token.get("start_ms") is not None:
                     word_entry["start"] = float(token["start_ms"]) / 1000.0
                 if token.get("end_ms") is not None:

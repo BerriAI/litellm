@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from typing_extensions import Required, TypedDict
 
@@ -103,9 +103,7 @@ class BidiGenerateContentRealtimeInput(TypedDict, total=False):
 StartOfSpeechSensitivityEnum = Literal[
     "START_SENSITIVITY_UNSPECIFIED", "START_SENSITIVITY_HIGH", "START_SENSITIVITY_LOW"
 ]
-EndOfSpeechSensitivityEnum = Literal[
-    "END_SENSITIVITY_UNSPECIFIED", "END_SENSITIVITY_HIGH", "END_SENSITIVITY_LOW"
-]
+EndOfSpeechSensitivityEnum = Literal["END_SENSITIVITY_UNSPECIFIED", "END_SENSITIVITY_HIGH", "END_SENSITIVITY_LOW"]
 
 
 class AutomaticActivityDetection(TypedDict, total=False):
@@ -130,7 +128,7 @@ class BidiGenerateContentSetup(TypedDict, total=False):
     systemInstruction: HttpxContentType
     """The system instruction to be used for the realtime session."""
 
-    tools: List[Tools]
+    tools: list[Tools]
     """The tools to be used for the realtime session."""
 
     realtimeInputConfig: BidiGenerateContentRealtimeInputConfig
@@ -165,51 +163,51 @@ class GeminiImageGenerationInstance(TypedDict):
 class GeminiImageGenerationParameters(BaseModel):
     """Parameters for Gemini image generation request"""
 
-    sampleCount: Optional[int] = None
+    sampleCount: int | None = None
     """Number of images to generate (maps to OpenAI 'n' parameter)"""
 
-    aspectRatio: Optional[str] = None
+    aspectRatio: str | None = None
     """Aspect ratio for generated images (e.g., '1:1', '16:9', '9:16', '4:3', '3:4')"""
 
-    imageSize: Optional[str] = None
+    imageSize: str | None = None
     """Image size for generated images (e.g., '1K', '2K')"""
 
-    personGeneration: Optional[str] = None
+    personGeneration: str | None = None
     """Controls person generation in images"""
 
     # Additional parameters that might be passed through
-    background: Optional[str] = None
+    background: str | None = None
     """Background specification"""
 
-    input_fidelity: Optional[str] = None
+    input_fidelity: str | None = None
     """Input fidelity specification"""
 
-    moderation: Optional[str] = None
+    moderation: str | None = None
     """Moderation settings"""
 
-    output_compression: Optional[str] = None
+    output_compression: str | None = None
     """Output compression settings"""
 
-    output_format: Optional[str] = None
+    output_format: str | None = None
     """Output format specification"""
 
-    quality: Optional[str] = None
+    quality: str | None = None
     """Quality settings"""
 
-    response_format: Optional[str] = None
+    response_format: str | None = None
     """Response format specification"""
 
-    style: Optional[str] = None
+    style: str | None = None
     """Style specification"""
 
-    user: Optional[str] = None
+    user: str | None = None
     """User specification"""
 
 
 class GeminiImageGenerationRequest(BaseModel):
     """Complete request body for Gemini image generation"""
 
-    instances: List[GeminiImageGenerationInstance]
+    instances: list[GeminiImageGenerationInstance]
     parameters: GeminiImageGenerationParameters
 
 
@@ -223,13 +221,13 @@ class GeminiGeneratedImage(TypedDict):
 class GeminiImageGenerationPrediction(TypedDict):
     """Prediction object containing generated images"""
 
-    generatedImages: List[GeminiGeneratedImage]
+    generatedImages: list[GeminiGeneratedImage]
 
 
 class GeminiImageGenerationResponse(TypedDict):
     """Complete response body from Gemini image generation API"""
 
-    predictions: List[GeminiImageGenerationPrediction]
+    predictions: list[GeminiImageGenerationPrediction]
 
 
 # Video Generation Types
@@ -237,7 +235,7 @@ class GeminiVideoGenerationInstance(TypedDict, total=False):
     """Instance data for Gemini video generation request"""
 
     prompt: Required[str]
-    image: Dict[str, Any]
+    image: dict[str, Any]
 
 
 class GeminiVideoGenerationParameters(BaseModel):
@@ -247,43 +245,43 @@ class GeminiVideoGenerationParameters(BaseModel):
     See: Veo 3/3.1 parameter guide.
     """
 
-    aspectRatio: Optional[str] = None
+    aspectRatio: str | None = None
     """Aspect ratio for generated video (e.g., '16:9', '9:16')."""
 
-    durationSeconds: Optional[int] = None
+    durationSeconds: int | None = None
     """
     Length of the generated video in seconds (e.g., 4, 5, 6, 8).
     Must be 8 when using extension/interpolation or referenceImages.
     """
 
-    resolution: Optional[str] = None
+    resolution: str | None = None
     """
     Video resolution (e.g., '720p', '1080p').
     '1080p' only supports 8s duration; extension only supports '720p'.
     """
 
-    negativePrompt: Optional[str] = None
+    negativePrompt: str | None = None
     """Text describing what not to include in the video."""
 
-    lastFrame: Optional[Any] = None
+    lastFrame: Any | None = None
     """
     The final image for interpolation video to transition.
     Should be used with the 'image' parameter.
     """
 
-    referenceImages: Optional[list] = None
+    referenceImages: list | None = None
     """
     Up to three images to be used as style/content references.
     Only supported in Veo 3.1 (list of VideoGenerationReferenceImage objects).
     """
 
-    video: Optional[Any] = None
+    video: Any | None = None
     """
     Video to be used for video extension (Video object).
     Only supported in Veo 3.1 & Veo 3 Fast.
     """
 
-    personGeneration: Optional[str] = None
+    personGeneration: str | None = None
     """
     Controls the generation of people.
     Text-to-video & Extension: "allow_all" only
@@ -295,8 +293,8 @@ class GeminiVideoGenerationParameters(BaseModel):
 class GeminiVideoGenerationRequest(BaseModel):
     """Complete request body for Gemini video generation"""
 
-    instances: List[GeminiVideoGenerationInstance]
-    parameters: Optional[GeminiVideoGenerationParameters] = None
+    instances: list[GeminiVideoGenerationInstance]
+    parameters: GeminiVideoGenerationParameters | None = None
 
 
 # Video Generation Operation Response Types
@@ -317,7 +315,7 @@ class GeminiGeneratedVideoSample(BaseModel):
 class GeminiGenerateVideoResponse(BaseModel):
     """Generate video response containing the samples"""
 
-    generatedSamples: List[GeminiGeneratedVideoSample]
+    generatedSamples: list[GeminiGeneratedVideoSample]
     """List of generated video samples"""
 
 
@@ -331,9 +329,9 @@ class GeminiOperationResponse(BaseModel):
 class GeminiOperationMetadata(BaseModel):
     """Metadata for the operation"""
 
-    createTime: Optional[str] = None
+    createTime: str | None = None
     """Creation timestamp"""
-    model: Optional[str] = None
+    model: str | None = None
     """Model used for generation"""
 
 
@@ -350,11 +348,11 @@ class GeminiLongRunningOperationResponse(BaseModel):
     done: bool = False
     """Whether the operation is complete"""
 
-    metadata: Optional[GeminiOperationMetadata] = None
+    metadata: GeminiOperationMetadata | None = None
     """Operation metadata"""
 
-    response: Optional[GeminiOperationResponse] = None
+    response: GeminiOperationResponse | None = None
     """Response object when operation is complete"""
 
-    error: Optional[Dict[str, Any]] = None
+    error: dict[str, Any] | None = None
     """Error details if operation failed"""

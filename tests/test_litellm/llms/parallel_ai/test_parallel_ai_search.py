@@ -293,7 +293,10 @@ class TestParallelAISearch:
         ],
     )
     @pytest.mark.asyncio
-    async def test_custom_api_base_appends_v1_search(self, api_base):
+    async def test_custom_api_base_appends_v1_search(self, api_base, monkeypatch):
+        # Operator points at an internal base via the env override (a trusted
+        # host), so the server key is still used and the URL is normalized.
+        monkeypatch.setenv("PARALLEL_AI_API_BASE", api_base)
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             new_callable=AsyncMock,
@@ -303,7 +306,6 @@ class TestParallelAISearch:
             await litellm.asearch(
                 query="AI developments",
                 search_provider="parallel_ai",
-                api_base=api_base,
             )
 
             call_args = mock_post.call_args
@@ -311,6 +313,23 @@ class TestParallelAISearch:
                 call_args.kwargs["url"]
                 == "https://proxy.internal.example.com/v1/search"
             )
+
+    @pytest.mark.asyncio
+    async def test_caller_api_base_without_key_is_refused(self, monkeypatch):
+        # A caller-supplied api_base (untrusted host) while relying on the
+        # server key must be refused without any outbound request.
+        monkeypatch.setenv("PARALLEL_API_KEY", "server-secret")
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            with pytest.raises(Exception, match="Refusing to send"):
+                await litellm.asearch(
+                    query="AI developments",
+                    search_provider="parallel_ai",
+                    api_base="https://attacker.example.com",
+                )
+            mock_post.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_missing_api_key_raises(self, monkeypatch):

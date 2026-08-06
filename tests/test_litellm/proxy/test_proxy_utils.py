@@ -7,8 +7,10 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import ProxyErrorTypes
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -427,6 +429,321 @@ class TestPostCallFailureHookLiftsFirstApiCallStartTime:
         assert "litellm_logging_obj" not in request_data
 
 
+class TestPostCallFailureHookLiftsRecoveredPartialSpend:
+    """A stream that broke mid-flight still billed the provider for the chunks
+    already delivered. The streaming handler stashes that recovered usage and
+    cost on the logging object; post_call_failure_hook must lift them onto
+    request_data before the logging object is popped, so the failure-path spend
+    callbacks (which run after the pop) record the real partial spend.
+    """
+
+    async def _run(self, request_data):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("boom"),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_lifts_recovered_usage_and_cost(self):
+        from litellm.types.utils import Usage
+
+        recovered_usage = Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31)
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {
+            "combined_usage_object": recovered_usage,
+            "response_cost": 3.5e-05,
+        }
+        request_data = {"litellm_logging_obj": logging_obj, "metadata": {}}
+        await self._run(request_data)
+
+        assert request_data["combined_usage_object"] is recovered_usage
+        assert request_data["response_cost"] == 3.5e-05
+        assert "litellm_logging_obj" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_no_recovered_usage_is_noop(self):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        request_data = {"litellm_logging_obj": logging_obj, "metadata": {}}
+        await self._run(request_data)
+        assert "combined_usage_object" not in request_data
+        assert "response_cost" not in request_data
+
+
+from typing import cast
+
+import litellm
+from litellm.proxy.utils import create_model_info_response
+from litellm.types.utils import ModelInfo
+
+
+def _fake_model_info(**fields: object) -> ModelInfo:
+    return cast(ModelInfo, dict(fields))
+
+
+def _raise_unmapped(model_id: str) -> ModelInfo:
+    raise ValueError(f"This model isn't mapped yet: {model_id}")
+
+
+def test_create_model_info_response_includes_max_tokens_from_lookup():
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens=128000, max_output_tokens=16384
+        ),
+    )
+
+    assert response["id"] == "some-model"
+    assert response["object"] == "model"
+    assert response["max_input_tokens"] == 128000
+    assert response["max_output_tokens"] == 16384
+
+
+def test_create_model_info_response_does_not_call_router_group_info():
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (None, None)
+
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=router,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens=128000, max_output_tokens=16384
+        ),
+    )
+
+    router.get_model_group_info.assert_not_called()
+    assert response["max_input_tokens"] == 128000
+
+
+def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map():
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (32000, 8000)
+
+    response = create_model_info_response(
+        model_id="my-custom-deployment",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    router.get_model_group_info.assert_not_called()
+    assert response["max_input_tokens"] == 32000
+    assert response["max_output_tokens"] == 8000
+
+
+def test_create_model_info_response_deployment_limits_override_cost_map():
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (200000, None)
+
+    response = create_model_info_response(
+        model_id="gpt-4o",
+        provider="openai",
+        llm_router=router,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens=128000, max_output_tokens=16384
+        ),
+    )
+
+    assert response["max_input_tokens"] == 200000
+    assert response["max_output_tokens"] == 16384
+
+
+def test_create_model_info_response_survives_malformed_configured_limits():
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-limit-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": "128,000"},
+            }
+        ]
+    )
+
+    response = create_model_info_response(
+        model_id="bad-limit-model",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert response["id"] == "bad-limit-model"
+    assert "max_input_tokens" not in response
+    assert "max_output_tokens" not in response
+
+
+@pytest.mark.parametrize("bad_value", ["128,000", "", "unlimited", [128000], {"max": 128000}, True])
+def test_create_model_info_response_survives_malformed_cost_map_limits(bad_value):
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens=bad_value, max_output_tokens=bad_value
+        ),
+    )
+
+    assert response["id"] == "some-model"
+    assert "max_input_tokens" not in response
+    assert "max_output_tokens" not in response
+
+
+def test_create_model_info_response_keeps_valid_cost_map_limit_beside_malformed_one():
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens="128,000", max_output_tokens=16384
+        ),
+    )
+
+    assert "max_input_tokens" not in response
+    assert response["max_output_tokens"] == 16384
+
+
+def test_create_model_info_response_survives_malformed_limits_registered_by_router():
+    """A deployment's model_info is registered into litellm.model_cost verbatim, so a
+    malformed configured limit reaches the listing through the real cost-map lookup and
+    not just the router index. Guarding only the index path still 500s the whole listing."""
+    from litellm import Router
+
+    saved_model_cost = dict(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "openai/some-unmapped-model",
+                    "litellm_params": {"model": "openai/some-unmapped-model"},
+                    "model_info": {"max_input_tokens": "128,000"},
+                }
+            ]
+        )
+
+        response = create_model_info_response(
+            model_id="openai/some-unmapped-model",
+            provider="openai",
+            llm_router=router,
+        )
+    finally:
+        litellm.model_cost.clear()
+        litellm.model_cost.update(saved_model_cost)
+
+    assert response["id"] == "openai/some-unmapped-model"
+    assert "max_input_tokens" not in response
+
+
+def test_create_model_info_response_emits_integer_token_counts():
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens=128000, max_output_tokens=16384
+        ),
+    )
+
+    assert isinstance(response["max_input_tokens"], int)
+    assert isinstance(response["max_output_tokens"], int)
+
+
+def test_create_model_info_response_omits_unknown_individual_limit():
+    response = create_model_info_response(
+        model_id="some-embedding",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(max_input_tokens=8191),
+    )
+
+    assert response["max_input_tokens"] == 8191
+    assert "max_output_tokens" not in response
+
+
+def test_create_model_info_response_omits_limits_when_lookup_raises():
+    response = create_model_info_response(
+        model_id="openai/*",
+        provider="openai",
+        llm_router=None,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert response["id"] == "openai/*"
+    assert "max_input_tokens" not in response
+    assert "max_output_tokens" not in response
+
+
+def test_create_model_info_response_no_router_keeps_base_fields():
+    response = create_model_info_response(
+        model_id="totally-unknown-model-xyz",
+        provider="openai",
+        llm_router=None,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert response == {
+        "id": "totally-unknown-model-xyz",
+        "object": "model",
+        "created": response["created"],
+        "owned_by": "openai",
+    }
+
+
+def test_create_model_info_response_reads_real_cost_map():
+    response = create_model_info_response(
+        model_id="gpt-4o", provider="openai", llm_router=None
+    )
+
+    assert isinstance(response["max_input_tokens"], int)
+    assert response["max_input_tokens"] > 0
+    assert isinstance(response["max_output_tokens"], int)
+    assert response["max_output_tokens"] > 0
+
+
+def test_create_model_info_response_includes_mode_from_lookup():
+    response = create_model_info_response(
+        model_id="text-embedding-3-small",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(mode="embedding"),
+    )
+
+    assert response["mode"] == "embedding"
+
+
+def test_create_model_info_response_omits_mode_when_lookup_raises():
+    response = create_model_info_response(
+        model_id="my-custom-deployment",
+        provider="openai",
+        llm_router=None,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert "mode" not in response
+
+
+def test_create_model_info_response_omits_non_string_mode():
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(mode=None),
+    )
+
+    assert "mode" not in response
+
+
 class TestPostCallFailureHookLLMExceptionAlerting:
     """The llm_exceptions alert is for infra / LLM-API failures, not user
     errors (https://github.com/BerriAI/litellm/issues/3395). Already-normalized
@@ -632,3 +949,215 @@ class TestSendEmailStartTls:
         assert isinstance(context, ssl.SSLContext)
         assert context.verify_mode == ssl.CERT_REQUIRED
         assert context.check_hostname is True
+
+
+class _RecordingMCPGuardrail(CustomGuardrail):
+    """Unified guardrail that masks every text it is handed."""
+
+    def __init__(self, event_hook, masked_text="<MASKED>", raises=None):
+        super().__init__(guardrail_name="mcp-output-guardrail", event_hook=event_hook, default_on=True)
+        self.masked_text = masked_text
+        self.raises = raises
+        self.call_count = 0
+        self.last_input_type = None
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        self.call_count += 1
+        self.last_input_type = input_type
+        if self.raises is not None:
+            raise self.raises
+        return {"texts": [self.masked_text for _ in inputs.get("texts", [])]}
+
+
+class _NativeMCPGuardrail(CustomGuardrail):
+    """Guardrail that only implements the MCP logging hook (cisco-style)."""
+
+    def __init__(self):
+        super().__init__(
+            guardrail_name="native-mcp-guardrail",
+            event_hook=GuardrailEventHooks.post_mcp_call,
+            default_on=True,
+        )
+        self.considered_count = 0
+
+    def should_run_guardrail(self, data, event_type):
+        self.considered_count += 1
+        return super().should_run_guardrail(data=data, event_type=event_type)
+
+    async def async_post_mcp_tool_call_hook(self, kwargs, response_obj, start_time, end_time):
+        return None
+
+
+@pytest.fixture
+def restore_callbacks():
+    """Restore the process-wide callback state post_mcp_call_hook reads.
+
+    ProxyLogging caches callback capabilities keyed on id()s of litellm.callbacks,
+    so a restored-but-different list can collide with a stale entry after GC and
+    leak a has_guardrail verdict into unrelated tests in the same worker.
+    """
+    original = list(litellm.callbacks)
+    yield
+    litellm.callbacks = original
+    ProxyLogging._callback_capabilities_cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_masks_tool_result(restore_callbacks):
+    """A post_mcp_call guardrail must see the tool result text and mask it in the returned result."""
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = _RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call)
+    litellm.callbacks = [guardrail]
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data={"mcp_tool_name": "echo"},
+        user_api_key_dict=None,
+    )
+
+    assert guardrail.call_count == 1
+    assert guardrail.last_input_type == "response"
+    assert [item.text for item in returned.content] == ["<MASKED>"]
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_skips_guardrail_configured_for_other_hooks(restore_callbacks):
+    """A guardrail not configured for post_mcp_call must not scan MCP tool results."""
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = _RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_call)
+    litellm.callbacks = [guardrail]
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data={"mcp_tool_name": "echo"},
+        user_api_key_dict=None,
+    )
+
+    assert guardrail.call_count == 0
+    assert [item.text for item in returned.content] == ["jane@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_skips_guardrail_without_apply_guardrail(restore_callbacks):
+    """Guardrails that implement async_post_mcp_tool_call_hook are dispatched by the
+    logging object, so this hook must not run them a second time."""
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = _NativeMCPGuardrail()
+    litellm.callbacks = [guardrail]
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data={"mcp_tool_name": "echo"},
+        user_api_key_dict=None,
+    )
+
+    assert guardrail.considered_count == 0
+    assert [item.text for item in returned.content] == ["jane@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_propagates_guardrail_block(restore_callbacks):
+    """A guardrail rejecting the tool result must raise out of the hook."""
+    from mcp.types import CallToolResult, TextContent
+
+    from litellm.exceptions import BlockedPiiEntityError
+
+    guardrail = _RecordingMCPGuardrail(
+        event_hook=GuardrailEventHooks.post_mcp_call,
+        raises=BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="mcp-output-guardrail"),
+    )
+    litellm.callbacks = [guardrail]
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    with pytest.raises(BlockedPiiEntityError):
+        await proxy_logging_obj.post_mcp_call_hook(
+            response=result,
+            request_data={"mcp_tool_name": "echo"},
+            user_api_key_dict=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_prisma_health_check_failure_names_itself_at_operator_visible_level(caplog):
+    """A failing DB health check has to name the check that failed, at a level
+    operators actually run at.
+
+    Reporting it as ``disconnect()`` sends anyone grepping the logs to the wrong
+    function and reads as "the check never ran", and reporting it only at debug
+    level hides a database fault behind a flag nobody enables in production."""
+    import logging
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.utils import PrismaClient
+
+    client = MagicMock()
+    client.db.query_raw = AsyncMock(side_effect=Exception("connection refused"))
+    client.proxy_logging_obj.failure_handler = AsyncMock()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        with pytest.raises(Exception, match="connection refused"):
+            await PrismaClient.health_check(client)
+
+    assert "health_check()" in caplog.text
+    assert "disconnect()" not in caplog.text
+    assert "connection refused" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_prisma_connect_failure_is_reported_at_operator_visible_level(caplog):
+    """The sibling connect failure is labelled correctly but was equally
+    invisible. A database the proxy could not connect to at startup must not be
+    a debug-only record."""
+    import logging
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.utils import PrismaClient
+
+    client = MagicMock()
+    client.db.is_connected = MagicMock(return_value=False)
+    client.db.connect = AsyncMock(side_effect=Exception("could not reach database"))
+    client.proxy_logging_obj.failure_handler = AsyncMock()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        with pytest.raises(Exception, match="could not reach database"):
+            await PrismaClient.connect(client)
+
+    assert "connect()" in caplog.text
+    assert "could not reach database" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_prisma_health_check_failure_redacts_database_credentials(caplog):
+    """Raising the level must not widen what reaches the logs. The exception
+    text can carry a full connection string, so the credential has to be gone
+    from the emitted record."""
+    import logging
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.utils import PrismaClient
+
+    client = MagicMock()
+    client.db.query_raw = AsyncMock(
+        side_effect=Exception("could not connect to postgresql://admin:hunter2@db.internal:5432/litellm")
+    )
+    client.proxy_logging_obj.failure_handler = AsyncMock()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        with pytest.raises(Exception):
+            await PrismaClient.health_check(client)
+
+    emitted = [record.getMessage() for record in caplog.records if record.name == "LiteLLM Proxy"]
+
+    assert emitted
+    assert all("hunter2" not in message for message in emitted)
+    assert any("postgresql://REDACTED@db.internal" in message for message in emitted)

@@ -10,7 +10,7 @@ import asyncio
 import copy
 import json
 import os
-from typing import Any, Dict, List, Literal, Optional, cast
+from typing import Any, Final, Literal, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
@@ -40,18 +40,16 @@ class ConfigRepository:
     @property
     def prisma_client(self) -> Any:
         if self._prisma_client is None:
-            raise RuntimeError(
-                "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
-            )
+            raise RuntimeError("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
         return self._prisma_client
 
     @property
     def table(self) -> Any:
         return self.prisma_client.db.litellm_config
 
-    async def get_param(self, param_name: str) -> Optional[ConfigParam]:
+    async def get_param(self, param_name: str) -> ConfigParam | None:
         """Get a config parameter from the database."""
-        record = await self.table.find_unique(where={"param_name": param_name})
+        record: Final = await self.table.find_unique(where={"param_name": param_name})
         if record is None:
             return None
         param_value = record.param_value
@@ -61,9 +59,7 @@ class ConfigRepository:
 
     async def set_param(self, param_name: str, param_value: Any) -> ConfigParam:
         """Set a config parameter in the database."""
-        value_json = (
-            json.dumps(param_value) if not isinstance(param_value, str) else param_value
-        )
+        value_json: Final = json.dumps(param_value) if not isinstance(param_value, str) else param_value
         await self.table.upsert(
             where={"param_name": param_name},
             data={
@@ -81,10 +77,10 @@ class ConfigRepository:
         except Exception:
             return False
 
-    async def get_all_params(self) -> Dict[str, Any]:
+    async def get_all_params(self) -> dict[str, Any]:
         """Get all config parameters from the database."""
-        records = await self.table.find_many()
-        result = {}
+        records: Final = await self.table.find_many()
+        result: Final = {}
         for record in records:
             param_value = record.param_value
             if isinstance(param_value, str):
@@ -98,7 +94,7 @@ class ConfigRepository:
         On conflicts, src (DB) wins, but empty lists are treated as "no value"
         and don't overwrite the destination.
         """
-        stack = [(dst, src)]
+        stack: Final = [(dst, src)]
         while stack:
             d, s = stack.pop()
             for k, v in s.items():
@@ -111,11 +107,9 @@ class ConfigRepository:
                 else:
                     d[k] = v
 
-    def _decrypt_env_variables(
-        self, env_vars: Dict[str, Any], return_original_value: bool = True
-    ) -> Dict[str, str]:
+    def _decrypt_env_variables(self, env_vars: dict[str, Any], return_original_value: bool = True) -> dict[str, str]:
         """Decrypt environment variables from database."""
-        decrypted: Dict[str, str] = {}
+        decrypted: Final[dict[str, str]] = {}
         for key, value in env_vars.items():
             if isinstance(value, str):
                 decrypted_value = decrypt_value_helper(
@@ -130,9 +124,9 @@ class ConfigRepository:
                 decrypted[key] = str(value)
         return decrypted
 
-    def _normalize_env_variable_keys(self, env_vars: Dict[str, str]) -> Dict[str, str]:
+    def _normalize_env_variable_keys(self, env_vars: dict[str, str]) -> dict[str, str]:
         """Normalize env variable keys to include both original and uppercase versions."""
-        normalized: Dict[str, str] = {}
+        normalized: Final[dict[str, str]] = {}
         for key, value in env_vars.items():
             normalized[key] = value
             upper_key = key.upper()
@@ -152,25 +146,19 @@ class ConfigRepository:
     ) -> dict:
         """Update config fields with DB values, handling the merge strategy."""
         if param_name == "environment_variables":
-            decrypted_env_vars = self._decrypt_env_variables(
-                db_param_value, return_original_value=True
-            )
-            merged_env_vars = self._normalize_env_variable_keys(decrypted_env_vars)
+            decrypted_env_vars: Final = self._decrypt_env_variables(db_param_value, return_original_value=True)
+            merged_env_vars: Final = self._normalize_env_variable_keys(decrypted_env_vars)
             for env_key, value in merged_env_vars.items():
                 os.environ[env_key] = value
 
-            current_config.setdefault("environment_variables", {}).update(
-                merged_env_vars
-            )
+            current_config.setdefault("environment_variables", {}).update(merged_env_vars)
             return current_config
 
         if param_name not in current_config:
             current_config[param_name] = db_param_value
             return current_config
 
-        if isinstance(current_config[param_name], dict) and isinstance(
-            db_param_value, dict
-        ):
+        if isinstance(current_config[param_name], dict) and isinstance(db_param_value, dict):
             self._deep_merge_dicts(current_config[param_name], db_param_value)
         else:
             current_config[param_name] = db_param_value
@@ -180,7 +168,7 @@ class ConfigRepository:
     async def reconcile_config(
         self,
         yaml_config: dict,
-        store_model_in_db: Optional[bool] = None,
+        store_model_in_db: bool | None = None,
     ) -> dict:
         """Reconcile config from YAML with database overrides.
 
@@ -196,13 +184,11 @@ class ConfigRepository:
             The merged configuration with DB overrides applied
         """
         if store_model_in_db is not True:
-            verbose_proxy_logger.info(
-                "'store_model_in_db' is not True, skipping db config reconciliation"
-            )
+            verbose_proxy_logger.info("'store_model_in_db' is not True, skipping db config reconciliation")
             return yaml_config
 
-        tasks = [self.get_param(k) for k in self.CONFIG_PARAMS]
-        responses = await asyncio.gather(*tasks)
+        tasks: Final = [self.get_param(k) for k in self.CONFIG_PARAMS]
+        responses: Final = await asyncio.gather(*tasks)
 
         config = copy.deepcopy(yaml_config)
         for response in responses:
@@ -211,9 +197,7 @@ class ConfigRepository:
 
             param_name = response.param_name
             param_value = response.param_value
-            verbose_proxy_logger.debug(
-                f"param_name={param_name}, param_value={param_value}"
-            )
+            verbose_proxy_logger.debug("param_name=%s, param_value=%s", param_name, param_value)
 
             if param_name is not None and param_value is not None:
                 config = self._update_config_fields(
@@ -232,7 +216,7 @@ class ConfigRepository:
 
         return config
 
-    async def prefetch_params(self, param_names: List[str]) -> None:
+    async def prefetch_params(self, param_names: list[str]) -> None:
         """Prefetch config params to warm the cache.
 
         This can be called before reconcile_config to ensure all needed

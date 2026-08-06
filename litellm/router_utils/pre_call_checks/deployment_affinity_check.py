@@ -13,7 +13,7 @@ where routing to a consistent deployment is still beneficial.
 """
 
 import hashlib
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Final, cast
 
 from typing_extensions import TypedDict
 
@@ -54,7 +54,7 @@ class DeploymentAffinityCheck(CustomLogger):
         enable_user_key_affinity: bool,
         enable_responses_api_affinity: bool,
         enable_session_id_affinity: bool = False,
-        model_group_affinity_config: Optional[Dict[str, List[str]]] = None,
+        model_group_affinity_config: dict[str, list[str]] | None = None,
     ):
         super().__init__()
         self.cache = cache
@@ -62,9 +62,7 @@ class DeploymentAffinityCheck(CustomLogger):
         self.enable_user_key_affinity = enable_user_key_affinity
         self.enable_responses_api_affinity = enable_responses_api_affinity
         self.enable_session_id_affinity = enable_session_id_affinity
-        self.model_group_affinity_config: Dict[str, List[str]] = (
-            model_group_affinity_config or {}
-        )
+        self.model_group_affinity_config: dict[str, list[str]] = model_group_affinity_config or {}
         for group, flags in self.model_group_affinity_config.items():
             unknown = set(flags) - self.VALID_FLAGS
             if unknown:
@@ -75,7 +73,7 @@ class DeploymentAffinityCheck(CustomLogger):
                     self.VALID_FLAGS,
                 )
 
-    def _get_effective_flags(self, model_group: str) -> Tuple[bool, bool, bool]:
+    def _get_effective_flags(self, model_group: str) -> tuple[bool, bool, bool]:
         """
         Return (enable_user_key_affinity, enable_responses_api_affinity, enable_session_id_affinity)
         for the given model group.
@@ -83,7 +81,7 @@ class DeploymentAffinityCheck(CustomLogger):
         If the model group has an explicit entry in model_group_affinity_config, use it.
         Otherwise fall back to the global instance flags.
         """
-        group_checks = self.model_group_affinity_config.get(model_group)
+        group_checks: Final = self.model_group_affinity_config.get(model_group)
         if group_checks is not None:
             return (
                 "deployment_affinity" in group_checks,
@@ -124,7 +122,7 @@ class DeploymentAffinityCheck(CustomLogger):
     @staticmethod
     def _get_model_map_key_from_litellm_model_name(
         litellm_model_name: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Best-effort derivation of a stable "model map key" for affinity scoping.
 
@@ -150,7 +148,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return remainder
 
     @staticmethod
-    def _get_model_map_key_from_deployment(deployment: dict) -> Optional[str]:
+    def _get_model_map_key_from_deployment(deployment: dict) -> str | None:
         """
         Derive a stable model-map key from a router deployment dict.
 
@@ -162,35 +160,31 @@ class DeploymentAffinityCheck(CustomLogger):
         Prefer `base_model` when available (important for Azure), otherwise fall back to
         parsing `litellm_params.model`.
         """
-        model_name = deployment.get("model_name")
+        model_name: Final = deployment.get("model_name")
         if isinstance(model_name, str) and model_name:
             return model_name
 
-        model_info = deployment.get("model_info")
+        model_info: Final = deployment.get("model_info")
         if isinstance(model_info, dict):
             base_model = model_info.get("base_model")
             if isinstance(base_model, str) and base_model:
                 return base_model
 
-        litellm_params = deployment.get("litellm_params")
+        litellm_params: Final = deployment.get("litellm_params")
         if isinstance(litellm_params, dict):
             base_model = litellm_params.get("base_model")
             if isinstance(base_model, str) and base_model:
                 return base_model
-            litellm_model_name = litellm_params.get("model")
+            litellm_model_name: Final = litellm_params.get("model")
             if isinstance(litellm_model_name, str) and litellm_model_name:
-                return (
-                    DeploymentAffinityCheck._get_model_map_key_from_litellm_model_name(
-                        litellm_model_name
-                    )
-                )
+                return DeploymentAffinityCheck._get_model_map_key_from_litellm_model_name(litellm_model_name)
 
         return None
 
     @staticmethod
     def _get_stable_model_map_key_from_deployments(
-        healthy_deployments: List[dict],
-    ) -> Optional[str]:
+        healthy_deployments: list[dict],
+    ) -> str | None:
         """
         Only use model-map key scoping when it is stable across the deployment set.
 
@@ -200,14 +194,14 @@ class DeploymentAffinityCheck(CustomLogger):
         if not healthy_deployments:
             return None
 
-        keys: List[str] = []
+        keys: Final[list[str]] = []
         for deployment in healthy_deployments:
             key = DeploymentAffinityCheck._get_model_map_key_from_deployment(deployment)
             if key is None:
                 return None
             keys.append(key)
 
-        unique_keys = set(keys)
+        unique_keys: Final = set(keys)
         if len(unique_keys) != 1:
             return None
         return keys[0]
@@ -220,7 +214,7 @@ class DeploymentAffinityCheck(CustomLogger):
 
     @classmethod
     def get_affinity_cache_key(cls, model_group: str, user_key: str) -> str:
-        hashed_user_key = cls._hash_user_key(user_key=user_key)
+        hashed_user_key: Final = cls._hash_user_key(user_key=user_key)
         return f"{cls.CACHE_KEY_PREFIX}:{model_group}:{hashed_user_key}"
 
     @classmethod
@@ -228,30 +222,30 @@ class DeploymentAffinityCheck(CustomLogger):
         return f"{cls.CACHE_KEY_PREFIX}:session:{model_group}:{session_id}"
 
     @staticmethod
-    def _get_user_key_from_metadata_dict(metadata: dict) -> Optional[str]:
+    def _get_user_key_from_metadata_dict(metadata: dict) -> str | None:
         # NOTE: affinity is keyed on the *API key hash* provided by the proxy (not the
         # OpenAI `user` parameter, which is an end-user identifier).
-        user_key = metadata.get("user_api_key_hash")
+        user_key: Final = metadata.get("user_api_key_hash")
         if user_key is None:
             return None
         return str(user_key)
 
     @staticmethod
-    def _get_session_id_from_metadata_dict(metadata: dict) -> Optional[str]:
-        session_id = metadata.get("session_id")
+    def _get_session_id_from_metadata_dict(metadata: dict) -> str | None:
+        session_id: Final = metadata.get("session_id")
         if session_id is None:
             return None
         return str(session_id)
 
     @staticmethod
-    def _iter_metadata_dicts(request_kwargs: dict) -> List[dict]:
+    def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
         """
         Return all metadata dicts available on the request.
 
         Depending on the endpoint, Router may populate `metadata` or `litellm_metadata`.
         Users may also send one or both, so we check both (rather than using `or`).
         """
-        metadata_dicts: List[dict] = []
+        metadata_dicts: Final[list[dict]] = []
         for key in ("litellm_metadata", "metadata"):
             md = request_kwargs.get(key)
             if isinstance(md, dict):
@@ -259,7 +253,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return metadata_dicts
 
     @staticmethod
-    def _get_user_key_from_request_kwargs(request_kwargs: dict) -> Optional[str]:
+    def _get_user_key_from_request_kwargs(request_kwargs: dict) -> str | None:
         """
         Extract a stable affinity key from request kwargs.
 
@@ -270,54 +264,46 @@ class DeploymentAffinityCheck(CustomLogger):
         """
         # Check metadata dicts (Proxy usage)
         for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
-            user_key = DeploymentAffinityCheck._get_user_key_from_metadata_dict(
-                metadata=metadata
-            )
+            user_key = DeploymentAffinityCheck._get_user_key_from_metadata_dict(metadata=metadata)
             if user_key is not None:
                 return user_key
 
         return None
 
     @staticmethod
-    def _get_session_id_from_request_kwargs(request_kwargs: dict) -> Optional[str]:
+    def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
         for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
-            session_id = DeploymentAffinityCheck._get_session_id_from_metadata_dict(
-                metadata=metadata
-            )
+            session_id = DeploymentAffinityCheck._get_session_id_from_metadata_dict(metadata=metadata)
             if session_id is not None:
                 return session_id
         return None
 
     @staticmethod
-    def _find_deployment_by_model_id(
-        healthy_deployments: List[dict], model_id: str
-    ) -> Optional[dict]:
+    def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
         for deployment in healthy_deployments:
             model_info = deployment.get("model_info")
             if not isinstance(model_info, dict):
                 continue
             deployment_model_id = model_info.get("id")
-            if deployment_model_id is not None and str(deployment_model_id) == str(
-                model_id
-            ):
+            if deployment_model_id is not None and str(deployment_model_id) == str(model_id):
                 return deployment
         return None
 
     async def async_filter_deployments(
         self,
         model: str,
-        healthy_deployments: List,
-        messages: Optional[List[AllMessageValues]],
-        request_kwargs: Optional[dict] = None,
-        parent_otel_span: Optional[Span] = None,
-    ) -> List[dict]:
+        healthy_deployments: list,
+        messages: list[AllMessageValues] | None,
+        request_kwargs: dict | None = None,
+        parent_otel_span: Span | None = None,
+    ) -> list[dict]:
         """
         Optionally filter healthy deployments based on:
         1. `previous_response_id` (Responses API continuity) [highest priority]
         2. cached API-key deployment affinity
         """
         request_kwargs = request_kwargs or {}
-        typed_healthy_deployments = cast(List[dict], healthy_deployments)
+        typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
 
         (
             enable_user_key,
@@ -327,13 +313,9 @@ class DeploymentAffinityCheck(CustomLogger):
 
         # 1) Responses API continuity (high priority)
         if enable_responses_api:
-            previous_response_id = request_kwargs.get("previous_response_id")
+            previous_response_id: Final = request_kwargs.get("previous_response_id")
             if previous_response_id is not None:
-                responses_model_id = (
-                    ResponsesAPIRequestUtils.get_model_id_from_response_id(
-                        str(previous_response_id)
-                    )
-                )
+                responses_model_id = ResponsesAPIRequestUtils.get_model_id_from_response_id(str(previous_response_id))
                 if responses_model_id is not None:
                     deployment = self._find_deployment_by_model_id(
                         healthy_deployments=typed_healthy_deployments,
@@ -346,7 +328,7 @@ class DeploymentAffinityCheck(CustomLogger):
                         )
                         return [deployment]
 
-        stable_model_map_key = self._get_stable_model_map_key_from_deployments(
+        stable_model_map_key: Final = self._get_stable_model_map_key_from_deployments(
             healthy_deployments=typed_healthy_deployments
         )
         if stable_model_map_key is None:
@@ -354,27 +336,21 @@ class DeploymentAffinityCheck(CustomLogger):
 
         # 2) Session-id -> deployment affinity
         if enable_session_id:
-            session_id = self._get_session_id_from_request_kwargs(
-                request_kwargs=request_kwargs
-            )
+            session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs=request_kwargs)
             if session_id is not None:
-                session_cache_key = self.get_session_affinity_cache_key(
+                session_cache_key: Final = self.get_session_affinity_cache_key(
                     model_group=stable_model_map_key, session_id=session_id
                 )
-                session_cache_result = await self.cache.async_get_cache(
-                    key=session_cache_key
-                )
+                session_cache_result: Final = await self.cache.async_get_cache(key=session_cache_key)
 
-                session_model_id: Optional[str] = None
+                session_model_id: str | None = None
                 if isinstance(session_cache_result, dict):
-                    session_model_id = cast(
-                        Optional[str], session_cache_result.get("model_id")
-                    )
+                    session_model_id = cast(str | None, session_cache_result.get("model_id"))
                 elif isinstance(session_cache_result, str):
                     session_model_id = session_cache_result
 
                 if session_model_id:
-                    session_deployment = self._find_deployment_by_model_id(
+                    session_deployment: Final = self._find_deployment_by_model_id(
                         healthy_deployments=typed_healthy_deployments,
                         model_id=session_model_id,
                     )
@@ -395,18 +371,16 @@ class DeploymentAffinityCheck(CustomLogger):
         if not enable_user_key:
             return typed_healthy_deployments
 
-        user_key = self._get_user_key_from_request_kwargs(request_kwargs=request_kwargs)
+        user_key: Final = self._get_user_key_from_request_kwargs(request_kwargs=request_kwargs)
         if user_key is None:
             return typed_healthy_deployments
 
-        cache_key = self.get_affinity_cache_key(
-            model_group=stable_model_map_key, user_key=user_key
-        )
-        cache_result = await self.cache.async_get_cache(key=cache_key)
+        cache_key: Final = self.get_affinity_cache_key(model_group=stable_model_map_key, user_key=user_key)
+        cache_result: Final = await self.cache.async_get_cache(key=cache_key)
 
-        model_id: Optional[str] = None
+        model_id: str | None = None
         if isinstance(cache_result, dict):
-            model_id = cast(Optional[str], cache_result.get("model_id"))
+            model_id = cast(str | None, cache_result.get("model_id"))
         elif isinstance(cache_result, str):
             # Backwards / safety: allow raw string values.
             model_id = cache_result
@@ -432,9 +406,7 @@ class DeploymentAffinityCheck(CustomLogger):
         )
         return [deployment]
 
-    async def async_pre_call_deployment_hook(
-        self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
-    ) -> Optional[dict]:
+    async def async_pre_call_deployment_hook(self, kwargs: dict[str, Any], call_type: CallTypes | None) -> dict | None:
         """
         Persist/update the API-key -> deployment mapping for this request.
 
@@ -442,17 +414,14 @@ class DeploymentAffinityCheck(CustomLogger):
         - LiteLLM runs async success callbacks via a background logging worker for performance.
         - We want affinity to be immediately available for subsequent requests.
         """
-        metadata_dicts = self._iter_metadata_dicts(kwargs)
+        metadata_dicts: Final = self._iter_metadata_dicts(kwargs)
 
         # Extract deployment_model_name first — needed for both per-group flag resolution
         # and cache key scoping.
-        deployment_model_name: Optional[str] = None
+        deployment_model_name: str | None = None
         for metadata in metadata_dicts:
             maybe_deployment_model_name = metadata.get("deployment_model_name")
-            if (
-                isinstance(maybe_deployment_model_name, str)
-                and maybe_deployment_model_name
-            ):
+            if isinstance(maybe_deployment_model_name, str) and maybe_deployment_model_name:
                 deployment_model_name = maybe_deployment_model_name
                 break
 
@@ -499,18 +468,14 @@ class DeploymentAffinityCheck(CustomLogger):
             # likely a non-router call or a call path that doesn't support affinity.
             return None
 
-        model_id = model_info.get("id")
+        model_id: Final = model_info.get("id")
         if not model_id:
-            verbose_router_logger.warning(
-                "DeploymentAffinityCheck: model_id missing; skipping affinity cache update."
-            )
+            verbose_router_logger.warning("DeploymentAffinityCheck: model_id missing; skipping affinity cache update.")
             return None
 
         if user_key is not None:
             try:
-                cache_key = self.get_affinity_cache_key(
-                    model_group=deployment_model_name, user_key=user_key
-                )
+                cache_key: Final = self.get_affinity_cache_key(model_group=deployment_model_name, user_key=user_key)
                 await self.cache.async_set_cache(
                     cache_key,
                     DeploymentAffinityCacheValue(model_id=str(model_id)),
@@ -535,7 +500,7 @@ class DeploymentAffinityCheck(CustomLogger):
         # Also persist Session-ID affinity if enabled and session-id is provided
         if session_id is not None:
             try:
-                session_cache_key = self.get_session_affinity_cache_key(
+                session_cache_key: Final = self.get_session_affinity_cache_key(
                     model_group=deployment_model_name, session_id=session_id
                 )
                 await self.cache.async_set_cache(

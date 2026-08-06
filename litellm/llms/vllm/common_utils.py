@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import Final
 
 import httpx
 
@@ -15,9 +15,9 @@ class VLLMError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
-        headers: Optional[Union[httpx.Headers, dict]] = None,
+        request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
+        headers: httpx.Headers | dict | None = None,
     ):
         super().__init__(
             status_code=status_code,
@@ -33,18 +33,18 @@ class VLLMModelInfo(BaseLLMModelInfo):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is not None:
             headers["x-api-key"] = api_key
         return headers
 
     @staticmethod
-    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+    def get_api_base(api_base: str | None = None) -> str | None:
         api_base = api_base or get_secret_str("VLLM_API_BASE")
         if api_base is None:
             raise ValueError(
@@ -53,38 +53,32 @@ class VLLMModelInfo(BaseLLMModelInfo):
         return api_base
 
     @staticmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         return None
 
     @staticmethod
-    def get_base_model(model: str) -> Optional[str]:
+    def get_base_model(model: str) -> str | None:
         return model
 
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         api_base = VLLMModelInfo.get_api_base(api_base)
         api_key = VLLMModelInfo.get_api_key(api_key)
-        endpoint = "/v1/models"
+        endpoint: Final = "/v1/models"
         if api_base is None or api_key is None:
             raise ValueError(
                 "VLLM_API_BASE or VLLM_API_KEY is not set. Please set the environment variable, to query VLLM's `/models` endpoint."
             )
 
-        url = _add_path_to_api_base(api_base, endpoint)
-        response = litellm.module_level_client.get(
+        url: Final = _add_path_to_api_base(api_base, endpoint)
+        response: Final = litellm.module_level_client.get(
             url=url,
         )
 
         response.raise_for_status()
 
-        models = response.json()["data"]
+        models: Final = response.json()["data"]
 
         return [model["id"] for model in models]
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
-        return VLLMError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+        return VLLMError(status_code=status_code, message=error_message, headers=headers)

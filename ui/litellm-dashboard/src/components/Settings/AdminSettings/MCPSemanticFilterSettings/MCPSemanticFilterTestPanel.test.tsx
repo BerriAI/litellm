@@ -27,6 +27,7 @@ const buildProps = (overrides: Partial<React.ComponentProps<typeof MCPSemanticFi
   onTest: vi.fn(),
   filterEnabled: true,
   testResult: null as TestResult | null,
+  testError: null as string | null,
   curlCommand: "curl --location 'http://localhost:4000/v1/responses'",
   ...overrides,
 });
@@ -90,7 +91,7 @@ describe("MCPSemanticFilterTestPanel", () => {
     expect(screen.queryByText("Semantic filtering is disabled")).not.toBeInTheDocument();
   });
 
-  it("should display test results when testResult is provided", () => {
+  it("should display selected and filtered-out counts when testResult is provided", () => {
     const testResult: TestResult = {
       totalTools: 10,
       selectedTools: 3,
@@ -98,16 +99,54 @@ describe("MCPSemanticFilterTestPanel", () => {
     };
     render(<MCPSemanticFilterTestPanel {...buildProps({ testResult })} />);
 
-    expect(screen.getByText("3 tools selected")).toBeInTheDocument();
-    expect(screen.getByText("Filtered from 10 available tools")).toBeInTheDocument();
+    expect(screen.getByText("3 of 10 tools selected")).toBeInTheDocument();
+    expect(screen.getByText("7 tools filtered out")).toBeInTheDocument();
     expect(screen.getByText("wiki-fetch")).toBeInTheDocument();
     expect(screen.getByText("github-search")).toBeInTheDocument();
     expect(screen.getByText("slack-post")).toBeInTheDocument();
+    expect(screen.queryByText(/more selected tools not shown/i)).not.toBeInTheDocument();
+  });
+
+  it("should note how many selected tools are missing when the header list is incomplete", () => {
+    const testResult: TestResult = {
+      totalTools: 40,
+      selectedTools: 8,
+      tools: ["metrics_mcp-node_query_by_id", "metrics_mcp-latency_query_api", "inventory_mcp-site_lookup"],
+    };
+    render(<MCPSemanticFilterTestPanel {...buildProps({ testResult })} />);
+
+    expect(screen.getByText("+5 more selected tools not shown")).toBeInTheDocument();
+  });
+
+  it("should surface a zero filtered-out count when the filter selected every tool", () => {
+    const testResult: TestResult = {
+      totalTools: 207,
+      selectedTools: 207,
+      tools: ["tool-a", "tool-b"],
+    };
+    render(<MCPSemanticFilterTestPanel {...buildProps({ testResult })} />);
+
+    expect(screen.getByText("207 of 207 tools selected")).toBeInTheDocument();
+    expect(screen.getByText("0 tools filtered out")).toBeInTheDocument();
   });
 
   it("should not render the results section when testResult is null", () => {
     render(<MCPSemanticFilterTestPanel {...buildProps({ testResult: null })} />);
     expect(screen.queryByText("Results")).not.toBeInTheDocument();
+  });
+
+  it("should render an error banner with the backend message when testError is set", () => {
+    const testError =
+      "MCP semantic tool filtering could not run: embedding model 'text-embedding-3-small' exceeded its context window while embedding the user query. Switch to an embedding model with a larger context window, or disable semantic tool filtering.";
+    render(<MCPSemanticFilterTestPanel {...buildProps({ testError })} />);
+
+    expect(screen.getByText("Semantic filtering did not run")).toBeInTheDocument();
+    expect(screen.getByText(testError)).toBeInTheDocument();
+  });
+
+  it("should not render the error banner when testError is null", () => {
+    render(<MCPSemanticFilterTestPanel {...buildProps({ testError: null })} />);
+    expect(screen.queryByText("Semantic filtering did not run")).not.toBeInTheDocument();
   });
 
   it("should show the curl command in the API Usage tab", async () => {

@@ -24,6 +24,8 @@ from litellm import RateLimitError, Timeout, completion, completion_cost, embedd
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
+
 # litellm.num_retries=3
 
 litellm.cache = None
@@ -207,36 +209,6 @@ def test_completion_empower():
         )
         # Add any assertions, here to check response args
         print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_completion_github_api():
-    litellm.set_verbose = True
-    messages = [
-        {
-            "role": "user",
-            "content": "\nWhat is the query for `console.log` => `console.error`\n",
-        },
-        {
-            "role": "assistant",
-            "content": "\nThis is the GritQL query for the given before/after examples:\n<gritql>\n`console.log` => `console.error`\n</gritql>\n",
-        },
-        {
-            "role": "user",
-            "content": "\nWhat is the query for `console.info` => `consdole.heaven`\n",
-        },
-    ]
-    try:
-        # test without max tokens
-        response = completion(
-            model="github/gpt-4o",
-            messages=messages,
-        )
-        # Add any assertions, here to check response args
-        print(response)
-    except litellm.AuthenticationError:
-        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1343,7 +1315,7 @@ def test_lm_studio_completion(monkeypatch):
             messages=[
                 {"role": "user", "content": "What's the weather like in San Francisco?"}
             ],
-            api_base="https://exampleopenaiendpoint-production.up.railway.app/",
+            api_base=FAKE_OPENAI_API_BASE,
         )
     except litellm.AuthenticationError as e:
         pytest.fail(f"Error occurred: {e}")

@@ -299,7 +299,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
         {/* Dropdown panel */}
         {isOpen && (
-          <div className="absolute top-full right-0 z-[9999] min-w-[600px] mt-1 bg-white border border-gray-200 rounded-lg shadow-xl">
+          <div className="absolute top-full right-0 z-9999 min-w-[600px] mt-1 bg-white border border-gray-200 rounded-lg shadow-xl">
             <div className="flex">
               {/* Left side - Relative time options */}
               <div className="w-1/2 border-r border-gray-200">

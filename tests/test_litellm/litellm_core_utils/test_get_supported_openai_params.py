@@ -132,3 +132,47 @@ def test_azure_base_model_detection_preserved():
     assert params is not None
     assert "reasoning_effort" in params
     assert "tools" in params
+
+
+def test_sambanova_embeddings_request_returns_list_not_none():
+    """The sambanova embeddings branch resolved the config but dropped the result,
+    so embedding requests got ``None`` instead of the supported-params list while the
+    chat branch returned correctly. A list (the sambanova embeddings config exposes no
+    extra params, hence ``[]``) must reach the caller."""
+    embedding_params = get_supported_openai_params(
+        model="E5-Mistral-7B-Instruct",
+        custom_llm_provider="sambanova",
+        request_type="embeddings",
+    )
+
+    assert embedding_params == []
+
+
+def test_bedrock_converse_alias_resolves_like_bedrock():
+    """The ``bedrock_converse`` invocation alias must resolve through AmazonConverseConfig
+    just like ``bedrock`` (the codebase already pairs them, e.g. ``_strip_model_name``).
+    Before this mapping it returned ``None`` (unmapped), so callers gating on supported
+    params saw no Bedrock capabilities for a Converse model invoked via the alias."""
+    anthropic_model = "bedrock/converse/us.anthropic.claude-sonnet-4-6"
+
+    via_alias = get_supported_openai_params(
+        model=anthropic_model, custom_llm_provider="bedrock_converse"
+    )
+
+    assert via_alias is not None
+    assert via_alias == get_supported_openai_params(
+        model=anthropic_model, custom_llm_provider="bedrock"
+    )
+    assert "web_search_options" not in via_alias
+    assert "tools" in via_alias
+
+
+def test_bedrock_converse_alias_keeps_nova_web_search_options():
+    """Nova on the ``bedrock_converse`` alias still advertises web_search_options, proving the
+    alias routes through the model-aware config rather than a blanket Bedrock default."""
+    nova_params = get_supported_openai_params(
+        model="amazon.nova-pro-v1:0", custom_llm_provider="bedrock_converse"
+    )
+
+    assert nova_params is not None
+    assert "web_search_options" in nova_params
