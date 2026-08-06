@@ -1253,6 +1253,31 @@ class StructuredRedactionGuardrail(CustomGuardrail):
         return inputs
 
 
+class ToolSynthesizingGuardrail(CustomGuardrail):
+    """Appends its own function tool to whatever tools it was given, like a
+    retrieval/recovery guardrail that injects a tool the model can later call."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="tool-synthesizing")
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tools = list(inputs.get("tools") or [])
+        tools.append(
+            {
+                "type": "function",
+                "function": {"name": "injected_retrieve", "parameters": {"type": "object", "properties": {}}},
+            }
+        )
+        inputs["tools"] = tools
+        return inputs
+
+
 class TestScanOnlyToolResults:
     def _bedrock_guardrail(self):
         from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
@@ -1347,6 +1372,35 @@ class TestScanOnlyToolResults:
         assert guardrail.captured_inputs.get("tools") == expected_tools, (
             "function definitions must stay out of a tool-results-only scan"
         )
+
+    @pytest.mark.parametrize("scan_only_tool_results", [True, False])
+    @pytest.mark.asyncio
+    async def test_guardrail_synthesized_tools_never_replace_scoped_out_request_tools(self, scan_only_tool_results):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = ToolSynthesizingGuardrail()
+        guardrail.scan_only_tool_results = scan_only_tool_results
+        original_tools = [
+            {
+                "type": "function",
+                "function": {"name": "read_file", "parameters": {"type": "object", "properties": {}}},
+            }
+        ]
+        data = {
+            "messages": [
+                {"role": "user", "content": "read the report"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT"},
+            ],
+            "tools": original_tools,
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        if scan_only_tool_results:
+            assert data["tools"] == original_tools, (
+                "tools the guardrail synthesized without seeing the request's tools must not replace them"
+            )
+        else:
+            assert [t["function"]["name"] for t in data["tools"]] == ["read_file", "injected_retrieve"]
 
     @pytest.mark.asyncio
     async def test_structured_write_back_keeps_out_of_scope_messages(self):
