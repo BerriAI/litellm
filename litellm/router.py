@@ -1169,6 +1169,60 @@ class Router:
             )
         return valid[0] if valid else None
 
+    def _build_model_group_selector(self, strategy: str, args: Mapping[str, object]) -> object | None:
+        try:
+            return self._build_strategy_selector(strategy=strategy, routing_strategy_args=args)
+        except (TypeError, ValueError):
+            return None
+
+    def _live_model_group_selector_keys(self) -> frozenset[str]:
+        """
+        Composite selector-cache keys still referenced by some model group's
+        `model_info` strategy config. Used to evict selectors orphaned by model
+        edits or deletions before caching a newly built one.
+        """
+        return frozenset(
+            f"{strategy}|{json.dumps(args, sort_keys=True, default=str)}"
+            for name in tuple(self.model_name_to_deployment_indices)
+            if (config := self._get_model_group_strategy_config(name)) is not None
+            for strategy, args in (config,)
+            if args and strategy != "simple-shuffle"
+        )
+
+    def _resolve_model_group_context(
+        self, model: str, strategy: str, args: Mapping[str, object]
+    ) -> tuple[str, object | None] | None:
+        """
+        Selector resolution for a `model_info.routing_strategy` hit. Returns
+        None when the selector cannot be built (invalid `routing_strategy_args`),
+        so the caller falls through to the legacy routing-group / top-level
+        strategy instead of failing the request; the failure is reported once
+        per model_name.
+        """
+        if strategy == "simple-shuffle" or not args:
+            verbose_router_logger.debug("routing_group=model-info model=%s strategy=%s", model, strategy)
+            return strategy, self._get_override_strategy_selector(strategy)
+        selector_key: Final = f"{strategy}|{json.dumps(args, sort_keys=True, default=str)}"
+        with self._override_selectors_lock:
+            if selector_key not in self._override_selectors:
+                built: Final = self._build_model_group_selector(strategy, args)
+                if built is None:
+                    if model not in self._warned_model_group_strategy_models:
+                        self._warned_model_group_strategy_models.add(model)
+                        verbose_router_logger.warning(
+                            "model_info.routing_strategy_args for model_group '%s' cannot initialize strategy "
+                            "'%s'; falling back to the routing-group / top-level strategy.",
+                            model,
+                            strategy,
+                        )
+                    return None
+                live_keys: Final = self._live_model_group_selector_keys()
+                stale: Final = tuple(k for k in self._override_selectors if "|" in k and k not in live_keys)
+                self._unregister_router_selectors(tuple(self._override_selectors.pop(k) for k in stale))
+                self._override_selectors[selector_key] = built
+            verbose_router_logger.debug("routing_group=model-info model=%s strategy=%s", model, strategy)
+            return strategy, self._override_selectors[selector_key]
+
     def _get_routing_context(self, model: str, request_kwargs: dict | None = None) -> tuple[str | None, Any | None]:
         """
         Resolves the routing strategy and selector to use for the given model.
@@ -1191,19 +1245,11 @@ class Router:
             return override, self._get_override_strategy_selector(override)
 
         model_group_config: Final = self._get_model_group_strategy_config(model)
-        if model_group_config is not None:
-            mg_strategy, mg_args = model_group_config
-            verbose_router_logger.debug("routing_group=model-info model=%s strategy=%s", model, mg_strategy)
-            if not mg_args:
-                return mg_strategy, self._get_override_strategy_selector(mg_strategy)
-            selector_key: Final = f"{mg_strategy}|{json.dumps(mg_args, sort_keys=True, default=str)}"
-            with self._override_selectors_lock:
-                if selector_key not in self._override_selectors:
-                    self._override_selectors[selector_key] = self._build_strategy_selector(
-                        strategy=mg_strategy,
-                        routing_strategy_args=mg_args,
-                    )
-                return mg_strategy, self._override_selectors[selector_key]
+        mg_resolution: Final = (
+            self._resolve_model_group_context(model, *model_group_config) if model_group_config is not None else None
+        )
+        if mg_resolution is not None:
+            return mg_resolution
 
         group_name: Final = self._model_to_group.get(model)
         if group_name is None:

@@ -138,6 +138,78 @@ def test_invalid_value_ignored_with_warning(caplog):
     assert any("unsupported value" in r.getMessage() for r in caplog.records)
 
 
+def test_invalid_args_fall_back_without_failing_traffic(caplog):
+    router = _build_router(
+        [
+            _deployment(
+                "quality",
+                "openai/gpt-4o",
+                "d1",
+                {"routing_strategy": "latency-based-routing", "routing_strategy_args": {"ttl": "bogus"}},
+            )
+        ],
+        routing_strategy="cost-based-routing",
+    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        strategy, selector = router._get_routing_context("quality")
+        router._get_routing_context("quality")
+    assert strategy == "cost-based-routing"
+    assert selector is router.lowestcost_logger
+    warnings = [r for r in caplog.records if "cannot initialize strategy" in r.getMessage()]
+    assert len(warnings) == 1
+
+
+def test_simple_shuffle_with_args_keeps_shuffle_semantics(caplog):
+    router = _build_router(
+        [
+            _deployment(
+                "quality",
+                "openai/gpt-4o",
+                "d1",
+                {"routing_strategy": "simple-shuffle", "routing_strategy_args": {"ignored": 1}},
+            )
+        ],
+        routing_strategy="latency-based-routing",
+    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        assert router._get_routing_context("quality") == ("simple-shuffle", None)
+    assert not any("cannot initialize strategy" in r.getMessage() for r in caplog.records)
+
+
+def test_stale_selector_evicted_when_args_change():
+    router = _build_router(
+        [
+            _deployment(
+                "quality",
+                "openai/gpt-4o",
+                "d1",
+                {"routing_strategy": "latency-based-routing", "routing_strategy_args": {"ttl": 120}},
+            ),
+            _deployment(
+                "other",
+                "openai/gpt-4o-mini",
+                "d2",
+                {"routing_strategy": "latency-based-routing", "routing_strategy_args": {"ttl": 600}},
+            ),
+        ]
+    )
+    _, old_selector = router._get_routing_context("quality")
+    _, kept_selector = router._get_routing_context("other")
+    old_keys = {k for k in router._override_selectors if "|" in k}
+    assert len(old_keys) == 2
+
+    for idx in router.model_name_to_deployment_indices["quality"]:
+        router.model_list[idx]["model_info"]["routing_strategy_args"] = {"ttl": 240}
+
+    _, new_selector = router._get_routing_context("quality")
+    assert new_selector is not old_selector
+    assert new_selector.routing_args.ttl == 240
+    remaining_keys = {k for k in router._override_selectors if "|" in k}
+    assert len(remaining_keys) == 2
+    assert all(c is not old_selector for c in litellm.callbacks)
+    assert router._get_routing_context("other")[1] is kept_selector
+
+
 def test_selector_shared_across_model_groups_with_identical_config():
     router = _build_router(
         [
