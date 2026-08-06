@@ -47,16 +47,16 @@ export default function PlaygroundPage() {
   }
 
   return (
-    <div className="h-full w-full flex flex-col">
-      <TabGroup className="w-full" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <TabList className="mb-0">
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
+      <TabGroup className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <TabList className="mb-0 shrink-0 overflow-x-auto">
           <Tab>Chat</Tab>
           <Tab>Compare</Tab>
           <Tab>Compliance</Tab>
           <Tab>Agent Builder (Experimental)</Tab>
         </TabList>
-        <TabPanels className="h-full">
-          <TabPanel className="h-full">
+        <TabPanels className="min-h-0 min-w-0 flex-1 overflow-hidden">
+          <TabPanel className="h-full min-h-0 min-w-0 overflow-hidden">
             <ChatUI
               accessToken={accessToken}
               token={token}

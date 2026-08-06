@@ -1,4 +1,5 @@
-import { DeleteOutlined, FilePdfOutlined } from "@ant-design/icons";
+import { FileText, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 interface FilePreviewCardProps {
   file: File;
@@ -15,7 +16,7 @@ function FilePreviewCard({ file, previewUrl, onRemove }: FilePreviewCardProps) {
         <div className="relative inline-block">
           {isPdf ? (
             <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
-              <FilePdfOutlined style={{ fontSize: "16px", color: "white" }} />
+              <FileText className="size-4 text-white" aria-hidden="true" />
             </div>
           ) : (
             <img
@@ -29,12 +30,16 @@ function FilePreviewCard({ file, previewUrl, onRemove }: FilePreviewCardProps) {
           <div className="text-sm font-medium text-gray-900 truncate">{file.name}</div>
           <div className="text-xs text-gray-500">{isPdf ? "PDF" : "Image"}</div>
         </div>
-        <button
-          className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`Remove ${file.name}`}
+          className="text-gray-400 hover:text-gray-600 hover:bg-gray-200"
           onClick={onRemove}
         >
-          <DeleteOutlined style={{ fontSize: "12px" }} />
-        </button>
+          <X className="size-3" />
+        </Button>
       </div>
     </div>
   );
