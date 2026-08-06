@@ -48,12 +48,7 @@ export function ProjectsPage() {
   }, [projects, searchText, teamAliasMap]);
 
   if (selectedProjectId) {
-    return (
-      <ProjectDetail
-        projectId={selectedProjectId}
-        onBack={() => void setSelectedProjectId(null, { history: "replace" })}
-      />
-    );
+    return <ProjectDetail projectId={selectedProjectId} onBack={() => void setSelectedProjectId(null)} />;
   }
 
   return (

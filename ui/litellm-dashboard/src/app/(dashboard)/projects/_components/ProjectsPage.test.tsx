@@ -243,7 +243,6 @@ describe("ProjectsPage", () => {
     await waitFor(() => {
       expect(onUrlUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ queryString: "" }));
     });
-    expect(onUrlUpdate.mock.calls.at(-1)?.[0].options.history).toBe("replace");
     expect(screen.queryByTestId("project-detail")).not.toBeInTheDocument();
     expect(screen.getByText("Alpha Project")).toBeInTheDocument();
   });
