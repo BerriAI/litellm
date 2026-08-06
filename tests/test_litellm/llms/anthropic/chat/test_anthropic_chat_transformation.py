@@ -1042,6 +1042,31 @@ def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
     assert "tools" not in optional_params
 
 
+def test_claude_sonnet_5_uses_native_structured_output() -> None:
+    optional_params = AnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "answer",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"answer": {"type": "string"}},
+                        "required": ["answer"],
+                    },
+                },
+            }
+        },
+        optional_params={},
+        model="claude-sonnet-5",
+        drop_params=False,
+    )
+
+    assert "output_format" in optional_params
+    assert "tools" not in optional_params
+    assert "tool_choice" not in optional_params
+
+
 def test_non_structured_output_model_uses_tool_workaround():
     """
     Test that models NOT in the native structured output list still use the
