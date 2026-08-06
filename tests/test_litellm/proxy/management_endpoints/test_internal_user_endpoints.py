@@ -1384,6 +1384,39 @@ async def test_user_info_nonexistent_user(mocker):
 
 
 @pytest.mark.asyncio
+async def test_user_info_no_user_id_view_only_admin_gets_proxy_admin_payload(mocker):
+    """PROXY_ADMIN_VIEW_ONLY must take the proxy-admin branch; otherwise /user/info
+    silently narrows to the viewer's own row instead of the whole tenant."""
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth, UserInfoResponse
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.get_data = mocker.AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    admin_payload = UserInfoResponse(user_id=None, user_info=None, keys=[], teams=[])
+    mock_get_user_info_for_proxy_admin = mocker.AsyncMock(return_value=admin_payload)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._get_user_info_for_proxy_admin",
+        mock_get_user_info_for_proxy_admin,
+    )
+
+    viewer = UserAPIKeyAuth(
+        user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    )
+    mock_request = mocker.MagicMock(spec=Request)
+
+    response = await user_info(
+        user_id=None, user_api_key_dict=viewer, request=mock_request
+    )
+
+    mock_get_user_info_for_proxy_admin.assert_awaited_once_with(user_api_key_dict=viewer)
+    assert response is admin_payload
+
+
+@pytest.mark.asyncio
 async def test_new_user_default_teams_flow(mocker):
     """
     Test that when teams are set via default_internal_user_params:
@@ -2893,6 +2926,7 @@ async def test_user_info_v2_response_shape(mocker):
         "updated_at",
         "sso_user_id",
         "teams",
+        "object_permission",
     }
     assert set(response_dict.keys()) == expected_fields
 
@@ -3212,13 +3246,9 @@ def test_enforce_user_info_access_admin_bypass():
     _enforce_user_info_access(user_id="someone_else", user_api_key_dict=admin)
 
 
-def test_enforce_user_info_access_view_only_admin_blocked_from_other_users():
-    """PROXY_ADMIN_VIEW_ONLY is not a true admin for /user/info — the upstream
-    route check applies the same `user_id == valid_token.user_id` rule, so the
-    re-check here must mirror that and deny cross-user lookups."""
-    import pytest
-    from fastapi import HTTPException
-
+def test_enforce_user_info_access_view_only_admin_can_read_other_users():
+    """PROXY_ADMIN_VIEW_ONLY has read parity with PROXY_ADMIN, so the ownership
+    re-check must wave it through for another user's id."""
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         _enforce_user_info_access,
@@ -3228,9 +3258,7 @@ def test_enforce_user_info_access_view_only_admin_blocked_from_other_users():
         user_id="viewer",
         user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
     )
-    with pytest.raises(HTTPException) as exc_info:
-        _enforce_user_info_access(user_id="someone_else", user_api_key_dict=viewer)
-    assert exc_info.value.status_code == 403
+    _enforce_user_info_access(user_id="someone_else", user_api_key_dict=viewer)
 
 
 def test_enforce_user_info_access_view_only_admin_can_read_own():
@@ -3605,3 +3633,429 @@ async def test_add_new_user_to_default_team_string_teams_have_no_member_budget(m
 
     assert mock_add.call_args.kwargs["max_budget_in_team"] is None
     assert mock_add.call_args.kwargs["team_id"] == "string-team"
+
+
+@pytest.mark.asyncio
+async def test_add_user_to_team_logs_unknown_team_at_error(mocker, caplog):
+    """A default team that no longer exists makes every membership write 404.
+
+    The failure is swallowed so user creation still succeeds, so the log line is
+    the only signal an operator gets; it must be ERROR and name the team.
+    """
+    import logging
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _add_user_to_team,
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.team_endpoints.team_member_add",
+        new_callable=mocker.AsyncMock,
+        side_effect=HTTPException(status_code=404, detail={"error": "Team not found"}),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        await _add_user_to_team(
+            user_id="sso-user",
+            team_id="deleted-team",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1, f"expected exactly one ERROR log, got {errors}"
+    assert "deleted-team" in errors[0]
+    assert "sso-user" in errors[0]
+
+
+@pytest.mark.asyncio
+async def test_add_user_to_team_keeps_already_a_member_quiet(mocker, caplog):
+    """Re-adding an existing member is expected on every login and must not
+    produce an ERROR, otherwise the real failures above are lost in the noise."""
+    import logging
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _add_user_to_team,
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.team_endpoints.team_member_add",
+        new_callable=mocker.AsyncMock,
+        side_effect=HTTPException(status_code=400, detail={"error": "User already exists in team"}),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        await _add_user_to_team(
+            user_id="sso-user",
+            team_id="existing-team",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_for_proxy_admin_validates_keys_and_teams():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _get_user_info_for_proxy_admin,
+    )
+
+    raw_rows = [
+        {
+            "teams": [
+                {"team_id": "team-b", "team_alias": "beta"},
+                {"team_id": "team-a", "team_alias": "alpha"},
+            ],
+            "keys": [
+                {"token": "hashed-token-1", "team_id": "team-a", "models": None, "spend": 1.0},
+            ],
+        }
+    ]
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=raw_rows)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        result = await _get_user_info_for_proxy_admin(user_api_key_dict=UserAPIKeyAuth(user_id=None))
+
+    assert all(isinstance(team, LiteLLM_TeamTable) for team in result.teams)
+    assert [team.team_alias for team in result.teams] == ["alpha", "beta"]
+    assert len(result.keys) == 1
+    returned_key = result.keys[0]
+    assert returned_key["team_id"] == "team-a"
+    assert returned_key["models"] == []
+
+
+def _object_permission_mocks(mocker, existing_object_permission_id=None):
+    """Prisma double whose user row optionally already links a permission row."""
+    mock_prisma_client = mocker.MagicMock()
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {
+        "user_id": "target-user",
+        "object_permission_id": existing_object_permission_id,
+    }
+    existing_user.user_id = "target-user"
+    existing_user.object_permission_id = existing_object_permission_id
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=existing_user
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = mocker.AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = mocker.AsyncMock(
+        return_value=SimpleNamespace(object_permission_id="perm-new")
+    )
+    mock_prisma_client.update_data = mocker.AsyncMock(
+        return_value={"user_id": "target-user"}
+    )
+    mock_prisma_client.jsonify_object = mocker.MagicMock(side_effect=lambda x: x)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+    mocker.patch(
+        "litellm.proxy.proxy_server._invalidate_spend_counter",
+        new=mocker.AsyncMock(),
+    )
+    return mock_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_user_update_persists_mcp_entitlement_and_links_it(mocker):
+    """/user/update documents an object_permission param; it must actually be stored.
+
+    The grants live in their own table, so the endpoint has to upsert them and hand the user row
+    only the resulting object_permission_id. Passing object_permission through to the user update
+    would not even be a column.
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = _object_permission_mocks(mocker)
+    cache = mocker.MagicMock()
+    cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(
+            user_id="target-user",
+            object_permission={
+                "mcp_servers": ["github"],
+                "mcp_tool_permissions": {"github": ["list_issues"]},
+            },
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    upsert_kwargs = mock_prisma_client.db.litellm_objectpermissiontable.upsert.call_args.kwargs
+    created = upsert_kwargs["data"]["create"]
+    assert created["mcp_servers"] == ["github"]
+    assert json.loads(created["mcp_tool_permissions"]) == {"github": ["list_issues"]}
+
+    written = mock_prisma_client.update_data.call_args.kwargs["data"]
+    assert written["object_permission_id"] == "perm-new"
+    assert "object_permission" not in written
+
+
+@pytest.mark.asyncio
+async def test_user_update_invalidates_the_cached_entitlement(mocker):
+    """An admin revoking a tool must take effect now, not at the end of the cache TTL.
+
+    Three entries go stale: the permission row (keyed by its own id), the user -> permission link
+    (which carries a "no entitlement" sentinel), and the cached user row.
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    _object_permission_mocks(mocker)
+    cache = mocker.MagicMock()
+    cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(
+            user_id="target-user",
+            object_permission={"mcp_tool_permissions": {"github": []}},
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    deleted = {call.kwargs["key"] for call in cache.async_delete_cache.call_args_list}
+    assert deleted == {
+        "object_permission_id:perm-new",
+        "user_object_permission_id:target-user",
+        "target-user",
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_can_clear_a_users_mcp_entitlement(mocker):
+    """An explicit empty object_permission means "no object permission", so it must unlink.
+
+    The merge-based upsert cannot express this: merging an empty grant set over the existing row
+    leaves every grant in place, and the empty-value filter drops the field before the upsert runs,
+    so without the explicit clear path the documented operation silently returns success unchanged.
+
+    A clear also leaves no incoming permission id, so invalidation keyed off one would skip it and
+    the gateway would keep enforcing the cleared grants until the cache expired.
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = _object_permission_mocks(mocker, "perm-existing")
+    cache = mocker.MagicMock()
+    cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(user_id="target-user", object_permission={}),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    written = mock_prisma_client.update_data.call_args.kwargs["data"]
+    assert written["object_permission_id"] is None
+    assert "object_permission" not in written
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_not_called()
+
+    deleted = {call.kwargs["key"] for call in cache.async_delete_cache.call_args_list}
+    assert deleted == {
+        "object_permission_id:perm-existing",
+        "user_object_permission_id:target-user",
+        "target-user",
+    }
+
+
+@pytest.mark.asyncio
+async def test_user_update_invalidates_both_the_old_and_new_permission_rows(mocker):
+    """An upsert can mint a new permission row, which leaves the outgoing one cached under its id.
+
+    Only the link cache knows the user moved; the old row's own entry still holds the pre-update
+    grants, so anything still resolving that id keeps reading them.
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    _object_permission_mocks(mocker, "perm-existing")
+    cache = mocker.MagicMock()
+    cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(
+            user_id="target-user",
+            object_permission={"mcp_tool_permissions": {"github": ["list_issues"]}},
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    deleted = {call.kwargs["key"] for call in cache.async_delete_cache.call_args_list}
+    assert deleted == {
+        "object_permission_id:perm-existing",
+        "object_permission_id:perm-new",
+        "user_object_permission_id:target-user",
+        "target-user",
+    }
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cannot_clear_their_own_mcp_entitlement(mocker):
+    """The empty-value filter drops `object_permission: {}` before the guard saw it, so a non-admin
+    could clear the very ceiling an admin placed on them. The guard reads the fields the caller SENT.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = _object_permission_mocks(mocker, "perm-existing")
+    cache = mocker.MagicMock()
+    cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
+
+    with pytest.raises(HTTPException) as exc:
+        await _update_single_user_helper(
+            user_request=UpdateUserRequest(user_id="target-user", object_permission={}),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="target-user", user_role=LitellmUserRoles.INTERNAL_USER
+            ),
+        )
+
+    assert exc.value.status_code == 403
+    mock_prisma_client.update_data.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cannot_rewrite_their_own_mcp_entitlement(mocker):
+    """The entitlement bounds the human, so a self-write is an escalation path: an empty grant list
+    means "no restriction" and would lift a ceiling the admin placed on them."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = _object_permission_mocks(mocker, "perm-existing")
+    cache = mocker.MagicMock()
+    cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
+
+    with pytest.raises(HTTPException) as exc:
+        await _update_single_user_helper(
+            user_request=UpdateUserRequest(
+                user_id="target-user",
+                object_permission={"mcp_servers": [], "mcp_tool_permissions": {}},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="target-user", user_role=LitellmUserRoles.INTERNAL_USER
+            ),
+        )
+
+    assert exc.value.status_code == 403
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_not_called()
+    mock_prisma_client.update_data.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_new_user_persists_the_requested_mcp_entitlement(mocker):
+    """generate_key_helper_fn only forwards object_permission_id, so /user/new has to create the
+    grants row itself; otherwise the entitlement the admin sent is silently dropped."""
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = mocker.AsyncMock(
+        return_value=SimpleNamespace(object_permission_id="perm-created")
+    )
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_usertable.count = mocker.AsyncMock(return_value=0)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.check_if_default_team_set",
+        return_value=None,
+    )
+    mock_generate = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        new=mocker.AsyncMock(
+            return_value={"user_id": "new-human", "token": "sk-x", "expires": None}
+        ),
+    )
+    mocker.patch(
+        "litellm.proxy.hooks.user_management_event_hooks.UserManagementEventHooks.async_user_created_hook",
+        new=mocker.AsyncMock(),
+    )
+
+    await new_user(
+        data=NewUserRequest(
+            user_id="new-human",
+            object_permission={"mcp_tool_permissions": {"github": ["list_issues"]}},
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    created = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+    assert json.loads(created["mcp_tool_permissions"]) == {"github": ["list_issues"]}
+    forwarded = mock_generate.call_args.kwargs
+    assert forwarded["object_permission_id"] == "perm-created"
+    assert "object_permission" not in forwarded
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_returns_the_mcp_entitlement(mocker):
+    """The admin UI reads the current entitlement off this endpoint, so the grants have to come back
+    with the user row rather than only their id."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    user_row = SimpleNamespace(
+        object_permission=SimpleNamespace(
+            object_permission_id="perm-1",
+            mcp_servers=["github"],
+            mcp_access_groups=[],
+            mcp_tool_permissions={"github": ["list_issues"]},
+        ),
+    )
+    user_row.model_dump = lambda: {
+        "user_id": "human-1",
+        "object_permission": {
+            "object_permission_id": "perm-1",
+            "mcp_servers": ["github"],
+            "mcp_access_groups": [],
+            "mcp_tool_permissions": {"github": ["list_issues"]},
+        },
+    }
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.MagicMock())
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_user_info_v2_access",
+        new=mocker.AsyncMock(return_value=user_row),
+    )
+
+    response = await user_info_v2(
+        request=SimpleNamespace(query_params={}),
+        user_id="human-1",
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+    )
+
+    assert response.object_permission is not None
+    assert response.object_permission.mcp_servers == ["github"]
+    assert response.object_permission.mcp_tool_permissions == {
+        "github": ["list_issues"]
+    }

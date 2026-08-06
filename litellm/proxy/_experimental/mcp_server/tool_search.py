@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from mcp.types import CallToolResult
@@ -10,8 +10,8 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
 
-MCP_TOOL_SEARCH_TOOL_NAME: str = "mcp_tool_search"
-MCP_TOOL_CALL_TOOL_NAME: str = "mcp_tool_call"
+MCP_TOOL_SEARCH_TOOL_NAME: Final[str] = "mcp_tool_search"
+MCP_TOOL_CALL_TOOL_NAME: Final[str] = "mcp_tool_call"
 
 
 def coerce_top_k(value: Any, default: int = 5) -> int:
@@ -24,13 +24,13 @@ def coerce_top_k(value: Any, default: int = 5) -> int:
 def search_tools(query: str, tools: list[dict[str, Any]], top_k: int = 5) -> list[dict[str, Any]]:
     if not query:
         return []
-    tokens = query.lower().split()
+    tokens: Final = query.lower().split()
 
     def _score(tool: dict[str, Any]) -> int:
-        haystack = (tool.get("name", "") + " " + tool.get("description", "")).lower()
+        haystack: Final = (tool.get("name", "") + " " + tool.get("description", "")).lower()
         return sum(1 for t in tokens if t in haystack)
 
-    scored = ((s, tool) for tool in tools if (s := _score(tool)) > 0)
+    scored: Final = ((s, tool) for tool in tools if (s := _score(tool)) > 0)
     return [tool for _, tool in sorted(scored, key=lambda x: x[0], reverse=True)[:top_k]]
 
 
@@ -80,18 +80,18 @@ async def handle_mcp_tool_search(
     query: str,
     top_k: int,
     user_api_key_dict: UserAPIKeyAuth,
-    client_ip: Optional[str] = None,
-    mcp_servers: Optional[list[str]] = None,
-    mcp_auth_header: Optional[str] = None,
-    mcp_server_auth_headers: Optional[dict[str, dict[str, str]]] = None,
-    oauth2_headers: Optional[dict[str, str]] = None,
-    raw_headers: Optional[dict[str, str]] = None,
+    client_ip: str | None = None,
+    mcp_servers: list[str] | None = None,
+    mcp_auth_header: str | None = None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
+    oauth2_headers: dict[str, str] | None = None,
+    raw_headers: dict[str, str] | None = None,
 ) -> CallToolResult:
     from mcp.types import CallToolResult, TextContent
 
     from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
 
-    mcp_listing = await _list_mcp_tools(
+    mcp_listing: Final = await _list_mcp_tools(
         user_api_key_auth=user_api_key_dict,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
@@ -100,8 +100,8 @@ async def handle_mcp_tool_search(
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
     )
-    mcp_tools = mcp_listing.tools
-    tools = [
+    mcp_tools: Final = mcp_listing.tools
+    tools: Final = [
         {
             "name": t.name,
             "description": t.description or "",
@@ -109,7 +109,7 @@ async def handle_mcp_tool_search(
         }
         for t in mcp_tools
     ]
-    results = search_tools(query, tools, top_k)
+    results: Final = search_tools(query, tools, top_k)
     return CallToolResult(content=[TextContent(type="text", text=json.dumps(results))], isError=False)
 
 
@@ -117,20 +117,20 @@ async def handle_mcp_tool_call(
     tool_name: str,
     arguments: dict[str, Any],
     user_api_key_dict: UserAPIKeyAuth,
-    client_ip: Optional[str] = None,
-    mcp_servers: Optional[list[str]] = None,
-    mcp_auth_header: Optional[str] = None,
-    mcp_server_auth_headers: Optional[dict[str, dict[str, str]]] = None,
-    oauth2_headers: Optional[dict[str, str]] = None,
-    raw_headers: Optional[dict[str, str]] = None,
-    litellm_logging_obj: Optional[LiteLLMLoggingObj] = None,
+    client_ip: str | None = None,
+    mcp_servers: list[str] | None = None,
+    mcp_auth_header: str | None = None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
+    oauth2_headers: dict[str, str] | None = None,
+    raw_headers: dict[str, str] | None = None,
+    litellm_logging_obj: LiteLLMLoggingObj | None = None,
 ) -> CallToolResult:
     from litellm.proxy._experimental.mcp_server.server import (
         _get_allowed_mcp_servers,
         execute_mcp_tool,
     )
 
-    allowed_mcp_servers = await _get_allowed_mcp_servers(
+    allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
         user_api_key_auth=user_api_key_dict,
         mcp_servers=mcp_servers,
         client_ip=client_ip,

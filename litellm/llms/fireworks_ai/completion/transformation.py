@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import Final
 
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
 
@@ -35,7 +35,7 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
                 optional_params[k] = v
@@ -44,16 +44,16 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
     def transform_text_completion_request(
         self,
         model: str,
-        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
+        messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        prompt = _transform_prompt(messages=messages)
+        prompt: Final = _transform_prompt(messages=messages)
 
         if not model.startswith("accounts/") and "#" not in model:
             model = f"accounts/fireworks/models/{model}"
 
-        data = {
+        data: Final = {
             "model": model,
             "prompt": prompt,
             **optional_params,
