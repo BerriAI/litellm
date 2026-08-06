@@ -1,4 +1,6 @@
-# pyright: ignore[reportUnusedVariable]  # required for BaseLLMConfig type signature compatibility
+# pyright: reportUnusedVariable=false
+# pyright: reportIncompatibleMethodOverride=false
+# pyright: reportGeneralTypeIssues=false
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 
 

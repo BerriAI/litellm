@@ -1,4 +1,6 @@
-# pyright: ignore[reportUnusedVariable]  # required for BaseLLMConfig type signature compatibility
+# pyright: reportUnusedVariable=false
+# pyright: reportIncompatibleMethodOverride=false
+# pyright: reportGeneralTypeIssues=false
 from typing import Final
 
 import httpx
