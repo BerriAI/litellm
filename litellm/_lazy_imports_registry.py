@@ -288,7 +288,6 @@ LLM_CONFIG_NAMES: Final = (
     "HostedVLLMEmbeddingConfig",
     # Alias for backwards compatibility
     "VolcEngineConfig",  # Alias for VolcEngineChatConfig
-    "BytePlusConfig",  # Alias for BytePlusChatConfig
     "LlamafileChatConfig",
     "LiteLLMProxyChatConfig",
     "VLLMConfig",
@@ -1120,10 +1119,6 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.volcengine.chat.transformation",
         "VolcEngineChatConfig",
     ),  # Alias
-    "BytePlusConfig": (
-        ".llms.byteplus.chat.transformation",
-        "BytePlusChatConfig",
-    ),
     "LlamafileChatConfig": (
         ".llms.llamafile.chat.transformation",
         "LlamafileChatConfig",
