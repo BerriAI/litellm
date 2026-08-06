@@ -1083,6 +1083,27 @@ def test_blank_otel_v2_flag_reads_as_off(monkeypatch):
     is_otel_v2_enabled.cache_clear()
 
 
+def test_no_otel_v2_flag_value_can_raise(monkeypatch):
+    """The flag is read while ``proxy_server`` is still importing, so any value that
+    raises takes the proxy down before it binds. A stray space or a word pydantic does not
+    accept is an easy typo and must degrade to off, while a padded boolean still means
+    what it says."""
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    def _read(raw):
+        monkeypatch.setenv('LITELLM_OTEL_V2', raw)
+        is_otel_v2_enabled.cache_clear()
+        return is_otel_v2_enabled()
+
+    for raw in ('enabled', '2', 'maybe', 'TRUE!', '-1'):
+        assert _read(raw) is False, f'{raw!r} should degrade to off'
+    for raw in ('true ', ' TRUE', '  yes  '):
+        assert _read(raw) is True, f'{raw!r} should read as on'
+    for raw in ('false ', '  0 '):
+        assert _read(raw) is False, f'{raw!r} should read as off'
+    is_otel_v2_enabled.cache_clear()
+
+
 def test_each_backend_registers_itself_on_the_per_backend_event_lists():
     """Regression: only the first OTel v2 backend ever dispatched.
 

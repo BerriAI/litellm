@@ -4,9 +4,18 @@ from enum import Enum
 from functools import lru_cache
 from typing import Annotated, Any
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.baggage import (
     BAGGAGE_PROMOTED_KEYS,
     DEFAULT_BAGGAGE_METADATA_KEYS,
@@ -48,17 +57,32 @@ class _OTelV2Flag(BaseSettings):
 
     @field_validator("enabled", mode="before")
     @classmethod
-    def _blank_reads_as_off(cls, value: object) -> object:
-        """Treat a declared-but-empty env var as off rather than as a parse error.
+    def _unparseable_reads_as_off(cls, value: object) -> object:
+        """Never raise on this flag: an unusable value reads as off, loudly.
 
-        ``LITELLM_OTEL_V2=`` is routine in k8s ConfigMaps and ``.env`` files. Left to
-        pydantic it raises at import, and the flag is read from ``instrument_fastapi_app``
-        while ``proxy_server`` is still importing, so the whole proxy fails to bind over a
-        variable the operator meant to leave unset.
+        The flag is read from ``instrument_fastapi_app`` while ``proxy_server`` is still
+        importing, so a parse error here takes the whole proxy down before it binds a
+        port. ``LITELLM_OTEL_V2=`` is routine in k8s ConfigMaps and ``.env`` files, and a
+        stray space or a word pydantic does not accept (``enabled``, ``2``) is an easy
+        typo; none of them is worth refusing to start over a feature that is off by
+        default. Surrounding whitespace is trimmed first so ``"true "`` still means true,
+        and anything left unrecognized warns and degrades rather than failing closed on
+        the whole process.
         """
-        if isinstance(value, str) and not value.strip():
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        if not stripped:
             return False
-        return value
+        try:
+            return TypeAdapter(bool).validate_python(stripped)
+        except ValidationError:
+            verbose_logger.warning(
+                "%s=%r is not a recognized boolean; treating OpenTelemetry v2 as disabled. Use true or false.",
+                OTEL_V2_ENV,
+                value,
+            )
+            return False
 
 
 @lru_cache(maxsize=1)
