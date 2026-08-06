@@ -11,8 +11,6 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrou
 )
 from litellm.types.utils import ModelResponse, Usage
 
-# gemini/ and vertex_ai/ price this model differently (2x), so it is the only way to
-# observe which rate card a code path actually used.
 MODEL = "gemini-3.1-flash-image"
 PROMPT_TOKENS = 1000
 COMPLETION_TOKENS = 500

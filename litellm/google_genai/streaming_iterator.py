@@ -79,13 +79,7 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
     async def _handle_async_streaming_logging(
         self,
     ):
-        """Handle the logging after all chunks have been collected.
-
-        ``url_route`` below carries no hostname, so the pass-through handler cannot
-        sniff the provider off it and would price every Google stream at Vertex rates.
-        ``custom_llm_provider`` is forwarded so costing uses the provider already
-        resolved for this request.
-        """
+        """Handle the logging after all chunks have been collected."""
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
         )

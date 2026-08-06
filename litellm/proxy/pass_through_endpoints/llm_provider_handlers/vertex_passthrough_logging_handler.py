@@ -404,11 +404,6 @@ class VertexPassthroughLoggingHandler:
         - Builds complete response from chunks
         - Creates standard logging object
         - Logs in litellm callbacks
-
-        ``custom_llm_provider`` is the provider the caller already resolved. Callers that
-        only know the upstream URL leave it unset and the provider is sniffed from the
-        hostname instead. Native google_genai streams pass it explicitly because their
-        url_route carries no hostname to sniff.
         """
         kwargs: dict[str, Any] = {}
         model = model or VertexPassthroughLoggingHandler.extract_model_from_url(url_route)

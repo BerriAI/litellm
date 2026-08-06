@@ -138,9 +138,6 @@ class PassThroughStreamingHandler:
         - Anthropic
         - Vertex AI
         - OpenAI
-
-        ``custom_llm_provider`` lets a caller that already knows the provider skip the
-        URL-hostname sniffing the pass-through handlers fall back to.
         """
         try:
             (
