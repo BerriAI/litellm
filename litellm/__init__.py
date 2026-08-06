@@ -1532,6 +1532,7 @@ if TYPE_CHECKING:
     from .llms.openrouter.chat.transformation import (
         OpenrouterConfig as OpenrouterConfig,
     )
+    from .llms.opper.chat.transformation import OpperConfig as OpperConfig
     from .llms.datarobot.chat.transformation import DataRobotConfig as DataRobotConfig
     from .llms.anthropic.chat.transformation import AnthropicConfig as AnthropicConfig
     from .llms.bedrock.claude_platform.transformation import (

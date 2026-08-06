@@ -2192,12 +2192,15 @@ def _map_openrouter_exception(
             )
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
+        fallback_api_base: Final = (
+            "https://api.opper.ai/v3/compat" if custom_llm_provider == "opper" else "https://api.openai.com/v1/"
+        )
         raise APIConnectionError(
             message=f"APIConnectionError: {exception_provider} - {error_str}",
             llm_provider=custom_llm_provider,
             model=model,
             litellm_debug_info=extra_information,
-            request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
+            request=httpx.Request(method="POST", url=fallback_api_base),
         )
 
 
@@ -2606,7 +2609,7 @@ def exception_type(
                     exception_provider=exception_provider,
                     extra_information=extra_information,
                 )
-            if custom_llm_provider == "openrouter":
+            if custom_llm_provider in ("openrouter", "opper"):
                 _map_openrouter_exception(
                     model=model,
                     original_exception=mappable_exception,

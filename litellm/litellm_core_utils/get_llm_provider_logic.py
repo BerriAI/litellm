@@ -204,6 +204,12 @@ def get_llm_provider(
                 return remainder, custom_llm_provider, dynamic_api_key, api_base
             return model, custom_llm_provider, dynamic_api_key, api_base
 
+        if custom_llm_provider == "opper" and model.startswith("opper/"):
+            opper_remainder: Final = model[len("opper/") :]
+            if "/" in opper_remainder:
+                return opper_remainder, custom_llm_provider, dynamic_api_key, api_base
+            return model, custom_llm_provider, dynamic_api_key, api_base
+
         # Check JSON-configured providers FIRST (before enum-based provider_list)
         provider_prefix: Final = model.split("/", 1)[0]
         if len(model.split("/")) > 1 and JSONProviderRegistry.exists(provider_prefix):
@@ -681,6 +687,10 @@ def _get_openai_compatible_provider_info(
         api_base = api_base or get_secret("TENCENT_API_BASE") or "https://tokenhub-intl.tencentcloudmaas.com/v1"
 
         dynamic_api_key = api_key or get_secret_str("TENCENT_API_KEY")
+    elif custom_llm_provider == "opper":
+        api_base = api_base or get_secret("OPPER_API_BASE") or "https://api.opper.ai/v3/compat"
+
+        dynamic_api_key = api_key or get_secret_str("OPPER_API_KEY")
     elif custom_llm_provider == "fireworks_ai":
         # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
         (

@@ -3421,6 +3421,54 @@ def _complete_openrouter(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
+def _complete_opper(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    acompletion: Final = ctx.acompletion
+    client: Final = ctx.client
+    litellm_params: Final = ctx.litellm_params
+    logging: Final = ctx.logging
+    messages: Final = ctx.messages
+    model: Final = ctx.model
+    model_response: Final = ctx.model_response
+    optional_params: Final = ctx.optional_params
+    shared_session: Final = ctx.shared_session
+    stream: Final = ctx.stream
+    timeout: Final = ctx.timeout
+
+    api_base: Final = (
+        ctx.api_base or litellm.api_base or get_secret_str("OPPER_API_BASE") or "https://api.opper.ai/v3/compat"
+    )
+    api_key: Final = ctx.api_key or litellm.api_key or get_secret_str("OPPER_API_KEY")
+    headers: Final = ctx.headers or litellm.headers
+
+    config: Final = litellm.OpperConfig.get_config()
+    for k, v in config.items():
+        if k not in optional_params:
+            optional_params[k] = v
+
+    response: Final = base_llm_http_handler.completion(
+        model=model,
+        stream=stream,
+        messages=messages,
+        acompletion=acompletion,
+        api_base=api_base,
+        model_response=model_response,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        shared_session=shared_session,
+        custom_llm_provider="opper",
+        timeout=timeout,
+        headers=headers,
+        encoding=_get_encoding(),
+        api_key=api_key,
+        logging_obj=logging,
+        client=client,
+    )
+    ## LOGGING
+    logging.post_call(input=messages, api_key=api_key, original_response=response)
+
+    return response
+
+
 def _complete_vercel_ai_gateway(
     ctx: _CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -5755,6 +5803,8 @@ def completion(
             response = _complete_datarobot(_dispatch_ctx)
         elif custom_llm_provider == "openrouter":
             response = _complete_openrouter(_dispatch_ctx)
+        elif custom_llm_provider == "opper":
+            response = _complete_opper(_dispatch_ctx)  # rebind-ok: dispatch chain assigns response per provider branch
         elif custom_llm_provider == "vercel_ai_gateway":
             response = _complete_vercel_ai_gateway(_dispatch_ctx)
         elif custom_llm_provider == "palm":
