@@ -2,19 +2,15 @@ import asyncio
 import json
 import os
 import ssl
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Coroutine,
-    Dict,
-    Iterator,
-    List,
     Literal,
     Optional,
-    Tuple,
+    TypeVar,
     Union,
     cast,
     get_type_hints,
@@ -23,6 +19,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx  # type: ignore
 from openai.types.file_deleted import FileDeleted
+from tiktoken import Encoding
 
 import litellm
 import litellm.litellm_core_utils
@@ -149,6 +146,8 @@ from litellm.utils import (
     async_pre_call_deployment_hook,
 )
 
+FakeStreamWrappableResponseT = TypeVar("FakeStreamWrappableResponseT")
+
 
 def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
@@ -162,7 +161,11 @@ from .http_handler import get_shared_realtime_ssl_context
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 
+    from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+        FakeAnthropicMessagesStreamIterator,
+    )
     from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
         AnthropicMessagesStreamingResponse,
     )
@@ -189,11 +192,11 @@ def _google_genai_streaming_hidden_params(
     litellm_params: GenericLiteLLMParams,
     logging_obj: LiteLLMLoggingObj,
     response_headers: httpx.Headers,
-) -> Dict[str, Any]:
+) -> dict[str, object]:
     """Pre-stream metadata for proxy response headers (mirrors CustomStreamWrapper._hidden_params)."""
     from litellm.litellm_core_utils.core_helpers import process_response_headers
 
-    _model_info: Dict[str, Any] = dict(getattr(litellm_params, "model_info", None) or {})
+    _model_info: dict[str, object] = dict(getattr(litellm_params, "model_info", None) or {})
     _raw_id = _model_info.get("id") or logging_obj.get_router_model_id() or ""
     _model_id = _raw_id if isinstance(_raw_id, str) else str(_raw_id)
     return {
@@ -210,7 +213,7 @@ def _responses_api_optional_request_param_names() -> frozenset[str]:
     return frozenset(get_type_hints(ResponsesAPIOptionalRequestParams).keys())
 
 
-def _custom_logger_callbacks(logging_obj: Any) -> list[Any]:
+def _custom_logger_callbacks(logging_obj: LiteLLMLoggingObj) -> list["CustomLogger"]:
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import (
         get_custom_logger_compatible_class,
@@ -221,7 +224,7 @@ def _custom_logger_callbacks(logging_obj: Any) -> list[Any]:
     if isinstance(dynamic_success_callbacks, (list, tuple)):
         callbacks.extend(dynamic_success_callbacks)
 
-    custom_loggers: list[Any] = []
+    custom_loggers: list[CustomLogger] = []
     for cb in callbacks:
         if isinstance(cb, str):
             resolved = get_custom_logger_compatible_class(cb)  # type: ignore[arg-type]
@@ -233,7 +236,7 @@ def _custom_logger_callbacks(logging_obj: Any) -> list[Any]:
     return custom_loggers
 
 
-def _has_pre_call_deployment_hook(logging_obj: Any) -> bool:
+def _has_pre_call_deployment_hook(logging_obj: LiteLLMLoggingObj) -> bool:
     from litellm.integrations.custom_logger import CustomLogger
 
     base_func = CustomLogger.async_pre_call_deployment_hook
@@ -252,16 +255,16 @@ class BaseLLMHTTPHandler:
         api_base: str,
         headers: dict,
         data: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
         stream: bool = False,
-        signed_json_body: Optional[bytes] = None,
+        signed_json_body: bytes | None = None,
     ) -> httpx.Response:
         """Common implementation across stream + non-stream calls. Meant to ensure consistent error-handling."""
         max_retry_on_unprocessable_entity_error = provider_config.max_retry_on_unprocessable_entity_error
 
-        response: Optional[httpx.Response] = None
+        response: httpx.Response | None = None
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
                 response = await async_httpx_client.post(
@@ -302,15 +305,15 @@ class BaseLLMHTTPHandler:
         api_base: str,
         headers: dict,
         data: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
         stream: bool = False,
-        signed_json_body: Optional[bytes] = None,
+        signed_json_body: bytes | None = None,
     ) -> httpx.Response:
         max_retry_on_unprocessable_entity_error = provider_config.max_retry_on_unprocessable_entity_error
 
-        response: Optional[httpx.Response] = None
+        response: httpx.Response | None = None
 
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
@@ -352,18 +355,18 @@ class BaseLLMHTTPHandler:
         api_base: str,
         headers: dict,
         data: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         model: str,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         messages: list,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        encoding: Encoding,
+        api_key: str | None = None,
+        client: AsyncHTTPHandler | None = None,
         json_mode: bool = False,
-        signed_json_body: Optional[bytes] = None,
+        signed_json_body: bytes | None = None,
         shared_session: Optional["ClientSession"] = None,
     ):
         if client is None:
@@ -422,25 +425,25 @@ class BaseLLMHTTPHandler:
         self,
         model: str,
         messages: list,
-        api_base: Optional[str],
+        api_base: str | None,
         custom_llm_provider: str,
         model_response: ModelResponse,
-        encoding,
+        encoding: Encoding,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         litellm_params: dict,
         acompletion: bool,
-        stream: Optional[bool] = False,
+        stream: bool | None = False,
         fake_stream: bool = False,
-        api_key: Optional[str] = None,
-        headers: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        provider_config: Optional[BaseConfig] = None,
+        api_key: str | None = None,
+        headers: dict[str, Any] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        provider_config: BaseConfig | None = None,
         shared_session: Optional["ClientSession"] = None,
     ):
         json_mode: bool = optional_params.pop("json_mode", False)
-        extra_body: Optional[dict] = optional_params.pop("extra_body", None)
+        extra_body: dict | None = optional_params.pop("extra_body", None)
 
         provider_config = provider_config or ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -640,18 +643,18 @@ class BaseLLMHTTPHandler:
         api_base: str,
         headers: dict,
         data: dict,
-        signed_json_body: Optional[bytes],
+        signed_json_body: bytes | None,
         original_data: dict,
         model: str,
         messages: list,
         logging_obj,
         optional_params: dict,
         litellm_params: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         fake_stream: bool = False,
-        client: Optional[HTTPHandler] = None,
+        client: HTTPHandler | None = None,
         json_mode: bool = False,
-    ) -> Tuple[Any, dict]:
+    ) -> tuple[MockResponseIterator | BaseModelResponseIterator, dict]:
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client(
                 {
@@ -691,7 +694,9 @@ class BaseLLMHTTPHandler:
                 json_mode=json_mode,
             )
 
-            completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
+            completion_stream: MockResponseIterator | BaseModelResponseIterator = MockResponseIterator(
+                model_response=model_response, json_mode=json_mode
+            )
         else:
             completion_stream = provider_config.get_model_response_iterator(
                 streaming_response=response.iter_lines(),
@@ -717,15 +722,15 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         headers: dict,
         provider_config: BaseConfig,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
         data: dict,
         litellm_params: dict,
         optional_params: dict,
         fake_stream: bool = False,
-        client: Optional[AsyncHTTPHandler] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        client: AsyncHTTPHandler | None = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ):
         if provider_config.has_custom_stream_wrapper is True:
             return await provider_config.get_async_custom_stream_wrapper(
@@ -776,14 +781,14 @@ class BaseLLMHTTPHandler:
         data: dict,
         messages: list,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         litellm_params: dict,
         optional_params: dict,
         fake_stream: bool = False,
-        client: Optional[AsyncHTTPHandler] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
-    ) -> Tuple[Any, httpx.Headers]:
+        client: AsyncHTTPHandler | None = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
+    ) -> tuple[MockResponseIterator | BaseModelResponseIterator, httpx.Headers]:
         """
         Helper function for making an async call with stream.
 
@@ -827,7 +832,9 @@ class BaseLLMHTTPHandler:
                 json_mode=json_mode,
             )
 
-            completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
+            completion_stream: MockResponseIterator | BaseModelResponseIterator = MockResponseIterator(
+                model_response=model_response, json_mode=json_mode
+            )
         else:
             completion_stream = provider_config.get_model_response_iterator(
                 streaming_response=response.aiter_lines(), sync_stream=False
@@ -870,14 +877,14 @@ class BaseLLMHTTPHandler:
         timeout: float,
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
         litellm_params: dict,
         model_response: EmbeddingResponse,
-        api_key: Optional[str] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        aembedding: Optional[bool] = False,
-        headers: Optional[Dict[str, Any]] = None,
+        api_key: str | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        aembedding: bool | None = False,
+        headers: dict[str, Any] | None = None,
     ) -> EmbeddingResponse:
         provider_config = ProviderConfigManager.get_provider_embedding_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -999,10 +1006,10 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        signed_body: Optional[bytes] = None,
+        api_key: str | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        signed_body: bytes | None = None,
     ) -> EmbeddingResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -1047,15 +1054,15 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         provider_config: BaseRerankConfig,
-        optional_rerank_params: Dict,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        optional_rerank_params: dict,
+        timeout: float | httpx.Timeout | None,
         model_response: RerankResponse,
         _is_async: bool = False,
-        headers: Optional[Dict[str, Any]] = None,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        litellm_params: Optional[Dict[str, Any]] = None,
+        headers: dict[str, str] | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        litellm_params: dict[str, Any] | None = None,
     ) -> RerankResponse:
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
@@ -1141,9 +1148,9 @@ class BaseLLMHTTPHandler:
         model_response: RerankResponse,
         api_base: str,
         headers: dict,
-        api_key: Optional[str] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_key: str | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> RerankResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(llm_provider=litellm.LlmProviders(custom_llm_provider))
@@ -1175,11 +1182,11 @@ class BaseLLMHTTPHandler:
         optional_params: dict,
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        headers: Optional[Dict[str, Any]],
+        api_key: str | None,
+        api_base: str | None,
+        headers: dict[str, str] | None,
         provider_config: BaseAudioTranscriptionConfig,
-    ) -> Tuple[dict, str, Union[dict, bytes, None], Optional[dict]]:
+    ) -> tuple[dict, str, dict | bytes | None, dict | None]:
         """
         Shared logic for preparing audio transcription requests.
         Returns: (headers, complete_url, data, files)
@@ -1244,7 +1251,7 @@ class BaseLLMHTTPHandler:
         model_response: TranscriptionResponse,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        api_key: Optional[str],
+        api_key: str | None,
     ) -> TranscriptionResponse:
         """Shared logic for transforming audio transcription responses."""
         return provider_config.transform_audio_transcription_response(
@@ -1261,15 +1268,15 @@ class BaseLLMHTTPHandler:
         timeout: float,
         max_retries: int,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
-        api_base: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
         custom_llm_provider: str,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         atranscription: bool = False,
-        headers: Optional[Dict[str, Any]] = None,
-        provider_config: Optional[BaseAudioTranscriptionConfig] = None,
+        headers: dict[str, str] | None = None,
+        provider_config: BaseAudioTranscriptionConfig | None = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]:
+    ) -> TranscriptionResponse | Coroutine[None, None, TranscriptionResponse]:
         if provider_config is None:
             raise ValueError(f"No provider config found for model: {model} and provider: {custom_llm_provider}")
 
@@ -1347,12 +1354,12 @@ class BaseLLMHTTPHandler:
         timeout: float,
         max_retries: int,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
-        api_base: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
         custom_llm_provider: str,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        headers: Optional[Dict[str, Any]] = None,
-        provider_config: Optional[BaseAudioTranscriptionConfig] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        headers: dict[str, str] | None = None,
+        provider_config: BaseAudioTranscriptionConfig | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> TranscriptionResponse:
         if provider_config is None:
@@ -1412,15 +1419,15 @@ class BaseLLMHTTPHandler:
     def _prepare_ocr_request(
         self,
         model: str,
-        document: Dict[str, str],
+        document: dict[str, str],
         optional_params: dict,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        headers: Optional[Dict[str, Any]],
+        api_key: str | None,
+        api_base: str | None,
+        headers: dict[str, object] | None,
         provider_config: BaseOCRConfig,
         litellm_params: dict,
-    ) -> Tuple[Dict[str, Any], str, Dict[str, Any], None]:
+    ) -> tuple[dict[str, Any], str, dict[str, Any], None]:
         """
         Shared logic for preparing OCR requests.
         Returns: (headers, complete_url, data, files)
@@ -1478,15 +1485,15 @@ class BaseLLMHTTPHandler:
     async def _async_prepare_ocr_request(
         self,
         model: str,
-        document: Dict[str, str],
+        document: dict[str, str],
         optional_params: dict,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        headers: Optional[Dict[str, Any]],
+        api_key: str | None,
+        api_base: str | None,
+        headers: dict[str, object] | None,
         provider_config: BaseOCRConfig,
         litellm_params: dict,
-    ) -> Tuple[Dict[str, Any], str, Dict[str, Any], None]:
+    ) -> tuple[dict[str, Any], str, dict[str, Any], None]:
         """
         Async version of _prepare_ocr_request for providers that need async transforms.
         Returns: (headers, complete_url, data, files)
@@ -1558,19 +1565,19 @@ class BaseLLMHTTPHandler:
     def ocr(
         self,
         model: str,
-        document: Dict[str, str],
+        document: dict[str, str],
         optional_params: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
-        api_base: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
         custom_llm_provider: str,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         aocr: bool = False,
-        headers: Optional[Dict[str, Any]] = None,
-        provider_config: Optional[BaseOCRConfig] = None,
-        litellm_params: Optional[dict] = None,
-    ) -> Union[OCRResponse, Coroutine[Any, Any, OCRResponse]]:
+        headers: dict[str, object] | None = None,
+        provider_config: BaseOCRConfig | None = None,
+        litellm_params: dict | None = None,
+    ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
         """
         Sync OCR handler.
         """
@@ -1633,17 +1640,17 @@ class BaseLLMHTTPHandler:
     async def async_ocr(
         self,
         model: str,
-        document: Dict[str, str],
+        document: dict[str, str],
         optional_params: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
-        api_base: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
         custom_llm_provider: str,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        headers: Optional[Dict[str, Any]] = None,
-        provider_config: Optional[BaseOCRConfig] = None,
-        litellm_params: Optional[dict] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        headers: dict[str, object] | None = None,
+        provider_config: BaseOCRConfig | None = None,
+        litellm_params: dict | None = None,
     ) -> OCRResponse:
         """
         Async OCR handler.
@@ -1694,18 +1701,18 @@ class BaseLLMHTTPHandler:
 
     def search(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
-        api_base: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
         custom_llm_provider: str,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         asearch: bool = False,
-        headers: Optional[Dict[str, Any]] = None,
-        provider_config: Optional[BaseSearchConfig] = None,
-    ) -> Union[SearchResponse, Coroutine[Any, Any, SearchResponse]]:
+        headers: dict[str, str] | None = None,
+        provider_config: BaseSearchConfig | None = None,
+    ) -> SearchResponse | Coroutine[None, None, SearchResponse]:
         """
         Sync Search handler.
         """
@@ -1790,16 +1797,16 @@ class BaseLLMHTTPHandler:
 
     async def async_search(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
-        api_base: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
         custom_llm_provider: str,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        headers: Optional[Dict[str, Any]] = None,
-        provider_config: Optional[BaseSearchConfig] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        headers: dict[str, str] | None = None,
+        provider_config: BaseSearchConfig | None = None,
     ) -> SearchResponse:
         """
         Async Search handler.
@@ -1884,15 +1891,15 @@ class BaseLLMHTTPHandler:
         headers: dict,
         # str when the caller passes a pre-serialized (unsigned) body to avoid
         # re-dumping; bytes when a provider signed the request (e.g. Bedrock).
-        signed_json_body: Optional[Union[str, bytes]],
+        signed_json_body: str | bytes | None,
         request_body: dict,
         stream: bool,
         logging_obj: LiteLLMLoggingObj,
         provider_config: BaseAnthropicMessagesConfig,
         litellm_params: GenericLiteLLMParams,
-        api_key: Optional[str],
+        api_key: str | None,
         model: str,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response:
         max_attempts = max(provider_config.max_retry_on_anthropic_messages_http_error, 1)
         litellm_params_dict = dict(litellm_params)
@@ -1945,7 +1952,7 @@ class BaseLLMHTTPHandler:
         litellm_params: GenericLiteLLMParams,
         stream: bool,
         custom_llm_provider: str,
-    ) -> Optional[Union[float, httpx.Timeout]]:
+    ) -> float | httpx.Timeout | None:
         from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
         from litellm.litellm_core_utils.request_timeout_resolver import (
             get_configured_request_timeout,
@@ -1969,19 +1976,19 @@ class BaseLLMHTTPHandler:
     async def async_anthropic_messages_handler(
         self,
         model: str,
-        messages: List[Dict],
+        messages: list[dict],
         anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
-        anthropic_messages_optional_request_params: Dict,
+        anthropic_messages_optional_request_params: dict,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        client: Optional[AsyncHTTPHandler] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        stream: Optional[bool] = False,
-        kwargs: Optional[Dict[str, Any]] = None,
-    ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+        client: AsyncHTTPHandler | None = None,
+        extra_headers: dict[str, str] | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        stream: bool | None = False,
+        kwargs: dict[str, object] | None = None,
+    ) -> AnthropicMessagesResponse | AsyncIterator:
         from litellm.litellm_core_utils.get_provider_specific_headers import (
             ProviderSpecificHeaderUtils,
         )
@@ -1994,7 +2001,7 @@ class BaseLLMHTTPHandler:
         # Prepare headers
         kwargs = kwargs or {}
         provider_specific_header = cast(
-            Optional[litellm.types.utils.ProviderSpecificHeader],
+            litellm.types.utils.ProviderSpecificHeader | None,
             kwargs.get("provider_specific_header", None),
         )
         provider_specific_headers = ProviderSpecificHeaderUtils.get_provider_specific_headers(
@@ -2006,9 +2013,9 @@ class BaseLLMHTTPHandler:
         extra_headers_from_kwargs = kwargs.get("extra_headers", None)
         # Merge all header sources: forwarded < extra_headers < provider_specific
         merged_headers = {}
-        if forwarded_headers:
+        if isinstance(forwarded_headers, dict):
             merged_headers.update(forwarded_headers)
-        if extra_headers_from_kwargs:
+        if isinstance(extra_headers_from_kwargs, dict):
             merged_headers.update(extra_headers_from_kwargs)
         if provider_specific_headers:
             merged_headers.update(provider_specific_headers)
@@ -2156,7 +2163,7 @@ class BaseLLMHTTPHandler:
         # used for logging + cost tracking
         logging_obj.model_call_details["httpx_response"] = response
 
-        initial_response: Union[AsyncIterator, AnthropicMessagesResponse]
+        initial_response: AsyncIterator | AnthropicMessagesResponse
         if stream:
             from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
                 AnthropicMessagesStreamingResponse,
@@ -2328,22 +2335,19 @@ class BaseLLMHTTPHandler:
     def anthropic_messages_handler(
         self,
         model: str,
-        messages: List[Dict],
+        messages: list[dict],
         anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
-        anthropic_messages_optional_request_params: Dict,
+        anthropic_messages_optional_request_params: dict,
         custom_llm_provider: str,
         _is_async: bool,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        stream: Optional[bool] = False,
-        kwargs: Optional[Dict[str, Any]] = None,
-    ) -> Union[
-        AnthropicMessagesResponse,
-        Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator]],
-    ]:
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        stream: bool | None = False,
+        kwargs: dict[str, object] | None = None,
+    ) -> AnthropicMessagesResponse | Coroutine[None, None, AnthropicMessagesResponse | AsyncIterator]:
         """
         LLM HTTP Handler for Anthropic Messages
         """
@@ -2369,14 +2373,14 @@ class BaseLLMHTTPHandler:
         self,
         *,
         model: str,
-        input: Union[str, ResponseInputParam],
+        input: str | ResponseInputParam,
         custom_llm_provider: str,
         response_api_optional_request_params: dict[str, Any],
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
     ) -> tuple[
         str,
-        Union[str, ResponseInputParam],
+        str | ResponseInputParam,
         str,
         dict[str, Any],
         GenericLiteLLMParams,
@@ -2428,7 +2432,7 @@ class BaseLLMHTTPHandler:
         return (
             str(modified_kwargs["model"]) if "model" in modified_kwargs else model,
             cast(
-                Union[str, ResponseInputParam],
+                str | ResponseInputParam,
                 modified_kwargs["input"] if "input" in modified_kwargs else input,
             ),
             (
@@ -2443,25 +2447,25 @@ class BaseLLMHTTPHandler:
     def response_api_handler(
         self,
         model: str,
-        input: Union[str, ResponseInputParam],
+        input: str | ResponseInputParam,
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_request_params: dict[str, Any],
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         fake_stream: bool = False,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
+        litellm_metadata: dict[str, object] | None = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union[
-        ResponsesAPIResponse,
-        BaseResponsesAPIStreamingIterator,
-        Coroutine[Any, Any, Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]],
-    ]:
+    ) -> (
+        ResponsesAPIResponse
+        | BaseResponsesAPIStreamingIterator
+        | Coroutine[None, None, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
+    ):
         """
         Handles responses API requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -2543,7 +2547,7 @@ class BaseLLMHTTPHandler:
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
         # hooks/metadata; the streaming iterator now consumes this to run deployment hooks
         # with the same info as chat, including litellm_params.
-        request_context: Dict[str, Any] = {"input": input}
+        request_context: dict[str, Any] = {"input": input}
         try:
             request_context.update(response_api_optional_request_params)
         except Exception:
@@ -2573,7 +2577,7 @@ class BaseLLMHTTPHandler:
             stream=stream,
             fake_stream=fake_stream,
         )
-        body_kwargs: Dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
+        body_kwargs: dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
 
         ## LOGGING
         logging_obj.pre_call(
@@ -2657,20 +2661,20 @@ class BaseLLMHTTPHandler:
     async def async_response_api_handler(
         self,
         model: str,
-        input: Union[str, ResponseInputParam],
+        input: str | ResponseInputParam,
         responses_api_provider_config: BaseResponsesAPIConfig,
-        response_api_optional_request_params: Dict,
+        response_api_optional_request_params: dict,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         fake_stream: bool = False,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
+        litellm_metadata: dict[str, object] | None = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+    ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
         """
         Async version of the responses API handler.
         Uses async HTTP client to make requests.
@@ -2720,7 +2724,7 @@ class BaseLLMHTTPHandler:
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
         # hooks/metadata; the streaming iterator now consumes this to run deployment hooks
         # with the same info as chat, including litellm_params.
-        request_context: Dict[str, Any] = {"input": input}
+        request_context: dict[str, Any] = {"input": input}
         try:
             request_context.update(response_api_optional_request_params)
         except Exception:
@@ -2747,7 +2751,7 @@ class BaseLLMHTTPHandler:
             stream=stream,
             fake_stream=fake_stream,
         )
-        body_kwargs: Dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
+        body_kwargs: dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
 
         ## LOGGING
         logging_obj.pre_call(
@@ -2846,11 +2850,11 @@ class BaseLLMHTTPHandler:
         responses_api_provider_config: BaseResponsesAPIConfig,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        custom_llm_provider: str | None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
     ) -> DeleteResponseResult:
@@ -2902,7 +2906,7 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        delete_kwargs: Dict[str, Any] = {
+        delete_kwargs: dict[str, Any] = {
             "url": url,
             "headers": headers,
             "timeout": timeout,
@@ -2930,14 +2934,14 @@ class BaseLLMHTTPHandler:
         responses_api_provider_config: BaseResponsesAPIConfig,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        custom_llm_provider: str | None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union[DeleteResponseResult, Coroutine[Any, Any, DeleteResponseResult]]:
+    ) -> DeleteResponseResult | Coroutine[None, None, DeleteResponseResult]:
         """
         Async version of the responses API handler.
         Uses async HTTP client to make requests.
@@ -2992,7 +2996,7 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        delete_kwargs: Dict[str, Any] = {
+        delete_kwargs: dict[str, Any] = {
             "url": url,
             "headers": headers,
             "timeout": timeout,
@@ -3020,14 +3024,14 @@ class BaseLLMHTTPHandler:
         responses_api_provider_config: BaseResponsesAPIConfig,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        custom_llm_provider: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union[ResponsesAPIResponse, Coroutine[Any, Any, ResponsesAPIResponse]]:
+    ) -> ResponsesAPIResponse | Coroutine[None, None, ResponsesAPIResponse]:
         """
         Get a response by ID
         Uses GET /v1/responses/{response_id} endpoint in the responses API
@@ -3101,11 +3105,11 @@ class BaseLLMHTTPHandler:
         responses_api_provider_config: BaseResponsesAPIConfig,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        custom_llm_provider: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> ResponsesAPIResponse:
         """
@@ -3177,18 +3181,18 @@ class BaseLLMHTTPHandler:
         responses_api_provider_config: BaseResponsesAPIConfig,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
-        after: Optional[str] = None,
-        before: Optional[str] = None,
-        include: Optional[List[str]] = None,
+        custom_llm_provider: str | None = None,
+        after: str | None = None,
+        before: str | None = None,
+        include: list[str] | None = None,
         limit: int = 20,
         order: Literal["asc", "desc"] = "desc",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+    ) -> dict | Coroutine[None, None, dict]:
         if _is_async:
             return self.async_list_responses_input_items(
                 response_id=response_id,
@@ -3263,17 +3267,17 @@ class BaseLLMHTTPHandler:
         responses_api_provider_config: BaseResponsesAPIConfig,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
-        after: Optional[str] = None,
-        before: Optional[str] = None,
-        include: Optional[List[str]] = None,
+        custom_llm_provider: str | None = None,
+        after: str | None = None,
+        before: str | None = None,
+        include: list[str] | None = None,
         limit: int = 20,
         order: Literal["asc", "desc"] = "desc",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Dict:
+    ) -> dict:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             verbose_logger.debug(
                 f"Creating HTTP client for list_input_items with shared_session: {id(shared_session) if shared_session else None}"
@@ -3336,7 +3340,7 @@ class BaseLLMHTTPHandler:
         response: httpx.Response,
         upload_url_location: str,
         upload_url_key: str = "upload_url",
-    ) -> tuple[Optional[str], Optional[dict]]:
+    ) -> tuple[str | None, dict | None]:
         """
         Extract upload URL from initial file creation response.
 
@@ -3352,13 +3356,15 @@ class BaseLLMHTTPHandler:
         """
         if upload_url_location == "headers":
             # Google Cloud Storage style - URL in X-Goog-Upload-URL header
-            upload_url = response.headers.get("X-Goog-Upload-URL")
-            return upload_url, None
+            raw_header_upload_url = response.headers.get("X-Goog-Upload-URL")
+            header_upload_url = raw_header_upload_url if isinstance(raw_header_upload_url, str) else None
+            return header_upload_url, None
         else:
             # Response body style (e.g., Manus, S3 presigned URLs)
             try:
                 response_data = response.json()
-                upload_url = response_data.get(upload_url_key)
+                raw_upload_url = response_data.get(upload_url_key)
+                upload_url = raw_upload_url if isinstance(raw_upload_url, str) else None
                 return upload_url, response_data if upload_url else None
             except Exception:
                 return None, None
@@ -3369,13 +3375,13 @@ class BaseLLMHTTPHandler:
         litellm_params: dict,
         provider_config: BaseFilesConfig,
         headers: dict,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         logging_obj: LiteLLMLoggingObj,
         _is_async: bool = False,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> OpenAIFileObject | Coroutine[None, None, OpenAIFileObject]:
         """
         Creates a file using Gemini's two-step upload process
         """
@@ -3477,7 +3483,7 @@ class BaseLLMHTTPHandler:
         ):
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
             # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
-            presigned_request = cast(Dict[str, Any], transformed_request)
+            presigned_request = cast(dict[str, Any], transformed_request)
             upload_response = getattr(sync_httpx_client, presigned_request["method"].lower())(
                 url=presigned_request["url"],
                 headers=presigned_request["headers"],
@@ -3523,7 +3529,7 @@ class BaseLLMHTTPHandler:
         elif isinstance(transformed_request, dict) and "file" in transformed_request:
             # Handle multipart form-data uploads (e.g., Anthropic Files API)
             # The dict contains tuples suitable for httpx's `files` parameter
-            file_request = cast(Dict[str, Any], transformed_request)
+            file_request = cast(dict[str, Any], transformed_request)
             upload_response = sync_httpx_client.post(
                 url=api_base,
                 headers=headers,
@@ -3555,8 +3561,8 @@ class BaseLLMHTTPHandler:
         headers: dict,
         api_base: str,
         logging_obj: LiteLLMLoggingObj,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ):
         """
         Creates a file using Gemini's two-step upload process
@@ -3639,7 +3645,7 @@ class BaseLLMHTTPHandler:
         ):
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
             # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
-            presigned_request = cast(Dict[str, Any], transformed_request)
+            presigned_request = cast(dict[str, Any], transformed_request)
             upload_response = await getattr(async_httpx_client, presigned_request["method"].lower())(
                 url=presigned_request["url"],
                 headers=presigned_request["headers"],
@@ -3725,19 +3731,18 @@ class BaseLLMHTTPHandler:
         *,
         client: HTTPHandler,
         url: str,
-        base_headers: Dict[str, str],
+        base_headers: dict[str, str],
         body_stream: BaseFileUploadStream,
         content_type: str,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         headers = {**base_headers, "Content-Type": content_type}
-        kwargs: Dict[str, Any] = {
-            "headers": headers,
-            "content": self._iter_in_blocks(body_stream.iter_bytes(), self._MEDIA_UPLOAD_BLOCK_SIZE),
-        }
-        if timeout is not None:
-            kwargs["timeout"] = timeout
-        resp = client.client.post(url, **kwargs)
+        content = self._iter_in_blocks(body_stream.iter_bytes(), self._MEDIA_UPLOAD_BLOCK_SIZE)
+        resp = (
+            client.client.post(url, headers=headers, content=content, timeout=timeout)
+            if timeout is not None
+            else client.client.post(url, headers=headers, content=content)
+        )
         self._check_media_upload_response(resp)
         return resp
 
@@ -3746,10 +3751,10 @@ class BaseLLMHTTPHandler:
         *,
         client: AsyncHTTPHandler,
         url: str,
-        base_headers: Dict[str, str],
+        base_headers: dict[str, str],
         body_stream: BaseFileUploadStream,
         content_type: str,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         """Stream the transformed body straight to a single media upload. Each
         block is produced on a worker thread (the transform never runs on the
@@ -3768,10 +3773,11 @@ class BaseLLMHTTPHandler:
                     break
                 yield cast(bytes, block)
 
-        kwargs: Dict[str, Any] = {"headers": headers, "content": _abody()}
-        if timeout is not None:
-            kwargs["timeout"] = timeout
-        resp = await client.client.post(url, **kwargs)
+        resp = (
+            await client.client.post(url, headers=headers, content=_abody(), timeout=timeout)
+            if timeout is not None
+            else await client.client.post(url, headers=headers, content=_abody())
+        )
         await resp.aread()
         self._check_media_upload_response(resp)
         return resp
@@ -3782,14 +3788,14 @@ class BaseLLMHTTPHandler:
         litellm_params: dict,
         provider_config: "BaseBatchesConfig",
         headers: dict,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         logging_obj: "LiteLLMLoggingObj",
         _is_async: bool = False,
-        client: Optional[Union["HTTPHandler", "AsyncHTTPHandler"]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        model: Optional[str] = None,
-    ) -> Union["LiteLLMBatch", Coroutine[Any, Any, "LiteLLMBatch"]]:
+        client: Union["HTTPHandler", "AsyncHTTPHandler"] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        model: str | None = None,
+    ) -> Union["LiteLLMBatch", Coroutine[None, None, "LiteLLMBatch"]]:
         """
         Creates a batch using provider-specific batch creation process
         """
@@ -3894,14 +3900,14 @@ class BaseLLMHTTPHandler:
         litellm_params: dict,
         provider_config: "BaseBatchesConfig",
         headers: dict,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         logging_obj: "LiteLLMLoggingObj",
         _is_async: bool = False,
-        client: Optional[Union["HTTPHandler", "AsyncHTTPHandler"]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        model: Optional[str] = None,
-    ) -> Union["LiteLLMBatch", Coroutine[Any, Any, "LiteLLMBatch"]]:
+        client: Union["HTTPHandler", "AsyncHTTPHandler"] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        model: str | None = None,
+    ) -> Union["LiteLLMBatch", Coroutine[None, None, "LiteLLMBatch"]]:
         """
         Retrieve a batch using provider-specific configuration.
         """
@@ -3976,16 +3982,16 @@ class BaseLLMHTTPHandler:
 
     async def async_create_batch(
         self,
-        transformed_request: Union[bytes, str, dict],
+        transformed_request: bytes | str | dict,
         litellm_params: dict,
         provider_config: "BaseBatchesConfig",
         headers: dict,
         api_base: str,
         logging_obj: "LiteLLMLoggingObj",
-        client: Optional[Union["HTTPHandler", "AsyncHTTPHandler"]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Union["HTTPHandler", "AsyncHTTPHandler"] | None = None,
+        timeout: float | httpx.Timeout | None = None,
         create_batch_data: Optional["CreateBatchRequest"] = None,
-        model: Optional[str] = None,
+        model: str | None = None,
     ):
         """
         Async version of create_batch
@@ -4055,16 +4061,16 @@ class BaseLLMHTTPHandler:
 
     async def async_retrieve_batch(
         self,
-        transformed_request: Union[bytes, str, dict],
+        transformed_request: bytes | str | dict,
         litellm_params: dict,
         provider_config: "BaseBatchesConfig",
         headers: dict,
-        api_base: Optional[str],
+        api_base: str | None,
         logging_obj: "LiteLLMLoggingObj",
-        client: Optional[Union["HTTPHandler", "AsyncHTTPHandler"]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        batch_id: Optional[str] = None,
-        model: Optional[str] = None,
+        client: Union["HTTPHandler", "AsyncHTTPHandler"] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        batch_id: str | None = None,
+        model: str | None = None,
     ):
         """
         Async version of retrieve_batch
@@ -4137,14 +4143,14 @@ class BaseLLMHTTPHandler:
         responses_api_provider_config: BaseResponsesAPIConfig,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        custom_llm_provider: str | None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union[ResponsesAPIResponse, Coroutine[Any, Any, ResponsesAPIResponse]]:
+    ) -> ResponsesAPIResponse | Coroutine[None, None, ResponsesAPIResponse]:
         """
         Async version of the responses API handler.
         Uses async HTTP client to make requests.
@@ -4217,11 +4223,11 @@ class BaseLLMHTTPHandler:
         responses_api_provider_config: BaseResponsesAPIConfig,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        custom_llm_provider: str | None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
     ) -> ResponsesAPIResponse:
@@ -4290,17 +4296,17 @@ class BaseLLMHTTPHandler:
         model: str,
         input: Union[str, "ResponseInputParam"],
         responses_api_provider_config: BaseResponsesAPIConfig,
-        response_api_optional_request_params: Dict,
+        response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        custom_llm_provider: str | None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union[ResponsesAPIResponse, Coroutine[Any, Any, ResponsesAPIResponse]]:
+    ) -> ResponsesAPIResponse | Coroutine[None, None, ResponsesAPIResponse]:
         """
         Handler for the compact responses API.
         """
@@ -4357,7 +4363,7 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             model=model,
         )
-        body_kwargs: Dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
+        body_kwargs: dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
 
         ## LOGGING
         logging_obj.pre_call(
@@ -4389,14 +4395,14 @@ class BaseLLMHTTPHandler:
         model: str,
         input: Union[str, "ResponseInputParam"],
         responses_api_provider_config: BaseResponsesAPIConfig,
-        response_api_optional_request_params: Dict,
+        response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        custom_llm_provider: str | None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
     ) -> ResponsesAPIResponse:
@@ -4448,7 +4454,7 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             model=model,
         )
-        body_kwargs: Dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
+        body_kwargs: dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
 
         ## LOGGING
         logging_obj.pre_call(
@@ -4483,9 +4489,9 @@ class BaseLLMHTTPHandler:
         headers: dict,
         logging_obj: LiteLLMLoggingObj,
         _is_async: bool = False,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> OpenAIFileObject | Coroutine[None, None, OpenAIFileObject]:
         """
         Retrieve file metadata by ID
         """
@@ -4550,8 +4556,8 @@ class BaseLLMHTTPHandler:
         litellm_params: dict,
         headers: dict,
         logging_obj: LiteLLMLoggingObj,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> OpenAIFileObject:
         """
         Async retrieve file metadata by ID
@@ -4607,9 +4613,9 @@ class BaseLLMHTTPHandler:
         headers: dict,
         logging_obj: LiteLLMLoggingObj,
         _is_async: bool = False,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> Union["FileDeleted", Coroutine[Any, Any, "FileDeleted"]]:
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Union["FileDeleted", Coroutine[None, None, "FileDeleted"]]:
         """
         Delete a file by ID
         """
@@ -4674,8 +4680,8 @@ class BaseLLMHTTPHandler:
         litellm_params: dict,
         headers: dict,
         logging_obj: LiteLLMLoggingObj,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> "FileDeleted":
         """
         Async delete a file by ID
@@ -4725,15 +4731,15 @@ class BaseLLMHTTPHandler:
 
     def list_files(
         self,
-        purpose: Optional[str],
+        purpose: str | None,
         provider_config: BaseFilesConfig,
         litellm_params: dict,
         headers: dict,
         logging_obj: LiteLLMLoggingObj,
         _is_async: bool = False,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> Union[List[OpenAIFileObject], Coroutine[Any, Any, List[OpenAIFileObject]]]:
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> list[OpenAIFileObject] | Coroutine[None, None, list[OpenAIFileObject]]:
         """
         List all files
         """
@@ -4793,14 +4799,14 @@ class BaseLLMHTTPHandler:
 
     async def async_list_files(
         self,
-        purpose: Optional[str],
+        purpose: str | None,
         provider_config: BaseFilesConfig,
         litellm_params: dict,
         headers: dict,
         logging_obj: LiteLLMLoggingObj,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> List[OpenAIFileObject]:
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> list[OpenAIFileObject]:
         """
         Async list all files
         """
@@ -4855,9 +4861,9 @@ class BaseLLMHTTPHandler:
         headers: dict,
         logging_obj: LiteLLMLoggingObj,
         _is_async: bool = False,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> Union["HttpxBinaryResponseContent", Coroutine[Any, Any, "HttpxBinaryResponseContent"]]:
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Union["HttpxBinaryResponseContent", Coroutine[None, None, "HttpxBinaryResponseContent"]]:
         """
         Retrieve file content by ID
         """
@@ -4929,8 +4935,8 @@ class BaseLLMHTTPHandler:
         litellm_params: dict,
         headers: dict,
         logging_obj: LiteLLMLoggingObj,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> "HttpxBinaryResponseContent":
         """
         Async retrieve file content by ID
@@ -4990,7 +4996,7 @@ class BaseLLMHTTPHandler:
         stream: bool,
         data: dict,
         fake_stream: bool,
-    ) -> Tuple[bool, dict]:
+    ) -> tuple[bool, dict]:
         """
         Handles preparing a request when `fake_stream` is True.
         """
@@ -5001,14 +5007,14 @@ class BaseLLMHTTPHandler:
         return stream, data
 
     @staticmethod
-    def _get_agentic_loop_settings(kwargs: Dict) -> Tuple[int, int, List[str]]:
+    def _get_agentic_loop_settings(kwargs: dict) -> tuple[int, int, list[str]]:
         depth = int(kwargs.get("_agentic_loop_depth", 0) or 0)
         max_loops = int(kwargs.get("max_agentic_loops", 3) or 3)
         fingerprints = list(kwargs.get("_agentic_loop_fingerprints", []) or [])
         return depth, max(max_loops, 1), fingerprints
 
     @staticmethod
-    def _has_agentic_completion_hook(logging_obj: Any) -> bool:
+    def _has_agentic_completion_hook(logging_obj: LiteLLMLoggingObj) -> bool:
         """
         True if any registered callback actually overrides
         ``async_should_run_agentic_loop`` (the gate every agentic hook goes
@@ -5039,8 +5045,8 @@ class BaseLLMHTTPHandler:
 
     @staticmethod
     def _check_agentic_loop_safety(
-        tool_calls: Any,
-        fingerprints: List[str],
+        tool_calls: Mapping[str, object] | None,
+        fingerprints: list[str],
         depth: int,
         max_loops: int,
         model: str,
@@ -5062,7 +5068,7 @@ class BaseLLMHTTPHandler:
         return fingerprint
 
     @staticmethod
-    def _fingerprint_agentic_tools(tools: Dict) -> str:
+    def _fingerprint_agentic_tools(tools: Mapping[str, object] | None) -> str:
         try:
             return json.dumps(tools, sort_keys=True, default=str)
         except Exception:
@@ -5072,16 +5078,16 @@ class BaseLLMHTTPHandler:
         self,
         plan: AgenticLoopPlan,
         model: str,
-        messages: List[Dict],
-        anthropic_messages_optional_request_params: Dict,
+        messages: list[dict],
+        anthropic_messages_optional_request_params: dict,
         logging_obj: "LiteLLMLoggingObj",
-        kwargs: Dict,
+        kwargs: dict,
         depth: int,
         max_loops: int,
-        fingerprints: List[str],
+        fingerprints: list[str],
         fingerprint: str,
         stream: bool = False,
-        callback: Optional[Any] = None,
+        callback: Any | None = None,
     ) -> Any:
         from litellm.anthropic_interface import messages as anthropic_messages
 
@@ -5101,7 +5107,7 @@ class BaseLLMHTTPHandler:
 
         max_tokens = patch.max_tokens
         if max_tokens is None:
-            max_tokens = cast(Optional[int], optional_params.pop("max_tokens", None))
+            max_tokens = cast(int | None, optional_params.pop("max_tokens", None))
         else:
             optional_params.pop("max_tokens", None)
         if max_tokens is None:
@@ -5248,10 +5254,10 @@ class BaseLLMHTTPHandler:
         self,
         result: Any,
         model: str,
-        responses_api_provider_config: Any,
+        responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str,
-    ) -> Any:
+    ) -> MockResponsesAPIStreamingIterator:
         """
         Wrap a completed responses result as a synthetic stream.
 
@@ -5259,10 +5265,6 @@ class BaseLLMHTTPHandler:
         the non-streaming path, but the caller originally asked for streaming.
         """
         import httpx
-
-        from litellm.responses.streaming_iterator import (
-            MockResponsesAPIStreamingIterator,
-        )
 
         payload = result.model_dump() if hasattr(result, "model_dump") else result
         raw_response = httpx.Response(status_code=200, json=payload)
@@ -5278,13 +5280,13 @@ class BaseLLMHTTPHandler:
         self,
         plan: AgenticLoopPlan,
         model: str,
-        messages: List[Dict],
-        optional_params: Dict,
-        kwargs: Dict,
+        messages: list[dict],
+        optional_params: dict,
+        kwargs: dict,
         custom_llm_provider: str,
         depth: int,
         max_loops: int,
-        fingerprints: List[str],
+        fingerprints: list[str],
         fingerprint: str,
     ) -> Any:
         patch = plan.request_patch or AgenticLoopRequestPatch()
@@ -5330,10 +5332,10 @@ class BaseLLMHTTPHandler:
 
     def _maybe_wrap_in_fake_stream(
         self,
-        response: Any,
+        response: FakeStreamWrappableResponseT,
         logging_obj: Optional["LiteLLMLoggingObj"],
         api_surface: str,
-    ) -> Any:
+    ) -> Union[FakeStreamWrappableResponseT, "FakeAnthropicMessagesStreamIterator"]:
         """
         If the original request was streaming but converted to non-streaming for
         WebSearch interception, wrap the dict response in a FakeAnthropicMessagesStreamIterator.
@@ -5371,15 +5373,15 @@ class BaseLLMHTTPHandler:
         self,
         response: Any,
         model: str,
-        messages: List[Dict],
+        messages: list[dict],
         anthropic_messages_provider_config: "BaseAnthropicMessagesConfig",
-        anthropic_messages_optional_request_params: Dict,
+        anthropic_messages_optional_request_params: dict,
         logging_obj: "LiteLLMLoggingObj",
         stream: bool,
         custom_llm_provider: str,
-        kwargs: Dict,
+        kwargs: dict,
         api_surface: str = "anthropic_messages",
-    ) -> Optional[Any]:
+    ) -> Any | None:
         """
         Call agentic completion hooks for all custom loggers (Anthropic Messages API).
 
@@ -5402,7 +5404,7 @@ class BaseLLMHTTPHandler:
                 continue
 
             should_run: bool = False
-            tool_calls: Any = None
+            tool_calls: Mapping[str, object] | None = None
             try:
                 # First: Check if agentic loop should run.  Wrap in try/except
                 # to shield from buggy user callbacks — a callback crash should
@@ -5542,13 +5544,13 @@ class BaseLLMHTTPHandler:
         self,
         response: Any,
         model: str,
-        messages: List[Dict],
-        optional_params: Dict,
+        messages: list[dict],
+        optional_params: dict,
         logging_obj: "LiteLLMLoggingObj",
         stream: bool,
         custom_llm_provider: str,
-        kwargs: Dict,
-    ) -> Optional[Any]:
+        kwargs: dict,
+    ) -> Any | None:
         """
         Call agentic chat completion hooks for all custom loggers (Chat Completions API).
 
@@ -5571,7 +5573,7 @@ class BaseLLMHTTPHandler:
                 continue
 
             should_run: bool = False
-            tool_calls: Any = None
+            tool_calls: Mapping[str, object] | None = None
             try:
                 (
                     should_run,
@@ -5750,7 +5752,7 @@ class BaseLLMHTTPHandler:
         )
 
     @staticmethod
-    def _append_query_params(url: str, query_params: Optional[RealtimeQueryParams]) -> str:
+    def _append_query_params(url: str, query_params: RealtimeQueryParams | None) -> str:
         """Append query_params to url, skipping keys already present in the URL."""
         if not query_params:
             return url
@@ -5795,7 +5797,7 @@ class BaseLLMHTTPHandler:
             )
             if exc is not None
         )
-        last_exc: Optional[BaseException] = None
+        last_exc: BaseException | None = None
         for _ in range(max_attempts):
             try:
                 return await websockets_module.connect(
@@ -5823,13 +5825,13 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         provider_config: BaseRealtimeConfig,
         headers: dict,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        client: Optional[Any] = None,
-        timeout: Optional[float] = None,
-        user_api_key_dict: Optional[Any] = None,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        query_params: Optional[RealtimeQueryParams] = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        client: Any | None = None,
+        timeout: float | None = None,
+        user_api_key_dict: Any | None = None,
+        litellm_metadata: dict[str, object] | None = None,
+        query_params: RealtimeQueryParams | None = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -5850,7 +5852,7 @@ class BaseLLMHTTPHandler:
                 ssl_context.verify_mode = ssl.CERT_NONE
             backend_ws = await self._open_realtime_backend_ws(websockets, url, headers, ssl_context)
             async with backend_ws:
-                _request_data: Dict[str, Any] = {}
+                _request_data: dict[str, Any] = {}
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata
                 realtime_streaming = RealTimeStreaming(
@@ -5872,7 +5874,7 @@ class BaseLLMHTTPHandler:
                 # auto-response disable can be folded into this one setup: Gemini
                 # rejects a second setup, so a follow-up disable would be dropped
                 # and the guardrail bypassed.
-                _session_config: Optional[str] = None
+                _session_config: str | None = None
                 if provider_config.requires_session_configuration():
                     _session_config = provider_config.session_configuration_request(model)
                     if _session_config:
@@ -5922,14 +5924,14 @@ class BaseLLMHTTPHandler:
         self,
         api_base: str,
         api_key: str,
-        request_data: Dict[str, Any],
+        request_data: dict[str, Any],
         logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
-        provider_config: Optional[Any] = None,
-        model: Optional[str] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        api_version: Optional[str] = None,
+        timeout: float | httpx.Timeout,
+        provider_config: Any | None = None,
+        model: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        api_version: str | None = None,
     ) -> httpx.Response:
         """
         Forward POST /v1/realtime/client_secrets to upstream provider.
@@ -5955,14 +5957,14 @@ class BaseLLMHTTPHandler:
         self,
         api_base: str,
         api_key: str,
-        request_data: Dict[str, Any],
+        request_data: dict[str, Any],
         logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
-        provider_config: Optional[Any] = None,
-        model: Optional[str] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        api_version: Optional[str] = None,
+        timeout: float | httpx.Timeout,
+        provider_config: Any | None = None,
+        model: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        api_version: str | None = None,
     ) -> httpx.Response:
         """Forward POST /v1/realtime/transcription_sessions to upstream provider."""
         return await self._async_realtime_session_post(
@@ -5984,14 +5986,14 @@ class BaseLLMHTTPHandler:
         endpoint: Literal["client_secrets", "transcription_sessions"],
         api_base: str,
         api_key: str,
-        request_data: Dict[str, Any],
+        request_data: dict[str, Any],
         logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
-        provider_config: Optional[Any] = None,
-        model: Optional[str] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        api_version: Optional[str] = None,
+        timeout: float | httpx.Timeout,
+        provider_config: Any | None = None,
+        model: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        api_version: str | None = None,
     ) -> httpx.Response:
         """
         Shared POST flow for the realtime HTTP session endpoints
@@ -6014,7 +6016,7 @@ class BaseLLMHTTPHandler:
                 )
             else:
                 url = provider_config.get_complete_url(api_base=api_base, model=model or "", api_version=api_version)
-            headers: Dict[str, Any] = provider_config.validate_environment(
+            headers: dict[str, Any] = provider_config.validate_environment(
                 headers={}, model=model or "", api_key=api_key
             )
         else:
@@ -6058,13 +6060,13 @@ class BaseLLMHTTPHandler:
         openai_ephemeral_key: str,
         sdp_body: bytes,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
-        provider_config: Optional[Any] = None,
-        model: Optional[str] = None,
-        session_config: Optional[Dict[str, Any]] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        api_version: Optional[str] = None,
+        timeout: float | httpx.Timeout,
+        provider_config: Any | None = None,
+        model: str | None = None,
+        session_config: dict[str, object] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        api_version: str | None = None,
     ) -> httpx.Response:
         """
         Forward POST /v1/realtime/calls (SDP exchange) to upstream provider.
@@ -6085,7 +6087,7 @@ class BaseLLMHTTPHandler:
 
         if provider_config is not None:
             url = provider_config.get_realtime_calls_url(api_base=api_base, model=model or "", api_version=api_version)
-            headers: Dict[str, Any] = provider_config.get_realtime_calls_headers(ephemeral_key=openai_ephemeral_key)
+            headers: dict[str, Any] = provider_config.get_realtime_calls_headers(ephemeral_key=openai_ephemeral_key)
         else:
             url = f"{api_base.rstrip('/')}/v1/realtime/calls"
             headers = {
@@ -6139,14 +6141,14 @@ class BaseLLMHTTPHandler:
         model: str,
         websocket: Any,
         logging_obj: LiteLLMLoggingObj,
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig],
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        timeout: Optional[float] = None,
-        user_api_key_dict: Optional[Any] = None,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        custom_llm_provider: Optional[str] = None,
-        first_message: Optional[str] = None,
+        responses_api_provider_config: BaseResponsesAPIConfig | None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        timeout: float | None = None,
+        user_api_key_dict: Any | None = None,
+        litellm_metadata: dict[str, object] | None = None,
+        custom_llm_provider: str | None = None,
+        first_message: str | None = None,
         **kwargs: Any,
     ):
         """
@@ -6253,7 +6255,7 @@ class BaseLLMHTTPHandler:
                     yield backend
 
             async with _backend_connection() as backend_ws:
-                _request_data: Dict[str, Any] = {}
+                _request_data: dict[str, Any] = {}
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata
 
@@ -6316,24 +6318,21 @@ class BaseLLMHTTPHandler:
     def image_edit_handler(
         self,
         model: str,
-        image: Any,
-        prompt: Optional[str],
+        image: Any,  # any-ok: real callers pass either a single FileTypes or a List[FileTypes]
+        prompt: str | None,
         image_edit_provider_config: BaseImageEditConfig,
-        image_edit_optional_request_params: Dict,
+        image_edit_optional_request_params: dict,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: float | httpx.Timeout,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         fake_stream: bool = False,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+        litellm_metadata: dict[str, object] | None = None,
+    ) -> ImageResponse | Coroutine[None, None, ImageResponse]:
         """
 
         Handles image edit requests.
@@ -6436,19 +6435,19 @@ class BaseLLMHTTPHandler:
     async def async_image_edit_handler(
         self,
         model: str,
-        image: FileTypes,
-        prompt: Optional[str],
+        image: Any,  # any-ok: real callers pass either a single FileTypes or a List[FileTypes]
+        prompt: str | None,
         image_edit_provider_config: BaseImageEditConfig,
-        image_edit_optional_request_params: Dict,
+        image_edit_optional_request_params: dict,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: float | httpx.Timeout,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         fake_stream: bool = False,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
+        litellm_metadata: dict[str, object] | None = None,
     ) -> ImageResponse:
         """
         Async version of the image edit handler.
@@ -6537,22 +6536,19 @@ class BaseLLMHTTPHandler:
         model: str,
         prompt: str,
         image_generation_provider_config: BaseImageGenerationConfig,
-        image_generation_optional_request_params: Dict,
+        image_generation_optional_request_params: dict,
         custom_llm_provider: str,
-        litellm_params: Dict,
+        litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: float | httpx.Timeout,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         fake_stream: bool = False,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        api_key: Optional[str] = None,
-    ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+        litellm_metadata: dict[str, object] | None = None,
+        api_key: str | None = None,
+    ) -> ImageResponse | Coroutine[None, None, ImageResponse]:
         """
         Handles image generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -6664,17 +6660,17 @@ class BaseLLMHTTPHandler:
         model: str,
         prompt: str,
         image_generation_provider_config: BaseImageGenerationConfig,
-        image_generation_optional_request_params: Dict,
+        image_generation_optional_request_params: dict,
         custom_llm_provider: str,
-        litellm_params: Dict,
+        litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: float | httpx.Timeout,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         fake_stream: bool = False,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        api_key: Optional[str] = None,
+        litellm_metadata: dict[str, object] | None = None,
+        api_key: str | None = None,
     ) -> ImageResponse:
         """
         Async version of the image generation handler.
@@ -6772,22 +6768,19 @@ class BaseLLMHTTPHandler:
         model: str,
         prompt: str,
         video_generation_provider_config: BaseVideoConfig,
-        video_generation_optional_request_params: Dict,
+        video_generation_optional_request_params: dict,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: float | httpx.Timeout,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         fake_stream: bool = False,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        api_key: Optional[str] = None,
-    ) -> Union[
-        VideoObject,
-        Coroutine[Any, Any, VideoObject],
-    ]:
+        litellm_metadata: dict[str, object] | None = None,
+        api_key: str | None = None,
+    ) -> VideoObject | Coroutine[None, None, VideoObject]:
         """
         Handles video generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -6896,17 +6889,17 @@ class BaseLLMHTTPHandler:
         model: str,
         prompt: str,
         video_generation_provider_config: "BaseVideoConfig",
-        video_generation_optional_request_params: Dict,
+        video_generation_optional_request_params: dict,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: float | httpx.Timeout,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         fake_stream: bool = False,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        api_key: Optional[str] = None,
+        litellm_metadata: dict[str, object] | None = None,
+        api_key: str | None = None,
     ) -> VideoObject:
         """
         Async version of the video generation handler.
@@ -7000,13 +6993,13 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        api_key: Optional[str] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: float | httpx.Timeout,
+        extra_headers: dict[str, str] | None = None,
+        api_key: str | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-        variant: Optional[str] = None,
-    ) -> Union[bytes, Coroutine[Any, Any, bytes]]:
+        variant: str | None = None,
+    ) -> bytes | Coroutine[None, None, bytes]:
         """
         Handle video content download requests.
         """
@@ -7090,11 +7083,11 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        api_key: Optional[str] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        variant: Optional[str] = None,
+        timeout: float | httpx.Timeout,
+        extra_headers: dict[str, str] | None = None,
+        api_key: str | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        variant: str | None = None,
     ) -> bytes:
         """
         Async version of the video content download handler.
@@ -7169,12 +7162,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | None = None,
         _is_async: bool = False,
         client=None,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         """
         Handler for video remix requests.
@@ -7268,11 +7261,11 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | None = None,
         client=None,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         """
         Async version of the video remix handler.
@@ -7351,11 +7344,11 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | None = None,
         _is_async: bool = False,
         client=None,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         if _is_async:
             return self.async_video_create_character_handler(
@@ -7435,10 +7428,10 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | None = None,
         client=None,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -7506,11 +7499,11 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | None = None,
         _is_async: bool = False,
         client=None,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         if _is_async:
             return self.async_video_get_character_handler(
@@ -7575,10 +7568,10 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | None = None,
         client=None,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -7634,12 +7627,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | None = None,
         _is_async: bool = False,
         client=None,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         if _is_async:
             return self.async_video_edit_handler(
@@ -7743,11 +7736,11 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | None = None,
         client=None,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -7840,12 +7833,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | None = None,
         _is_async: bool = False,
         client=None,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         if _is_async:
             return self.async_video_extension_handler(
@@ -7929,11 +7922,11 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | None = None,
         client=None,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -7997,19 +7990,19 @@ class BaseLLMHTTPHandler:
 
     def video_list_handler(
         self,
-        after: Optional[str],
-        limit: Optional[int],
-        order: Optional[str],
+        after: str | None,
+        limit: int | None,
+        order: str | None,
         video_list_provider_config,
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_query: dict[str, str] | None = None,
+        timeout: float | None = None,
         _is_async: bool = False,
         client=None,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         """
         Handler for video list requests.
@@ -8051,18 +8044,18 @@ class BaseLLMHTTPHandler:
 
     async def async_video_list_handler(
         self,
-        after: Optional[str],
-        limit: Optional[int],
-        order: Optional[str],
+        after: str | None,
+        limit: int | None,
+        order: str | None,
         video_list_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_query: dict[str, str] | None = None,
+        timeout: float | None = None,
         client=None,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         """
         Async version of the video list handler.
@@ -8139,10 +8132,10 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | None = None,
         client=None,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         """
         Async version of the video delete handler.
@@ -8215,12 +8208,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | None = None,
         _is_async: bool = False,
         client=None,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         """
         Handler for video status requests.
@@ -8320,11 +8313,11 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | None = None,
         client=None,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         """
         Async version of the video status handler.
@@ -8406,15 +8399,15 @@ class BaseLLMHTTPHandler:
     def container_create_handler(
         self,
         name: str,
-        container_create_request_params: Dict,
+        container_create_request_params: dict,
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Union[float, httpx.Timeout] = 600,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout = 600,
         _is_async: bool = False,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-    ) -> Union["ContainerObject", Coroutine[Any, Any, "ContainerObject"]]:
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+    ) -> Union["ContainerObject", Coroutine[None, None, "ContainerObject"]]:
         if _is_async:
             # Return the async coroutine if called with _is_async=True
             return self.async_container_create_handler(
@@ -8493,13 +8486,13 @@ class BaseLLMHTTPHandler:
     async def async_container_create_handler(
         self,
         name: str,
-        container_create_request_params: Dict,
+        container_create_request_params: dict,
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Union[float, httpx.Timeout] = 600,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout = 600,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> "ContainerObject":
         # For async calls, use async HTTP client
         if client is None or not isinstance(client, AsyncHTTPHandler):
@@ -8571,15 +8564,15 @@ class BaseLLMHTTPHandler:
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
-        after: Optional[str] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        timeout: Union[float, httpx.Timeout] = 600,
+        after: str | None = None,
+        limit: int | None = None,
+        order: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_query: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout = 600,
         _is_async: bool = False,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-    ) -> Union["ContainerListResponse", Coroutine[Any, Any, "ContainerListResponse"]]:
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+    ) -> Union["ContainerListResponse", Coroutine[None, None, "ContainerListResponse"]]:
         if _is_async:
             # Return the async coroutine if called with _is_async=True
             return self.async_container_list_handler(
@@ -8661,13 +8654,13 @@ class BaseLLMHTTPHandler:
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
-        after: Optional[str] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        timeout: Union[float, httpx.Timeout] = 600,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        after: str | None = None,
+        limit: int | None = None,
+        order: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_query: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout = 600,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> "ContainerListResponse":
         # For async calls, use async HTTP client
         if client is None or not isinstance(client, AsyncHTTPHandler):
@@ -8739,12 +8732,12 @@ class BaseLLMHTTPHandler:
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        timeout: Union[float, httpx.Timeout] = 600,
+        extra_headers: dict[str, str] | None = None,
+        extra_query: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout = 600,
         _is_async: bool = False,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-    ) -> Union["ContainerObject", Coroutine[Any, Any, "ContainerObject"]]:
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+    ) -> Union["ContainerObject", Coroutine[None, None, "ContainerObject"]]:
         if _is_async:
             # Return the async coroutine if called with _is_async=True
             return self.async_container_retrieve_handler(
@@ -8827,10 +8820,10 @@ class BaseLLMHTTPHandler:
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        timeout: Union[float, httpx.Timeout] = 600,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_query: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout = 600,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> "ContainerObject":
         # For async calls, use async HTTP client
         if client is None or not isinstance(client, AsyncHTTPHandler):
@@ -8904,12 +8897,12 @@ class BaseLLMHTTPHandler:
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        timeout: Union[float, httpx.Timeout] = 600,
+        extra_headers: dict[str, str] | None = None,
+        extra_query: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout = 600,
         _is_async: bool = False,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-    ) -> Union["DeleteContainerResult", Coroutine[Any, Any, "DeleteContainerResult"]]:
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+    ) -> Union["DeleteContainerResult", Coroutine[None, None, "DeleteContainerResult"]]:
         if _is_async:
             # Return the async coroutine if called with _is_async=True
             return self.async_container_delete_handler(
@@ -8992,10 +8985,10 @@ class BaseLLMHTTPHandler:
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        timeout: Union[float, httpx.Timeout] = 600,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_query: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout = 600,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> "DeleteContainerResult":
         # For async calls, use async HTTP client
         if client is None or not isinstance(client, AsyncHTTPHandler):
@@ -9069,15 +9062,15 @@ class BaseLLMHTTPHandler:
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
-        after: Optional[str] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        timeout: Union[float, httpx.Timeout] = 600,
+        after: str | None = None,
+        limit: int | None = None,
+        order: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_query: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout = 600,
         _is_async: bool = False,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-    ) -> Union["ContainerFileListResponse", Coroutine[Any, Any, "ContainerFileListResponse"]]:
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+    ) -> Union["ContainerFileListResponse", Coroutine[None, None, "ContainerFileListResponse"]]:
         if _is_async:
             return self.async_container_file_list_handler(
                 container_id=container_id,
@@ -9161,13 +9154,13 @@ class BaseLLMHTTPHandler:
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
-        after: Optional[str] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        timeout: Union[float, httpx.Timeout] = 600,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        after: str | None = None,
+        limit: int | None = None,
+        order: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_query: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout = 600,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> "ContainerFileListResponse":
         # For async calls, use async HTTP client
         if client is None or not isinstance(client, AsyncHTTPHandler):
@@ -9241,11 +9234,11 @@ class BaseLLMHTTPHandler:
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Union[float, httpx.Timeout] = 600,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout = 600,
         _is_async: bool = False,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-    ) -> Union[bytes, Coroutine[Any, Any, bytes]]:
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+    ) -> bytes | Coroutine[None, None, bytes]:
         if _is_async:
             return self.async_container_file_content_handler(
                 container_id=container_id,
@@ -9327,9 +9320,9 @@ class BaseLLMHTTPHandler:
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Union[float, httpx.Timeout] = 600,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout = 600,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> bytes:
         # For async calls, use async HTTP client
         if client is None or not isinstance(client, AsyncHTTPHandler):
@@ -9400,16 +9393,16 @@ class BaseLLMHTTPHandler:
     async def async_vector_store_search_handler(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         vector_store_provider_config: BaseVectorStoreConfig,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
     ) -> VectorStoreSearchResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
@@ -9459,7 +9452,7 @@ class BaseLLMHTTPHandler:
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
             )
-        all_optional_params: Dict[str, Any] = dict(litellm_params)
+        all_optional_params: dict[str, Any] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
         headers, signed_json_body = vector_store_provider_config.sign_request(
             headers=headers,
@@ -9498,18 +9491,18 @@ class BaseLLMHTTPHandler:
     def vector_store_search_handler(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         vector_store_provider_config: BaseVectorStoreConfig,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[VectorStoreSearchResponse, Coroutine[Any, Any, VectorStoreSearchResponse]]:
+    ) -> VectorStoreSearchResponse | Coroutine[None, None, VectorStoreSearchResponse]:
         if _is_async:
             return self.async_vector_store_search_handler(
                 vector_store_id=vector_store_id,
@@ -9555,7 +9548,7 @@ class BaseLLMHTTPHandler:
             extra_body=extra_body,
         )
 
-        all_optional_params: Dict[str, Any] = dict(litellm_params)
+        all_optional_params: dict[str, Any] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
 
         headers, signed_json_body = vector_store_provider_config.sign_request(
@@ -9598,10 +9591,10 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
     ) -> VectorStoreCreateResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
@@ -9658,12 +9651,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[VectorStoreCreateResponse, Coroutine[Any, Any, VectorStoreCreateResponse]]:
+    ) -> VectorStoreCreateResponse | Coroutine[None, None, VectorStoreCreateResponse]:
         if _is_async:
             return self.async_vector_store_create_handler(
                 vector_store_create_optional_params=vector_store_create_optional_params,
@@ -9728,10 +9721,10 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> VectorStoreCreateResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -9781,12 +9774,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[VectorStoreCreateResponse, Coroutine[Any, Any, VectorStoreCreateResponse]]:
+    ) -> VectorStoreCreateResponse | Coroutine[None, None, VectorStoreCreateResponse]:
         if _is_async:
             return self.async_vector_store_retrieve_handler(
                 vector_store_id=vector_store_id,
@@ -9840,18 +9833,18 @@ class BaseLLMHTTPHandler:
 
     async def async_vector_store_list_handler(
         self,
-        after: Optional[str],
-        before: Optional[str],
-        limit: Optional[int],
-        order: Optional[str],
+        after: str | None,
+        before: str | None,
+        limit: int | None,
+        order: str | None,
         vector_store_provider_config: BaseVectorStoreConfig,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -9875,7 +9868,7 @@ class BaseLLMHTTPHandler:
 
         url = api_base
 
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         if after is not None:
             params["after"] = after
         if before is not None:
@@ -9904,18 +9897,18 @@ class BaseLLMHTTPHandler:
 
     def vector_store_list_handler(
         self,
-        after: Optional[str],
-        before: Optional[str],
-        limit: Optional[int],
-        order: Optional[str],
+        after: str | None,
+        before: str | None,
+        limit: int | None,
+        order: str | None,
         vector_store_provider_config: BaseVectorStoreConfig,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
     ):
         if _is_async:
@@ -9953,7 +9946,7 @@ class BaseLLMHTTPHandler:
 
         url = api_base
 
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         if after is not None:
             params["after"] = after
         if before is not None:
@@ -9988,10 +9981,10 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> VectorStoreCreateResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -10016,7 +10009,7 @@ class BaseLLMHTTPHandler:
         encoded_vector_store_id = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url = f"{api_base}/{encoded_vector_store_id}"
 
-        request_body: Dict[str, Any] = dict(vector_store_update_optional_params)
+        request_body: dict[str, Any] = dict(vector_store_update_optional_params)
 
         # Clean metadata to only include string values (OpenAI requirement)
         if "metadata" in request_body and request_body["metadata"] is not None:
@@ -10054,12 +10047,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[VectorStoreCreateResponse, Coroutine[Any, Any, VectorStoreCreateResponse]]:
+    ) -> VectorStoreCreateResponse | Coroutine[None, None, VectorStoreCreateResponse]:
         if _is_async:
             return self.async_vector_store_update_handler(
                 vector_store_id=vector_store_id,
@@ -10094,7 +10087,7 @@ class BaseLLMHTTPHandler:
         encoded_vector_store_id = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url = f"{api_base}/{encoded_vector_store_id}"
 
-        request_body: Dict[str, Any] = dict(vector_store_update_optional_params)
+        request_body: dict[str, Any] = dict(vector_store_update_optional_params)
 
         # Clean metadata to only include string values (OpenAI requirement)
         if "metadata" in request_body and request_body["metadata"] is not None:
@@ -10131,10 +10124,10 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -10182,10 +10175,10 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
     ):
         if _is_async:
@@ -10249,10 +10242,10 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> VectorStoreFileObject:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -10314,12 +10307,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[VectorStoreFileObject, Coroutine[Any, Any, VectorStoreFileObject]]:
+    ) -> VectorStoreFileObject | Coroutine[None, None, VectorStoreFileObject]:
         if _is_async:
             return self.async_vector_store_file_create_handler(
                 vector_store_id=vector_store_id,
@@ -10391,10 +10384,10 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_query: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> VectorStoreFileListResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -10455,12 +10448,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_query: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[VectorStoreFileListResponse, Coroutine[Any, Any, VectorStoreFileListResponse]]:
+    ) -> VectorStoreFileListResponse | Coroutine[None, None, VectorStoreFileListResponse]:
         if _is_async:
             return self.async_vector_store_file_list_handler(
                 vector_store_id=vector_store_id,
@@ -10531,9 +10524,9 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> VectorStoreFileObject:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -10590,11 +10583,11 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[VectorStoreFileObject, Coroutine[Any, Any, VectorStoreFileObject]]:
+    ) -> VectorStoreFileObject | Coroutine[None, None, VectorStoreFileObject]:
         if _is_async:
             return self.async_vector_store_file_retrieve_handler(
                 vector_store_id=vector_store_id,
@@ -10660,9 +10653,9 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> VectorStoreFileContentResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -10721,14 +10714,11 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[
-        VectorStoreFileContentResponse,
-        Coroutine[Any, Any, VectorStoreFileContentResponse],
-    ]:
+    ) -> VectorStoreFileContentResponse | Coroutine[None, None, VectorStoreFileContentResponse]:
         if _is_async:
             return self.async_vector_store_file_content_handler(
                 vector_store_id=vector_store_id,
@@ -10797,10 +10787,10 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> VectorStoreFileObject:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -10863,12 +10853,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[VectorStoreFileObject, Coroutine[Any, Any, VectorStoreFileObject]]:
+    ) -> VectorStoreFileObject | Coroutine[None, None, VectorStoreFileObject]:
         if _is_async:
             return self.async_vector_store_file_update_handler(
                 vector_store_id=vector_store_id,
@@ -10941,9 +10931,9 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> VectorStoreFileDeleteResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -11000,14 +10990,11 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[
-        VectorStoreFileDeleteResponse,
-        Coroutine[Any, Any, VectorStoreFileDeleteResponse],
-    ]:
+    ) -> VectorStoreFileDeleteResponse | Coroutine[None, None, VectorStoreFileDeleteResponse]:
         if _is_async:
             return self.async_vector_store_file_delete_handler(
                 vector_store_id=vector_store_id,
@@ -11072,19 +11059,19 @@ class BaseLLMHTTPHandler:
         model: str,
         contents: Any,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
-        generate_content_config_dict: Dict,
+        generate_content_config_dict: dict,
         tools: Any,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
         _is_async: bool = False,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         stream: bool = False,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        system_instruction: Optional[Any] = None,
+        litellm_metadata: dict[str, object] | None = None,
+        system_instruction: Any | None = None,
     ) -> Any:
         """
         Handles Google GenAI generate content requests.
@@ -11204,18 +11191,18 @@ class BaseLLMHTTPHandler:
         model: str,
         contents: Any,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
-        generate_content_config_dict: Dict,
+        generate_content_config_dict: dict,
         tools: Any,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: AsyncHTTPHandler | None = None,
         stream: bool = False,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        system_instruction: Optional[Any] = None,
+        litellm_metadata: dict[str, object] | None = None,
+        system_instruction: Any | None = None,
     ) -> Any:
         """
         Async version of the generate content handler.
@@ -11321,19 +11308,19 @@ class BaseLLMHTTPHandler:
         self,
         model: str,
         input: str,
-        voice: Optional[str],
+        voice: str | None,
         text_to_speech_provider_config: BaseTextToSpeechConfig,
-        text_to_speech_optional_params: Dict,
+        text_to_speech_optional_params: dict,
         custom_llm_provider: str,
-        litellm_params: Dict,
+        litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: float | httpx.Timeout,
+        extra_headers: dict[str, str] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
     ) -> Union[
         "HttpxBinaryResponseContent",
-        Coroutine[Any, Any, "HttpxBinaryResponseContent"],
+        Coroutine[None, None, "HttpxBinaryResponseContent"],
     ]:
         """
         Handles text-to-speech requests.
@@ -11436,15 +11423,15 @@ class BaseLLMHTTPHandler:
         self,
         model: str,
         input: str,
-        voice: Optional[str],
+        voice: str | None,
         text_to_speech_provider_config: BaseTextToSpeechConfig,
-        text_to_speech_optional_params: Dict,
+        text_to_speech_optional_params: dict,
         custom_llm_provider: str,
-        litellm_params: Dict,
+        litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: float | httpx.Timeout,
+        extra_headers: dict[str, str] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> "HttpxBinaryResponseContent":
         """
         Async version of the text-to-speech handler.
@@ -11537,9 +11524,9 @@ class BaseLLMHTTPHandler:
 
     def _prepare_skill_multipart_request(
         self,
-        request_body: Dict,
+        request_body: dict,
         headers: dict,
-    ) -> tuple[Optional[Dict], Optional[list]]:
+    ) -> tuple[dict | None, list | None]:
         """
         Helper to prepare multipart/form-data request for skills API.
 
@@ -11570,17 +11557,17 @@ class BaseLLMHTTPHandler:
     def create_skill_handler(
         self,
         url: str,
-        request_body: Dict,
+        request_body: dict,
         skills_api_provider_config: "BaseSkillsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union["Skill", Coroutine[Any, Any, "Skill"]]:
+    ) -> Union["Skill", Coroutine[None, None, "Skill"]]:
         """Create a skill"""
         if _is_async:
             return self.async_create_skill_handler(
@@ -11636,14 +11623,14 @@ class BaseLLMHTTPHandler:
     async def async_create_skill_handler(
         self,
         url: str,
-        request_body: Dict,
+        request_body: dict,
         skills_api_provider_config: "BaseSkillsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> "Skill":
         """Async create a skill"""
@@ -11692,17 +11679,17 @@ class BaseLLMHTTPHandler:
     def list_skills_handler(
         self,
         url: str,
-        query_params: Dict,
+        query_params: dict,
         skills_api_provider_config: "BaseSkillsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union["ListSkillsResponse", Coroutine[Any, Any, "ListSkillsResponse"]]:
+    ) -> Union["ListSkillsResponse", Coroutine[None, None, "ListSkillsResponse"]]:
         """List skills"""
         if _is_async:
             return self.async_list_skills_handler(
@@ -11751,14 +11738,14 @@ class BaseLLMHTTPHandler:
     async def async_list_skills_handler(
         self,
         url: str,
-        query_params: Dict,
+        query_params: dict,
         skills_api_provider_config: "BaseSkillsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> "ListSkillsResponse":
         """Async list skills"""
@@ -11802,12 +11789,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union["Skill", Coroutine[Any, Any, "Skill"]]:
+    ) -> Union["Skill", Coroutine[None, None, "Skill"]]:
         """Get a skill"""
         if _is_async:
             return self.async_get_skill_handler(
@@ -11858,9 +11845,9 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> "Skill":
         """Async get a skill"""
@@ -11903,12 +11890,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union["DeleteSkillResponse", Coroutine[Any, Any, "DeleteSkillResponse"]]:
+    ) -> Union["DeleteSkillResponse", Coroutine[None, None, "DeleteSkillResponse"]]:
         """Delete a skill"""
         if _is_async:
             return self.async_delete_skill_handler(
@@ -11959,9 +11946,9 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> "DeleteSkillResponse":
         """Async delete a skill"""
@@ -12004,17 +11991,17 @@ class BaseLLMHTTPHandler:
     def create_eval_handler(
         self,
         url: str,
-        request_body: Dict,
+        request_body: dict,
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union["Eval", Coroutine[Any, Any, "Eval"]]:
+    ) -> Union["Eval", Coroutine[None, None, "Eval"]]:
         """Create an eval"""
         if _is_async:
             return self.async_create_eval_handler(
@@ -12063,14 +12050,14 @@ class BaseLLMHTTPHandler:
     async def async_create_eval_handler(
         self,
         url: str,
-        request_body: Dict,
+        request_body: dict,
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> "Eval":
         """Async create an eval"""
@@ -12110,17 +12097,17 @@ class BaseLLMHTTPHandler:
     def list_evals_handler(
         self,
         url: str,
-        query_params: Dict,
+        query_params: dict,
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union["ListEvalsResponse", Coroutine[Any, Any, "ListEvalsResponse"]]:
+    ) -> Union["ListEvalsResponse", Coroutine[None, None, "ListEvalsResponse"]]:
         """List evals"""
         if _is_async:
             return self.async_list_evals_handler(
@@ -12169,14 +12156,14 @@ class BaseLLMHTTPHandler:
     async def async_list_evals_handler(
         self,
         url: str,
-        query_params: Dict,
+        query_params: dict,
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> "ListEvalsResponse":
         """Async list evals"""
@@ -12220,12 +12207,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union["Eval", Coroutine[Any, Any, "Eval"]]:
+    ) -> Union["Eval", Coroutine[None, None, "Eval"]]:
         """Get an eval"""
         if _is_async:
             return self.async_get_eval_handler(
@@ -12276,9 +12263,9 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> "Eval":
         """Async get an eval"""
@@ -12317,17 +12304,17 @@ class BaseLLMHTTPHandler:
     def update_eval_handler(
         self,
         url: str,
-        request_body: Dict,
+        request_body: dict,
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union["Eval", Coroutine[Any, Any, "Eval"]]:
+    ) -> Union["Eval", Coroutine[None, None, "Eval"]]:
         """Update an eval"""
         if _is_async:
             return self.async_update_eval_handler(
@@ -12376,14 +12363,14 @@ class BaseLLMHTTPHandler:
     async def async_update_eval_handler(
         self,
         url: str,
-        request_body: Dict,
+        request_body: dict,
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> "Eval":
         """Async update an eval"""
@@ -12427,12 +12414,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union["DeleteEvalResponse", Coroutine[Any, Any, "DeleteEvalResponse"]]:
+    ) -> Union["DeleteEvalResponse", Coroutine[None, None, "DeleteEvalResponse"]]:
         """Delete an eval"""
         if _is_async:
             return self.async_delete_eval_handler(
@@ -12483,9 +12470,9 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> "DeleteEvalResponse":
         """Async delete an eval"""
@@ -12528,12 +12515,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union["CancelEvalResponse", Coroutine[Any, Any, "CancelEvalResponse"]]:
+    ) -> Union["CancelEvalResponse", Coroutine[None, None, "CancelEvalResponse"]]:
         """Cancel an eval"""
         if _is_async:
             return self.async_cancel_eval_handler(
@@ -12584,9 +12571,9 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> "CancelEvalResponse":
         """Async cancel an eval"""
@@ -12629,17 +12616,17 @@ class BaseLLMHTTPHandler:
     def create_run_handler(
         self,
         url: str,
-        request_body: Dict,
+        request_body: dict,
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union["Run", Coroutine[Any, Any, "Run"]]:
+    ) -> Union["Run", Coroutine[None, None, "Run"]]:
         """Create a run"""
         if _is_async:
             return self.async_create_run_handler(
@@ -12688,14 +12675,14 @@ class BaseLLMHTTPHandler:
     async def async_create_run_handler(
         self,
         url: str,
-        request_body: Dict,
+        request_body: dict,
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> "Run":
         """Async create a run"""
@@ -12735,17 +12722,17 @@ class BaseLLMHTTPHandler:
     def list_runs_handler(
         self,
         url: str,
-        query_params: Dict,
+        query_params: dict,
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union["ListRunsResponse", Coroutine[Any, Any, "ListRunsResponse"]]:
+    ) -> Union["ListRunsResponse", Coroutine[None, None, "ListRunsResponse"]]:
         """List runs"""
         if _is_async:
             return self.async_list_runs_handler(
@@ -12794,14 +12781,14 @@ class BaseLLMHTTPHandler:
     async def async_list_runs_handler(
         self,
         url: str,
-        query_params: Dict,
+        query_params: dict,
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> "ListRunsResponse":
         """Async list runs"""
@@ -12845,12 +12832,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union["Run", Coroutine[Any, Any, "Run"]]:
+    ) -> Union["Run", Coroutine[None, None, "Run"]]:
         """Get a run"""
         if _is_async:
             return self.async_get_run_handler(
@@ -12901,9 +12888,9 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> "Run":
         """Async get a run"""
@@ -12946,12 +12933,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union["CancelRunResponse", Coroutine[Any, Any, "CancelRunResponse"]]:
+    ) -> Union["CancelRunResponse", Coroutine[None, None, "CancelRunResponse"]]:
         """Cancel a run"""
         if _is_async:
             return self.async_cancel_run_handler(
@@ -13002,9 +12989,9 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> "CancelRunResponse":
         """Async cancel a run"""
@@ -13047,12 +13034,12 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union["RunDeleteResponse", Coroutine[Any, Any, "RunDeleteResponse"]]:
+    ) -> Union["RunDeleteResponse", Coroutine[None, None, "RunDeleteResponse"]]:
         """Delete a run"""
         if _is_async:
             return self.async_delete_run_handler(
@@ -13103,9 +13090,9 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> "RunDeleteResponse":
         """Async delete a run"""

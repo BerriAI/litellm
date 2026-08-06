@@ -3,9 +3,6 @@
 import logging
 from typing import (
     Any,
-    List,
-    Optional,
-    Union,
     cast,
 )
 
@@ -18,10 +15,10 @@ from litellm.utils import CustomStreamWrapper
 
 
 def _add_mcp_metadata_to_response(
-    response: Union[ModelResponse, CustomStreamWrapper],
-    openai_tools: Optional[List],
-    tool_calls: Optional[List] = None,
-    tool_results: Optional[List] = None,
+    response: ModelResponse | CustomStreamWrapper,
+    openai_tools: list | None,
+    tool_calls: list | None = None,
+    tool_results: list | None = None,
 ) -> None:
     """
     Add MCP metadata to response's provider_specific_fields.
@@ -80,10 +77,10 @@ def _add_mcp_metadata_to_response(
 
 async def acompletion_with_mcp(
     model: str,
-    messages: List,
-    tools: Optional[List] = None,
+    messages: list,
+    tools: list | None = None,
     **kwargs: Any,
-) -> Union[ModelResponse, CustomStreamWrapper]:
+) -> ModelResponse | CustomStreamWrapper:
     """
     Async completion with MCP integration.
 
@@ -229,10 +226,10 @@ async def acompletion_with_mcp(
                 self.openai_tools = openai_tools
                 self.base_call_args = base_call_args
                 self.request_tags = request_tags
-                self.collected_chunks: List[ModelResponseStream] = []
-                self.tool_calls: Optional[List] = None
-                self.tool_results: Optional[List] = None
-                self.complete_response: Optional[ModelResponse] = None
+                self.collected_chunks: list[ModelResponseStream] = []
+                self.tool_calls: list | None = None
+                self.tool_results: list | None = None
+                self.complete_response: ModelResponse | None = None
                 self.stream_exhausted = False
                 self.tool_execution_done = False
                 self.follow_up_stream = None
@@ -503,12 +500,12 @@ async def acompletion_with_mcp(
         # Create a wrapper class that delegates to our custom iterator
         # We'll use a simple approach: just replace the __aiter__ method
         class MCPStreamWrapper(CustomStreamWrapper):
-            def __init__(self, original_wrapper, custom_iterator):
+            def __init__(self, original_wrapper: CustomStreamWrapper, custom_iterator):
                 # Initialize with the same parameters as original wrapper
                 super().__init__(
                     completion_stream=None,
                     model=getattr(original_wrapper, "model", "unknown"),
-                    logging_obj=getattr(original_wrapper, "logging_obj", None),
+                    logging_obj=original_wrapper.logging_obj,
                     custom_llm_provider=getattr(original_wrapper, "custom_llm_provider", None),
                     stream_options=getattr(original_wrapper, "stream_options", None),
                     make_call=getattr(original_wrapper, "make_call", None),
