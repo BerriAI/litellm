@@ -1021,20 +1021,26 @@ async def proxy_startup_event(app: FastAPI):
 
             for attempt in range(3):
                 try:
-                    migrated: Final = await global_agent_registry.migrate_legacy_grant_ids(
+                    result: Final = await global_agent_registry.migrate_legacy_grant_ids(
                         table=object_permission_table(prisma_client)
                     )
-                    if migrated:
+                    if result.rewritten:
                         verbose_proxy_logger.info(
-                            "Rewrote %s object_permission rows from legacy config agent ids", migrated
+                            "Rewrote %s object_permission rows from legacy config agent ids", result.rewritten
                         )
-                    return
+                    if result.missed == 0:
+                        return
+                    verbose_proxy_logger.warning(
+                        "Legacy agent grant id migration attempt %s/3 left %s rows unmigrated",
+                        attempt + 1,
+                        result.missed,
+                    )
                 except Exception as e:
                     verbose_proxy_logger.warning(
                         "Legacy agent grant id migration attempt %s/3 failed: %s", attempt + 1, e
                     )
-                    if attempt < 2:
-                        await asyncio.sleep(5)
+                if attempt < 2:
+                    await asyncio.sleep(5)
 
         asyncio.create_task(_run_agent_grant_id_migration())
 

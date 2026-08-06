@@ -1,9 +1,10 @@
+import asyncio
 import hashlib
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, Final, Protocol, TypedDict
+from typing import Any, Final, NamedTuple, Protocol, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -101,6 +102,11 @@ class ObjectPermissionTableClient(Protocol):
 def object_permission_table(prisma_client: PrismaClient) -> ObjectPermissionTableClient:
     table: Final[ObjectPermissionTableClient] = ObjectPermissionRepository(prisma_client).table
     return table
+
+
+class GrantMigrationResult(NamedTuple):
+    rewritten: int
+    missed: int
 
 
 class AgentRegistry:
@@ -217,7 +223,7 @@ class AgentRegistry:
         self.load_agents_from_config(agent_config if agent_config is not None else self.config_agents)
         return self.agent_list
 
-    async def migrate_legacy_grant_ids(self, table: ObjectPermissionTableClient) -> int:
+    async def migrate_legacy_grant_ids(self, table: ObjectPermissionTableClient) -> GrantMigrationResult:
         """
         Rewrite object_permission.agents rows holding a legacy full-entry hash to the
         stable name-derived id.
@@ -234,7 +240,7 @@ class AgentRegistry:
         """
         legacy_ids: Final = tuple(legacy for legacy, stable in self.config_agent_legacy_ids.items() if legacy != stable)
         if not legacy_ids:
-            return 0
+            return GrantMigrationResult(rewritten=0, missed=0)
         rows: Final = await table.find_many(where={"agents": {"has_some": legacy_ids}})
         updates: Final = tuple(
             (
@@ -244,12 +250,17 @@ class AgentRegistry:
             )
             for row in rows
         )
-        for object_permission_id, snapshot_agents, translated_agents in updates:
-            await table.update_many(
-                where={"object_permission_id": object_permission_id, "agents": {"equals": snapshot_agents}},
-                data={"agents": translated_agents},
+        counts: Final = await asyncio.gather(
+            *(
+                table.update_many(
+                    where={"object_permission_id": object_permission_id, "agents": {"equals": snapshot_agents}},
+                    data={"agents": translated_agents},
+                )
+                for object_permission_id, snapshot_agents, translated_agents in updates
             )
-        return len(updates)
+        )
+        rewritten: Final = sum(counts)
+        return GrantMigrationResult(rewritten=rewritten, missed=len(updates) - rewritten)
 
     ###########################################################
     ########### DB management helpers for agents ###########

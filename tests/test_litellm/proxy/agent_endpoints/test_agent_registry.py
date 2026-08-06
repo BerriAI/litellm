@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry, GrantMigrationResult
 
 
 def _sample_agent_card_params() -> dict:
@@ -390,12 +390,33 @@ async def test_migrate_legacy_grant_ids_persists_stable_ids_into_grant_rows():
     table.find_many = AsyncMock(return_value=[row])
     table.update_many = AsyncMock(return_value=1)
 
-    assert await registry.migrate_legacy_grant_ids(table=table) == 1
+    assert await registry.migrate_legacy_grant_ids(table=table) == GrantMigrationResult(rewritten=1, missed=0)
     table.find_many.assert_awaited_once_with(where={"agents": {"has_some": (legacy_id,)}})
     table.update_many.assert_awaited_once_with(
         where={"object_permission_id": "op-1", "agents": {"equals": (legacy_id, "unrelated-id", agent.agent_id)}},
         data={"agents": (agent.agent_id, "unrelated-id")},
     )
+
+
+@pytest.mark.asyncio
+async def test_migrate_legacy_grant_ids_reports_compare_and_swap_misses():
+    """A concurrently edited row makes the CAS update affect zero rows; the result must
+    surface that as missed so the startup task knows to retry instead of reporting success."""
+    entry: Final = {
+        "agent_name": "contended-agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "static_headers": {"x-upstream-token": "token-v1"},
+    }
+    registry: Final = AgentRegistry()
+    registry.load_agents_from_config([entry])
+    legacy_id: Final = hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest()
+
+    row: Final = SimpleNamespace(object_permission_id="op-1", agents=[legacy_id])
+    table: Final = MagicMock()
+    table.find_many = AsyncMock(return_value=[row])
+    table.update_many = AsyncMock(return_value=0)
+
+    assert await registry.migrate_legacy_grant_ids(table=table) == GrantMigrationResult(rewritten=0, missed=1)
 
 
 @pytest.mark.asyncio
@@ -405,5 +426,5 @@ async def test_migrate_legacy_grant_ids_no_ops_without_config_agents():
     table: Final = MagicMock()
     table.find_many = AsyncMock()
 
-    assert await registry.migrate_legacy_grant_ids(table=table) == 0
+    assert await registry.migrate_legacy_grant_ids(table=table) == GrantMigrationResult(rewritten=0, missed=0)
     table.find_many.assert_not_awaited()
