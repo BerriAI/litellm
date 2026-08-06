@@ -4298,6 +4298,13 @@ def get_optional_params(
             model=model,
             drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
         )
+    elif custom_llm_provider == "opper":
+        optional_params = litellm.OpperConfig().map_openai_params(  # rebind-ok: provider chain assigns optional_params per branch
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+        )
     elif custom_llm_provider == "watsonx":
         optional_params = litellm.IBMWatsonXChatConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -6012,6 +6019,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
+        elif custom_llm_provider == "opper":
+            if "OPPER_API_KEY" in os.environ:
+                keys_in_environment = True  # rebind-ok: provider chain rebinds the shared result flag
+            else:
+                missing_keys.append("OPPER_API_KEY")
         elif custom_llm_provider == "vercel_ai_gateway":
             if "VERCEL_AI_GATEWAY_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -7745,6 +7757,7 @@ class ProviderConfigManager:
             LlmProviders.HUGGINGFACE: (lambda: litellm.HuggingFaceChatConfig(), False),
             LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIConfig(), False),
             LlmProviders.OPENROUTER: (lambda: litellm.OpenrouterConfig(), False),
+            LlmProviders.OPPER: (lambda: litellm.OpperConfig(), False),
             LlmProviders.VERCEL_AI_GATEWAY: (
                 lambda: litellm.VercelAIGatewayConfig(),
                 False,
