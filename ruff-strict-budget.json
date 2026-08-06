@@ -9,7 +9,7 @@
     "limit": 834
   },
   "ANN201": {
-    "limit": 2034
+    "limit": 2033
   },
   "ANN202": {
     "limit": 865
@@ -135,7 +135,7 @@
     "limit": 27
   },
   "PERF401": {
-    "limit": 14
+    "limit": 13
   },
   "PERF402": {
     "limit": 0
