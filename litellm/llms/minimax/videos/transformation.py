@@ -38,8 +38,8 @@ else:
 class MinimaxVideoConfig(BaseVideoConfig):
     """Configuration for MiniMax's v1 text-to-video and image-to-video API."""
 
-    def get_supported_openai_params(self, model: str) -> list:
-        return [
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseVideoConfig requires a list.
+        return [  # mutable-ok: BaseVideoConfig requires a list result.
             "model",
             "prompt",
             "input_reference",
@@ -60,11 +60,11 @@ class MinimaxVideoConfig(BaseVideoConfig):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
-        mapped_params: dict = {}
+    ) -> dict:  # mutable-ok: BaseVideoConfig requires a mutable parameter mapping.
+        mapped_params: dict = {}  # mutable-ok: Provider parameters are assembled incrementally.
 
         for key, value in video_create_optional_params.items():
-            if value is None or key in {"model", "prompt", "extra_headers", "user"}:
+            if value is None or key in ("model", "prompt", "extra_headers", "user"):
                 continue
             if key == "input_reference":
                 mapped_params["first_frame_image"] = self._prepare_first_frame_image(value)
@@ -77,17 +77,21 @@ class MinimaxVideoConfig(BaseVideoConfig):
 
         extra_body = video_create_optional_params.get("extra_body")
         if isinstance(extra_body, dict):
-            mapped_params.update({key: value for key, value in extra_body.items() if value is not None})
+            mapped_params.update(  # mutable-ok: Provider extra fields must merge into the request mapping.
+                {  # mutable-ok: Provider extra fields must merge into the request mapping.
+                    key: value for key, value in extra_body.items() if value is not None
+                }
+            )
 
         return mapped_params
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: BaseVideoConfig passes a mutable header mapping.
         model: str,
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: BaseVideoConfig requires mutable headers.
         if litellm_params and litellm_params.api_key:
             api_key = api_key or litellm_params.api_key
 
@@ -98,7 +102,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
             )
 
         headers.update(
-            {
+            {  # mutable-ok: Headers are updated in place by the provider interface.
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             }
@@ -109,7 +113,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict,  # mutable-ok: BaseVideoConfig defines this parameter as a dict.
     ) -> str:
         """Return the regional MiniMax v1 root used by all video operations."""
         base_url = api_base or get_secret_str("MINIMAX_API_BASE") or "https://api.minimax.io/v1"
@@ -127,16 +131,19 @@ class MinimaxVideoConfig(BaseVideoConfig):
         model: str,
         prompt: str,
         api_base: str,
-        video_create_optional_request_params: dict,
+        video_create_optional_request_params: dict,  # mutable-ok: BaseVideoConfig defines mutable request parameters.
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles, str]:
-        request_data: dict = {"model": model, "prompt": prompt}
+        headers: dict,  # mutable-ok: BaseVideoConfig passes a mutable header mapping.
+    ) -> tuple[dict, RequestFiles, str]:  # mutable-ok: BaseVideoConfig requires a dict payload.
+        request_data: dict = {  # mutable-ok: Provider request fields are assembled incrementally.
+            "model": model,
+            "prompt": prompt,
+        }
         request_data.update(video_create_optional_request_params)
         request_data.pop("extra_headers", None)
         request_data.pop("extra_body", None)
         request_data.pop("user", None)
-        return request_data, [], f"{api_base.rstrip('/')}/video_generation"
+        return request_data, [], f"{api_base.rstrip('/')}/video_generation"  # mutable-ok: No multipart files are sent.
 
     def transform_video_create_response(
         self,
@@ -144,7 +151,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-        request_data: dict | None = None,
+        request_data: dict | None = None,  # mutable-ok: BaseVideoConfig supplies request metadata as a dict.
     ) -> VideoObject:
         response_data = self._parse_json_response(raw_response)
         self._raise_for_provider_error(raw_response, response_data)
@@ -152,7 +159,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         if task_id is None:
             raise ValueError("MiniMax did not return a task_id for video generation")
 
-        video_data: dict = {
+        video_data: dict = {  # mutable-ok: Optional response metadata is added after validation.
             "id": str(task_id),
             "object": "video",
             "status": self._map_status(response_data.get("status", "queueing")),
@@ -169,11 +176,14 @@ class MinimaxVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict,  # mutable-ok: BaseVideoConfig passes a mutable header mapping.
         variant: str | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict]:  # mutable-ok: BaseVideoConfig requires a dict query payload.
         task_id = quote(extract_original_video_id(video_id), safe="")
-        return f"{api_base.rstrip('/')}/query/video_generation?task_id={task_id}", {}
+        return (  # mutable-ok: The provider query has no separate parameter payload.
+            f"{api_base.rstrip('/')}/query/video_generation?task_id={task_id}",
+            {},  # mutable-ok: The provider query has no separate parameter payload.
+        )
 
     def transform_video_content_response(
         self,
@@ -242,10 +252,13 @@ class MinimaxVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict,  # mutable-ok: BaseVideoConfig passes a mutable header mapping.
+    ) -> tuple[str, dict]:  # mutable-ok: BaseVideoConfig requires a dict query payload.
         task_id = quote(extract_original_video_id(video_id), safe="")
-        return f"{api_base.rstrip('/')}/query/video_generation?task_id={task_id}", {}
+        return (  # mutable-ok: The provider query has no separate parameter payload.
+            f"{api_base.rstrip('/')}/query/video_generation?task_id={task_id}",
+            {},  # mutable-ok: The provider query has no separate parameter payload.
+        )
 
     def transform_video_status_retrieve_response(
         self,
@@ -259,14 +272,14 @@ class MinimaxVideoConfig(BaseVideoConfig):
         if task_id is None:
             raise ValueError("MiniMax did not return a task_id for video status")
         model = response_data.get("model")
-        video_data: dict = {
+        video_data: dict = {  # mutable-ok: Optional status fields are added after validation.
             "id": str(task_id),
             "object": "video",
             "status": self._map_status(response_data.get("status", "processing")),
             "model": model,
         }
         if response_data.get("status") and self._map_status(response_data["status"]) == "failed":
-            video_data["error"] = {
+            video_data["error"] = {  # mutable-ok: VideoObject expects a mutable error payload.
                 "code": "generation_failed",
                 "message": str(response_data.get("status")),
             }
@@ -285,9 +298,9 @@ class MinimaxVideoConfig(BaseVideoConfig):
         prompt: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-        extra_body: dict | None = None,
-    ) -> tuple[str, dict]:
+        headers: dict,  # mutable-ok: BaseVideoConfig passes a mutable header mapping.
+        extra_body: dict | None = None,  # mutable-ok: BaseVideoConfig defines provider extras as a dict.
+    ) -> tuple[str, dict]:  # mutable-ok: BaseVideoConfig requires a dict payload.
         raise NotImplementedError("Video remix is not supported by the MiniMax v1 API")
 
     def transform_video_remix_response(
@@ -302,12 +315,12 @@ class MinimaxVideoConfig(BaseVideoConfig):
         self,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict,  # mutable-ok: BaseVideoConfig passes a mutable header mapping.
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict | None = None,
-    ) -> tuple[str, dict]:
+        extra_query: dict | None = None,  # mutable-ok: BaseVideoConfig defines query extras as a dict.
+    ) -> tuple[str, dict]:  # mutable-ok: BaseVideoConfig requires a dict payload.
         raise NotImplementedError("Video listing is not supported by the MiniMax v1 API")
 
     def transform_video_list_response(
@@ -315,7 +328,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, str]:  # mutable-ok: BaseVideoConfig requires a dict response.
         raise NotImplementedError("Video listing is not supported by the MiniMax v1 API")
 
     def transform_video_delete_request(
@@ -323,8 +336,8 @@ class MinimaxVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict,  # mutable-ok: BaseVideoConfig passes a mutable header mapping.
+    ) -> tuple[str, dict]:  # mutable-ok: BaseVideoConfig requires a dict payload.
         raise NotImplementedError("Video deletion is not supported by the MiniMax v1 API")
 
     def transform_video_delete_response(
@@ -334,7 +347,12 @@ class MinimaxVideoConfig(BaseVideoConfig):
     ) -> VideoObject:
         raise NotImplementedError("Video deletion is not supported by the MiniMax v1 API")
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict | httpx.Headers,  # mutable-ok: BaseLLMException accepts the response header mapping.
+    ) -> BaseLLMException:
         return BaseLLMException(status_code=status_code, message=error_message, headers=headers)
 
     @staticmethod
@@ -347,16 +365,19 @@ class MinimaxVideoConfig(BaseVideoConfig):
     @staticmethod
     def _map_status(status: object) -> str:
         normalized = str(status or "").strip().lower().replace(" ", "_")
-        if normalized in {"success", "succeeded", "completed", "complete"}:
+        if normalized in ("success", "succeeded", "completed", "complete"):
             return "completed"
-        if normalized in {"fail", "failed", "error", "cancelled", "canceled"}:
+        if normalized in ("fail", "failed", "error", "cancelled", "canceled"):
             return "failed"
-        if normalized in {"queueing", "queued", "preparing", "pending"}:
+        if normalized in ("queueing", "queued", "preparing", "pending"):
             return "queued"
         return "in_progress"
 
     @staticmethod
-    def _add_request_metadata(video_data: dict, request_data: dict | None) -> None:
+    def _add_request_metadata(
+        video_data: dict,  # mutable-ok: VideoObject metadata is assembled in place.
+        request_data: dict | None,  # mutable-ok: Request metadata arrives as a dict.
+    ) -> None:
         if not request_data:
             return
         if request_data.get("duration") is not None:
@@ -365,29 +386,37 @@ class MinimaxVideoConfig(BaseVideoConfig):
             video_data["size"] = str(request_data["resolution"])
 
     @staticmethod
-    def _usage_from_video(video_obj: VideoObject) -> dict:
+    def _usage_from_video(video_obj: VideoObject) -> dict:  # mutable-ok: VideoObject usage requires a dict.
         if video_obj.seconds is None:
-            return {}
+            return {}  # mutable-ok: VideoObject usage requires a dict.
         try:
-            return {"duration_seconds": float(video_obj.seconds)}
+            return {  # mutable-ok: VideoObject usage requires a dict.
+                "duration_seconds": float(video_obj.seconds)
+            }
         except (TypeError, ValueError):
-            return {}
+            return {}  # mutable-ok: VideoObject usage requires a dict.
 
     @staticmethod
     def _wrap_video_id(video_obj: VideoObject, provider: str | None, model: str | None) -> None:
         if provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, provider, model)
 
-    def _parse_json_response(self, raw_response: httpx.Response) -> dict:
+    def _parse_json_response(
+        self, raw_response: httpx.Response
+    ) -> dict:  # mutable-ok: JSON objects are provider dicts.
         self._raise_for_status(raw_response)
         try:
             return raw_response.json()
         except Exception as exc:
             raise ValueError(f"MiniMax returned an invalid JSON response: {exc}") from exc
 
-    def _raise_for_provider_error(self, raw_response: httpx.Response, response_data: dict) -> None:
+    def _raise_for_provider_error(
+        self,
+        raw_response: httpx.Response,
+        response_data: dict,  # mutable-ok: Parsed provider JSON is represented as a dict.
+    ) -> None:
         self._raise_for_status(raw_response)
-        base_resp = response_data.get("base_resp") or {}
+        base_resp = response_data.get("base_resp") or {}  # mutable-ok: Missing provider metadata uses an empty dict.
         status_code = base_resp.get("status_code")
         if status_code not in (None, 0, "0"):
             message = base_resp.get("status_msg") or "MiniMax video request failed"
@@ -398,14 +427,16 @@ class MinimaxVideoConfig(BaseVideoConfig):
             raise self.get_error_class(raw_response.text, raw_response.status_code, raw_response.headers)
 
     @staticmethod
-    def _request_headers(raw_response: httpx.Response) -> dict[str, str]:
+    def _request_headers(
+        raw_response: httpx.Response,
+    ) -> dict[str, str]:  # mutable-ok: HTTP handlers require a dict of headers.
         request = getattr(raw_response, "_request", None)
         request_headers = getattr(request, "headers", None)
         if isinstance(request_headers, (dict, httpx.Headers)):
             authorization = request_headers.get("Authorization")
             if authorization:
-                return {"Authorization": authorization}
-        return {}
+                return {"Authorization": authorization}  # mutable-ok: HTTP handlers require a dict of headers.
+        return {}  # mutable-ok: HTTP handlers require a dict of headers.
 
     @staticmethod
     def _api_base_from_response(raw_response: httpx.Response) -> str:
@@ -425,7 +456,9 @@ class MinimaxVideoConfig(BaseVideoConfig):
         return content_type.startswith("video/") or content_type == "application/octet-stream"
 
     @staticmethod
-    def _get_download_url(response_data: dict) -> str | None:
+    def _get_download_url(
+        response_data: dict,  # mutable-ok: Parsed provider JSON is represented as a dict.
+    ) -> str | None:
         file_data = response_data.get("file")
         if isinstance(file_data, dict):
             for key in ("download_url", "url"):

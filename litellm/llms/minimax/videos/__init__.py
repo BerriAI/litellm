@@ -2,4 +2,4 @@
 
 from .transformation import MinimaxVideoConfig
 
-__all__ = ["MinimaxVideoConfig"]
+__all__ = ("MinimaxVideoConfig",)
