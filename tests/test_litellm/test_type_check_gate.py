@@ -1,6 +1,5 @@
 import importlib.util
 import json
-import os
 import subprocess
 from pathlib import Path
 
@@ -84,33 +83,51 @@ def test_node_options_with_heap_appends_after_caller_flags_so_it_wins():
     assert merged == f"--max-old-space-size=4096 --no-warnings {gate.NODE_HEAP_OPTION}"
 
 
-def _stub_basedpyright(tmp_path, monkeypatch, script_body):
-    stub = tmp_path / "basedpyright"
+def _stub_env(tmp_path, script_body):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "basedpyright"
     stub.write_text(f"#!/bin/sh\n{script_body}\n")
     stub.chmod(0o755)
-    monkeypatch.setenv("PATH", str(tmp_path), prepend=os.pathsep)
+    return tmp_path
 
 
 def test_run_basedpyright_exports_the_raised_heap_to_the_child(tmp_path, monkeypatch):
     captured = tmp_path / "node_options.txt"
-    _stub_basedpyright(
+    env_dir = _stub_env(
         tmp_path,
-        monkeypatch,
         f'echo "$NODE_OPTIONS" > "{captured}"\necho \'{{"generalDiagnostics": []}}\'',
     )
     monkeypatch.delenv("NODE_OPTIONS", raising=False)
-    assert json.loads(gate.run_basedpyright(cwd=tmp_path)) == {"generalDiagnostics": []}
+    assert json.loads(gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir)) == {
+        "generalDiagnostics": []
+    }
     assert captured.read_text().strip() == gate.NODE_HEAP_OPTION
 
 
-def test_run_basedpyright_fails_loudly_on_a_crash_exit_code(tmp_path, monkeypatch):
+def test_run_basedpyright_pins_import_resolution_to_the_owned_env(tmp_path):
+    # basedpyright auto-detects a `.venv` in the project root, and that beats
+    # PATH order and VIRTUAL_ENV; only an explicit --pythonpath keeps the
+    # caller's fatter venv (whose extra typed packages flip diagnostics vs CI)
+    # out of the measurement.
+    captured = tmp_path / "argv.txt"
+    env_dir = _stub_env(
+        tmp_path,
+        f'echo "$@" > "{captured}"\necho \'{{"generalDiagnostics": []}}\'',
+    )
+    gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir)
+    argv = captured.read_text().split()
+    assert argv[argv.index("--pythonpath") + 1] == str(env_dir / "bin" / "python")
+
+
+def test_run_basedpyright_fails_loudly_on_a_crash_exit_code(tmp_path):
     import pytest
 
     # 134 is SIGABRT, what node dies with on a heap OOM; it must never read as a
     # clean zero-error run.
-    _stub_basedpyright(tmp_path, monkeypatch, "exit 134")
+    env_dir = _stub_env(tmp_path, "exit 134")
     with pytest.raises(SystemExit):
-        gate.run_basedpyright(cwd=tmp_path)
+        gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir)
 
 
 def test_at_or_under_ceiling_passes():
@@ -246,6 +263,68 @@ def test_cache_key_changes_with_base_point_and_each_fingerprint():
     assert gate.cache_key("def", ("cfg", "lock")) != key
     assert gate.cache_key("abc", ("cfg2", "lock")) != key
     assert gate.cache_key("abc", ("cfg", "lock2")) != key
+
+
+def test_fingerprints_carry_the_dependency_group_set():
+    # Counts measured under one group set must never be compared against
+    # another's: the fingerprint difference re-keys every cache entry and
+    # artifact name, so a changed canonical set falls back to recompute.
+    assert gate.environment_fingerprints() == gate.environment_fingerprints()
+    assert gate.environment_fingerprints(
+        dep_groups=("proxy-dev",)
+    ) != gate.environment_fingerprints(dep_groups=("proxy-dev", "e2e-dev"))
+    assert gate.environment_fingerprints()[-1] == "groups:" + ",".join(
+        gate.TYPECHECK_DEP_GROUPS
+    )
+
+
+def test_env_commands_sync_the_canonical_groups_then_generate_prisma():
+    sync, generate = gate.typecheck_env_commands(Path("/envdir"))
+    assert sync[:3] == ("uv", "sync", "--frozen")
+    adjacent = list(zip(sync, sync[1:]))
+    for group in gate.TYPECHECK_DEP_GROUPS:
+        assert ("--group", group) in adjacent
+    assert generate == (
+        str(Path("/envdir") / "bin" / "python"),
+        str(gate.PRISMA_GENERATE_SCRIPT),
+    )
+
+
+def test_env_interpreter_pin_tracks_pyrightconfigs_python_version():
+    configured = json.loads((ROOT / "pyrightconfig.json").read_text())[
+        "pythonVersion"
+    ]
+    assert gate.typecheck_python_version() == configured
+    sync = gate.typecheck_env_commands()[0]
+    assert sync[sync.index("--python") + 1] == configured
+
+
+def test_ensure_env_targets_the_owned_dir_and_runs_sync_then_generate(tmp_path):
+    calls = []
+
+    def runner(cmd, env):
+        calls.append((cmd[:2], env["UV_PROJECT_ENVIRONMENT"]))
+        return 0
+
+    assert gate.ensure_typecheck_env(env_dir=tmp_path, run=runner) == tmp_path
+    assert calls == [
+        (("uv", "sync"), str(tmp_path)),
+        ((str(tmp_path / "bin" / "python"), str(gate.PRISMA_GENERATE_SCRIPT)), str(tmp_path)),
+    ]
+
+
+def test_ensure_env_fails_loudly_and_stops_at_the_first_failed_step(tmp_path):
+    import pytest
+
+    calls = []
+
+    def failing(cmd, env):
+        calls.append(cmd)
+        return 2
+
+    with pytest.raises(SystemExit):
+        gate.ensure_typecheck_env(env_dir=tmp_path, run=failing)
+    assert len(calls) == 1
 
 
 def test_cached_counts_round_trip(tmp_path):
