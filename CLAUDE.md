@@ -29,7 +29,7 @@ Never use `pytest` commands or the like as "Screenshots / Proof of Fix". We pref
 
 If you ever make public-facing PR descriptions, comments, issues, commit messages, etc., always follow these guidelines to sound less AI-y:
 - don't use emojis
-- don't use "—". Instead, reach for ",", ".", conjunction words, ":", ";", etc. in descending order of preference: vary among them, weighted toward the front of the list, and skip "," where it would cause a comma splice or the sentence is getting long. Overusing any one of them, ";" especially, also feels AI-y. A word cap is not a one-sentence cap: when writing under tight word budgets (tldrs, 15-25 word review replies), prefer a period split or a conjunction over ";", and keep to at most one ";" per message
+- don't use "—". Instead, reach for ",", ".", conjunction words, ":", ";", etc. in descending order of preference: vary among them, weighted toward the front of the list, and skip "," where it would cause a comma splice or the sentence is getting long. Overusing any one of them, ";" especially, also feels AI-y. A word cap does not penalize you for adding more sentences: when writing under tight word budgets, prefer a period split or a conjunction over ";", and keep to at most one ";" per message
 - don't use the pattern "It's not X, it's Y", "You're not X, you're Y", etc.
 - don't use bulleted or numbered lists unless it would be nonsensical not to. Instead, prefer prose
 - don't add a trailing "." at the end of paragraphs (just like this file). That means every paragraph, not just the last one (of the markdown file, PR description, GitHub comment, etc.). Rule of thumb: if you're adding new line(s) before the next sentence, don't add a "."
@@ -41,7 +41,7 @@ Python max line length is 120, not 88
 
 When you fix violations gated by `ruff-strict-budget.json`, `type-discipline-budget.json`, or `basedpyright-code-budget.json`, run `make lint-budget-update` and commit the lowered limits so the ceilings ratchet down instead of leaving stale headroom. It measures the working tree, so it must contain exactly the fixes you're committing
 
-`make pre-commit` always saves its complete output to a per-worktree log file and prints that path as its first and last output lines. To inspect a run, read or grep that log instead of re-running the multi-minute checks just to see a different slice, and re-run only after the working tree actually changed
+`make pre-commit` saves its complete output to a log file in .git (overwriting previous pre-commit logs) and prints that path as its first and last output lines. To inspect a run, read or grep that log instead of re-running the multi-minute checks just to see a different slice
 
 If you're trying to create a new function that relies on untyped stuff, instead of adding more Any's and pushing `reportAny` / `reportExplicitAny` closer to their basedpyright ceilings, just validate it in the caller with Pydantic (a model or `TypeAdapter` that returns the typed thing or raises will do) and then pass the now typed variable in
 
@@ -59,7 +59,7 @@ Do not add `Co-Authored-By: Claude` or any Claude attribution to commit messages
 
 When working on a PR, keep the PR description in sync with new commits being made
 
-All GitHub comments (issue comments, PR discussion comments, and replies/rebuttals to AI PR review bots) must be 15-25 word human-readable messages, 25 words max
+All GitHub comments must be human-readable and 15-25 word max
 
 Monkeypatching attributes of a class to do testing is an anti-pattern. Prefer dependency-injecting things into classes. That way, at unit test time, you can pass a mocked dependency in
 
