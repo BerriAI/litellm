@@ -67,7 +67,10 @@ if TYPE_CHECKING:
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
-from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.proxy.litellm_pre_call_utils import (
+    add_litellm_data_to_request,
+    reject_url_valued_destination,
+)
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -906,6 +909,28 @@ def _get_cost_breakdown_from_logging_obj(
     return original_cost, discount_amount, margin_total_amount, margin_percent
 
 
+def _classifier_cost_from_request_data(request_data: Mapping[str, object] | None) -> float | None:
+    """Cost of the auto-router's LLM classifier call, read from the request's routing_decision.
+
+    The pre-routing hook records the decision in `litellm_metadata` on messages/batch-style
+    routes and in `metadata` on chat-style routes, so both buckets are consulted, in the same
+    precedence `get_or_create_metadata_bucket` writes them.
+    """
+    data: Final = request_data or {}
+    for metadata_key in ("litellm_metadata", "metadata"):
+        metadata = data.get(metadata_key)
+        if not isinstance(metadata, dict):
+            continue
+        decision = metadata.get("routing_decision")
+        if not isinstance(decision, dict):
+            continue
+        cost = decision.get("classifier_cost")
+        if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+            continue
+        return float(cost)
+    return None
+
+
 def _has_attribute_error_in_chain(exc: Exception) -> bool:
     """Walk the exception chain to find an AttributeError at any depth.
 
@@ -1029,6 +1054,7 @@ class ProxyBaseLLMRequestProcessing:
                 pass
 
         model_name: Final = ProxyBaseLLMRequestProcessing._get_deployment_model_name(litellm_logging_obj)
+        classifier_cost: Final = _classifier_cost_from_request_data(request_data)
 
         headers: Final = {
             "x-litellm-call-id": call_id,
@@ -1047,6 +1073,7 @@ class ProxyBaseLLMRequestProcessing:
                 str(margin_total_amount) if margin_total_amount is not None else None
             ),
             "x-litellm-response-cost-margin-percent": (str(margin_percent) if margin_percent is not None else None),
+            "x-litellm-classifier-cost": (str(classifier_cost) if classifier_cost is not None else None),
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
             "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
@@ -1285,6 +1312,9 @@ class ProxyBaseLLMRequestProcessing:
             if not isinstance(self.data[_metadata_variable_name], dict):
                 self.data[_metadata_variable_name] = {}
             self.data[_metadata_variable_name]["queue_time_seconds"] = queue_time_seconds
+
+        if isinstance(model, str):
+            reject_url_valued_destination("model", model)
 
         self.data["model"] = (
             general_settings.get("completion_model", None)  # server default
@@ -2688,7 +2718,6 @@ class ProxyBaseLLMRequestProcessing:
                 _response_headers: Final = getattr(_response, "headers", None)
                 if _response_headers:
                     headers = get_response_headers(dict(_response_headers))
-        headers = {k: v for k, v in headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
         headers.update(custom_headers)
 
         # Call response headers hook for failure
@@ -2704,16 +2733,15 @@ class ProxyBaseLLMRequestProcessing:
         except Exception:
             pass
 
-        headers = {k: v for k, v in headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
+        safe_headers: Final = {k: v for k, v in headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
 
-        self._apply_router_cooldown_retry_after(headers, e)
+        self._apply_router_cooldown_retry_after(safe_headers, e)
 
         if isinstance(e, ProxyException):
-            merged_headers = {
-                **e.headers,
-                **{k: v if isinstance(v, str) else str(v) for k, v in headers.items()},
+            e.headers = {
+                **{k: v for k, v in e.headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS},
+                **{k: v if isinstance(v, str) else str(v) for k, v in safe_headers.items()},
             }
-            e.headers = {k: v for k, v in merged_headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
             raise e
 
         if isinstance(e, HTTPException):
@@ -2730,7 +2758,7 @@ class ProxyBaseLLMRequestProcessing:
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
                 provider_specific_fields=merged_fields,
-                headers=headers,
+                headers=safe_headers,
             )
         elif isinstance(e, httpx.HTTPStatusError):
             # Handle httpx.HTTPStatusError - extract actual error from response
@@ -2756,7 +2784,7 @@ class ProxyBaseLLMRequestProcessing:
                 type="invalid_request_error",
                 param=None,
                 code=status.HTTP_400_BAD_REQUEST,
-                headers=headers,
+                headers=safe_headers,
             )
         # Extract status_code from the exception if it carries one.
         # Provider exceptions (NotFoundError, BadRequestError, GeminiError,
@@ -2775,7 +2803,7 @@ class ProxyBaseLLMRequestProcessing:
             openai_code=getattr(e, "code", None),
             code=_code,
             provider_specific_fields=getattr(e, "provider_specific_fields", None),
-            headers=headers,
+            headers=safe_headers,
         )
 
     #########################################################

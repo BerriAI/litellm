@@ -21,7 +21,7 @@
     "limit": 215
   },
   "reportDuplicateImport": {
-    "limit": 24
+    "limit": 19
   },
   "reportExplicitAny": {
     "limit": 8505
@@ -54,7 +54,7 @@
     "limit": 0
   },
   "reportMissingParameterType": {
-    "limit": 5855
+    "limit": 5850
   },
   "reportMissingTypeArgument": {
     "limit": 15793
@@ -114,7 +114,7 @@
     "limit": 31466
   },
   "reportUnnecessaryCast": {
-    "limit": 124
+    "limit": 122
   },
   "reportUnnecessaryComparison": {
     "limit": 703
@@ -126,7 +126,7 @@
     "limit": 863
   },
   "reportUntypedBaseClass": {
-    "limit": 164
+    "limit": 72
   },
   "reportUntypedFunctionDecorator": {
     "limit": 33
@@ -138,9 +138,9 @@
     "limit": 139
   },
   "reportUnusedImport": {
-    "limit": 588
+    "limit": 555
   },
   "reportUnusedVariable": {
-    "limit": 147
+    "limit": 146
   }
 }

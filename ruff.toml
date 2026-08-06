@@ -16,11 +16,17 @@ format.exclude = ["**/enterprise/**"]
 
 # Was the top-level `exclude`. Scoped to lint so `ruff format` still formats these paths
 # (Black did) while `ruff check` keeps skipping them.
-lint.exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
+lint.exclude = ["litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
 
 
 [lint.per-file-ignores]
 "litellm/main.py" = ["F401"]
+"litellm/types/caching.py" = ["F401"]
+"litellm/types/integrations/slack_alerting.py" = ["F401"]
+"litellm/types/llms/custom_http.py" = ["F401"]
+"litellm/types/llms/openai.py" = ["F401"]
+"litellm/types/proxy/management_endpoints/scim_v2.py" = ["F401"]
+"litellm/types/responses/main.py" = ["F401"]
 "litellm/utils.py" = ["F401"]
 "litellm/proxy/proxy_server.py" = ["F401"]
 "litellm/caching/__init__.py" = ["F401"]

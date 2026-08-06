@@ -180,6 +180,7 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
     if isinstance(file_obj, tuple):
         if len(file_obj) < 2:
             fallback_filename = str(file_obj[0]) if len(file_obj) > 0 else None
+            file_content_obj = None
         else:
             fallback_filename = str(file_obj[0]) if file_obj[0] is not None else None
             file_content_obj = file_obj[1]
@@ -206,7 +207,7 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
             except OSError:
                 fallback_filename = str(file_content_obj)
                 file_content = None
-        elif hasattr(file_content_obj, "read"):
+        elif file_content_obj is not None and hasattr(file_content_obj, "read"):
             try:
                 current_position: Final = file_content_obj.tell() if hasattr(file_content_obj, "tell") else None
                 if hasattr(file_content_obj, "seek"):

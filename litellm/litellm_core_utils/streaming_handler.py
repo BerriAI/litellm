@@ -195,7 +195,7 @@ class _ProviderChunkEarlyReturn:
     value: "ModelResponseStream | None"
 
 
-_ProviderChunkResult = Union[_ProviderChunkParsed, _ProviderChunkEarlyReturn]
+_ProviderChunkResult = _ProviderChunkParsed | _ProviderChunkEarlyReturn
 
 
 class CustomStreamWrapper:
@@ -352,9 +352,7 @@ class CustomStreamWrapper:
             chunk = chunk.strip()
             self.complete_response = self.complete_response.strip()
 
-            if chunk.startswith(self.complete_response):
-                # Remove last_sent_chunk only if it appears at the start of the new chunk
-                chunk = chunk[len(self.complete_response) :]
+            chunk = chunk.removeprefix(self.complete_response)
 
             self.complete_response += chunk
             return chunk

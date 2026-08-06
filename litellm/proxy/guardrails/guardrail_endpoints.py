@@ -8,6 +8,7 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import UnionType
 from typing import TYPE_CHECKING, Final, Literal, TypeVar, Union, cast, get_args, get_origin
 from urllib.parse import urlparse
 
@@ -214,7 +215,7 @@ async def list_guardrails_v2(
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
-    is_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    is_admin: Final = _user_has_admin_view(user_api_key_dict)
 
     try:
         guardrails = (
@@ -956,7 +957,7 @@ async def get_guardrail_submission(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
-    is_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    is_admin: Final = _user_has_admin_view(user_api_key_dict)
 
     try:
         row: Final = await _guardrails_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
@@ -1589,7 +1590,7 @@ def _get_field_type_from_annotation(field_annotation: object) -> str:
     Convert a Python type annotation to a UI-friendly type string
     """
     # Handle Union types (like Optional[T])
-    if _annotation_origin(field_annotation) is Union:
+    if _annotation_origin(field_annotation) is Union or _annotation_origin(field_annotation) is UnionType:
         # For Optional[T], get the non-None type
         non_none_args: Final = tuple(arg for arg in _annotation_args(field_annotation) if arg is not type(None))
         if non_none_args:
@@ -1690,7 +1691,7 @@ def _should_skip_optional_params(field_name: str, field_annotation: object) -> b
 
 def _unwrap_optional_type(field_annotation: object) -> object:
     """Unwrap Optional types to get the actual type."""
-    if _annotation_origin(field_annotation) is Union:
+    if _annotation_origin(field_annotation) is Union or _annotation_origin(field_annotation) is UnionType:
         # For Optional[BaseModel], get the non-None type
         non_none_args: Final = tuple(arg for arg in _annotation_args(field_annotation) if arg is not type(None))
         if non_none_args:

@@ -111,7 +111,7 @@
     "limit": 3
   },
   "F401": {
-    "limit": 20
+    "limit": 17
   },
   "FURB136": {
     "limit": 0
@@ -222,7 +222,7 @@
     "limit": 0
   },
   "RET504": {
-    "limit": 180
+    "limit": 178
   },
   "RUF010": {
     "limit": 0
@@ -255,7 +255,7 @@
     "limit": 100
   },
   "S110": {
-    "limit": 220
+    "limit": 218
   },
   "S112": {
     "limit": 22
