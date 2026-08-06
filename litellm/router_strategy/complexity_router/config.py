@@ -59,6 +59,30 @@ class KeywordTierRule(BaseModel):
         return self
 
 
+class ReminderMarkerPair(BaseModel):
+    """One open/close delimiter pair a harness wraps injected context in.
+
+    Normalizing here rather than at the scan is what makes matching case-insensitive: markers reach
+    the scan already lowered, so it lowercases only the haystack and never the needles. Stripping
+    keeps YAML indentation whitespace from becoming part of the delimiter.
+    """
+
+    open: str = Field(description="Opening delimiter, e.g. '<system-reminder>'")
+    close: str = Field(description="Closing delimiter, e.g. '</system-reminder>'")
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "ReminderMarkerPair":
+        open_marker: Final = self.open.strip().lower()
+        close_marker: Final = self.close.strip().lower()
+        if not open_marker or not close_marker:
+            raise ValueError("reminder_markers entries must not be blank")
+        if open_marker == close_marker:
+            raise ValueError("reminder_markers open and close must be different strings")
+        self.open = open_marker
+        self.close = close_marker
+        return self
+
+
 # ─── Default Keyword Lists ───
 # Note: Keywords should be full words/phrases to avoid substring false positives.
 # The matching logic uses word boundary detection for single-word keywords.
@@ -498,12 +522,15 @@ class ComplexityRouterConfig(BaseModel):
         description="RoutingPlugin instances that narrow the classified tier's candidate models before selection",
     )
 
-    reminder_markers: tuple[str, str] | None = Field(
+    reminder_markers: tuple[ReminderMarkerPair, ...] | None = Field(
         default=None,
+        min_length=1,
         description=(
-            "Override the (open, close) marker pair used to recognize and strip harness-injected "
-            "reminder blocks before classification. Defaults to Claude Code's convention, "
-            "('<system-reminder>', '</system-reminder>'), when unset. Matching is case-insensitive."
+            "Override the delimiter pairs used to recognize and strip harness-injected reminder "
+            "blocks before classification. A harness that wraps injected context differently per "
+            "agent type (main, subagent, cron) lists every pair it emits. Replaces, rather than "
+            "adds to, the built-in default of ('<system-reminder>', '</system-reminder>'), so a "
+            "harness that also emits that pair lists it too. Matching is case-insensitive."
         ),
     )
 
@@ -599,18 +626,6 @@ class ComplexityRouterConfig(BaseModel):
                 "plugins and adaptive=True cannot both be set: adaptive's bandit selection doesn't yet "
                 "consume plugin-narrowed candidate pools. Disable adaptive or remove plugins."
             )
-        return self
-
-    @model_validator(mode="after")
-    def _normalize_reminder_markers(self) -> "ComplexityRouterConfig":
-        if self.reminder_markers is None:
-            return self
-        open_marker, close_marker = (marker.strip().lower() for marker in self.reminder_markers)
-        if not open_marker or not close_marker:
-            raise ValueError("reminder_markers entries must not be blank")
-        if open_marker == close_marker:
-            raise ValueError("reminder_markers open and close must be different strings")
-        self.reminder_markers = (open_marker, close_marker)
         return self
 
     def tier_label(self, tier: ComplexityTier) -> str:

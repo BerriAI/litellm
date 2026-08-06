@@ -191,11 +191,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   const isAdmin = all_admin_roles.includes(userRole);
 
-  const modelGroupOptions = Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group) => ({
-    value: model_group,
-    label: model_group,
-  }));
-
   const availability = React.useMemo(
     () =>
       buildModelAvailability(

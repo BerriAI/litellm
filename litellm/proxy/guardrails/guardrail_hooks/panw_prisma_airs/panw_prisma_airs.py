@@ -22,6 +22,9 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -1561,6 +1564,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         return scannable
 
+    def supports_scan_only_tool_results(self) -> bool:
+        return False
+
     @staticmethod
     def _get_scannable_text_indices(
         texts: list[str],
@@ -1716,6 +1722,15 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 # - latest-user extraction returned None (no user / count mismatch)
                 if scannable_indices is None:
                     scannable_indices = self._get_scannable_text_indices(texts, structured_messages)
+                if (
+                    scannable_indices is not None
+                    and not scannable_indices
+                    and effective_scan_only_tool_results_for_guardrail(self)
+                ):
+                    verbose_proxy_logger.warning(
+                        "PANW Prisma AIRS scans only user, system, and developer messages, "
+                        "so scan_only_tool_results leaves nothing to scan for this request"
+                    )
 
         for i, text in enumerate(texts):
             if not text or not text.strip():

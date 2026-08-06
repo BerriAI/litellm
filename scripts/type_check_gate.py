@@ -23,7 +23,11 @@ detached worktree at the merge-base, run under the same environment so import
 resolution matches, and its per-rule counts are cached under the repo's git
 common dir keyed by merge-base commit,
 ``pyrightconfig.json``, and ``uv.lock``, so re-runs against the same branch
-point pay for it once. ``--update`` ratchets each rule's ``limit`` down by the
+point pay for it once. A CI workflow publishes every staging commit's counts as
+an artifact (``--emit-counts-dir`` is its entry point), and on a disk-cache miss
+the gate first tries to download the merge-base's artifact through the ``gh``
+CLI; any fetch failure falls back silently to the local base pass, so the gate
+never gets worse than it was without CI. ``--update`` ratchets each rule's ``limit`` down by the
 number of errors this branch fixed relative to its branch point (the merge-base),
 so the headroom you were granted shrinks by exactly what you cleared and never
 grows.
@@ -37,12 +41,15 @@ carries an unambiguous ``rule`` field.
 import argparse
 import contextlib
 import hashlib
+import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
@@ -54,6 +61,8 @@ PYRIGHT_CONFIG = REPO_ROOT / "pyrightconfig.json"
 UV_LOCK = REPO_ROOT / "uv.lock"
 DEFAULT_BASE = "origin/litellm_internal_staging"
 CACHE_FILE_PREFIX = "basedpyright-base-"
+ARTIFACT_NAME_PREFIX = "basedpyright-counts-"
+GH_TIMEOUT_SECONDS = 10
 
 # basedpyright's node process needs more than the ~4 GB default heap on this
 # repo; appended last so it wins node's last-flag-wins resolution over any
@@ -225,12 +234,8 @@ def default_cache_dir() -> Path:
     return resolved / "litellm-lint-cache"
 
 
-def load_cached_counts(path: Path) -> dict[str, int] | None:
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
-    counts = data.get("counts") if isinstance(data, dict) else None
+def validated_counts(data: object) -> dict[str, int] | None:
+    counts: Final = data.get("counts") if isinstance(data, dict) else None
     if not isinstance(counts, dict):
         return None
     if not all(
@@ -241,12 +246,30 @@ def load_cached_counts(path: Path) -> dict[str, int] | None:
     return counts
 
 
+def load_cached_counts(path: Path) -> dict[str, int] | None:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return validated_counts(data)
+
+
 def scratch_path(path: Path) -> Path:
     """In-flight scratch for the tmp+rename write. Dot-prefixed so the prune
     glob in `store_counts` can never match it (a concurrent run would otherwise
     unlink it between write and rename), and pid-suffixed so two concurrent
     writers of the same entry never share a scratch."""
     return path.with_name(f".{path.name}.{os.getpid()}.tmp")
+
+
+def counts_payload(base_point: str, counts: Mapping[str, int]) -> str:
+    return (
+        json.dumps(
+            {"base_point": base_point, "counts": dict(sorted(counts.items()))},
+            indent=2,
+        )
+        + "\n"
+    )
 
 
 def store_counts(
@@ -257,30 +280,141 @@ def store_counts(
         if stale != path:
             stale.unlink(missing_ok=True)
     scratch = scratch_path(path)
-    scratch.write_text(
-        json.dumps(
-            {"base_point": base_point, "counts": dict(sorted(counts.items()))},
-            indent=2,
-        )
-        + "\n"
-    )
+    scratch.write_text(counts_payload(base_point, counts))
     scratch.replace(path)
+
+
+def parse_origin_slug(url: str) -> str | None:
+    match: Final = re.fullmatch(
+        r"(?:git@github\.com:|https://github\.com/)([^/]+/[^/]+?)(?:\.git)?/?",
+        url.strip(),
+    )
+    return match.group(1) if match else None
+
+
+def origin_slug() -> str | None:
+    proc: Final = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return None
+    return parse_origin_slug(proc.stdout)
+
+
+def artifact_name(base_point: str) -> str:
+    return f"{ARTIFACT_NAME_PREFIX}{cache_key(base_point, environment_fingerprints())}"
+
+
+def _gh_output(args: list[str]) -> bytes | None:
+    try:
+        proc = subprocess.run(
+            ["gh", *args], capture_output=True, timeout=GH_TIMEOUT_SECONDS
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _parsed_json(raw: bytes) -> object | None:
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
+
+
+def _artifact_download_url(listing: object) -> str | None:
+    artifacts: Final = listing.get("artifacts") if isinstance(listing, dict) else None
+    if not isinstance(artifacts, list) or not artifacts:
+        return None
+    newest: Final = artifacts[0]
+    if not isinstance(newest, dict) or newest.get("expired"):
+        return None
+    url: Final = newest.get("archive_download_url")
+    return url if isinstance(url, str) else None
+
+
+def _counts_json_from_zip(zip_bytes: bytes) -> object | None:
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+            members: Final = [
+                name for name in archive.namelist() if name.endswith(".json")
+            ]
+            if len(members) != 1:
+                return None
+            return json.loads(archive.read(members[0]))
+    except (zipfile.BadZipFile, ValueError, OSError):
+        return None
+
+
+def counts_for_base(payload: object, base_point: str) -> dict[str, int] | None:
+    if not isinstance(payload, dict) or payload.get("base_point") != base_point:
+        return None
+    counts: Final = validated_counts(payload)
+    return counts if counts else None
+
+
+def _fetch_fallback(reason: str) -> None:
+    sys.stderr.write(f"{reason}; computing base counts locally\n")
+
+
+def fetch_ci_base_counts(
+    base_point: str,
+    gh_output: Callable[[list[str]], bytes | None] = _gh_output,
+) -> dict[str, int] | None:
+    """Base counts from the CI artifact published for `base_point`, or None.
+
+    Every failure mode (no gh, no auth, offline, expired or missing artifact,
+    malformed payload, counts for a different commit) returns None so the
+    caller falls back to the local base pass; the fetch is an optimization and
+    must never make the gate less available than local compute alone."""
+    slug: Final = origin_slug()
+    if slug is None:
+        return _fetch_fallback("origin remote is not a github.com URL")
+    name: Final = artifact_name(base_point)
+    listing: Final = gh_output(
+        ["api", f"repos/{slug}/actions/artifacts?name={name}&per_page=1"]
+    )
+    if listing is None:
+        return _fetch_fallback(f"could not list CI artifacts named {name}")
+    url: Final = _artifact_download_url(_parsed_json(listing))
+    if url is None:
+        return _fetch_fallback(f"no usable CI artifact named {name}")
+    zip_bytes: Final = gh_output(["api", url])
+    if zip_bytes is None:
+        return _fetch_fallback(f"download failed for CI artifact {name}")
+    counts: Final = counts_for_base(_counts_json_from_zip(zip_bytes), base_point)
+    if counts is None:
+        return _fetch_fallback(
+            f"CI artifact {name} is not valid base counts for {base_point[:12]}"
+        )
+    sys.stderr.write(f"base counts fetched from CI artifact {name}\n")
+    return counts
 
 
 def base_counts_cached(
     base_point: str,
     cache_dir: Path | None = None,
     compute: Callable[[str], dict[str, int]] = base_counts,
+    fetch: Callable[[str], dict[str, int] | None] = fetch_ci_base_counts,
 ) -> dict[str, int]:
     """`base_counts` memoized on disk. The base tree at a given commit is
     immutable, so its counts are a pure function of the merge-base plus the
     environment fingerprints in the cache key; an empty result is never stored
-    because it is the signature of a crashed pass, not a clean tree."""
+    because it is the signature of a crashed pass, not a clean tree. On a disk
+    miss the counts CI already published for the merge-base are fetched before
+    the expensive local base pass; a fetch miss of any kind computes locally."""
     directory = default_cache_dir() if cache_dir is None else cache_dir
     path = cache_path(directory, base_point, environment_fingerprints())
     cached = load_cached_counts(path)
     if cached is not None:
         return cached
+    fetched: Final = fetch(base_point)
+    if fetched:
+        store_counts(directory, path, base_point, fetched)
+        return fetched
     counts = compute(base_point)
     if counts:
         store_counts(directory, path, base_point, counts)
@@ -353,6 +487,29 @@ def cmd_update(current: Mapping[str, int], base_ref: str = DEFAULT_BASE) -> None
     )
 
 
+def cmd_emit_counts(head: Mapping[str, int], directory: Path, head_sha: str) -> None:
+    """Write HEAD's per-rule counts as the file the publisher workflow uploads.
+
+    The filename stem is exactly the artifact name `fetch_ci_base_counts` will
+    later look up for this commit, so emit and fetch cannot drift apart. Empty
+    counts are refused for the same reason `is_vacuous_run` exists: a pass that
+    produced nothing almost certainly crashed, and publishing it would poison
+    every branch that fetches it."""
+    if not head:
+        print(
+            "FAIL: basedpyright produced no errors; refusing to publish empty base "
+            "counts because the pass almost certainly crashed or emitted nothing."
+        )
+        raise SystemExit(1)
+    name: Final = artifact_name(head_sha)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{name}.json").write_text(counts_payload(head_sha, head))
+    print(
+        f"Emitted base counts for {head_sha} as {name}.json "
+        f"({sum(head.values())} errors total)"
+    )
+
+
 def cmd_check(head: Mapping[str, int], base_ref: str) -> None:
     budget = json.loads(BUDGET_PATH.read_text())
     if is_vacuous_run(head, budget):
@@ -401,9 +558,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default=DEFAULT_BASE)
     parser.add_argument("--update", action="store_true")
+    parser.add_argument("--emit-counts-dir", type=Path)
     args = parser.parse_args()
     head = count_basedpyright(run_basedpyright())
-    if args.update:
+    if args.emit_counts_dir is not None:
+        cmd_emit_counts(
+            head, args.emit_counts_dir, _run(["git", "rev-parse", "HEAD"]).strip()
+        )
+    elif args.update:
         cmd_update(head, args.base)
     else:
         cmd_check(head, args.base)

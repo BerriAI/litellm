@@ -7,13 +7,10 @@ vi.mock("antd", async () => {
 
   function Select(props: any) {
     const { value, onChange, options, optionRender, labelRender, ...rest } = props;
-    const selectedOption = options?.find((opt: any) => opt.value === value);
-    const renderedLabel = labelRender ? labelRender({ value, label: selectedOption?.label }) : selectedOption?.label;
 
-    const optionElements = options?.map((opt: any) => {
-      const rendered = optionRender ? optionRender({ value: opt.value, label: opt.label }) : opt.label;
-      return React.createElement("option", { key: opt.value, value: opt.value }, opt.label);
-    });
+    const optionElements = options?.map((opt: any) =>
+      React.createElement("option", { key: opt.value, value: opt.value }, opt.label),
+    );
 
     const optionRenderOutputs = options
       ?.map((opt: any) => {
