@@ -987,6 +987,41 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         return evt
 
 
+class SyntheticResponsesAPIStreamingIterator(CachedResponsesAPIStreamingIterator):
+    """Replays a materialized ResponsesAPIResponse as streaming SSE events.
+
+    Unlike CachedResponsesAPIStreamingIterator this is NOT a cache hit: the
+    response is a real provider response that arrived non-streaming (e.g. the
+    provider collapsed a stream internally).  The two flags that differ:
+      - _completed_response_cache_hit stays None  (not a cache hit)
+      - _persist_completed_response_before_logging stays True (default; cache it)
+    """
+
+    def __init__(
+        self,
+        response: Any,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str | None = None,
+        litellm_metadata: dict[str, Any] | None = None,
+        request_data: dict[str, Any] | None = None,
+        call_type: str | None = None,
+    ) -> None:
+        BaseResponsesAPIStreamingIterator.__init__(
+            self,
+            response=httpx.Response(200),
+            model=getattr(response, "model", ""),
+            responses_api_provider_config=None,
+            logging_obj=logging_obj,
+            litellm_metadata=litellm_metadata,
+            custom_llm_provider=custom_llm_provider,
+            request_data=request_data,
+            call_type=call_type,
+        )
+        self._events: list[Any] = []
+        self._idx = 0
+        self._set_events_from_response(transformed=response, logging_obj=logging_obj)
+
+
 def _dump_response_object(obj: Any) -> dict[str, Any]:
     if hasattr(obj, "model_dump"):
         return obj.model_dump()
