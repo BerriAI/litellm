@@ -1093,40 +1093,5 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 };
 
 // Add this helper function to process model-specific activity data
-const getModelActivityData = (userSpendData: { results: DailyData[]; metadata: any }) => {
-  const modelData: {
-    [key: string]: {
-      total_requests: number;
-      total_tokens: number;
-      daily_data: Array<{
-        date: string;
-        api_requests: number;
-        total_tokens: number;
-      }>;
-    };
-  } = {};
-
-  userSpendData.results.forEach((day: DailyData) => {
-    Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
-      if (!modelData[model]) {
-        modelData[model] = {
-          total_requests: 0,
-          total_tokens: 0,
-          daily_data: [],
-        };
-      }
-
-      modelData[model].total_requests += metrics.metrics.api_requests;
-      modelData[model].total_tokens += metrics.metrics.total_tokens;
-      modelData[model].daily_data.push({
-        date: day.date,
-        api_requests: metrics.metrics.api_requests,
-        total_tokens: metrics.metrics.total_tokens,
-      });
-    });
-  });
-
-  return modelData;
-};
 
 export default UsagePage;
