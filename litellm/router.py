@@ -8738,7 +8738,7 @@ class Router:
 
         Example:
             credentials = router.get_deployment_credentials_with_provider("gpt-4o-litellm")
-            # Returns: {"api_key": "sk-...", "custom_llm_provider": "openai", ...}
+            # Returns: {"api_key": "sk-...", "custom_llm_provider": "openai", "model": "gpt-4o", ...}
         """
         # Try to get deployment by model_id first
         deployment = self.get_deployment(model_id=model_id)
@@ -8796,6 +8796,8 @@ class Router:
             credentials.update(credential_values)
             # Remove the credential name since we've resolved it
             credentials.pop("litellm_credential_name", None)
+
+        credentials["model"] = deployment.litellm_params.model
 
         # Add custom_llm_provider
         if deployment.litellm_params.custom_llm_provider:
