@@ -66,7 +66,16 @@ import { MessageType } from "@/components/chat_ui/types";
 import { useCodeInterpreter } from "../../hooks/useCodeInterpreter";
 import { useChatHistory } from "../../hooks/useChatHistory";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { Select as ShadcnSelect, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
+import {
+  AUDIO_ACCEPT,
+  IMAGE_EDIT_ACCEPT,
+  validateAudioFile,
+  validateChatAttachment,
+  validateImageEditFile,
+} from "./uploadValidation";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -177,6 +186,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [selectedModel, setSelectedModel] = useState<string | undefined>(simplified ? fixedModel : undefined);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [modelLoadError, setModelLoadError] = useState(false);
   const [agentInfo, setAgentInfo] = useState<Agent[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
   const debouncedSetSelectedModel = useDebouncedCallback((value: string) => setSelectedModel(value), {
@@ -388,17 +399,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
   ]);
 
   useEffect(() => {
-    let userApiKey = apiKeySource === "session" ? accessToken : apiKey;
-    if (!userApiKey || !token || !userRole || !userID) {
+    const userApiKey = apiKeySource === "session" ? accessToken : apiKey.trim();
+    if (!userApiKey) {
+      setModelInfo([]);
+      setModelLoadError(false);
       return;
     }
 
-    // Fetch model info and set the default selected model (skip in simplified mode; we use fixedModel)
     const loadModels = async () => {
+      setIsLoadingModels(true);
+      setModelLoadError(false);
       try {
-        if (!userApiKey) {
-          return;
-        }
         const uniqueModels = await fetchAvailableModels(userApiKey);
 
         setModelInfo(uniqueModels);
@@ -412,6 +423,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
         }
       } catch (error) {
         console.error("Error fetching model info:", error);
+        setModelInfo([]);
+        setModelLoadError(true);
+      } finally {
+        setIsLoadingModels(false);
       }
     };
 
@@ -419,7 +434,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       loadModels();
     }
     loadMCPServers();
-  }, [accessToken, userID, userRole, apiKeySource, apiKey, token, simplified]);
+  }, [accessToken, apiKeySource, apiKey, simplified]);
 
   // Load tools when MCP direct mode has a server (or toolset) selected
   useEffect(() => {
@@ -494,13 +509,35 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
   };
 
-  const handleImageUpload = (file: File) => {
-    setUploadedImages((prev) => [...prev, file]);
+  const createBlobPreviewUrl = (file: File): string => {
     const rawPreviewUrl = URL.createObjectURL(file);
-    // Sanitize: only allow blob: URLs to prevent XSS via img src injection.
-    const previewUrl = rawPreviewUrl.startsWith("blob:") ? rawPreviewUrl : "";
-    setImagePreviewUrls((prev) => [...prev, previewUrl]);
-    return false; // Prevent default upload behavior
+    return rawPreviewUrl.startsWith("blob:") ? rawPreviewUrl : "";
+  };
+
+  const handleImageFiles = (files: File[]) => {
+    let nextCount = uploadedImages.length;
+    const accepted: File[] = [];
+    const previews: string[] = [];
+    for (const file of files) {
+      const result = validateImageEditFile(file, nextCount);
+      if (!result.ok) {
+        NotificationsManager.error(result.error);
+        continue;
+      }
+      accepted.push(file);
+      previews.push(createBlobPreviewUrl(file));
+      nextCount += 1;
+    }
+    if (accepted.length === 0) {
+      return;
+    }
+    setUploadedImages((prev) => [...prev, ...accepted]);
+    setImagePreviewUrls((prev) => [...prev, ...previews]);
+  };
+
+  const handleImageUpload = (file: File): false => {
+    handleImageFiles([file]);
+    return false;
   };
 
   const handleRemoveImage = (index: number) => {
@@ -519,11 +556,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setImagePreviewUrls([]);
   };
 
-  const handleResponsesImageUpload = (file: File): false => {
+  const handleResponsesImageUpload = (file: File): void => {
+    const result = validateChatAttachment(file);
+    if (!result.ok) {
+      NotificationsManager.error(result.error);
+      return;
+    }
     setResponsesUploadedImage(file);
-    const previewUrl = URL.createObjectURL(file);
-    setResponsesImagePreviewUrl(previewUrl);
-    return false; // Prevent default upload behavior
+    setResponsesImagePreviewUrl(createBlobPreviewUrl(file));
   };
 
   const handleRemoveResponsesImage = () => {
@@ -534,11 +574,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setResponsesImagePreviewUrl(null);
   };
 
-  const handleChatImageUpload = (file: File): false => {
+  const handleChatImageUpload = (file: File): void => {
+    const result = validateChatAttachment(file);
+    if (!result.ok) {
+      NotificationsManager.error(result.error);
+      return;
+    }
     setChatUploadedImage(file);
-    const previewUrl = URL.createObjectURL(file);
-    setChatImagePreviewUrl(previewUrl);
-    return false; // Prevent default upload behavior
+    setChatImagePreviewUrl(createBlobPreviewUrl(file));
   };
 
   const handleRemoveChatImage = () => {
@@ -550,8 +593,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const handleAudioUpload = (file: File): false => {
+    const result = validateAudioFile(file);
+    if (!result.ok) {
+      NotificationsManager.error(result.error);
+      return false;
+    }
     setUploadedAudio(file);
-    return false; // Prevent default upload behavior
+    return false;
   };
 
   const handleRemoveAudio = () => {
@@ -1002,8 +1050,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const onModelChange = (value: string) => {
     setSelectedModel(value);
-
     setShowCustomModelInput(value === "custom");
+
+    const model = modelInfo.find((option) => option.model_group === value);
+    if (model?.mode) {
+      setEndpointType(getEndpointType(model.mode));
+    }
   };
 
   // Check if the selected model is a chat model
@@ -1020,35 +1072,43 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const supportsStreamingToggle = endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES;
+  let modelEmptyText = "No models available for this key";
+  if (modelLoadError) {
+    modelEmptyText = "Unable to load models for this key";
+  } else if (apiKeySource === "custom" && !apiKey.trim()) {
+    modelEmptyText = "Enter a Virtual Key to load models";
+  }
 
   const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
 
   return (
-    <div className={`w-full bg-white ${simplified ? "h-full flex flex-col" : "p-4 pb-0"}`}>
-      <Card className={`w-full rounded-xl shadow-md overflow-hidden ${simplified ? "h-full flex flex-col" : ""}`}>
-        <div className={`flex w-full gap-4 ${simplified ? "h-full" : "h-[80vh]"}`}>
+    <div className={`min-h-0 min-w-0 bg-white ${simplified ? "flex h-full w-full flex-col" : "h-full w-full p-3"}`}>
+      <Card className="flex h-full min-h-0 min-w-0 w-full flex-col overflow-hidden rounded-xl shadow-md">
+        <div className="flex h-full min-h-0 min-w-0 w-full flex-col lg:flex-row">
           {/* Left Sidebar with Controls - hidden in simplified mode */}
           {!simplified && (
-            <div className="w-1/4 p-4 bg-gray-50 overflow-y-auto">
+            <div className="max-h-[42%] w-full shrink-0 overflow-y-auto border-b border-gray-200 bg-gray-50 p-4 lg:max-h-none lg:w-72 lg:border-r lg:border-b-0 xl:w-80">
               <Title className="text-xl font-semibold mb-6 mt-2">Configurations</Title>
               <div className="space-y-4">
                 <div>
                   <Text className="font-medium block mb-2 text-gray-700 flex items-center">
                     <KeyOutlined className="mr-2" /> Virtual Key Source
                   </Text>
-                  <Select
+                  <ShadcnSelect
                     disabled={disabledPersonalKeyCreation}
                     value={apiKeySource}
-                    style={{ width: "100%" }}
-                    onChange={(value) => {
+                    onValueChange={(value) => {
                       setApiKeySource(value as "session" | "custom");
                     }}
-                    options={[
-                      { value: "session", label: "Current UI Session" },
-                      { value: "custom", label: "Virtual Key" },
-                    ]}
-                    className="rounded-md"
-                  />
+                  >
+                    <SelectTrigger className="w-full" size="sm" aria-label="Virtual Key Source">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="session">Current UI Session</SelectItem>
+                      <SelectItem value="custom">Virtual Key</SelectItem>
+                    </SelectContent>
+                  </ShadcnSelect>
                   {apiKeySource === "custom" && (
                     <TextInput
                       className="mt-2"
@@ -1141,16 +1201,24 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         <SoundOutlined className="mr-2" />
                         Voice
                       </Text>
-                      <Select
+                      <ShadcnSelect
                         value={selectedVoice}
-                        onChange={(value) => {
+                        onValueChange={(value) => {
                           setSelectedVoice(value);
                           sessionStorage.setItem("selectedVoice", value);
                         }}
-                        style={{ width: "100%" }}
-                        className="rounded-md"
-                        options={OPEN_AI_VOICE_SELECT_OPTIONS}
-                      />
+                      >
+                        <SelectTrigger className="w-full" size="sm" aria-label="Voice">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {OPEN_AI_VOICE_SELECT_OPTIONS.map((voice) => (
+                            <SelectItem key={voice.value} value={voice.value}>
+                              {voice.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </ShadcnSelect>
                     </div>
                   )}
 
@@ -1212,46 +1280,20 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         </Tooltip>
                       )}
                     </Text>
-                    <Select
+                    <SearchSelect
                       value={selectedModel}
-                      placeholder="Select a Model"
-                      onChange={onModelChange}
+                      placeholder={isLoadingModels ? "Loading models..." : "Select a Model"}
+                      emptyText={modelEmptyText}
+                      disabled={isLoadingModels}
+                      onValueChange={onModelChange}
                       options={[
-                        { value: "custom", label: "Enter custom model", key: "custom" },
-                        ...Array.from(
-                          new Set(
-                            modelInfo
-                              .filter((option) => {
-                                if (!option.mode) {
-                                  //If no mode, show all models
-                                  return true;
-                                }
-                                const optionEndpoint = getEndpointType(option.mode);
-                                // Show chat models for responses/anthropic_messages/interactions endpoints as they are compatible
-                                if (
-                                  endpointType === EndpointType.RESPONSES ||
-                                  endpointType === EndpointType.ANTHROPIC_MESSAGES ||
-                                  endpointType === EndpointType.INTERACTIONS
-                                ) {
-                                  return optionEndpoint === endpointType || optionEndpoint === EndpointType.CHAT;
-                                }
-                                // Show image models for image_edits endpoint as they are compatible
-                                if (endpointType === EndpointType.IMAGE_EDITS) {
-                                  return optionEndpoint === endpointType || optionEndpoint === EndpointType.IMAGE;
-                                }
-                                return optionEndpoint === endpointType;
-                              })
-                              .map((option) => option.model_group),
-                          ),
-                        ).map((model_group, index) => ({
-                          value: model_group,
-                          label: model_group,
-                          key: index,
+                        { value: "custom", label: "Enter custom model" },
+                        ...modelInfo.map((model) => ({
+                          value: model.model_group,
+                          label: model.model_group,
+                          sublabel: model.mode ? `Mode: ${model.mode}` : undefined,
                         })),
                       ]}
-                      style={{ width: "100%" }}
-                      showSearch={true}
-                      className="rounded-md"
                     />
                     {showCustomModelInput && (
                       <TextInput
@@ -1269,35 +1311,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     <Text className="font-medium block mb-2 text-gray-700 flex items-center">
                       <RobotOutlined className="mr-2" /> Select Agent
                     </Text>
-                    <Select
+                    <SearchSelect
                       value={selectedAgent}
                       placeholder="Select an Agent"
-                      onChange={(value) => setSelectedAgent(value)}
+                      onValueChange={(value) => setSelectedAgent(value)}
                       options={agentInfo.map((agent) => ({
                         value: agent.agent_name,
                         label: agent.agent_name || agent.agent_id,
-                        key: agent.agent_id,
+                        sublabel: agent.agent_card_params?.description,
                       }))}
-                      style={{ width: "100%" }}
-                      showSearch={true}
-                      className="rounded-md"
-                      optionLabelProp="label"
-                    >
-                      {agentInfo.map((agent) => (
-                        <Select.Option
-                          key={agent.agent_id}
-                          value={agent.agent_name}
-                          label={agent.agent_name || agent.agent_id}
-                        >
-                          <div className="flex flex-col py-1">
-                            <span className="font-medium">{agent.agent_name || agent.agent_id}</span>
-                            {agent.agent_card_params?.description && (
-                              <span className="text-xs text-gray-500 mt-1">{agent.agent_card_params.description}</span>
-                            )}
-                          </div>
-                        </Select.Option>
-                      ))}
-                    </Select>
+                    />
                     {agentInfo.length === 0 && (
                       <Text className="text-xs text-gray-500 mt-2 block">
                         No agents found. Create agents via /v1/agents endpoint.
@@ -1697,7 +1720,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
           )}
 
           {/* Main Chat Area */}
-          <div className={`flex flex-col bg-white ${simplified ? "flex-1 w-full" : "w-3/4"}`}>
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-white">
             {endpointType === EndpointType.REALTIME ? (
               <RealtimePlayground
                 accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
@@ -1707,9 +1730,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
               />
             ) : (
               <>
-                <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+                <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-gray-200 p-3 sm:p-4">
                   <Title className="text-xl font-semibold mb-0">{simplified ? "Chat" : "Test Key"}</Title>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap justify-end gap-2">
                     <TremorButton
                       onClick={clearChatHistory}
                       className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
@@ -1728,7 +1751,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     )}
                   </div>
                 </div>
-                <div className="flex-1 overflow-auto p-4 pb-0">
+                <div className="min-h-0 min-w-0 flex-1 overflow-auto p-3 pb-0 sm:p-4 sm:pb-0">
                   {chatHistory.length === 0 && (
                     <div className="h-full flex flex-col items-center justify-center text-gray-400">
                       <RobotOutlined style={{ fontSize: "48px", marginBottom: "16px" }} />
@@ -1788,18 +1811,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <div ref={chatEndRef} style={{ height: "1px" }} />
                 </div>
 
-                <div className="p-4 border-t border-gray-200 bg-white">
+                <div className="max-h-[50%] shrink-0 overflow-y-auto border-t border-gray-200 bg-white p-3 sm:p-4">
                   {/* Image Upload Section for Image Edits */}
                   {endpointType === EndpointType.IMAGE_EDITS && (
                     <div className="mb-4">
                       {uploadedImages.length === 0 ? (
-                        <Dragger beforeUpload={handleImageUpload} accept="image/*" showUploadList={false}>
+                        <Dragger beforeUpload={handleImageUpload} accept={IMAGE_EDIT_ACCEPT} showUploadList={false}>
                           <p className="ant-upload-drag-icon">
                             <PictureOutlined style={{ fontSize: "24px", color: "#666" }} />
                           </p>
                           <p className="ant-upload-text text-sm">Click or drag images to upload</p>
                           <p className="ant-upload-hint text-xs text-gray-500">
-                            Support for PNG, JPG, JPEG formats. Multiple images supported.
+                            Support for PNG, JPG, JPEG, GIF, WebP. Multiple images supported.
                           </p>
                         </Dragger>
                       ) : (
@@ -1840,12 +1863,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             <input
                               id="additional-image-upload"
                               type="file"
-                              accept="image/*"
+                              accept={IMAGE_EDIT_ACCEPT}
                               multiple
                               style={{ display: "none" }}
                               onChange={(e) => {
-                                const files = Array.from(e.target.files || []);
-                                files.forEach((file) => handleImageUpload(file));
+                                handleImageFiles(Array.from(e.target.files || []));
+                                e.target.value = "";
                               }}
                             />
                           </div>
@@ -1858,11 +1881,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   {endpointType === EndpointType.TRANSCRIPTION && (
                     <div className="mb-4">
                       {!uploadedAudio ? (
-                        <Dragger
-                          beforeUpload={handleAudioUpload}
-                          accept="audio/*,.mp3,.mp4,.mpeg,.mpga,.m4a,.wav,.webm"
-                          showUploadList={false}
-                        >
+                        <Dragger beforeUpload={handleAudioUpload} accept={AUDIO_ACCEPT} showUploadList={false}>
                           <p className="ant-upload-drag-icon">
                             <SoundOutlined style={{ fontSize: "24px", color: "#666" }} />
                           </p>
