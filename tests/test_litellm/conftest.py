@@ -19,6 +19,7 @@ sys.path.insert(
 import asyncio
 
 import litellm
+from litellm import utils as litellm_utils
 from litellm._logging import ALL_LOGGERS
 from litellm.litellm_core_utils.prompt_templates import (
     image_handling as image_handling_module,
@@ -257,6 +258,9 @@ def isolate_litellm_state():
     had_module_level_aclient = "module_level_aclient" in litellm.__dict__
     original_module_level_client = litellm.__dict__.get("module_level_client")
     original_module_level_aclient = litellm.__dict__.get("module_level_aclient")
+    original_runtime_registered_model_cost = dict(
+        litellm_utils._runtime_registered_model_cost
+    )
 
     # Flush cache before test (critical for respx mocks)
     if hasattr(litellm, "in_memory_llm_clients_cache"):
@@ -316,6 +320,10 @@ def isolate_litellm_state():
         logger.filters = list(original_logger_state["filters"])
 
     tool_registry_writer_module._tool_policy_registry = original_tool_policy_registry
+    litellm_utils._runtime_registered_model_cost.clear()
+    litellm_utils._runtime_registered_model_cost.update(
+        original_runtime_registered_model_cost
+    )
     if current_module_level_client is not original_module_level_client:
         _close_handler_if_needed(current_module_level_client)
     if current_module_level_aclient is not original_module_level_aclient:

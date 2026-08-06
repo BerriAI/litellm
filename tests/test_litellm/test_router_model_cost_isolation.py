@@ -1471,3 +1471,22 @@ def test_replay_live_router_model_cost_rebuilds_every_live_router():
     finally:
         litellm.model_cost = saved_model_cost
         _invalidate_model_cost_lowercase_map()
+
+
+def test_runtime_model_cost_ledger_a_records_registration_during_test():
+    from litellm import utils as litellm_utils
+
+    original_entry = litellm.model_cost.get("ledger-isolation-model")
+    try:
+        litellm.register_model(
+            {"ledger-isolation-model": {"input_cost_per_token": 0.001, "litellm_provider": "openai"}}
+        )
+        assert "ledger-isolation-model" in litellm_utils._runtime_registered_model_cost
+    finally:
+        _restore_model_cost_entries({"ledger-isolation-model": original_entry})
+
+
+def test_runtime_model_cost_ledger_b_sees_the_ledger_rolled_back():
+    from litellm import utils as litellm_utils
+
+    assert "ledger-isolation-model" not in litellm_utils._runtime_registered_model_cost
