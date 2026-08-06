@@ -34,8 +34,8 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_batch_id_from_unified_batch_id,
     get_content_type_from_file_object,
     get_model_id_from_unified_batch_id,
-    get_models_from_unified_file_id,
     normalize_mime_type_for_provider,
+    resolve_managed_output_file_model_name,
 )
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
@@ -1102,21 +1102,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )  # managed batch id
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
             model_name = cast(Optional[str], response._hidden_params.get("model_name"))
-            resolved_model_name = model_name
 
-            # Some providers (e.g. Vertex batch retrieve) do not set model_name on
-            # the response. In that case, recover target_model_names from the input
-            # managed file metadata so unified output IDs preserve routing metadata.
-            if not resolved_model_name and isinstance(unified_file_id, str):
-                decoded_unified_file_id = (
-                    _is_base64_encoded_unified_file_id(unified_file_id)
-                    or unified_file_id
-                )
-                target_model_names = get_models_from_unified_file_id(
-                    decoded_unified_file_id
-                )
-                if target_model_names:
-                    resolved_model_name = ",".join(target_model_names)
+            resolved_model_name = resolve_managed_output_file_model_name(
+                unified_input_file_id=unified_file_id
+                if isinstance(unified_file_id, str)
+                else None,
+                fallback_model_name=model_name,
+            )
             original_response_id = response.id
 
             if (unified_batch_id or unified_file_id) and model_id:
