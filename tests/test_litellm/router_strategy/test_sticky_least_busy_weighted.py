@@ -36,6 +36,20 @@ def _make_weighted_deployment(dep_id: str, weight) -> dict:
 MG = "test-model"  # default model group for tests
 
 
+def _metric_sample_value(metric, expected_labels: dict) -> float:
+    values = [
+        sample.value
+        for family in metric.collect()
+        for sample in family.samples
+        if not sample.name.endswith("_created")
+        and all(
+            sample.labels.get(key) == value for key, value in expected_labels.items()
+        )
+    ]
+    assert len(values) == 1
+    return values[0]
+
+
 @pytest.fixture(autouse=True)
 def reset_singleton():
     """Reset the class-level singleton between tests for isolation."""
@@ -198,3 +212,101 @@ class TestCapacityNormalizedSelection:
         request_counts = {"dep-0": 10, "dep-1": 2, "dep-2": 10}
         result = handler._select_deployment(MG, deployments, request_counts, None)
         assert result["model_info"]["id"] == "dep-1"
+
+
+class TestPrometheusMetrics:
+    def test_selection_metrics_reuse_calculated_loads(self):
+        handler = StickyLeastBusyWeightedLoggingHandler(
+            router_cache=DualCache(), imbalance_threshold=1.5
+        )
+        deployments = [
+            _make_weighted_deployment("metrics-small", 1.0),
+            _make_weighted_deployment("metrics-large", 2.0),
+        ]
+
+        handler._select_deployment(
+            MG,
+            deployments,
+            {"metrics-small": 10, "metrics-large": 8},
+            None,
+        )
+
+        assert (
+            _metric_sample_value(
+                handler._healthy_deployments_count, {"model_group": MG}
+            )
+            == 2
+        )
+        assert (
+            _metric_sample_value(
+                handler._deployment_healthy,
+                {"model_group": MG, "deployment_id": "metrics-small"},
+            )
+            == 1
+        )
+        assert (
+            _metric_sample_value(
+                handler._deployment_weight,
+                {"model_group": MG, "deployment_id": "metrics-large"},
+            )
+            == 2
+        )
+        assert (
+            _metric_sample_value(
+                handler._normalized_load,
+                {"model_group": MG, "deployment_id": "metrics-small"},
+            )
+            == 10
+        )
+        assert (
+            _metric_sample_value(
+                handler._normalized_load,
+                {"model_group": MG, "deployment_id": "metrics-large"},
+            )
+            == 4
+        )
+        assert _metric_sample_value(handler._reference_load, {"model_group": MG}) == 5.5
+        assert (
+            _metric_sample_value(handler._threshold_load, {"model_group": MG}) == 8.25
+        )
+
+        handler._select_deployment(
+            MG,
+            [deployments[1]],
+            {"metrics-large": 3},
+            None,
+        )
+
+        assert (
+            _metric_sample_value(
+                handler._healthy_deployments_count, {"model_group": MG}
+            )
+            == 1
+        )
+        assert (
+            _metric_sample_value(
+                handler._deployment_healthy,
+                {"model_group": MG, "deployment_id": "metrics-small"},
+            )
+            == 0
+        )
+
+    def test_negative_count_increments_reset_counter(self):
+        handler = StickyLeastBusyWeightedLoggingHandler(router_cache=DualCache())
+        kwargs = {
+            "litellm_call_id": "counter-reset-call",
+            "litellm_params": {
+                "metadata": {"model_group": MG},
+                "model_info": {"id": "counter-reset-deployment"},
+            },
+        }
+
+        handler._decrement_request_count(kwargs, callback_type="TEST")
+
+        assert (
+            _metric_sample_value(
+                handler._counter_resets,
+                {"model_group": MG, "deployment_id": "counter-reset-deployment"},
+            )
+            == 1
+        )
