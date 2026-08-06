@@ -21222,6 +21222,18 @@ export interface components {
             /** Index Permissions */
             index_permissions: ("read" | "write")[];
         };
+        /** AnthropicThinkingParam */
+        AnthropicThinkingParam: {
+            /** Budget Tokens */
+            budget_tokens?: number;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type?: "enabled" | "adaptive";
+        } & {
+            [key: string]: unknown;
+        };
         /** ApplyGuardrailRequest */
         ApplyGuardrailRequest: {
             /** Entities */
@@ -33263,6 +33275,9 @@ export interface components {
         TierTarget: {
             /** Model */
             model: string | string[];
+            /** Reasoning Effort */
+            reasoning_effort?: string | null;
+            thinking?: components["schemas"]["AnthropicThinkingParam"] | null;
         } & {
             [key: string]: unknown;
         };

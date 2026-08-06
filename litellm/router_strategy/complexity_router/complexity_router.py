@@ -1153,31 +1153,21 @@ class ComplexityRouter(CustomLogger):
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
 
     @staticmethod
-    def _pick_from_tier_value(
-        model: str | list[str] | TierTarget, tier_key: str
-    ) -> str:  # mutable-ok: legacy pool inputs remain lists
-        if isinstance(model, str):
-            return model
+    def _pick_from_tier_value(model: str | list[str] | TierTarget, tier_key: str) -> str:
         pool: Final = tier_pool(model)
         if not pool:
             raise ValueError(f"Empty model pool for tier {tier_key}")
-        return random.choice(pool)
+        return random.choice(list(pool))
 
-    def _tier_pools(self) -> dict[str, list[str]]:  # mutable-ok: adaptive router consumes mutable pools
-        return {  # mutable-ok: router consumers require mutable tier pool mappings
-            tier: tier_pool(target) for tier, target in self.config.tiers.items()
-        }
+    def _tier_pools(self) -> Mapping[str, tuple[str, ...]]:
+        return MappingProxyType({tier: tier_pool(target) for tier, target in self.config.tiers.items()})
 
-    def _tier_params(
-        self, tier: ComplexityTier | str
-    ) -> dict[str, object] | None:  # mutable-ok: params are merged into request kwargs
+    def _tier_params(self, tier: ComplexityTier | str) -> Mapping[str, object] | None:
         tier_key: Final = tier.value if isinstance(tier, ComplexityTier) else tier
         target: Final = self.config.tiers.get(tier_key)
         return target.params or None if isinstance(target, TierTarget) else None
 
-    def _params_for_model(
-        self, model: str
-    ) -> dict[str, object] | None:  # mutable-ok: params are merged into request kwargs
+    def _params_for_model(self, model: str) -> Mapping[str, object] | None:
         tier: Final = self._tier_for_model(model)
         return self._tier_params(tier) if tier is not None else None
 

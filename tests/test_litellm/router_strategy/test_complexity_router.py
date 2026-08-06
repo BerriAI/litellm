@@ -171,9 +171,7 @@ class TestComplexityRouterInit:
             ComplexityRouterConfig(tiers={"SIMPLE": tier_value})
 
     def test_tier_target_accepts_pool_and_extra_params(self):
-        config = ComplexityRouterConfig(
-            tiers={"SIMPLE": {"model": ["gpt-5", "o3"], "reasoning_effort": "high"}}
-        )
+        config = ComplexityRouterConfig(tiers={"SIMPLE": {"model": ["gpt-5", "o3"], "reasoning_effort": "high"}})
         target = config.tiers["SIMPLE"]
         assert isinstance(target, TierTarget)
         assert target.model == ["gpt-5", "o3"]
@@ -185,6 +183,16 @@ class TestComplexityRouterInit:
         assert "thinking_level" in caplog.text
         assert isinstance(config.tiers["SIMPLE"], TierTarget)
         assert config.tiers["SIMPLE"].params["thinking_level"] == "high"
+
+    def test_thinking_budget_warning_explains_structured_syntax(self, caplog):
+        with caplog.at_level(logging.WARNING, logger=verbose_router_logger.name):
+            ComplexityRouterConfig(tiers={"SIMPLE": {"model": "gpt-5", "thinking_budget": 1024}})
+        assert "thinking: {type: enabled, budget_tokens: N}" in caplog.text
+
+    @pytest.mark.parametrize("structural_key", ["messages", "input", "stream", "metadata", "litellm_metadata"])
+    def test_structural_tier_params_are_rejected(self, structural_key):
+        with pytest.raises(ValidationError, match=structural_key):
+            ComplexityRouterConfig(tiers={"SIMPLE": {"model": "gpt-5", structural_key: "invalid"}})
 
     @pytest.mark.asyncio
     async def test_tier_params_are_applied_with_request_and_alias_precedence(self):
@@ -4469,7 +4477,6 @@ class TestRoutingDecisionContents:
         # The score is still recorded, but the cause is what says it did not decide.
         assert decision["score"] < decision["tier_boundaries"]["complex_reasoning"]
 
-
     @pytest.mark.asyncio
     async def test_an_unrenamed_router_writes_no_tier_label(self, complexity_router):
         """Renaming is opt-in, so a deployment that never renamed must gain no new key.
@@ -5924,7 +5931,9 @@ class TestCustomClassifierSystemPrompt:
 
     @pytest.mark.asyncio
     async def test_custom_prompt_is_sent_verbatim_as_the_system_role(self, mock_router_instance, llm_classifier_config):
-        custom = "Classify the data sensitivity: SIMPLE=public, MEDIUM=internal, COMPLEX=confidential, REASONING=regulated."
+        custom = (
+            "Classify the data sensitivity: SIMPLE=public, MEDIUM=internal, COMPLEX=confidential, REASONING=regulated."
+        )
         router = ComplexityRouter(
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,

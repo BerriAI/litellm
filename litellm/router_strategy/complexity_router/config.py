@@ -5,13 +5,16 @@ Contains default keyword lists, weights, tier boundaries, and configuration clas
 All values are configurable via proxy config.yaml.
 """
 
+from collections.abc import Mapping
 from enum import Enum
+from types import MappingProxyType
 from typing import Final, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
+from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.router import AdaptiveRouterWeights, RoutingPlugin
 from litellm.types.utils import all_litellm_params
 
@@ -31,6 +34,8 @@ TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
     ComplexityTier.COMPLEX,
     ComplexityTier.REASONING,
 )
+
+TIER_STRUCTURAL_KEYS: Final[frozenset[str]] = frozenset({"messages", "input", "stream", "metadata", "litellm_metadata"})
 
 DEFAULT_TIER_DISTANCE_PENALTY: Final[float] = 0.5
 
@@ -243,7 +248,9 @@ DEFAULT_TIER_MODELS: Final[dict[str, str]] = {
 
 
 class TierTarget(BaseModel):
-    model: str | list[str]  # mutable-ok: public config accepts model pools as lists
+    model: str | list[str]  # mutable-ok: pydantic accepts list-valued model pools
+    reasoning_effort: str | None = None
+    thinking: AnthropicThinkingParam | None = None
 
     model_config = ConfigDict(extra="allow")
 
@@ -265,15 +272,15 @@ class TierTarget(BaseModel):
         raise ValueError("model must be a string or a list of strings")
 
     @property
-    def params(self) -> dict[str, object]:  # mutable-ok: extras are passed through as request kwargs
-        return cast(dict[str, object], self.__pydantic_extra__ or {})  # cast-ok: pydantic owns extra params
+    def params(self) -> Mapping[str, object]:
+        return MappingProxyType(self.model_dump(exclude={"model"}, exclude_none=True))
 
 
-def tier_pool(value: str | list[str] | TierTarget) -> list[str]:  # mutable-ok: routing pools use list semantics
+def tier_pool(value: str | list[str] | TierTarget) -> tuple[str, ...]:
     if isinstance(value, TierTarget):
         target_model: Final = value.model
-        return target_model if isinstance(target_model, list) else [target_model]
-    return value if isinstance(value, list) else [value]
+        return (target_model,) if isinstance(target_model, str) else tuple(target_model)
+    return (value,) if isinstance(value, str) else tuple(value)
 
 
 class ClassifierLLMConfig(BaseModel):
@@ -587,6 +594,17 @@ class ComplexityRouterConfig(BaseModel):
         for tier, target in self.tiers.items():
             if isinstance(target, TierTarget):
                 for key in target.params:
+                    if key in TIER_STRUCTURAL_KEYS:
+                        raise ValueError(
+                            f"ComplexityRouter tier {tier} cannot configure structural request key {key!r}"
+                        )
+                    if key == "thinking_budget":
+                        verbose_router_logger.warning(
+                            "ComplexityRouter tier %s uses thinking_budget; use "
+                            "thinking: {type: enabled, budget_tokens: N} instead",
+                            tier,
+                        )
+                        continue
                     if key not in known:
                         verbose_router_logger.warning(
                             "ComplexityRouter tier %s has an unrecognized parameter key: %s",
@@ -600,11 +618,13 @@ class ComplexityRouterConfig(BaseModel):
         if not self.adaptive:
             return self
         normalized: Final[
-            dict[str, str | list[str] | TierTarget]  # mutable-ok: pydantic config surface is mutable
-        ] = {  # mutable-ok: pydantic requires normalized tier mappings
-            tier: target.model_copy(update={"model": tier_pool(target)})
+            dict[str, str | list[str] | TierTarget]
+        ] = {  # mutable-ok: pydantic requires normalized mapping
+            tier: target.model_copy(
+                update={"model": list(tier_pool(target))}
+            )  # mutable-ok: pydantic stores pools as lists
             if isinstance(target, TierTarget)
-            else tier_pool(target)
+            else list(tier_pool(target))  # mutable-ok: pydantic stores pools as lists
             for tier, target in self.tiers.items()
         }
         if not any(tier_pool(target) for target in normalized.values()):
