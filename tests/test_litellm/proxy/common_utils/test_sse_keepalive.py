@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncGenerator
-from typing import Final
+from typing import Final, cast
 
 import pytest
 from fastapi.responses import StreamingResponse
@@ -105,7 +105,19 @@ async def test_non_positive_interval_returns_stream_unwrapped():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bad_interval", [None, "abc", "", float("inf"), float("nan"), "-3"])
+@pytest.mark.parametrize(
+    "bad_interval",
+    [
+        None,
+        "abc",
+        "",
+        float("inf"),
+        float("nan"),
+        "-3",
+        cast("float | str | None", [15]),
+        cast("float | str | None", {"seconds": 15}),
+    ],
+)
 async def test_invalid_config_interval_returns_stream_unwrapped(bad_interval: float | str | None):
     async def any_stream() -> AsyncGenerator[str, None]:
         yield MESSAGE_START_CHUNK
