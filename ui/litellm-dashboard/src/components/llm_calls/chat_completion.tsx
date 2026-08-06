@@ -73,10 +73,6 @@ export async function makeOpenAIChatCompletionRequest(
     let firstTokenReceived = false;
     let timeToFirstToken: number | undefined = undefined;
 
-    // For collecting complete response text
-    let fullResponseContent = "";
-    let fullReasoningContent = "";
-
     // Track MCP metadata cumulatively across chunks
     let mcpMetadata: {
       mcp_list_tools?: any[];
@@ -167,7 +163,6 @@ export async function makeOpenAIChatCompletionRequest(
       if (chunk.choices[0]?.delta?.content) {
         const content = chunk.choices[0].delta.content;
         updateUI(content, chunk.model);
-        fullResponseContent += content;
       }
 
       // Process image generation if present
@@ -181,7 +176,6 @@ export async function makeOpenAIChatCompletionRequest(
         if (onReasoningContent) {
           onReasoningContent(reasoningContent);
         }
-        fullReasoningContent += reasoningContent;
       }
 
       // Check for search results in provider_specific_fields
