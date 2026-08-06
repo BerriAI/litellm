@@ -42,7 +42,6 @@ function extractCompletedAssistantText(response: {
     }
   }
 
-  // Prefer spoken transcript over text modality so we do not double-append both streams.
   if (transcripts.length > 0) {
     return transcripts.join("");
   }
@@ -71,7 +70,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   const configureSessionRef = useRef(false);
   const responseInProgressRef = useRef(false);
   const assistantStreamSourceRef = useRef<AssistantStreamSource>("none");
-  const pendingTextRef = useRef<string | null>(null);
+  const pendingTextsRef = useRef<string[]>([]);
   const selectedVoiceRef = useRef(selectedVoice);
   const flushPendingTextRef = useRef<() => void>(() => {});
   const cancelActiveResponseRef = useRef<() => void>(() => {});
@@ -105,7 +104,6 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   }, []);
 
   const appendAssistantText = useCallback((text: string, source: Exclude<AssistantStreamSource, "none">) => {
-    // Stick to one stream per response so audio transcript + text deltas do not garble the bubble.
     if (assistantStreamSourceRef.current === "none") {
       assistantStreamSourceRef.current = source;
     } else if (assistantStreamSourceRef.current !== source) {
@@ -175,7 +173,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   }, []);
 
   const flushPendingText = useCallback(() => {
-    const pending = pendingTextRef.current;
+    const pending = pendingTextsRef.current[0];
     if (!pending || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       return;
     }
@@ -183,7 +181,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
       return;
     }
 
-    pendingTextRef.current = null;
+    pendingTextsRef.current = pendingTextsRef.current.slice(1);
     addMessage("user", pending);
     wsRef.current.send(
       JSON.stringify({
@@ -214,7 +212,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     }
     setIsConnecting(true);
     markResponseFinished();
-    pendingTextRef.current = null;
+    pendingTextsRef.current = [];
     configureSessionRef.current = false;
 
     try {
@@ -278,7 +276,6 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
                 setMessages((prev) => {
                   const last = prev[prev.length - 1];
                   if (last && last.role === "assistant") {
-                    // Keep the longer of streamed vs final payload without concatenating both streams.
                     if (last.content.length >= completed.length) {
                       return prev;
                     }
@@ -296,7 +293,6 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
               typeof errorMessage === "string" && errorMessage.toLowerCase().includes("active response in progress");
 
             if (activeResponseError) {
-              // Stale client state vs server: cancel and unlock the composer.
               responseInProgressRef.current = true;
               setIsResponding(true);
               cancelActiveResponseRef.current();
@@ -324,7 +320,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
         setIsConnected(false);
         setIsConnecting(false);
         markResponseFinished();
-        pendingTextRef.current = null;
+        pendingTextsRef.current = [];
         wsRef.current = null;
       };
 
@@ -349,7 +345,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
 
   const disconnect = useCallback(() => {
     stopRecording();
-    pendingTextRef.current = null;
+    pendingTextsRef.current = [];
     markResponseFinished();
     wsRef.current?.close();
     wsRef.current = null;
@@ -439,7 +435,6 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     if (configureSessionRef.current) return;
     configureSessionRef.current = true;
-    // Text turns use manual response.create; disable server VAD so mic barge-in cannot race it.
     wsRef.current.send(
       JSON.stringify({
         type: "session.update",
@@ -459,7 +454,6 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   const sendTextMessage = useCallback(() => {
     if (!inputText.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
-    // Stop mic first so server VAD cannot open a competing response.
     stopRecording();
     ensureTextSession();
 
@@ -467,7 +461,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     setInputText("");
 
     if (responseInProgressRef.current) {
-      pendingTextRef.current = text;
+      pendingTextsRef.current = [...pendingTextsRef.current, text];
       cancelActiveResponse();
       addMessage("status", "Finishing the previous response, then sending your message...");
       return;
