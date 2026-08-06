@@ -766,7 +766,10 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
     source = inspect.getsource(wrapped)
     budget_check_pos = source.find("if prisma_client is not None and litellm.max_budget > 0:")
     warn_pos = source.find("_warn_budget_without_db(")
-    next_startup_section_pos = source.find("### START BATCH", budget_check_pos)
+    next_startup_section_pos = source.find(
+        "await ProxyStartupEvent.initialize_scheduled_background_jobs(",
+        budget_check_pos,
+    )
 
     assert budget_check_pos != -1, "global budget startup block not found"
     assert warn_pos != -1, "DB-less budget warning call not found"
