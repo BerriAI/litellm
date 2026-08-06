@@ -163,6 +163,14 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("27.1%")).toBeInTheDocument();
   });
 
+  it("exposes the whole expired-miss row as a focusable tooltip trigger", () => {
+    mockHook({ data: response([group()]) });
+    renderTab();
+
+    const trigger = screen.getByRole("button", { name: /Expired-miss/ });
+    expect(trigger).toHaveTextContent("27.1%");
+  });
+
   it("hides the expired-miss row when every return turn hit", () => {
     const allHits = totals({
       cache: cache({ return_to_tier: { turns: 381, hits: 381, hit_rate_pct: 100 }, return_misses_expired: 0 }),

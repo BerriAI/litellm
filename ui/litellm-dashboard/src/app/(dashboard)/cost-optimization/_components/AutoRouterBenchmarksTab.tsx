@@ -183,23 +183,26 @@ const CachingCard: React.FC<{ cache: AutoRouterCacheStats }> = ({ cache }) => {
             <p className="text-5xl font-semibold tracking-tight text-foreground">{pctLabel(cache.hit_rate_pct)}</p>
           </div>
           {expiredMissPct === null ? null : (
-            <div className="flex items-baseline justify-between gap-2 border-t pt-3">
-              <TooltipProvider delay={200}>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <p className="cursor-default text-sm text-muted-foreground underline decoration-dotted underline-offset-2">
-                        Expired-miss
-                      </p>
-                    }
-                  />
-                  <TooltipContent className="max-w-64">
-                    percentage of return-to-tier cache misses caused by cache expiring
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <p className="font-medium tabular-nums text-foreground">{pctLabel(expiredMissPct)}</p>
-            </div>
+            <TooltipProvider delay={200}>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      className="flex w-full cursor-default items-baseline justify-between gap-2 border-t pt-3 text-left"
+                    />
+                  }
+                >
+                  <span className="text-sm text-muted-foreground underline decoration-dotted underline-offset-2">
+                    Expired-miss
+                  </span>
+                  <span className="font-medium tabular-nums text-foreground">{pctLabel(expiredMissPct)}</span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-64">
+                  percentage of return-to-tier cache misses caused by cache expiring
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
         </div>
 
