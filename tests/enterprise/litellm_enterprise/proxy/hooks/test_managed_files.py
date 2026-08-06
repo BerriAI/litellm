@@ -1813,6 +1813,148 @@ def _create_unified_batch_id(model_id: str, batch_id: str) -> str:
     return base64.urlsafe_b64encode(unified_str.encode()).decode().rstrip("=")
 
 
+def _decode_unified_id(b64_id: str) -> str:
+    return base64.urlsafe_b64decode(b64_id + "=" * (-len(b64_id) % 4)).decode()
+
+
+def _terminal_batch_record(
+    unified_batch_uid: str,
+    raw_input_file_id: str,
+    raw_output_file_id: str,
+    raw_error_file_id: str,
+):
+    record = MagicMock()
+    record.unified_object_id = unified_batch_uid
+    record.created_by = "owner-user"
+    record.team_id = "owner-team"
+    record.status = "cancelled"
+    record.file_object = json.dumps(
+        {
+            "id": "batch-raw-456",
+            "object": "batch",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "status": "cancelled",
+            "created_at": 1234567890,
+            "input_file_id": raw_input_file_id,
+            "output_file_id": raw_output_file_id,
+            "error_file_id": raw_error_file_id,
+        }
+    )
+    return record
+
+
+@pytest.mark.asyncio
+async def test_list_batches_registers_and_returns_unified_output_file_ids():
+    """A stored batch blob with raw provider file IDs (e.g. persisted by the cost
+    poller for a cancelled batch) must be listed with unified managed IDs, and the
+    output/error files must be registered in the managed file table so GET
+    /files/{id}/content can route them."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    unified_batch_uid = _create_unified_batch_id("model-123", "batch-456")
+    raw_input_file_id = "file-list-in-1"
+    raw_output_file_id = "file-list-out-1"
+    raw_error_file_id = "file-list-err-1"
+    unified_input_file_id = base64.urlsafe_b64encode(
+        b"litellm_proxy:application/octet-stream;unified_id,in-1;target_model_names,gpt-5-batch"
+    ).decode()
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.find_many.return_value = [
+        _terminal_batch_record(
+            unified_batch_uid, raw_input_file_id, raw_output_file_id, raw_error_file_id
+        )
+    ]
+
+    input_file_row = MagicMock()
+    input_file_row.unified_file_id = unified_input_file_id
+
+    def find_managed_file(where):
+        if where["flat_model_file_ids"]["has"] == raw_input_file_id:
+            return input_file_row
+        return None
+
+    prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(
+        side_effect=find_managed_file
+    )
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+
+    result = await proxy_managed_files.list_user_batches(
+        user_api_key_dict=UserAPIKeyAuth(user_id="owner-user"),
+        limit=10,
+    )
+
+    listed = result["data"][0]
+    assert listed.id == unified_batch_uid
+    assert listed.input_file_id == unified_input_file_id
+
+    decoded_output = _decode_unified_id(listed.output_file_id)
+    assert decoded_output.startswith("litellm_proxy")
+    assert f"llm_output_file_id,{raw_output_file_id}" in decoded_output
+    assert "llm_output_file_model_id,model-123" in decoded_output
+    assert "target_model_names,gpt-5-batch" in decoded_output
+
+    decoded_error = _decode_unified_id(listed.error_file_id)
+    assert f"llm_output_file_id,{raw_error_file_id}" in decoded_error
+
+    upsert_calls = prisma_client.db.litellm_managedfiletable.upsert.await_args_list
+    stored_raw_ids = {
+        c.kwargs["data"]["create"]["flat_model_file_ids"][0] for c in upsert_calls
+    }
+    assert stored_raw_ids == {raw_output_file_id, raw_error_file_id}
+    for c in upsert_calls:
+        assert c.kwargs["data"]["create"]["created_by"] == "owner-user"
+        assert c.kwargs["data"]["create"]["team_id"] == "owner-team"
+
+
+@pytest.mark.asyncio
+async def test_list_batches_resolves_existing_managed_rows_without_minting():
+    """When the raw provider file IDs already have managed file rows, listing must
+    swap in the existing unified IDs and must not upsert duplicate rows."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    unified_batch_uid = _create_unified_batch_id("model-123", "batch-456")
+    raw_output_file_id = "file-list-out-existing"
+    existing_unified_output_id = base64.urlsafe_b64encode(
+        f"litellm_proxy:application/json;unified_id,u-9;llm_output_file_id,{raw_output_file_id}".encode()
+    ).decode()
+
+    record = _terminal_batch_record(
+        unified_batch_uid, "file-list-in-9", raw_output_file_id, ""
+    )
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.find_many.return_value = [record]
+
+    existing_row = MagicMock()
+    existing_row.unified_file_id = existing_unified_output_id
+
+    def find_managed_file(where):
+        if where["flat_model_file_ids"]["has"] == raw_output_file_id:
+            return existing_row
+        return None
+
+    prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(
+        side_effect=find_managed_file
+    )
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+
+    result = await proxy_managed_files.list_user_batches(
+        user_api_key_dict=UserAPIKeyAuth(user_id="owner-user"),
+        limit=10,
+    )
+
+    assert result["data"][0].output_file_id == existing_unified_output_id
+    prisma_client.db.litellm_managedfiletable.upsert.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_list_batches_from_managed_objects_table_provider_filter_raises_exception():
     from litellm.proxy._types import UserAPIKeyAuth

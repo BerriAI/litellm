@@ -31,6 +31,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    ensure_batch_response_managed_file_ids,
     get_batch_id_from_unified_batch_id,
     get_content_type_from_file_object,
     get_model_id_from_unified_batch_id,
@@ -352,6 +353,17 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 )
                 batch_obj = LiteLLMBatch.model_validate(batch_data)
                 batch_obj.id = batch.unified_object_id
+                await ensure_batch_response_managed_file_ids(
+                    response=batch_obj,
+                    managed_files_obj=self,
+                    prisma_client=self.prisma_client,
+                    verbose_proxy_logger=verbose_logger,
+                    user_api_key_dict=user_api_key_dict,
+                    db_batch_object=batch,
+                    unified_batch_id=_is_base64_encoded_unified_file_id(
+                        batch.unified_object_id
+                    ),
+                )
                 batch_objects.append(batch_obj)
 
             except Exception as e:
