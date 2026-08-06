@@ -3479,6 +3479,7 @@ all_litellm_params = (
         "user_continue_message",
         "fallback_depth",
         "max_fallbacks",
+        "attempted_targets",
         "max_budget",
         "budget_duration",
         "use_in_pass_through",
