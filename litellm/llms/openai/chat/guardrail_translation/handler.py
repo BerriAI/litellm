@@ -143,7 +143,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             guardrailed_tool_calls: Final = guardrailed_inputs.get("tool_calls", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
-            if guardrailed_tools is not None:
+            if guardrailed_tools is not None and not scan_only_tool_results:
                 data["tools"] = guardrailed_tools
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")

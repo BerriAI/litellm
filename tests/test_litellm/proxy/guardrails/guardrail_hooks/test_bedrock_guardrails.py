@@ -3670,3 +3670,40 @@ async def test_moderation_hook_honors_the_mcp_event_type(mode, call_type, should
             "the scan must be logged under the event it actually ran for, so guardrail logs, "
             "OTel spans, and Langfuse metadata do not misclassify MCP enforcement as an LLM call"
         )
+
+
+class TestScanOnlyToolResultsWithLatestRoleFilter:
+    @pytest.mark.asyncio
+    async def test_warns_and_skips_when_scoped_payload_has_no_user_message(self):
+        """scan_only_tool_results hands Bedrock a tool-role-only payload, but
+        experimental_use_latest_role_message_only scans only the latest user
+        message: the silent no-op must warn."""
+        guardrail = BedrockGuardrail(
+            guardrail_name="bedrock-latest-role-scoped",
+            guardrailIdentifier="test-guardrail",
+            guardrailVersion="DRAFT",
+            default_on=True,
+            experimental_use_latest_role_message_only=True,
+        )
+        guardrail.scan_only_tool_results = True
+        inputs = {
+            "texts": ["TOOL-RESULT"],
+            "structured_messages": [{"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT"}],
+        }
+
+        with (
+            patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api,
+            patch(
+                "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.verbose_proxy_logger.warning"
+            ) as mock_warning,
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={"litellm_call_id": "test-call-id"},
+                input_type="request",
+            )
+
+        mock_api.assert_not_called()
+        assert result["texts"] == ["TOOL-RESULT"]
+        warning_text = " ".join(str(arg) for c in mock_warning.call_args_list for arg in c.args)
+        assert "scan_only_tool_results" in warning_text
