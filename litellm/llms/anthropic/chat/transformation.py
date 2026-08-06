@@ -1935,11 +1935,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 output_key="top_k",
             )
 
-        # ``messages`` must be the last key in the serialized request body: Anthropic's
-        # prompt cache (observed on the Vertex AI global endpoint) keys off the raw
-        # request bytes, and a stable ``system``/``tools`` prefix only hits the cache
-        # on repeat turns when ``messages`` (the part that changes every turn) is
-        # ordered after them, not before.
         data: Final = {
             "model": model,
             **optional_params,
