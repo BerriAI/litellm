@@ -162,6 +162,47 @@ def test_transform_request_passes_tools_through_in_openai_format():
     assert body["tool_choice"] == "auto"
 
 
+def test_transform_request_flattens_content_part_arrays_to_string():
+    config = CloudflareChatConfig()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello"},
+                {"type": "text", "text": "More text"},
+            ],
+        }
+    ]
+
+    body = config.transform_request(
+        model="@cf/meta/llama-2-7b-chat-int8",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["messages"][0]["content"] == "HelloMore text"
+
+
+def test_transform_request_leaves_string_content_untouched():
+    config = CloudflareChatConfig()
+    messages = [
+        {"role": "system", "content": "you are terse"},
+        {"role": "user", "content": "weather in nyc?"},
+    ]
+
+    body = config.transform_request(
+        model="@cf/meta/llama-2-7b-chat-int8",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert [m["content"] for m in body["messages"]] == ["you are terse", "weather in nyc?"]
+
+
 def test_validate_environment_requires_api_key():
     config = CloudflareChatConfig()
 
