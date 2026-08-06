@@ -615,3 +615,45 @@ class TestScanOnlyToolResultsInitRefusal:
             },
         )
         assert result is not None
+
+    def test_prompt_security_default_tool_filtering_rejects_scan_only_tool_results(self, monkeypatch):
+        monkeypatch.delenv("PROMPT_SECURITY_CHECK_TOOL_RESULTS", raising=False)
+        with pytest.raises(ValueError, match="never scans tool results"):
+            self._initialize(
+                "prompt-security-scan-only-combo",
+                {
+                    "guardrail": "prompt_security",
+                    "mode": "pre_call",
+                    "api_key": "test-key",
+                    "api_base": "https://ps.example.com",
+                    "scan_only_tool_results": True,
+                },
+            )
+
+    def test_prompt_security_check_tool_results_accepts_scan_only_tool_results(self, monkeypatch):
+        monkeypatch.setenv("PROMPT_SECURITY_CHECK_TOOL_RESULTS", "true")
+        result = self._initialize(
+            "prompt-security-scan-only-ok",
+            {
+                "guardrail": "prompt_security",
+                "mode": "pre_call",
+                "api_key": "test-key",
+                "api_base": "https://ps.example.com",
+                "scan_only_tool_results": True,
+            },
+        )
+        assert result is not None
+
+    def test_skip_tool_message_with_scan_only_tool_results_is_rejected(self):
+        with pytest.raises(ValueError, match="skip_tool_message_in_guardrail are enabled together"):
+            self._initialize(
+                "bedrock-skip-tool-scan-only-combo",
+                {
+                    "guardrail": "bedrock",
+                    "mode": "pre_call",
+                    "guardrailIdentifier": "gr-1",
+                    "guardrailVersion": "1",
+                    "skip_tool_message_in_guardrail": True,
+                    "scan_only_tool_results": True,
+                },
+            )

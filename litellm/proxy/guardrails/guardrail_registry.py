@@ -16,6 +16,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
 )
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
@@ -496,14 +497,20 @@ class InMemoryGuardrailHandler:
                 "scan_only_tool_results",
             ):
                 setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
-            if (
-                effective_scan_only_tool_results_for_guardrail(custom_guardrail_callback)
-                and not custom_guardrail_callback.supports_scan_only_tool_results()
-            ):
+            scan_only_tool_results_enabled: Final = effective_scan_only_tool_results_for_guardrail(
+                custom_guardrail_callback
+            )
+            if scan_only_tool_results_enabled and not custom_guardrail_callback.supports_scan_only_tool_results():
                 raise ValueError(
                     f"Guardrail {guardrail['guardrail_name']}: scan_only_tool_results is enabled, but this "
                     "guardrail's role filtering never scans tool results, so no request content would ever "
                     "be scanned. Remove scan_only_tool_results or the guardrail's role-filtering option."
+                )
+            if scan_only_tool_results_enabled and effective_skip_tool_message_for_guardrail(custom_guardrail_callback):
+                raise ValueError(
+                    f"Guardrail {guardrail['guardrail_name']}: scan_only_tool_results and "
+                    "skip_tool_message_in_guardrail are enabled together, which excludes every message from "
+                    "scanning, so no request content would ever be scanned. Remove one of the two."
                 )
             configured_run_in_parallel: Final = getattr(litellm_params, "run_in_parallel", None)
             if configured_run_in_parallel is not None:
