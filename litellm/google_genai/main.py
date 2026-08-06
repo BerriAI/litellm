@@ -1,7 +1,8 @@
 import asyncio
 import contextvars
+from collections.abc import Iterator
 from functools import partial
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterator, Optional, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import httpx
 from pydantic import BaseModel, ConfigDict
@@ -17,6 +18,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager, client
 
 if TYPE_CHECKING:
@@ -39,19 +41,25 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
 
+def _mark_async_entrypoint(logging_obj: LiteLLMLoggingObj | None, marker: str, is_async: bool) -> None:
+    if logging_obj is not None:
+        logging_obj.model_call_details.setdefault("litellm_params", {})[marker] = is_async
+
+
 class GenerateContentSetupResult(BaseModel):
     """Internal Type - Result of setting up a generate content call"""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
     model: str
-    request_body: Dict[str, Any]
+    request_body: dict[str, Any]
     custom_llm_provider: str
-    generate_content_provider_config: Optional[BaseGoogleGenAIGenerateContentConfig]
-    generate_content_config_dict: Dict[str, Any]
+    generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig | None
+    generate_content_config_dict: dict[str, Any]
+    native_request_fields: dict[str, object]
     litellm_params: GenericLiteLLMParams
     litellm_logging_obj: LiteLLMLoggingObj
-    litellm_call_id: Optional[str]
+    litellm_call_id: str | None
 
 
 class GenerateContentHelper:
@@ -60,7 +68,7 @@ class GenerateContentHelper:
     @staticmethod
     def mock_generate_content_response(
         mock_response: str = "This is a mock response from Google GenAI generate_content.",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Mock response for generate_content for testing purposes"""
         return {
             "text": mock_response,
@@ -83,9 +91,9 @@ class GenerateContentHelper:
     def setup_generate_content_call(
         model: str,
         contents: GenerateContentContentListUnionDict,
-        config: Optional[GenerateContentConfigDict] = None,
-        custom_llm_provider: Optional[str] = None,
-        tools: Optional[ToolConfigDict] = None,
+        config: GenerateContentConfigDict | None = None,
+        custom_llm_provider: str | None = None,
+        tools: ToolConfigDict | None = None,
         **kwargs,
     ) -> GenerateContentSetupResult:
         """
@@ -102,13 +110,11 @@ class GenerateContentHelper:
         Returns:
             GenerateContentSetupResult containing all setup information
         """
-        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
-            "litellm_logging_obj"
-        )
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         ## MOCK RESPONSE LOGIC (only for non-streaming)
         if (
@@ -134,11 +140,11 @@ class GenerateContentHelper:
             litellm_params.custom_llm_provider = custom_llm_provider
 
         # get provider config
-        generate_content_provider_config: Optional[
-            BaseGoogleGenAIGenerateContentConfig
-        ] = ProviderConfigManager.get_provider_google_genai_generate_content_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        generate_content_provider_config: Final[BaseGoogleGenAIGenerateContentConfig | None] = (
+            ProviderConfigManager.get_provider_google_genai_generate_content_config(
+                model=model,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if generate_content_provider_config is None:
@@ -150,8 +156,9 @@ class GenerateContentHelper:
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 request_body={},  # Will be handled by adapter
-                generate_content_provider_config=None,  # type: ignore
+                generate_content_provider_config=None,
                 generate_content_config_dict=dict(config or {}),
+                native_request_fields={},
                 litellm_params=litellm_params,
                 litellm_logging_obj=litellm_logging_obj,
                 litellm_call_id=litellm_call_id,
@@ -161,24 +168,24 @@ class GenerateContentHelper:
         # Construct request body
         #########################################################################################
         # Create Google Optional Params Config
-        generate_content_config_dict = (
-            generate_content_provider_config.map_generate_content_optional_params(
-                generate_content_config_dict=config or {},
-                model=model,
-            )
+        generate_content_config_dict: Final = generate_content_provider_config.map_generate_content_optional_params(
+            generate_content_config_dict=config or {},
+            model=model,
         )
         # Extract systemInstruction from kwargs to pass to transform
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
-            "system_instruction"
-        )
-        request_body = (
-            generate_content_provider_config.transform_generate_content_request(
-                model=model,
-                contents=contents,
-                tools=tools,
-                generate_content_config_dict=generate_content_config_dict,
-                system_instruction=system_instruction,
-            )
+        system_instruction: Final = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
+        # Native top-level REST fields arrive as loose kwargs and are otherwise dropped.
+        native_request_fields: Final[dict[str, object]] = {
+            field: kwargs[field]
+            for field in generate_content_provider_config.get_generate_content_request_top_level_fields()
+            if field in kwargs
+        }
+        request_body: Final = generate_content_provider_config.transform_generate_content_request(
+            model=model,
+            contents=contents,
+            tools=tools,
+            generate_content_config_dict=generate_content_config_dict,
+            system_instruction=system_instruction,
         )
 
         # Pre Call logging
@@ -201,34 +208,51 @@ class GenerateContentHelper:
             request_body=request_body,
             generate_content_provider_config=generate_content_provider_config,
             generate_content_config_dict=generate_content_config_dict,
+            native_request_fields=native_request_fields,
             litellm_params=litellm_params,
             litellm_logging_obj=litellm_logging_obj,
             litellm_call_id=litellm_call_id,
         )
 
 
+def _merge_native_request_fields(
+    native_request_fields: dict[str, object],
+    extra_body: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """
+    Merge native top-level request fields into ``extra_body`` so the HTTP handler
+    forwards them verbatim onto the outgoing request body. An explicit ``extra_body``
+    value wins on conflict. Returns ``None`` only when there is genuinely nothing to
+    forward (no native fields and no caller-supplied ``extra_body``), preserving the
+    prior behavior without discarding an explicit ``extra_body={}``.
+    """
+    if not native_request_fields and extra_body is None:
+        return None
+    return {**native_request_fields, **(extra_body or {})}
+
+
 @client
 async def agenerate_content(
     model: str,
     contents: GenerateContentContentListUnionDict,
-    config: Optional[GenerateContentConfigDict] = None,
-    tools: Optional[ToolConfigDict] = None,
+    config: GenerateContentConfigDict | None = None,
+    tools: ToolConfigDict | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> Any:
     """
     Async: Generate content using Google GenAI
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["agenerate_content"] = True
 
         # Handle generationConfig parameter from kwargs for backward compatibility
@@ -241,7 +265,7 @@ async def agenerate_content(
                 custom_llm_provider=custom_llm_provider,
             )
 
-        func = partial(
+        func: Final = partial(
             generate_content,
             model=model,
             contents=contents,
@@ -255,9 +279,9 @@ async def agenerate_content(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -279,39 +303,37 @@ async def agenerate_content(
 def generate_content(
     model: str,
     contents: GenerateContentContentListUnionDict,
-    config: Optional[GenerateContentConfigDict] = None,
-    tools: Optional[ToolConfigDict] = None,
+    config: GenerateContentConfigDict | None = None,
+    tools: ToolConfigDict | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> Any:
     """
     Generate content using Google GenAI
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        _is_async = kwargs.pop("agenerate_content", False)
+        _is_async: Final = kwargs.pop("agenerate_content", False)
+
+        _mark_async_entrypoint(kwargs.get("litellm_logging_obj"), CallTypes.agenerate_content.value, _is_async)
 
         # Handle generationConfig parameter from kwargs for backward compatibility
         if "generationConfig" in kwargs and config is None:
             config = kwargs.pop("generationConfig")
         # Check for mock response first
-        litellm_params = GenericLiteLLMParams(**kwargs)
-        if litellm_params.mock_response and isinstance(
-            litellm_params.mock_response, str
-        ):
-            return GenerateContentHelper.mock_generate_content_response(
-                mock_response=litellm_params.mock_response
-            )
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
+            return GenerateContentHelper.mock_generate_content_response(mock_response=litellm_params.mock_response)
 
         # Setup the call
-        setup_result = GenerateContentHelper.setup_generate_content_call(
+        setup_result: Final = GenerateContentHelper.setup_generate_content_call(
             model=model,
             contents=contents,
             config=config,
@@ -321,16 +343,14 @@ def generate_content(
         )
 
         # Extract systemInstruction from kwargs to pass to handler
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
-            "system_instruction"
-        )
+        system_instruction: Final = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
             # Use the adapter to convert to completion format
             return GenerateContentToCompletionHandler.generate_content_handler(
                 model=model,
-                contents=contents,  # type: ignore
+                contents=contents,
                 config=setup_result.generate_content_config_dict,
                 tools=tools,
                 _is_async=_is_async,
@@ -340,7 +360,7 @@ def generate_content(
             )
 
         # Call the standard handler
-        response = base_llm_http_handler.generate_content_handler(
+        response: Final = base_llm_http_handler.generate_content_handler(
             model=setup_result.model,
             contents=contents,
             tools=tools,
@@ -350,7 +370,7 @@ def generate_content(
             litellm_params=setup_result.litellm_params,
             logging_obj=setup_result.litellm_logging_obj,
             extra_headers=extra_headers,
-            extra_body=extra_body,
+            extra_body=_merge_native_request_fields(setup_result.native_request_fields, extra_body),
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
@@ -373,24 +393,26 @@ def generate_content(
 async def agenerate_content_stream(
     model: str,
     contents: GenerateContentContentListUnionDict,
-    config: Optional[GenerateContentConfigDict] = None,
-    tools: Optional[ToolConfigDict] = None,
+    config: GenerateContentConfigDict | None = None,
+    tools: ToolConfigDict | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> Any:
     """
     Async: Generate content using Google GenAI with streaming response
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
         kwargs["agenerate_content_stream"] = True
+
+        _mark_async_entrypoint(kwargs.get("litellm_logging_obj"), CallTypes.agenerate_content_stream.value, True)
 
         # Handle generationConfig parameter from kwargs for backward compatibility
         if "generationConfig" in kwargs and config is None:
@@ -402,7 +424,7 @@ async def agenerate_content_stream(
             )
 
         # Setup the call
-        setup_result = GenerateContentHelper.setup_generate_content_call(
+        setup_result: Final = GenerateContentHelper.setup_generate_content_call(
             model=model,
             contents=contents,
             config=config,
@@ -412,9 +434,7 @@ async def agenerate_content_stream(
         )
 
         # Extract systemInstruction from kwargs to pass to handler
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
-            "system_instruction"
-        )
+        system_instruction: Final = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
@@ -422,17 +442,15 @@ async def agenerate_content_stream(
                 kwargs.pop("stream", None)
 
             # Use the adapter to convert to completion format
-            return (
-                await GenerateContentToCompletionHandler.async_generate_content_handler(
-                    model=model,
-                    contents=contents,  # type: ignore
-                    config=setup_result.generate_content_config_dict,
-                    litellm_params=setup_result.litellm_params,
-                    tools=tools,
-                    stream=True,
-                    extra_headers=extra_headers,
-                    **kwargs,
-                )
+            return await GenerateContentToCompletionHandler.async_generate_content_handler(
+                model=model,
+                contents=contents,
+                config=setup_result.generate_content_config_dict,
+                litellm_params=setup_result.litellm_params,
+                tools=tools,
+                stream=True,
+                extra_headers=extra_headers,
+                **kwargs,
             )
 
         # Call the handler with async enabled and streaming
@@ -447,7 +465,7 @@ async def agenerate_content_stream(
             litellm_params=setup_result.litellm_params,
             logging_obj=setup_result.litellm_logging_obj,
             extra_headers=extra_headers,
-            extra_body=extra_body,
+            extra_body=_merge_native_request_fields(setup_result.native_request_fields, extra_body),
             timeout=timeout or request_timeout,
             _is_async=True,
             client=kwargs.get("client"),
@@ -470,31 +488,33 @@ async def agenerate_content_stream(
 def generate_content_stream(
     model: str,
     contents: GenerateContentContentListUnionDict,
-    config: Optional[GenerateContentConfigDict] = None,
-    tools: Optional[ToolConfigDict] = None,
+    config: GenerateContentConfigDict | None = None,
+    tools: ToolConfigDict | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> Iterator[Any]:
     """
     Generate content using Google GenAI with streaming response
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
         # Remove any async-related flags since this is the sync function
-        _is_async = kwargs.pop("agenerate_content_stream", False)
+        _is_async: Final = kwargs.pop("agenerate_content_stream", False)
+
+        _mark_async_entrypoint(kwargs.get("litellm_logging_obj"), CallTypes.agenerate_content_stream.value, _is_async)
 
         # Handle generationConfig parameter from kwargs for backward compatibility
         if "generationConfig" in kwargs and config is None:
             config = kwargs.pop("generationConfig")
         # Setup the call
-        setup_result = GenerateContentHelper.setup_generate_content_call(
+        setup_result: Final = GenerateContentHelper.setup_generate_content_call(
             model=model,
             contents=contents,
             config=config,
@@ -502,6 +522,9 @@ def generate_content_stream(
             tools=tools,
             **kwargs,
         )
+
+        # Extract systemInstruction from kwargs to pass to handler
+        system_instruction: Final = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
@@ -511,7 +534,7 @@ def generate_content_stream(
             # Use the adapter to convert to completion format
             return GenerateContentToCompletionHandler.generate_content_handler(
                 model=model,
-                contents=contents,  # type: ignore
+                contents=contents,
                 config=setup_result.generate_content_config_dict,
                 _is_async=_is_async,
                 litellm_params=setup_result.litellm_params,
@@ -531,12 +554,13 @@ def generate_content_stream(
             litellm_params=setup_result.litellm_params,
             logging_obj=setup_result.litellm_logging_obj,
             extra_headers=extra_headers,
-            extra_body=extra_body,
+            extra_body=_merge_native_request_fields(setup_result.native_request_fields, extra_body),
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
             stream=True,
             litellm_metadata=kwargs.get("litellm_metadata", {}),
+            system_instruction=system_instruction,
         )
 
     except Exception as e:

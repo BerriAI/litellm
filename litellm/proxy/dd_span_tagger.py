@@ -1,5 +1,3 @@
-from typing import Optional
-
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.dd_tracing import set_active_span_tag
 from litellm.proxy._types import UserAPIKeyAuth
@@ -9,7 +7,7 @@ class DDSpanTagger:
     """Best-effort helpers for tagging the active Datadog APM span with LiteLLM request metadata."""
 
     @staticmethod
-    def tag_call_id(litellm_call_id: Optional[str]) -> None:
+    def tag_call_id(litellm_call_id: str | None) -> None:
         """
         Attach LiteLLM call id to the active Datadog APM span.
 
@@ -29,7 +27,7 @@ class DDSpanTagger:
     @staticmethod
     def tag_request(
         user_api_key_dict: UserAPIKeyAuth,
-        requested_model: Optional[str],
+        requested_model: str | None,
     ) -> None:
         """
         Attach key and model tags to the active Datadog APM span.
@@ -48,9 +46,7 @@ class DDSpanTagger:
         """
         try:
             if user_api_key_dict.key_alias:
-                set_active_span_tag(
-                    "litellm.key_alias", str(user_api_key_dict.key_alias)
-                )
+                set_active_span_tag("litellm.key_alias", str(user_api_key_dict.key_alias))
             if user_api_key_dict.token:
                 set_active_span_tag("litellm.key_hash", str(user_api_key_dict.token))
             if requested_model:

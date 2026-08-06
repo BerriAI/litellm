@@ -6,7 +6,7 @@ so they appear cleanly in the LiteLLM Logs page.
 """
 
 from datetime import datetime
-from typing import Dict
+from typing import Final
 
 import httpx
 
@@ -18,7 +18,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.utils import StandardPassThroughResponseObject
 
-CURSOR_AGENT_ENDPOINTS: Dict[str, str] = {
+CURSOR_AGENT_ENDPOINTS: Final[dict[str, str]] = {
     "POST /v0/agents": "cursor:agent:create",
     "GET /v0/agents": "cursor:agent:list",
     "POST /v0/agents/{id}/followup": "cursor:agent:followup",
@@ -34,7 +34,7 @@ CURSOR_AGENT_ENDPOINTS: Dict[str, str] = {
 
 def _classify_cursor_request(method: str, path: str) -> str:
     """Classify a Cursor API request into a readable operation name."""
-    normalized = path.rstrip("/")
+    normalized: Final = path.rstrip("/")
 
     for pattern, operation in CURSOR_AGENT_ENDPOINTS.items():
         pat_method, pat_path = pattern.split(" ", 1)
@@ -80,17 +80,17 @@ class CursorPassthroughLoggingHandler:
         Transform a Cursor API response into a standard logging payload.
         """
         try:
-            method = httpx_response.request.method
-            path = httpx.URL(url_route).path
-            operation = _classify_cursor_request(method, path)
+            method: Final = httpx_response.request.method
+            path: Final = httpx.URL(url_route).path
+            operation: Final = _classify_cursor_request(method, path)
 
-            agent_id = response_body.get("id", "")
-            agent_name = response_body.get("name", "")
-            agent_status = response_body.get("status", "")
+            agent_id: Final = response_body.get("id", "")
+            agent_name: Final = response_body.get("name", "")
+            agent_status: Final = response_body.get("status", "")
 
-            model_name = f"cursor/{operation}"
+            model_name: Final = f"cursor/{operation}"
 
-            summary_parts = []
+            summary_parts: Final = []
             if agent_id:
                 summary_parts.append(f"id={agent_id}")
             if agent_name:
@@ -98,7 +98,7 @@ class CursorPassthroughLoggingHandler:
             if agent_status:
                 summary_parts.append(f"status={agent_status}")
 
-            response_summary = ", ".join(summary_parts) if summary_parts else result
+            response_summary: Final = ", ".join(summary_parts) if summary_parts else result
 
             kwargs["model"] = model_name
             kwargs["response_cost"] = 0.0
@@ -106,11 +106,9 @@ class CursorPassthroughLoggingHandler:
             logging_obj.model_call_details["custom_llm_provider"] = "cursor"
             logging_obj.model_call_details["response_cost"] = 0.0
 
-            standard_logging_object = get_standard_logging_object_payload(
+            standard_logging_object: Final = get_standard_logging_object_payload(
                 kwargs=kwargs,
-                init_response_obj=StandardPassThroughResponseObject(
-                    response=response_summary
-                ),
+                init_response_obj=StandardPassThroughResponseObject(response=response_summary),
                 start_time=start_time,
                 end_time=end_time,
                 logging_obj=logging_obj,
@@ -129,9 +127,7 @@ class CursorPassthroughLoggingHandler:
                 "kwargs": kwargs,
             }
         except Exception as e:
-            verbose_proxy_logger.exception(
-                "Error in Cursor passthrough logging handler: %s", e
-            )
+            verbose_proxy_logger.exception("Error in Cursor passthrough logging handler: %s", e)
             return {
                 "result": StandardPassThroughResponseObject(response=result),
                 "kwargs": kwargs,

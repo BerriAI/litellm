@@ -8,26 +8,23 @@ from __future__ import annotations
 
 import glob
 import os
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 
 
 def wipe_directory(directory: str) -> None:
     """Delete all .db files in the directory. Called once before workers fork."""
-    files = glob.glob(os.path.join(directory, "*.db"))
+    files: Final = glob.glob(os.path.join(directory, "*.db"))
     deleted = 0
     for filepath in files:
         try:
             os.remove(filepath)
             deleted += 1
         except OSError as e:
-            verbose_proxy_logger.warning(
-                f"Failed to delete stale prometheus file {filepath}: {e}"
-            )
+            verbose_proxy_logger.warning("Failed to delete stale prometheus file %s: %s", filepath, e)
     if deleted:
-        verbose_proxy_logger.info(
-            f"Prometheus cleanup: wiped {deleted} stale .db files from {directory}"
-        )
+        verbose_proxy_logger.info("Prometheus cleanup: wiped %s stale .db files from %s", deleted, directory)
 
 
 def mark_worker_exit(worker_pid: int) -> None:
@@ -38,10 +35,6 @@ def mark_worker_exit(worker_pid: int) -> None:
         from prometheus_client import multiprocess
 
         multiprocess.mark_process_dead(worker_pid)
-        verbose_proxy_logger.info(
-            f"Prometheus cleanup: marked worker {worker_pid} as dead"
-        )
+        verbose_proxy_logger.info("Prometheus cleanup: marked worker %s as dead", worker_pid)
     except Exception as e:
-        verbose_proxy_logger.warning(
-            f"Failed to mark prometheus worker {worker_pid} as dead: {e}"
-        )
+        verbose_proxy_logger.warning("Failed to mark prometheus worker %s as dead: %s", worker_pid, e)

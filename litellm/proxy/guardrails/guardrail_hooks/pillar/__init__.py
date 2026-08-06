@@ -2,7 +2,7 @@
 Pillar Security Guardrail Integration for LiteLLM
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -19,13 +19,13 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
-    guardrail_name = guardrail.get("guardrail_name")
+    guardrail_name: Final = guardrail.get("guardrail_name")
     if not guardrail_name:
         raise ValueError("Pillar guardrail name is required")
 
-    optional_params = getattr(litellm_params, "optional_params", None)
+    optional_params: Final = getattr(litellm_params, "optional_params", None)
 
-    _pillar_callback = PillarGuardrail(
+    _pillar_callback: Final = PillarGuardrail(
         guardrail_name=guardrail_name,
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
@@ -33,18 +33,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
         async_mode=_get_config_value(litellm_params, optional_params, "async_mode"),
-        persist_session=_get_config_value(
-            litellm_params, optional_params, "persist_session"
-        ),
-        include_scanners=_get_config_value(
-            litellm_params, optional_params, "include_scanners"
-        ),
-        include_evidence=_get_config_value(
-            litellm_params, optional_params, "include_evidence"
-        ),
-        fallback_on_error=_get_config_value(
-            litellm_params, optional_params, "fallback_on_error"
-        ),
+        persist_session=_get_config_value(litellm_params, optional_params, "persist_session"),
+        include_scanners=_get_config_value(litellm_params, optional_params, "include_scanners"),
+        include_evidence=_get_config_value(litellm_params, optional_params, "include_evidence"),
+        fallback_on_error=_get_config_value(litellm_params, optional_params, "fallback_on_error"),
         timeout=_get_config_value(litellm_params, optional_params, "timeout"),
     )
     litellm.logging_callback_manager.add_litellm_callback(_pillar_callback)
@@ -56,18 +48,18 @@ def _get_config_value(litellm_params, optional_params, attribute_name):
     """Return guardrail configuration value prioritising optional params when present."""
 
     if optional_params is not None:
-        value = getattr(optional_params, attribute_name, None)
+        value: Final = getattr(optional_params, attribute_name, None)
         if value is not None:
             return value
     return getattr(litellm_params, attribute_name, None)
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.PILLAR.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.PILLAR.value: PillarGuardrail,
 }
 

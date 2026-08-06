@@ -9,7 +9,7 @@ Requires:
 """
 
 import os
-from typing import Optional
+from typing import Final
 
 import litellm
 from litellm.proxy._types import KeyManagementSystem
@@ -17,25 +17,21 @@ from litellm.proxy._types import KeyManagementSystem
 
 def validate_environment():
     if "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
-        raise ValueError(
-            "Missing required environment variable - GOOGLE_APPLICATION_CREDENTIALS"
-        )
+        raise ValueError("Missing required environment variable - GOOGLE_APPLICATION_CREDENTIALS")
     if "GOOGLE_KMS_RESOURCE_NAME" not in os.environ:
-        raise ValueError(
-            "Missing required environment variable - GOOGLE_KMS_RESOURCE_NAME"
-        )
+        raise ValueError("Missing required environment variable - GOOGLE_KMS_RESOURCE_NAME")
 
 
-def load_google_kms(use_google_kms: Optional[bool]):
+def load_google_kms(use_google_kms: bool | None):
     if use_google_kms is None or use_google_kms is False:
         return
     try:
-        from google.cloud import kms_v1  # type: ignore
+        from google.cloud import kms_v1
 
         validate_environment()
 
         # Create the KMS client
-        client = kms_v1.KeyManagementServiceClient()
+        client: Final = kms_v1.KeyManagementServiceClient()
         litellm.secret_manager_client = client
         litellm._key_management_system = KeyManagementSystem.GOOGLE_KMS
         litellm._google_kms_resource_name = os.getenv("GOOGLE_KMS_RESOURCE_NAME")

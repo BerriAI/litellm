@@ -1,17 +1,10 @@
 import datetime
 import traceback
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncIterator,
-    Dict,
-    Iterator,
-    Optional,
-    Union,
-    cast,
-)
+from collections.abc import AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any, Final, Optional, cast
 
 import anyio
+
 from litellm.files.types import FileContentProvider
 
 if TYPE_CHECKING:
@@ -29,10 +22,10 @@ class FileContentStreamingResponse:
 
     def __init__(
         self,
-        stream_iterator: Union[Iterator[bytes], AsyncIterator[bytes]],
+        stream_iterator: Iterator[bytes] | AsyncIterator[bytes],
         file_id: str,
-        model: Optional[str],
-        custom_llm_provider: Optional[Union[FileContentProvider, str]],
+        model: str | None,
+        custom_llm_provider: FileContentProvider | str | None,
         logging_obj: Optional["LiteLLMLoggingObj"],
     ) -> None:
         self.stream_iterator = stream_iterator
@@ -40,8 +33,8 @@ class FileContentStreamingResponse:
         self.model = model
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj = logging_obj
-        self.standard_logging_object: Optional["StandardLoggingPayload"] = None
-        self._hidden_params: Dict[str, Any] = {}
+        self.standard_logging_object: StandardLoggingPayload | None = None
+        self._hidden_params: dict[str, Any] = {}
         self._logging_completed = False
         self._close_completed = False
         self._start_time = (
@@ -93,18 +86,16 @@ class FileContentStreamingResponse:
 
         self._close_completed = True
         self._logging_completed = True
-        stream_to_close = self.stream_iterator
-        self.stream_iterator = cast(
-            Union[Iterator[bytes], AsyncIterator[bytes]], iter(())
-        )
+        stream_to_close: Final = self.stream_iterator
+        self.stream_iterator = cast(Iterator[bytes] | AsyncIterator[bytes], iter(()))
 
         # Shield cleanup from request cancellation so upstream HTTP connections
         # are released promptly on client disconnects.
         with anyio.CancelScope(shield=True):
             if hasattr(stream_to_close, "aclose"):
-                await cast(AsyncIterator[bytes], stream_to_close).aclose()  # type: ignore[attr-defined]
+                await cast(AsyncIterator[bytes], stream_to_close).aclose()
             elif hasattr(stream_to_close, "close"):
-                result = cast(Iterator[bytes], stream_to_close).close()  # type: ignore[attr-defined]
+                result: Final = cast(Iterator[bytes], stream_to_close).close()
                 if result is not None:
                     await result
 
@@ -114,16 +105,14 @@ class FileContentStreamingResponse:
 
         self._close_completed = True
         self._logging_completed = True
-        stream_to_close = self.stream_iterator
-        self.stream_iterator = cast(
-            Union[Iterator[bytes], AsyncIterator[bytes]], iter(())
-        )
+        stream_to_close: Final = self.stream_iterator
+        self.stream_iterator = cast(Iterator[bytes] | AsyncIterator[bytes], iter(()))
 
         if hasattr(stream_to_close, "close"):
-            cast(Iterator[bytes], stream_to_close).close()  # type: ignore[attr-defined]
+            cast(Iterator[bytes], stream_to_close).close()
 
-    def _build_logging_response(self) -> Dict[str, str]:
-        response = {
+    def _build_logging_response(self) -> dict[str, str]:
+        response: Final = {
             "id": self.file_id,
             "object": "file.content",
         }
@@ -134,9 +123,7 @@ class FileContentStreamingResponse:
     def _sync_hidden_params(self) -> None:
         litellm_params: dict[str, Any] = {}
         if self.logging_obj is not None:
-            litellm_params = (
-                self.logging_obj.model_call_details.get("litellm_params", {}) or {}
-            )
+            litellm_params = self.logging_obj.model_call_details.get("litellm_params", {}) or {}
 
         if "api_base" not in self._hidden_params and litellm_params.get("api_base"):
             self._hidden_params["api_base"] = litellm_params["api_base"]
@@ -162,7 +149,7 @@ class FileContentStreamingResponse:
         )
 
         self._sync_hidden_params()
-        payload = get_standard_logging_object_payload(
+        payload: Final = get_standard_logging_object_payload(
             kwargs=self.logging_obj.model_call_details,
             init_response_obj=self._build_logging_response(),
             start_time=self._start_time,
@@ -173,10 +160,10 @@ class FileContentStreamingResponse:
         if payload is None:
             return None
 
-        merged_hidden_params = cast(
+        merged_hidden_params: Final = cast(
             "StandardLoggingHiddenParams",
             {
-                **cast(Dict[str, Any], payload.get("hidden_params") or {}),
+                **cast(dict[str, Any], payload.get("hidden_params") or {}),
                 **self._hidden_params,
             },
         )
@@ -197,8 +184,8 @@ class FileContentStreamingResponse:
             return
 
         self._logging_completed = True
-        end_time = datetime.datetime.now()
-        standard_logging_object = self._build_standard_logging_object(end_time=end_time)
+        end_time: Final = datetime.datetime.now()
+        standard_logging_object: Final = self._build_standard_logging_object(end_time=end_time)
         await self.logging_obj.async_success_handler(
             result=self._build_logging_response(),
             start_time=self._start_time,
@@ -216,8 +203,8 @@ class FileContentStreamingResponse:
             return
 
         self._logging_completed = True
-        end_time = datetime.datetime.now()
-        standard_logging_object = self._build_standard_logging_object(end_time=end_time)
+        end_time: Final = datetime.datetime.now()
+        standard_logging_object: Final = self._build_standard_logging_object(end_time=end_time)
         self.logging_obj.success_handler(
             result=self._build_logging_response(),
             start_time=self._start_time,
@@ -230,21 +217,15 @@ class FileContentStreamingResponse:
             return
 
         self._logging_completed = True
-        end_time = datetime.datetime.now()
-        traceback_str = traceback.format_exc()
-        self.logging_obj.failure_handler(
-            error, traceback_str, self._start_time, end_time
-        )
-        await self.logging_obj.async_failure_handler(
-            error, traceback_str, self._start_time, end_time
-        )
+        end_time: Final = datetime.datetime.now()
+        traceback_str: Final = traceback.format_exc()
+        self.logging_obj.failure_handler(error, traceback_str, self._start_time, end_time)
+        await self.logging_obj.async_failure_handler(error, traceback_str, self._start_time, end_time)
 
     def _log_failure_sync(self, error: Exception) -> None:
         if self._logging_completed or self.logging_obj is None:
             return
 
         self._logging_completed = True
-        end_time = datetime.datetime.now()
-        self.logging_obj.failure_handler(
-            error, traceback.format_exc(), self._start_time, end_time
-        )
+        end_time: Final = datetime.datetime.now()
+        self.logging_obj.failure_handler(error, traceback.format_exc(), self._start_time, end_time)

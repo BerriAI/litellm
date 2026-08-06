@@ -2,7 +2,7 @@ import { Drawer, Tag, Typography } from "antd";
 import { CloseOutlined, CopyOutlined, CheckOutlined } from "@ant-design/icons";
 import { useState, useCallback } from "react";
 import moment from "moment";
-import { AuditLogEntry } from "../columns";
+import { AuditLogEntry } from "../AuditLogsTableColumns";
 import DefaultProxyAdminTag from "../../common_components/DefaultProxyAdminTag";
 
 const { Text } = Typography;
@@ -55,12 +55,12 @@ function CopyableJsonBlock({ label, value }: { label: string; value: Record<stri
   }, [value]);
 
   return (
-    <div className="bg-white rounded border overflow-hidden">
+    <div className="bg-white rounded-sm border overflow-hidden">
       <div className="flex justify-between items-center px-3 py-2 border-b bg-gray-50">
         <span className="text-xs font-semibold text-gray-600">{label}</span>
         <button
           onClick={handleCopy}
-          className="p-1 hover:bg-gray-200 rounded text-gray-500 hover:text-gray-700 transition-colors"
+          className="p-1 hover:bg-gray-200 rounded-sm text-gray-500 hover:text-gray-700 transition-colors"
           title="Copy JSON"
         >
           {copied ? <CheckOutlined className="text-green-600" /> : <CopyOutlined />}
@@ -127,7 +127,7 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
   const renderValue = (label: string, value: Record<string, any> | null | undefined) => {
     if (!value || Object.keys(value).length === 0) {
       return (
-        <div className="bg-white rounded border overflow-hidden">
+        <div className="bg-white rounded-sm border overflow-hidden">
           <div className="flex items-center px-3 py-2 border-b bg-gray-50">
             <span className="text-xs font-semibold text-gray-600">{label}</span>
           </div>
@@ -142,7 +142,7 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
       const hasOnlyKnown = Object.keys(value).every((k) => knownKeyFields.includes(k));
       if (hasOnlyKnown && !("note" in value)) {
         return (
-          <div className="bg-white rounded border overflow-hidden">
+          <div className="bg-white rounded-sm border overflow-hidden">
             <div className="flex items-center px-3 py-2 border-b bg-gray-50">
               <span className="text-xs font-semibold text-gray-600">{label}</span>
             </div>
@@ -208,7 +208,7 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
         </div>
         <button
           onClick={onClose}
-          className="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-100 text-gray-500"
+          className="w-8 h-8 flex items-center justify-center rounded-sm hover:bg-gray-100 text-gray-500"
           aria-label="Close"
         >
           <CloseOutlined />

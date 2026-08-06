@@ -6,7 +6,7 @@ then builds a SemanticRouter for prompt matching.
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import yaml
 
@@ -20,16 +20,16 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
-ROUTE_TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "route_templates")
+ROUTE_TEMPLATES_DIR: Final = os.path.join(os.path.dirname(__file__), "route_templates")
 
 
 class SemanticGuardRouteLoader:
     """Loads route definitions from YAML templates and custom configs, builds SemanticRouter."""
 
     @staticmethod
-    def load_builtin_template(template_name: str) -> Dict[str, Any]:
+    def load_builtin_template(template_name: str) -> dict[str, Any]:
         """Load a built-in route template YAML by name."""
-        file_path = os.path.join(ROUTE_TEMPLATES_DIR, f"{template_name}.yaml")
+        file_path: Final = os.path.join(ROUTE_TEMPLATES_DIR, f"{template_name}.yaml")
         if not os.path.exists(file_path):
             raise ValueError(
                 f"SemanticGuard: unknown route template '{template_name}'. "
@@ -39,9 +39,9 @@ class SemanticGuardRouteLoader:
             return yaml.safe_load(f)
 
     @staticmethod
-    def list_builtin_templates() -> List[str]:
+    def list_builtin_templates() -> list[str]:
         """List available built-in template names."""
-        templates = []
+        templates: Final = []
         if os.path.isdir(ROUTE_TEMPLATES_DIR):
             for fname in os.listdir(ROUTE_TEMPLATES_DIR):
                 if fname.endswith(".yaml"):
@@ -49,34 +49,30 @@ class SemanticGuardRouteLoader:
         return sorted(templates)
 
     @staticmethod
-    def load_custom_routes_file(file_path: str) -> List[Dict[str, Any]]:
+    def load_custom_routes_file(file_path: str) -> list[dict[str, Any]]:
         """Load custom routes from a YAML file."""
         if not os.path.exists(file_path):
-            raise ValueError(
-                f"SemanticGuard: custom routes file not found: {file_path}"
-            )
+            raise ValueError(f"SemanticGuard: custom routes file not found: {file_path}")
         with open(file_path, "r") as f:
-            data = yaml.safe_load(f)
+            data: Final = yaml.safe_load(f)
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
             return [data]
-        raise ValueError(
-            f"SemanticGuard: invalid custom routes file format in {file_path}"
-        )
+        raise ValueError(f"SemanticGuard: invalid custom routes file format in {file_path}")
 
     @classmethod
     def build_routes(
         cls,
-        route_templates: Optional[List[str]],
-        custom_routes_file: Optional[str],
-        custom_routes: Optional[List[Dict[str, Any]]],
+        route_templates: list[str] | None,
+        custom_routes_file: str | None,
+        custom_routes: list[dict[str, Any]] | None,
         global_threshold: float = DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD,
-    ) -> List["Route"]:
+    ) -> list["Route"]:
         """Build semantic-router Route objects from templates + custom config."""
         from semantic_router.routers.base import Route
 
-        routes: List[Route] = []
+        routes: Final[list[Route]] = []
 
         if route_templates:
             for template_name in route_templates:
@@ -92,7 +88,7 @@ class SemanticGuardRouteLoader:
                 )
 
         if custom_routes_file:
-            custom_defs = cls.load_custom_routes_file(custom_routes_file)
+            custom_defs: Final = cls.load_custom_routes_file(custom_routes_file)
             for route_def in custom_defs:
                 threshold = route_def.get("similarity_threshold", global_threshold)
                 routes.append(
@@ -116,13 +112,13 @@ class SemanticGuardRouteLoader:
                     )
                 )
 
-        verbose_logger.info(f"SemanticGuard: built {len(routes)} routes")
+        verbose_logger.info("SemanticGuard: built %s routes", len(routes))
         return routes
 
     @classmethod
     def build_semantic_router(
         cls,
-        routes: List["Route"],
+        routes: list["Route"],
         litellm_router: "Router",
         embedding_model: str,
         global_threshold: float,
@@ -134,7 +130,7 @@ class SemanticGuardRouteLoader:
             LiteLLMRouterEncoder,
         )
 
-        encoder = LiteLLMRouterEncoder(
+        encoder: Final = LiteLLMRouterEncoder(
             litellm_router_instance=litellm_router,
             model_name=embedding_model,
             score_threshold=global_threshold,

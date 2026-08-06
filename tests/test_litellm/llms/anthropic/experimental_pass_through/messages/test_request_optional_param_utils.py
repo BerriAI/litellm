@@ -6,6 +6,7 @@ Regression tests for the /v1/messages request-parse fast paths:
   while resolving the (static) type hints only once per process.
 """
 
+import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
     AnthropicMessagesRequestUtils,
     _anthropic_messages_optional_param_keys,
@@ -54,3 +55,36 @@ def test_empty_params():
         )
         == {}
     )
+
+
+def test_drop_params_strips_speed_for_unsupported_model():
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = (
+            AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+                params={"speed": "fast", "temperature": 0.5},
+                model="claude-sonnet-4-6",
+            )
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result == {"temperature": 0.5}
+    assert "speed" not in result
+
+
+def test_drop_params_keeps_speed_for_supporting_model():
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = (
+            AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+                params={"speed": "fast"},
+                model="claude-opus-4-6",
+            )
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result == {"speed": "fast"}

@@ -11,15 +11,15 @@ Reference: https://open.manus.im/docs/openai-compatibility#file-management
 """
 
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Final
 
 import httpx
 from openai.types.file_deleted import FileDeleted
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
@@ -37,7 +37,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import LlmProviders
 
-MANUS_API_BASE = "https://api.manus.im"
+MANUS_API_BASE: Final = "https://api.manus.im"
 
 
 class ManusFilesConfig(BaseFilesConfig):
@@ -66,8 +66,8 @@ class ManusFilesConfig(BaseFilesConfig):
         messages: list,
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and set up headers for Manus API.
@@ -92,9 +92,7 @@ class ManusFilesConfig(BaseFilesConfig):
         )
         return headers
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAICreateFileRequestOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         """
         Return supported OpenAI file creation parameters for Manus.
         Manus supports the standard 'purpose' parameter.
@@ -116,12 +114,12 @@ class ManusFilesConfig(BaseFilesConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for Manus Files API endpoint.
@@ -129,12 +127,7 @@ class ManusFilesConfig(BaseFilesConfig):
         Returns:
             str: The full URL for the Manus /v1/files endpoint
         """
-        api_base = (
-            api_base
-            or litellm.api_base
-            or get_secret_str("MANUS_API_BASE")
-            or MANUS_API_BASE
-        )
+        api_base = api_base or litellm.api_base or get_secret_str("MANUS_API_BASE") or MANUS_API_BASE
 
         # Remove trailing slashes
         api_base = api_base.rstrip("/")
@@ -148,7 +141,7 @@ class ManusFilesConfig(BaseFilesConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Union[dict, httpx.Headers],
+        headers: dict | httpx.Headers,
     ) -> BaseLLMException:
         """
         Return the appropriate error class for Manus API errors.
@@ -175,16 +168,16 @@ class ManusFilesConfig(BaseFilesConfig):
         2. PUT to upload_url with raw file content
         """
         # Extract file data
-        file_data = create_file_data.get("file")
+        file_data: Final = create_file_data.get("file")
         if file_data is None:
             raise ValueError("File data is required")
 
-        extracted_data = extract_file_data(file_data)
-        filename = extracted_data["filename"] or f"file_{int(time.time())}"
-        content = extracted_data["content"]
+        extracted_data: Final = extract_file_data(file_data)
+        filename: Final = extracted_data["filename"] or f"file_{int(time.time())}"
+        content: Final = extracted_data["content"]
 
         # Get API base URL
-        api_base = self.get_complete_url(
+        api_base: Final = self.get_complete_url(
             api_base=litellm_params.get("api_base"),
             api_key=litellm_params.get("api_key"),
             model=model,
@@ -193,11 +186,7 @@ class ManusFilesConfig(BaseFilesConfig):
         )
 
         # Get API key
-        api_key = (
-            litellm_params.get("api_key")
-            or litellm.api_key
-            or get_secret_str("MANUS_API_KEY")
-        )
+        api_key: Final = litellm_params.get("api_key") or litellm.api_key or get_secret_str("MANUS_API_KEY")
 
         if not api_key:
             raise ValueError(
@@ -227,7 +216,7 @@ class ManusFilesConfig(BaseFilesConfig):
 
     def transform_create_file_response(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
@@ -251,18 +240,18 @@ class ManusFilesConfig(BaseFilesConfig):
         """
         try:
             # For two-step uploads, get the initial response from litellm_params
-            initial_response_data = litellm_params.get("initial_file_response")
+            initial_response_data: Final = litellm_params.get("initial_file_response")
             if initial_response_data:
                 response_json = initial_response_data
             else:
                 # Log raw response for debugging
-                verbose_logger.debug(f"Manus raw response text: {raw_response.text}")
+                verbose_logger.debug("Manus raw response text: %s", raw_response.text)
                 response_json = raw_response.json()
 
-            verbose_logger.debug(f"Manus file response: {response_json}")
+            verbose_logger.debug("Manus file response: %s", response_json)
 
             # Parse created_at timestamp
-            created_at_str = response_json.get("created_at", "")
+            created_at_str: Final = response_json.get("created_at", "")
             if created_at_str:
                 try:
                     # Try parsing ISO format
@@ -290,8 +279,8 @@ class ManusFilesConfig(BaseFilesConfig):
                 status_details=response_json.get("status_details"),
             )
         except Exception as e:
-            verbose_logger.exception(f"Error parsing Manus file response: {str(e)}")
-            raise ValueError(f"Error parsing Manus file response: {str(e)}")
+            verbose_logger.exception("Error parsing Manus file response: %s", e)
+            raise ValueError(f"Error parsing Manus file response: {e}")
 
     def transform_retrieve_file_request(
         self,
@@ -300,14 +289,14 @@ class ManusFilesConfig(BaseFilesConfig):
         litellm_params: dict,
     ) -> tuple[str, dict]:
         """Get URL and params for retrieving a file."""
-        api_base = self.get_complete_url(
+        api_base: Final = self.get_complete_url(
             api_base=litellm_params.get("api_base"),
             api_key=litellm_params.get("api_key"),
             model="",
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
         return f"{api_base}/{encoded_file_id}", {}
 
     def transform_retrieve_file_response(
@@ -331,14 +320,14 @@ class ManusFilesConfig(BaseFilesConfig):
         litellm_params: dict,
     ) -> tuple[str, dict]:
         """Get URL and params for deleting a file."""
-        api_base = self.get_complete_url(
+        api_base: Final = self.get_complete_url(
             api_base=litellm_params.get("api_base"),
             api_key=litellm_params.get("api_key"),
             model="",
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
         return f"{api_base}/{encoded_file_id}", {}
 
     def transform_delete_file_response(
@@ -348,24 +337,24 @@ class ManusFilesConfig(BaseFilesConfig):
         litellm_params: dict,
     ) -> FileDeleted:
         """Transform delete file response."""
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
         return FileDeleted(**response_json)
 
     def transform_list_files_request(
         self,
-        purpose: Optional[str],
+        purpose: str | None,
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
         """Get URL and params for listing files."""
-        api_base = self.get_complete_url(
+        api_base: Final = self.get_complete_url(
             api_base=litellm_params.get("api_base"),
             api_key=litellm_params.get("api_key"),
             model="",
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        params = {}
+        params: Final = {}
         if purpose:
             params["purpose"] = purpose
         return api_base, params
@@ -375,15 +364,15 @@ class ManusFilesConfig(BaseFilesConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-    ) -> List[OpenAIFileObject]:
+    ) -> list[OpenAIFileObject]:
         """Transform list files response."""
-        response_json = raw_response.json()
-        files_data = response_json.get("data", [])
+        response_json: Final = raw_response.json()
+        files_data: Final = response_json.get("data", [])
         return [self._parse_file_dict(f) for f in files_data]
 
-    def _parse_file_dict(self, file_dict: Dict[str, Any]) -> OpenAIFileObject:
+    def _parse_file_dict(self, file_dict: dict[str, Any]) -> OpenAIFileObject:
         """Parse a file dict into OpenAIFileObject."""
-        created_at_str = file_dict.get("created_at", "")
+        created_at_str: Final = file_dict.get("created_at", "")
         if created_at_str:
             try:
                 created_at = int(
@@ -417,15 +406,15 @@ class ManusFilesConfig(BaseFilesConfig):
         litellm_params: dict,
     ) -> tuple[str, dict]:
         """Get URL and params for retrieving file content."""
-        file_id = file_content_request.get("file_id")
-        api_base = self.get_complete_url(
+        file_id: Final = file_content_request.get("file_id")
+        api_base: Final = self.get_complete_url(
             api_base=litellm_params.get("api_base"),
             api_key=litellm_params.get("api_key"),
             model="",
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
         return f"{api_base}/{encoded_file_id}/content", {}
 
     def transform_file_content_response(

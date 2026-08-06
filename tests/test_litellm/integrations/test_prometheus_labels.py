@@ -2,10 +2,33 @@
 Unit tests for prometheus metric labels configuration
 """
 
+import pytest
+
 from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
     UserAPIKeyLabelNames,
 )
+
+
+def _clear_prometheus_registry() -> None:
+    from prometheus_client import REGISTRY
+
+    for collector in list(REGISTRY._collector_to_names.keys()):
+        try:
+            REGISTRY.unregister(collector)
+        except Exception:
+            pass
+
+
+def _collected_samples(metric_name: str):
+    from prometheus_client import REGISTRY
+
+    return [
+        sample
+        for metric in REGISTRY.collect()
+        for sample in metric.samples
+        if sample.name == metric_name
+    ]
 
 
 def test_user_email_in_required_metrics():
@@ -85,6 +108,166 @@ def test_api_provider_in_spend_and_requests_metrics():
         print(f"✅ {metric_name} contains api_provider label")
 
 
+def test_api_provider_in_token_latency_and_request_metrics():
+    """
+    Regression test for LIT-4178.
+
+    These metrics are all emitted from the same call site (async_log_success_event
+    / async_post_call_failure_hook) as litellm_spend_metric and
+    litellm_requests_metric, which already carry api_provider. They were the odd
+    ones out with no way to break down tokens, latency, request counts or cache
+    hits by upstream provider, even though the provider is available on the
+    payload as custom_llm_provider.
+    """
+    api_provider_label = UserAPIKeyLabelNames.API_PROVIDER.value
+
+    metrics_with_api_provider = [
+        "litellm_llm_api_latency_metric",
+        "litellm_llm_api_time_to_first_token_metric",
+        "litellm_request_total_latency_metric",
+        "litellm_request_queue_time_seconds",
+        "litellm_proxy_total_requests_metric",
+        "litellm_proxy_failed_requests_metric",
+        "litellm_input_tokens_metric",
+        "litellm_total_tokens_metric",
+        "litellm_output_tokens_metric",
+        "litellm_cache_hits_metric",
+        "litellm_cache_misses_metric",
+        # The remaining cache metrics share _cache_metric_labels, so they pick up
+        # api_provider from the same change. Assert them explicitly so the shared
+        # list can't silently drop the label from them.
+        "litellm_cached_tokens_metric",
+        "litellm_provider_cache_read_input_tokens_metric",
+        "litellm_provider_cache_creation_input_tokens_metric",
+    ]
+
+    for metric_name in metrics_with_api_provider:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert (
+            api_provider_label in labels
+        ), f"Metric {metric_name} should contain api_provider label"
+
+
+def test_api_provider_value_flows_through_label_factory():
+    """
+    The label being in the allow-list is necessary but not sufficient: the
+    factory must also carry the value from the enum through to the emitted
+    label. This would fail if the label were dropped from the metric's list or
+    if the value plumbing regressed, which the allow-list assertion above cannot
+    catch on its own.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.integrations.prometheus import (
+        PrometheusLogger,
+        UserAPIKeyLabelValues,
+        prometheus_label_factory,
+    )
+
+    prometheus_logger = MagicMock()
+    prometheus_logger._cached_metric_labels = {}
+    prometheus_logger.label_filters = {}
+    prometheus_logger.get_labels_for_metric = (
+        PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
+    )
+
+    enum_values = UserAPIKeyLabelValues(
+        api_provider="anthropic",
+        litellm_model_name="claude-sonnet-4",
+        requested_model="claude",
+        status_code="200",
+    )
+
+    for metric_name in [
+        "litellm_input_tokens_metric",
+        "litellm_total_tokens_metric",
+        "litellm_output_tokens_metric",
+        "litellm_llm_api_latency_metric",
+        "litellm_request_total_latency_metric",
+        "litellm_proxy_total_requests_metric",
+        "litellm_cache_hits_metric",
+    ]:
+        labels = prometheus_label_factory(
+            supported_enum_labels=prometheus_logger.get_labels_for_metric(
+                metric_name=metric_name
+            ),
+            enum_values=enum_values,
+        )
+        assert (
+            labels.get("api_provider") == "anthropic"
+        ), f"{metric_name} should emit api_provider=anthropic, got {labels.get('api_provider')!r}"
+
+
+def test_extract_api_provider_from_request_data_failure_path():
+    """
+    On the client-side failure path the provider is not always known. Prefer the
+    resolved custom_llm_provider on litellm_params, fall back to a partial
+    standard_logging_object (e.g. a stream that broke mid-flight), then infer it
+    from the requested model name, and return None only when nothing maps so the
+    label emits empty rather than a guess.
+    """
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    extract = PrometheusLogger._extract_api_provider_from_request_data
+
+    assert extract({"litellm_params": {"custom_llm_provider": "bedrock"}}) == "bedrock"
+    assert (
+        extract({"standard_logging_object": {"custom_llm_provider": "vertex_ai"}})
+        == "vertex_ai"
+    )
+    # litellm_params wins over standard_logging_object when both are present
+    assert (
+        extract(
+            {
+                "litellm_params": {"custom_llm_provider": "openai"},
+                "standard_logging_object": {"custom_llm_provider": "azure"},
+            }
+        )
+        == "openai"
+    )
+    # Fallback: infer provider from the requested model name when the proxy's
+    # failure request_data carries only the client-supplied model. This is the
+    # common client-side failure case (e.g. an invalid param rejected with 400).
+    assert extract({"model": "gpt-4o-mini"}) == "openai"
+    assert extract({"litellm_params": {"model": "anthropic/claude-haiku-4-5"}}) == "anthropic"
+    assert extract({}) is None
+    # Unmappable model name -> None, not a guess
+    assert extract({"model": "some-unknown-model-xyz"}) is None
+
+
+def test_extract_api_provider_swallows_unknown_model_but_logs_unexpected_errors():
+    """
+    get_llm_provider raises BadRequestError for a model that maps to no
+    provider; that is the expected miss and must resolve to None quietly. Any
+    other exception is unexpected (e.g. a real bug) and must not vanish
+    silently, nor break metric emission: it is logged and still returns None.
+    """
+    from unittest.mock import patch
+
+    import litellm
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    extract = PrometheusLogger._extract_api_provider_from_request_data
+
+    # Expected miss: BadRequestError -> None, no log noise
+    with patch.object(
+        litellm,
+        "get_llm_provider",
+        side_effect=litellm.exceptions.BadRequestError(
+            message="no provider", model="x", llm_provider="y"
+        ),
+    ):
+        with patch("litellm.integrations.prometheus.verbose_logger") as mock_logger:
+            assert extract({"model": "x"}) is None
+            mock_logger.debug.assert_not_called()
+
+    # Unexpected error: must be logged and still return None (never raised)
+    with patch.object(litellm, "get_llm_provider", side_effect=RuntimeError("boom")):
+        with patch("litellm.integrations.prometheus.verbose_logger") as mock_logger:
+            assert extract({"model": "x"}) is None
+            mock_logger.debug.assert_called_once()
+
+
 def test_user_email_label_exists():
     """Test that the USER_EMAIL label is properly defined"""
     assert UserAPIKeyLabelNames.USER_EMAIL.value == "user_email"
@@ -146,6 +329,34 @@ def test_model_id_in_required_metrics():
             model_id_label in labels
         ), f"Metric {metric_name} should contain model_id label"
         print(f"✅ {metric_name} contains model_id label")
+
+
+def test_requested_model_in_spend_and_requests_metrics():
+    """
+    Regression test for LIT-3796.
+
+    litellm_spend_metric and litellm_requests_metric must expose the
+    requested_model label so spend and request counts can be grouped by the
+    model alias the caller asked for, not just the backend deployment that
+    served the request. The sibling token metrics (input/output/total)
+    already carry this label; spend and requests were the odd ones out, even
+    though both are emitted side-by-side from the same call site.
+    """
+    requested_model_label = UserAPIKeyLabelNames.REQUESTED_MODEL.value
+
+    metrics_with_requested_model = [
+        "litellm_spend_metric",
+        "litellm_requests_metric",
+        "litellm_input_tokens_metric",
+        "litellm_output_tokens_metric",
+        "litellm_total_tokens_metric",
+    ]
+
+    for metric_name in metrics_with_requested_model:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert requested_model_label in labels, (
+            f"Metric {metric_name} should contain requested_model label"
+        )
 
 
 def test_route_normalization_for_responses_api():
@@ -397,6 +608,112 @@ def test_prometheus_label_value_sanitization_non_string_types():
     assert _sanitize_prometheus_label_value(3.14) == "3.14"
 
     print("✅ Non-string values are coerced to str")
+
+
+@pytest.mark.asyncio
+async def test_success_hook_emits_api_provider_value_on_token_metric():
+    """
+    End-to-end emit wiring for the success path.
+
+    The label-list and factory tests prove the label exists and that the factory
+    carries a value handed to it, but neither drives the real logger, so deleting
+    the production api_provider=standard_logging_payload["custom_llm_provider"]
+    assignment in async_log_success_event would still pass them. This drives
+    async_log_success_event with a payload whose provider is openai and asserts
+    the collected litellm_total_tokens_metric sample actually carries
+    api_provider="openai"; it fails if that assignment is removed.
+    """
+    import datetime
+
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    payload = {
+        "id": "t",
+        "call_type": "completion",
+        "response_cost": 0.001,
+        "status": "success",
+        "total_tokens": 30,
+        "prompt_tokens": 20,
+        "completion_tokens": 10,
+        "startTime": 1.0,
+        "endTime": 2.0,
+        "completionStartTime": 1.5,
+        "model": "gpt-4o-mini",
+        "model_id": "model-123",
+        "model_group": "gpt-4o-mini",
+        "api_base": "https://api.openai.com",
+        "custom_llm_provider": "openai",
+        "request_tags": [],
+        "end_user": None,
+        "cache_hit": False,
+        "metadata": {
+            "user_api_key_hash": "h",
+            "user_api_key_alias": "a",
+            "user_api_key_team_id": "t",
+            "user_api_key_team_alias": "ta",
+            "user_api_key_user_id": "u",
+            "user_api_key_user_email": "e@x.com",
+            "user_api_key_org_id": None,
+            "user_api_key_org_alias": None,
+            "requester_metadata": None,
+            "user_api_key_end_user_id": None,
+        },
+        "hidden_params": {"litellm_overhead_time_ms": None, "additional_headers": None},
+    }
+
+    _clear_prometheus_registry()
+    try:
+        logger = PrometheusLogger()
+        now = datetime.datetime.now()
+        await logger.async_log_success_event(
+            {
+                "model": "gpt-4o-mini",
+                "litellm_params": {"metadata": {}},
+                "standard_logging_object": payload,
+            },
+            None,
+            now,
+            now,
+        )
+        samples = _collected_samples("litellm_total_tokens_metric_total")
+        assert samples, "expected litellm_total_tokens_metric to be emitted"
+        assert all(s.labels.get("api_provider") == "openai" for s in samples), (
+            "collected token metric must carry api_provider=openai, got "
+            f"{[s.labels.get('api_provider') for s in samples]}"
+        )
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_failure_hook_emits_api_provider_value_on_failed_requests_metric():
+    """
+    End-to-end emit wiring for the failure path.
+
+    async_post_call_failure_hook on a request whose model resolves to openai must
+    emit litellm_proxy_failed_requests_metric with api_provider="openai". This
+    fails if the api_provider assignment in the failure hook is removed, which the
+    helper-only test cannot catch.
+    """
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    _clear_prometheus_registry()
+    try:
+        logger = PrometheusLogger()
+        await logger.async_post_call_failure_hook(
+            request_data={"model": "gpt-4o-mini", "metadata": {}},
+            original_exception=Exception("boom"),
+            user_api_key_dict=UserAPIKeyAuth(token="tok"),
+        )
+        samples = _collected_samples("litellm_proxy_failed_requests_metric_total")
+        assert samples, "expected litellm_proxy_failed_requests_metric to be emitted"
+        assert any(s.labels.get("api_provider") == "openai" for s in samples), (
+            "collected failed-requests metric must carry api_provider=openai, got "
+            f"{[s.labels.get('api_provider') for s in samples]}"
+        )
+    finally:
+        _clear_prometheus_registry()
 
 
 if __name__ == "__main__":

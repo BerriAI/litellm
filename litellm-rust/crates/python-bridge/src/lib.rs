@@ -1,6 +1,14 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
+use litellm_ai_gateway::io::audio_transcription::{
+    AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
+};
+use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
+use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use litellm_core::error::CoreError;
+use litellm_core::messages::messages as run_messages;
+use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
@@ -28,15 +36,21 @@ fn json_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
     Ok(json.call_method1("loads", (encoded,))?.unbind())
 }
 
-/// Map a core error to the closest Python exception. Caller-input problems
-/// (auth, bad types, missing fields) -> `ValueError`; everything else
-/// (network, upstream status, parse failures) -> `RuntimeError`.
+fn messages_response_to_py(
+    py: Python<'_>,
+    response: AnthropicMessagesResponse,
+) -> PyResult<Py<PyAny>> {
+    let value =
+        serde_json::to_value(response).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    json_to_py(py, value)
+}
+
 fn core_error_to_pyerr(err: CoreError) -> PyErr {
     match err {
         CoreError::Auth(message) => PyValueError::new_err(message),
         CoreError::InvalidProvider(_)
-        | CoreError::InvalidType { .. }
         | CoreError::InvalidRequest(_)
+        | CoreError::InvalidType { .. }
         | CoreError::MissingField(_) => PyValueError::new_err(err.to_string()),
         other => PyRuntimeError::new_err(other.to_string()),
     }
@@ -66,6 +80,76 @@ fn optional_timeout(timeout_seconds: Option<f64>) -> Option<Duration> {
     })
 }
 
+fn marshal_headers(
+    py: Python<'_>,
+    headers: Option<Py<PyAny>>,
+) -> PyResult<HashMap<String, String>> {
+    let value = match headers {
+        Some(headers) => py_to_json(py, headers.bind(py))?,
+        None => Value::Object(Map::new()),
+    };
+    let Value::Object(headers) = value else {
+        return Err(PyValueError::new_err("headers must be a dict"));
+    };
+    headers
+        .into_iter()
+        .map(|(name, value)| {
+            value
+                .as_str()
+                .map(|value| (name, value.to_string()))
+                .ok_or_else(|| PyValueError::new_err("header values must be strings"))
+        })
+        .collect()
+}
+
+#[pyclass]
+struct ResponsesWebSocketConnection {
+    inner: RustResponsesWebSocketConnection,
+}
+
+#[pymethods]
+impl ResponsesWebSocketConnection {
+    #[classmethod]
+    #[pyo3(signature = (url, headers=None, timeout_seconds=None))]
+    fn connect<'py>(
+        _cls: &Bound<'py, pyo3::types::PyType>,
+        py: Python<'py>,
+        url: String,
+        headers: Option<Py<PyAny>>,
+        timeout_seconds: Option<f64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let headers = marshal_headers(py, headers)?;
+        let timeout = optional_timeout(timeout_seconds);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
+                .await
+                .map_err(core_error_to_pyerr)?;
+            Python::attach(|py| Py::new(py, ResponsesWebSocketConnection { inner }))
+        })
+    }
+
+    fn send_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.send_text(text).await.map_err(core_error_to_pyerr)
+        })
+    }
+
+    fn recv_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.recv_text().await.map_err(core_error_to_pyerr)
+        })
+    }
+
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.close().await.map_err(core_error_to_pyerr)
+        })
+    }
+}
+
 fn marshal_inputs(
     py: Python<'_>,
     document: Py<PyAny>,
@@ -84,7 +168,6 @@ fn marshal_inputs(
     Ok((document, extra_headers, optional_params, timeout))
 }
 
-/// Perform a Mistral OCR call end to end and return the response as a dict.
 #[pyfunction]
 #[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
 #[allow(clippy::too_many_arguments)]
@@ -99,7 +182,6 @@ fn ocr(
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<Py<PyAny>> {
-    let custom_llm_provider = custom_llm_provider.unwrap_or_else(|| "mistral".to_string());
     let (document, extra_headers, optional_params, timeout) = marshal_inputs(
         py,
         document,
@@ -108,20 +190,21 @@ fn ocr(
         timeout_seconds,
     )?;
 
-    // Release the GIL while the sync API waits on async Rust work.
     let result = gil::release_gil(py, || {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(litellm_providers::ocr::ocr(
-            litellm_providers::ocr::OcrRequest {
-                model: &model,
-                document,
-                api_key: api_key.as_deref(),
-                api_base: api_base.as_deref(),
-                custom_llm_provider: &custom_llm_provider,
-                extra_headers,
-                optional_params,
-                timeout,
-            },
-        ))
+        pyo3_async_runtimes::tokio::get_runtime().block_on(run_ocr(OcrRequest {
+            model: &model,
+            document,
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            custom_llm_provider: custom_llm_provider.as_deref(),
+            extra_headers,
+            optional_params,
+            timeout,
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+            request_metadata: Default::default(),
+            litellm_call_id: None,
+        }))
     });
 
     match result {
@@ -130,7 +213,6 @@ fn ocr(
     }
 }
 
-/// Perform an OCR call end to end and return an asyncio awaitable.
 #[pyfunction]
 #[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
 #[allow(clippy::too_many_arguments)]
@@ -145,7 +227,6 @@ fn aocr(
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<Bound<'_, PyAny>> {
-    let custom_llm_provider = custom_llm_provider.unwrap_or_else(|| "mistral".to_string());
     let (document, extra_headers, optional_params, timeout) = marshal_inputs(
         py,
         document,
@@ -155,25 +236,200 @@ fn aocr(
     )?;
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let value = litellm_providers::ocr::ocr(litellm_providers::ocr::OcrRequest {
+        let value = run_ocr(OcrRequest {
             model: &model,
             document,
             api_key: api_key.as_deref(),
             api_base: api_base.as_deref(),
-            custom_llm_provider: &custom_llm_provider,
+            custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
             optional_params,
+            timeout,
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+            request_metadata: Default::default(),
+            litellm_call_id: None,
+        })
+        .await
+        .map_err(core_error_to_pyerr)?;
+
+        Python::attach(|py| json_to_py(py, value))
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn transcription(
+    py: Python<'_>,
+    model: String,
+    audio: Py<PyAny>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    extra_headers: Option<Py<PyAny>>,
+    optional_params: Option<Py<PyAny>>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Py<PyAny>> {
+    let audio = py_to_json(py, audio.bind(py))?;
+    let extra_headers = match extra_headers {
+        Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
+        None => None,
+    };
+    let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
+    let timeout = optional_timeout(timeout_seconds);
+    let result = gil::release_gil(py, || {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(run_audio_transcription(
+            AudioTranscriptionRequest {
+                model: &model,
+                audio,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                optional_params,
+                timeout,
+                callbacks: Vec::new(),
+                guardrails: Vec::new(),
+                request_metadata: Default::default(),
+                litellm_call_id: None,
+            },
+        ))
+    });
+    match result {
+        Ok(value) => json_to_py(py, value),
+        Err(err) => Err(core_error_to_pyerr(err)),
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn atranscription(
+    py: Python<'_>,
+    model: String,
+    audio: Py<PyAny>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    extra_headers: Option<Py<PyAny>>,
+    optional_params: Option<Py<PyAny>>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Bound<'_, PyAny>> {
+    let audio = py_to_json(py, audio.bind(py))?;
+    let extra_headers = match extra_headers {
+        Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
+        None => None,
+    };
+    let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
+    let timeout = optional_timeout(timeout_seconds);
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let value = run_audio_transcription(AudioTranscriptionRequest {
+            model: &model,
+            audio,
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            custom_llm_provider: custom_llm_provider.as_deref(),
+            extra_headers,
+            optional_params,
+            timeout,
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+            request_metadata: Default::default(),
+            litellm_call_id: None,
+        })
+        .await
+        .map_err(core_error_to_pyerr)?;
+        Python::attach(|py| json_to_py(py, value))
+    })
+}
+
+type MarshaledMessagesInputs = (Value, Option<Map<String, Value>>, Option<Duration>);
+
+fn marshal_messages_inputs(
+    py: Python<'_>,
+    body: Py<PyAny>,
+    extra_headers: Option<Py<PyAny>>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<MarshaledMessagesInputs> {
+    let body = py_to_json(py, body.bind(py))?;
+    if !body.is_object() {
+        return Err(PyValueError::new_err("body must be a dict"));
+    }
+    let extra_headers = match extra_headers {
+        Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
+        None => None,
+    };
+    Ok((body, extra_headers, optional_timeout(timeout_seconds)))
+}
+
+#[pyfunction]
+#[pyo3(signature = (model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn messages(
+    py: Python<'_>,
+    model: String,
+    body: Py<PyAny>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    extra_headers: Option<Py<PyAny>>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Py<PyAny>> {
+    let (body, extra_headers, timeout) =
+        marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
+
+    let result = gil::release_gil(py, || {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(run_messages(MessagesRequest {
+            model: &model,
+            body,
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            custom_llm_provider: custom_llm_provider.as_deref(),
+            extra_headers,
+            timeout,
+        }))
+    });
+
+    match result {
+        Ok(response) => messages_response_to_py(py, response),
+        Err(err) => Err(core_error_to_pyerr(err)),
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn amessages(
+    py: Python<'_>,
+    model: String,
+    body: Py<PyAny>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    extra_headers: Option<Py<PyAny>>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Bound<'_, PyAny>> {
+    let (body, extra_headers, timeout) =
+        marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
+
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let response = run_messages(MessagesRequest {
+            model: &model,
+            body,
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            custom_llm_provider: custom_llm_provider.as_deref(),
+            extra_headers,
             timeout,
         })
         .await
         .map_err(core_error_to_pyerr)?;
 
-        Python::with_gil(|py| json_to_py(py, value))
+        Python::attach(|py| messages_response_to_py(py, response))
     })
 }
 
-/// Bridge GIL accounting, e.g. `{"releases": 12}`. Lets the Python side observe
-/// how often the sync bridge has dropped the GIL while awaiting Rust work.
 #[pyfunction]
 fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let stats = PyDict::new(py);
@@ -182,9 +438,14 @@ fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
 }
 
 #[pymodule]
-fn litellm_python_bridge(module: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ocr, module)?)?;
     module.add_function(wrap_pyfunction!(aocr, module)?)?;
+    module.add_function(wrap_pyfunction!(transcription, module)?)?;
+    module.add_function(wrap_pyfunction!(atranscription, module)?)?;
+    module.add_function(wrap_pyfunction!(messages, module)?)?;
+    module.add_function(wrap_pyfunction!(amessages, module)?)?;
+    module.add_class::<ResponsesWebSocketConnection>()?;
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
     Ok(())
 }

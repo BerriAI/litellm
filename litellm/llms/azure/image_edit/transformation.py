@@ -1,4 +1,4 @@
-from typing import Optional, cast
+from typing import Final, cast
 
 import httpx
 
@@ -28,9 +28,9 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate Azure environment and set up authentication headers.
@@ -62,17 +62,15 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
           the same ``litellm_params.api_key``, so the precedence only matters
           for direct callers of this method.
         """
-        params = GenericLiteLLMParams(**(litellm_params or {}))
+        params: Final = GenericLiteLLMParams(**(litellm_params or {}))
         if api_key is not None and params.api_key is None:
             params.api_key = api_key
-        return BaseAzureLLM._base_validate_azure_environment(
-            headers=headers, litellm_params=params
-        )
+        return BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=params)
 
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -95,20 +93,20 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
             raise ValueError(
                 f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
             )
-        original_url = httpx.URL(api_base)
+        original_url: Final = httpx.URL(api_base)
 
         # Resolve api_version: litellm_params > litellm.api_version > AZURE_API_VERSION env > default.
         # Mirrors the fallback chain used by the Azure chat path in common_utils.py,
         # so callers that set a global / env api_version don't get an unversioned URL.
-        api_version = (
-            cast(Optional[str], litellm_params.get("api_version"))
+        api_version: Final = (
+            cast(str | None, litellm_params.get("api_version"))
             or litellm.api_version
             or get_secret_str("AZURE_API_VERSION")
             or litellm.AZURE_DEFAULT_API_VERSION
         )
 
         # Create a new dictionary with existing params
-        query_params = dict(original_url.params)
+        query_params: Final = dict(original_url.params)
 
         # Add api_version if needed
         if "api-version" not in query_params and api_version:
@@ -124,11 +122,9 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
             new_url = api_base
 
         # Use the new query_params dictionary
-        final_url = httpx.URL(new_url).copy_with(params=query_params)
+        final_url: Final = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)
 
-    def finalize_image_edit_request_data(
-        self, data: dict, resolved_request_url: str
-    ) -> dict:
+    def finalize_image_edit_request_data(self, data: dict, resolved_request_url: str) -> dict:
         return self.azure_deployment_image_edit_form_data(data, resolved_request_url)

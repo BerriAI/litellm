@@ -8,7 +8,6 @@ import {
   TableHeaderCell,
   TableBody,
   TableCell,
-  BarChart,
   Text,
   Button,
   Tab,
@@ -17,6 +16,7 @@ import {
   TabPanel,
   TabPanels,
 } from "@tremor/react";
+import { BarChart } from "@/components/shared/charts";
 import { perUserAnalyticsCall } from "./networking";
 
 interface PerUserMetrics {
@@ -55,13 +55,11 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
     total_pages: 0,
   });
 
-  const [loading, setLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
 
   const fetchPerUserData = async () => {
     if (!accessToken) return;
 
-    setLoading(true);
     try {
       const response = await perUserAnalyticsCall(
         accessToken,
@@ -72,8 +70,6 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
       setPerUserData(response);
     } catch (error) {
       console.error("Failed to fetch per-user data:", error);
-    } finally {
-      setLoading(false);
     }
   };
 

@@ -1,48 +1,49 @@
 import os
 import shutil
 import sys
-from typing import Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
+from collections.abc import Callable, Mapping, Sequence
+from typing import Final
 
 import click
 import requests
 
 from .auth import get_stored_api_key, login
 
-ANTHROPIC_BASE_URL_ENV = "ANTHROPIC_BASE_URL"
-ANTHROPIC_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN"
-ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
-OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
-OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
+ANTHROPIC_BASE_URL_ENV: Final = "ANTHROPIC_BASE_URL"
+ANTHROPIC_AUTH_TOKEN_ENV: Final = "ANTHROPIC_AUTH_TOKEN"
+ANTHROPIC_API_KEY_ENV: Final = "ANTHROPIC_API_KEY"
+OPENAI_BASE_URL_ENV: Final = "OPENAI_BASE_URL"
+OPENAI_API_KEY_ENV: Final = "OPENAI_API_KEY"
 
-PROFILE_ANTHROPIC = "anthropic"
-PROFILE_OPENAI = "openai"
+PROFILE_ANTHROPIC: Final = "anthropic"
+PROFILE_OPENAI: Final = "openai"
 
-_KNOWN_AGENTS: Dict[str, Tuple[str, FrozenSet[str]]] = {
+_KNOWN_AGENTS: Final[dict[str, tuple[str, frozenset[str]]]] = {
     "claude": ("Claude Code", frozenset({PROFILE_ANTHROPIC})),
     "codex": ("Codex", frozenset({PROFILE_OPENAI})),
     "opencode": ("OpenCode", frozenset({PROFILE_OPENAI})),
 }
 
-_INSTALL_DOCS: Dict[str, str] = {
+_INSTALL_DOCS: Final[dict[str, str]] = {
     "claude": "https://docs.claude.com/en/docs/claude-code/setup",
     "codex": "https://developers.openai.com/codex/cli",
     "opencode": "https://opencode.ai/docs",
 }
 
-CODEX_PROXY_PROVIDER = "litellm"
+CODEX_PROXY_PROVIDER: Final = "litellm"
 
 
 class AgentRunError(Exception):
     """Raised for any user-actionable failure while preparing to run an agent."""
 
 
-def agent_profile(command: str) -> Tuple[str, FrozenSet[str]]:
+def agent_profile(command: str) -> tuple[str, frozenset[str]]:
     """Return the (display name, env profiles) for a wrapped command.
 
     Known agents map to the API family they speak. Anything else gets both
     families so it works regardless of which env vars the tool reads.
     """
-    base = os.path.basename(command)
+    base: Final = os.path.basename(command)
     if base in _KNOWN_AGENTS:
         return _KNOWN_AGENTS[base]
     return base, frozenset({PROFILE_ANTHROPIC, PROFILE_OPENAI})
@@ -52,8 +53,8 @@ def build_agent_env(
     base_env: Mapping[str, str],
     base_url: str,
     api_key: str,
-    profiles: FrozenSet[str],
-) -> Dict[str, str]:
+    profiles: frozenset[str],
+) -> dict[str, str]:
     """Return a copy of base_env wired to route the agent through the proxy.
 
     Anthropic clients (Claude Code) append /v1/messages to ANTHROPIC_BASE_URL,
@@ -61,8 +62,8 @@ def build_agent_env(
     /v1 suffix on OPENAI_BASE_URL. ANTHROPIC_API_KEY is dropped so a stray
     Anthropic key cannot win over the bearer token we set.
     """
-    env = dict(base_env)
-    root = base_url.rstrip("/")
+    env: Final = dict(base_env)
+    root: Final = base_url.rstrip("/")
     if PROFILE_ANTHROPIC in profiles:
         env[ANTHROPIC_BASE_URL_ENV] = root
         env[ANTHROPIC_AUTH_TOKEN_ENV] = api_key
@@ -73,7 +74,7 @@ def build_agent_env(
     return env
 
 
-def _codex_proxy_args(base_url: str) -> List[str]:
+def _codex_proxy_args(base_url: str) -> list[str]:
     """Codex `-c` overrides that point it at the proxy.
 
     Codex ignores OPENAI_BASE_URL (it always dials api.openai.com), so the env
@@ -82,8 +83,8 @@ def _codex_proxy_args(base_url: str) -> List[str]:
     because the proxy does not speak the Responses WebSocket protocol. The key is
     read from OPENAI_API_KEY, which build_agent_env already exports.
     """
-    root = base_url.rstrip("/") + "/v1"
-    provider = f"model_providers.{CODEX_PROXY_PROVIDER}"
+    root: Final = base_url.rstrip("/") + "/v1"
+    provider: Final = f"model_providers.{CODEX_PROXY_PROVIDER}"
     return [
         "-c",
         f'model_provider="{CODEX_PROXY_PROVIDER}"',
@@ -100,18 +101,18 @@ def _codex_proxy_args(base_url: str) -> List[str]:
     ]
 
 
-_PROXY_ARGS: Dict[str, Callable[[str], List[str]]] = {
+_PROXY_ARGS: Final[dict[str, Callable[[str], list[str]]]] = {
     "codex": _codex_proxy_args,
 }
 
 
-def agent_launch_args(command: str, base_url: str) -> List[str]:
+def agent_launch_args(command: str, base_url: str) -> list[str]:
     """Extra CLI args an agent needs to actually honor the proxy.
 
     Claude Code and OpenCode respect the exported env vars, so they get nothing
     here; Codex needs its provider pointed via config overrides.
     """
-    builder = _PROXY_ARGS.get(os.path.basename(command))
+    builder: Final = _PROXY_ARGS.get(os.path.basename(command))
     return builder(base_url) if builder else []
 
 
@@ -126,9 +127,9 @@ def verify_proxy_key(
     Raises AgentRunError when the proxy is unreachable or rejects the key. Other
     non-2xx responses are tolerated; the agent's own call is the real test.
     """
-    url = base_url.rstrip("/") + "/v1/models"
+    url: Final = base_url.rstrip("/") + "/v1/models"
     try:
-        resp = get(url, headers={"Authorization": f"Bearer {api_key}"}, timeout=10)
+        resp: Final = get(url, headers={"Authorization": f"Bearer {api_key}"}, timeout=10)
     except requests.RequestException as e:
         raise AgentRunError(
             f"Could not reach the LiteLLM proxy at {base_url.rstrip('/')}: {e}. "
@@ -156,7 +157,7 @@ def _restore_controlling_terminal() -> None:
     if sys.stdin.isatty():
         return
     try:
-        fd = os.open("/dev/tty", os.O_RDONLY)
+        fd: Final = os.open("/dev/tty", os.O_RDONLY)
     except OSError:
         return
     try:
@@ -171,11 +172,11 @@ def run_agent(
     command: Sequence[str],
     *,
     skip_verify: bool = False,
-    base_env: Optional[Mapping[str, str]] = None,
-    which: Callable[[str], Optional[str]] = shutil.which,
+    base_env: Mapping[str, str] | None = None,
+    which: Callable[[str], str | None] = shutil.which,
     verify: Callable[[str, str], None] = verify_proxy_key,
     launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _exec,
-    reattach_terminal: Optional[Callable[[], None]] = None,
+    reattach_terminal: Callable[[], None] | None = None,
 ) -> None:
     """Validate, wire the environment, and hand off to the agent.
 
@@ -187,22 +188,22 @@ def run_agent(
         raise AgentRunError("Nothing to run.")
 
     _, profiles = agent_profile(command[0])
-    binary = which(command[0])
+    binary: Final = which(command[0])
     if binary is None:
-        docs = _INSTALL_DOCS.get(os.path.basename(command[0]))
-        hint = f" Install it first: {docs}" if docs else ""
+        docs: Final = _INSTALL_DOCS.get(os.path.basename(command[0]))
+        hint: Final = f" Install it first: {docs}" if docs else ""
         raise AgentRunError(f"Could not find `{command[0]}` on your PATH.{hint}")
 
     if not skip_verify:
         verify(base_url, api_key)
 
-    env = build_agent_env(
+    env: Final = build_agent_env(
         base_env if base_env is not None else os.environ,
         base_url,
         api_key,
         profiles,
     )
-    extra_args = agent_launch_args(command[0], base_url)
+    extra_args: Final = agent_launch_args(command[0], base_url)
     if reattach_terminal is not None:
         reattach_terminal()
     launcher(binary, [command[0], *extra_args, *command[1:]], env)
@@ -212,8 +213,8 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty()
 
 
-def _resolve_api_key(ctx: click.Context) -> str:
-    base_url = ctx.obj["base_url"]
+def resolve_api_key(ctx: click.Context) -> str:
+    base_url: Final = ctx.obj["base_url"]
     api_key = ctx.obj.get("api_key")
     if api_key:
         return api_key
@@ -228,26 +229,20 @@ def _resolve_api_key(ctx: click.Context) -> str:
     ctx.invoke(login)
     api_key = get_stored_api_key(expected_base_url=base_url)
     if not api_key:
-        raise click.ClickException(
-            "Login did not produce an API key; cannot start the agent."
-        )
+        raise click.ClickException("Login did not produce an API key; cannot start the agent.")
     return api_key
 
 
-_SKIP_VERIFY_HELP = "Skip the pre-launch key check against the proxy."
+_SKIP_VERIFY_HELP: Final = "Skip the pre-launch key check against the proxy."
 
 
-def _launch(
-    ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool
-) -> None:
-    base_url = ctx.obj["base_url"]
-    started_interactive = _is_interactive()
-    api_key = _resolve_api_key(ctx)
+def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool) -> None:
+    base_url: Final = ctx.obj["base_url"]
+    started_interactive: Final = _is_interactive()
+    api_key: Final = resolve_api_key(ctx)
 
     display_name, _ = agent_profile(binary)
-    click.echo(
-        f"litellm: routing {display_name} through proxy at {base_url.rstrip('/')}"
-    )
+    click.echo(f"litellm: routing {display_name} through proxy at {base_url.rstrip('/')}")
 
     try:
         run_agent(
@@ -255,9 +250,7 @@ def _launch(
             api_key,
             [binary, *args],
             skip_verify=skip_verify,
-            reattach_terminal=(
-                _restore_controlling_terminal if started_interactive else None
-            ),
+            reattach_terminal=(_restore_controlling_terminal if started_interactive else None),
         )
     except AgentRunError as e:
         raise click.ClickException(str(e))
@@ -284,20 +277,18 @@ def _make_agent_command(binary: str, display_name: str) -> click.Command:
     return _command
 
 
-def agent_commands() -> List[click.Command]:
+def agent_commands() -> list[click.Command]:
     """Build one top-level command per known agent, e.g. `lite claude`."""
-    return [
-        _make_agent_command(binary, name)
-        for binary, (name, _profiles) in _KNOWN_AGENTS.items()
-    ]
+    return [_make_agent_command(binary, name) for binary, (name, _profiles) in _KNOWN_AGENTS.items()]
 
 
 __all__ = [
-    "agent_commands",
-    "run_agent",
-    "build_agent_env",
-    "agent_launch_args",
-    "verify_proxy_key",
-    "agent_profile",
     "AgentRunError",
+    "agent_commands",
+    "agent_launch_args",
+    "agent_profile",
+    "build_agent_env",
+    "resolve_api_key",
+    "run_agent",
+    "verify_proxy_key",
 ]

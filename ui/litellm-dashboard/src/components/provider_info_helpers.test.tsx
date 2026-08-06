@@ -113,24 +113,42 @@ describe("provider_info_helpers", () => {
     });
   });
 
-  describe("provider logo asset paths", () => {
-    // Regression: a relative "../ui/assets/logos/" base resolved to
-    // "/ui/ui/assets/logos/..." (404) on the public model hub at
-    // /ui/model_hub_table/, which sits a level below the /ui/ SPA. Root-absolute
-    // paths resolve correctly at any route depth.
-    it("should expose every provider logo as a root-absolute /ui path", () => {
-      const logos = Object.values(providerLogoMap);
-      expect(logos.length).toBeGreaterThan(0);
-      logos.forEach((logo) => {
-        expect(logo.startsWith("/ui/assets/logos/")).toBe(true);
-        expect(logo).not.toContain("../");
+  describe("provider logo bundled assets", () => {
+    it("should map every provider to a bundled logo except the known logoless set, never a raw /ui/assets path", () => {
+      const knownLogolessProviders = [
+        Providers.AUTO_ROUTER,
+        Providers.BYTEZ,
+        Providers.CLARIFAI,
+        Providers.COMPACTIFAI,
+        Providers.DATAROBOT,
+        Providers.DOCKER_MODEL_RUNNER,
+        Providers.DOTPROMPT,
+        Providers.EMPOWER,
+        Providers.GALADRIEL,
+        Providers.GradientAI,
+        Providers.HEROKU,
+        Providers.LEMONADE,
+        Providers.LLAMAFILE,
+        Providers.MARITALK,
+        Providers.NLP_CLOUD,
+        Providers.NSCALE,
+        Providers.OVHCLOUD,
+        Providers.PETALS,
+        Providers.PG_VECTOR,
+        Providers.PREDIBASE,
+        Providers.WANDB,
+        Providers.ZAI,
+      ];
+      const logolessProviders = Object.values(Providers).filter((provider) => !providerLogoMap[provider]);
+      expect([...logolessProviders].sort()).toEqual([...knownLogolessProviders].sort());
+      Object.values(providerLogoMap).forEach((logo) => {
+        expect(logo?.startsWith("/ui/assets/")).toBe(false);
       });
     });
 
-    it("should resolve a provider logo to a root-absolute path via getProviderLogoAndName", () => {
+    it("should resolve a provider to its own bundled logo via getProviderLogoAndName", () => {
       const { logo } = getProviderLogoAndName("openai");
-      expect(logo.startsWith("/ui/assets/logos/")).toBe(true);
-      expect(logo).not.toContain("../");
+      expect(logo).toContain("openai_small");
     });
   });
 
@@ -217,12 +235,6 @@ describe("provider_info_helpers", () => {
   });
 
   describe("getProviderModels", () => {
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    afterEach(() => {
-      consoleSpy.mockClear();
-    });
-
     it("should return empty array when provider is not provided", () => {
       const modelMap = {};
       const result = getProviderModels(undefined as any, modelMap);
@@ -308,17 +320,17 @@ describe("provider_info_helpers", () => {
       expect(result).not.toContain("anthropic-native");
     });
 
-    it("should include bedrock variants (converse, mantle) when called with 'Bedrock' provider key", () => {
+    it("should include bedrock converse but exclude standalone bedrock_mantle when called with 'Bedrock' provider key", () => {
       const modelMap = {
         "bedrock-base": { litellm_provider: "bedrock" },
         "bedrock-converse-model": { litellm_provider: "bedrock_converse" },
-        "bedrock-mantle-model": { litellm_provider: "bedrock_mantle" },
+        "bedrock_mantle/openai.gpt-5.4": { litellm_provider: "bedrock_mantle" },
         "openai-model": { litellm_provider: "openai" },
       };
       const result = getProviderModels("Bedrock" as Providers, modelMap);
       expect(result).toContain("bedrock-base");
       expect(result).toContain("bedrock-converse-model");
-      expect(result).toContain("bedrock-mantle-model");
+      expect(result).not.toContain("bedrock_mantle/openai.gpt-5.4");
       expect(result).not.toContain("openai-model");
     });
 
@@ -404,13 +416,6 @@ describe("provider_info_helpers", () => {
       expect(result).toEqual(["valid-model"]);
     });
 
-    it("should log provider key and mapped provider when called", () => {
-      const modelMap = { "gpt-3.5-turbo": { litellm_provider: "openai" } };
-      getProviderModels(Providers.OpenAI, modelMap);
-      expect(consoleSpy).toHaveBeenCalledWith(`Provider key: ${Providers.OpenAI}`);
-      expect(consoleSpy).toHaveBeenCalledWith(`Provider mapped to: ${provider_map[Providers.OpenAI]}`);
-    });
-
     it("should return empty array for provider with no matching models", () => {
       const modelMap = {
         "gpt-3.5-turbo": { litellm_provider: "openai" },
@@ -434,5 +439,28 @@ describe("provider_info_helpers", () => {
       expect(anthropicResult).toEqual(["claude-3-opus"]);
       expect(groqResult).toContain("groq-model");
     });
+  });
+});
+
+describe("getProviderLogoAndName under a custom server_root_path", () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.doUnmock("@/lib/serverRootPath");
+  });
+
+  it("returns the bundled logo URL untouched under a sub-path mount", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/serverRootPath", () => ({ serverRootPath: "/litellm" }));
+    const helpers = await import("./provider_info_helpers");
+    const { logo } = helpers.getProviderLogoAndName("openai");
+    expect(logo).toBe(helpers.providerLogoMap[helpers.Providers.OpenAI]);
+    expect(logo.startsWith("/litellm")).toBe(false);
+  });
+
+  it("returns the bundled logo URL untouched at the root mount", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/serverRootPath", () => ({ serverRootPath: "/" }));
+    const helpers = await import("./provider_info_helpers");
+    expect(helpers.getProviderLogoAndName("openai").logo).toBe(helpers.providerLogoMap[helpers.Providers.OpenAI]);
   });
 });

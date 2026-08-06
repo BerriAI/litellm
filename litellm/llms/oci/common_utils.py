@@ -5,7 +5,7 @@ import os
 import re
 from dataclasses import dataclass
 from email.utils import formatdate
-from typing import Any, Dict, Optional, Protocol, Tuple
+from typing import Any, Final, Protocol
 from urllib.parse import urlparse
 
 import httpx
@@ -27,14 +27,13 @@ except ImportError:
 
 
 # OCI GenAI REST API version — stable since service launch, unlikely to change
-OCI_API_VERSION = "20231130"
+OCI_API_VERSION: Final = "20231130"
 
 
 def _require_cryptography() -> None:
     if not _CRYPTOGRAPHY_AVAILABLE:
         raise ImportError(
-            "cryptography package is required for OCI authentication. "
-            "Please install it with: pip install cryptography"
+            "cryptography package is required for OCI authentication. Please install it with: pip install cryptography"
         )
 
 
@@ -43,7 +42,7 @@ class OCIError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Optional[httpx.Headers] = None,
+        headers: httpx.Headers | None = None,
     ):
         super().__init__(
             status_code=status_code,
@@ -65,9 +64,7 @@ class OCISignerProtocol(Protocol):
     See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/signing.html
     """
 
-    def do_request_sign(
-        self, request: Any, *, enforce_content_headers: bool = False
-    ) -> None:
+    def do_request_sign(self, request: Any, *, enforce_content_headers: bool = False) -> None:
         pass
 
 
@@ -88,7 +85,7 @@ class OCIRequestWrapper:
     @property
     def path_url(self) -> str:
         """Returns the path + query string for OCI signing."""
-        parsed = urlparse(self.url)
+        parsed: Final = urlparse(self.url)
         return parsed.path + ("?" + parsed.query if parsed.query else "")
 
 
@@ -101,14 +98,12 @@ def sha256_base64(data: bytes) -> str:
     # ``usedforsecurity=False`` declares non-security intent to static analyzers
     # (CodeQL ``py/weak-sensitive-data-hashing``) — without it the request body
     # gets flagged as "password-like data" via taint tracking.
-    digest = hashlib.sha256(data, usedforsecurity=False).digest()  # noqa: S324
+    digest: Final = hashlib.sha256(data, usedforsecurity=False).digest()  # noqa: S324
     return base64.b64encode(digest).decode()
 
 
-def build_signature_string(
-    method: str, path: str, headers: dict, signed_headers: list
-) -> str:
-    lines = []
+def build_signature_string(method: str, path: str, headers: dict, signed_headers: list) -> str:
+    lines: Final = []
     for header in signed_headers:
         if header == "(request-target)":
             value = f"{method.lower()} {path}"
@@ -120,14 +115,12 @@ def build_signature_string(
 
 def load_private_key_from_str(key_str: str) -> Any:
     _require_cryptography()
-    key = serialization.load_pem_private_key(  # type: ignore[union-attr]
+    key: Final = serialization.load_pem_private_key(
         key_str.encode("utf-8"),
         password=None,
     )
-    if not isinstance(key, rsa.RSAPrivateKey):  # type: ignore[union-attr]
-        raise TypeError(
-            "The provided private key is not an RSA key, which is required for OCI signing."
-        )
+    if not isinstance(key, rsa.RSAPrivateKey):
+        raise TypeError("The provided private key is not an RSA key, which is required for OCI signing.")
     return key
 
 
@@ -135,7 +128,7 @@ def load_private_key_from_file(file_path: str) -> Any:
     """Loads a private key from a file path."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
-            key_str = f.read().strip()
+            key_str: Final = f.read().strip()
     except FileNotFoundError:
         raise FileNotFoundError(f"Private key file not found: {file_path}")
     except OSError as e:
@@ -151,13 +144,13 @@ def load_private_key_from_file(file_path: str) -> Any:
 # Env-var credential resolution
 # ---------------------------------------------------------------------------
 
-_OCI_REGION_ENV = "OCI_REGION"
-_OCI_USER_ENV = "OCI_USER"
-_OCI_FINGERPRINT_ENV = "OCI_FINGERPRINT"
-_OCI_TENANCY_ENV = "OCI_TENANCY"
-_OCI_KEY_FILE_ENV = "OCI_KEY_FILE"
-_OCI_KEY_ENV = "OCI_KEY"
-_OCI_COMPARTMENT_ID_ENV = "OCI_COMPARTMENT_ID"
+_OCI_REGION_ENV: Final = "OCI_REGION"
+_OCI_USER_ENV: Final = "OCI_USER"
+_OCI_FINGERPRINT_ENV: Final = "OCI_FINGERPRINT"
+_OCI_TENANCY_ENV: Final = "OCI_TENANCY"
+_OCI_KEY_FILE_ENV: Final = "OCI_KEY_FILE"
+_OCI_KEY_ENV: Final = "OCI_KEY"
+_OCI_COMPARTMENT_ID_ENV: Final = "OCI_COMPARTMENT_ID"
 
 
 def resolve_oci_credentials(optional_params: dict) -> dict:
@@ -170,27 +163,21 @@ def resolve_oci_credentials(optional_params: dict) -> dict:
         oci_key, oci_key_file, oci_compartment_id
     """
     return {
-        "oci_region": optional_params.get("oci_region")
-        or os.environ.get(_OCI_REGION_ENV)
-        or "us-ashburn-1",
+        "oci_region": optional_params.get("oci_region") or os.environ.get(_OCI_REGION_ENV) or "us-ashburn-1",
         "oci_user": optional_params.get("oci_user") or os.environ.get(_OCI_USER_ENV),
-        "oci_fingerprint": optional_params.get("oci_fingerprint")
-        or os.environ.get(_OCI_FINGERPRINT_ENV),
-        "oci_tenancy": optional_params.get("oci_tenancy")
-        or os.environ.get(_OCI_TENANCY_ENV),
+        "oci_fingerprint": optional_params.get("oci_fingerprint") or os.environ.get(_OCI_FINGERPRINT_ENV),
+        "oci_tenancy": optional_params.get("oci_tenancy") or os.environ.get(_OCI_TENANCY_ENV),
         "oci_key": optional_params.get("oci_key") or os.environ.get(_OCI_KEY_ENV),
-        "oci_key_file": optional_params.get("oci_key_file")
-        or os.environ.get(_OCI_KEY_FILE_ENV),
-        "oci_compartment_id": optional_params.get("oci_compartment_id")
-        or os.environ.get(_OCI_COMPARTMENT_ID_ENV),
+        "oci_key_file": optional_params.get("oci_key_file") or os.environ.get(_OCI_KEY_FILE_ENV),
+        "oci_compartment_id": optional_params.get("oci_compartment_id") or os.environ.get(_OCI_COMPARTMENT_ID_ENV),
     }
 
 
-_OCI_REGION_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}[a-z0-9]$")
-_OCI_ACTION_PATH_RE = re.compile(rf"/{OCI_API_VERSION}/actions/[^/?#]+/?$")
+_OCI_REGION_RE: Final = re.compile(r"^[a-z][a-z0-9-]{0,30}[a-z0-9]$")
+_OCI_ACTION_PATH_RE: Final = re.compile(rf"/{OCI_API_VERSION}/actions/[^/?#]+/?$")
 
 
-def get_oci_base_url(optional_params: dict, api_base: Optional[str] = None) -> str:
+def get_oci_base_url(optional_params: dict, api_base: str | None = None) -> str:
     """Return the OCI inference base URL, respecting any explicit api_base override.
 
     If ``api_base`` already ends with a fully-formed OCI action path
@@ -199,14 +186,13 @@ def get_oci_base_url(optional_params: dict, api_base: Optional[str] = None) -> s
     """
     if api_base:
         return _OCI_ACTION_PATH_RE.sub("", api_base).rstrip("/")
-    creds = resolve_oci_credentials(optional_params)
-    region = creds["oci_region"]
+    creds: Final = resolve_oci_credentials(optional_params)
+    region: Final = creds["oci_region"]
     if not isinstance(region, str) or not _OCI_REGION_RE.match(region):
         raise OCIError(
             status_code=400,
             message=(
-                f"Invalid OCI region {region!r}: must match "
-                "^[a-z][a-z0-9-]{0,30}[a-z0-9]$ (e.g. 'us-ashburn-1')."
+                f"Invalid OCI region {region!r}: must match ^[a-z][a-z0-9-]{{0,30}}[a-z0-9]$ (e.g. 'us-ashburn-1')."
             ),
         )
     return f"https://inference.generativeai.{region}.oci.oraclecloud.com"
@@ -222,22 +208,20 @@ def sign_with_oci_signer(
     optional_params: dict,
     request_data: dict,
     api_base: str,
-) -> Tuple[dict, bytes]:
+) -> tuple[dict, bytes]:
     """Sign a request using an OCI SDK Signer object passed in optional_params."""
-    oci_signer = optional_params.get("oci_signer")
-    body = json.dumps(request_data).encode("utf-8")
-    method = str(optional_params.get("method", "POST")).upper()
+    oci_signer: Final = optional_params.get("oci_signer")
+    body: Final = json.dumps(request_data).encode("utf-8")
+    method: Final = str(optional_params.get("method", "POST")).upper()
 
     if method not in {"POST", "GET", "PUT", "DELETE", "PATCH"}:
         raise ValueError(f"Unsupported HTTP method: {method}")
 
-    prepared_headers = {**headers}
+    prepared_headers: Final = {**headers}
     prepared_headers.setdefault("content-type", "application/json")
     prepared_headers.setdefault("content-length", str(len(body)))
 
-    request_wrapper = OCIRequestWrapper(
-        method=method, url=api_base, headers=prepared_headers, body=body
-    )
+    request_wrapper: Final = OCIRequestWrapper(method=method, url=api_base, headers=prepared_headers, body=body)
 
     if oci_signer is None:
         raise ValueError("oci_signer cannot be None when calling sign_with_oci_signer")
@@ -248,7 +232,7 @@ def sign_with_oci_signer(
         raise OCIError(
             status_code=500,
             message=(
-                f"Failed to sign request with provided oci_signer: {str(e)}. "
+                f"Failed to sign request with provided oci_signer: {e}. "
                 "The signer must implement the OCI SDK Signer interface with a "
                 "do_request_sign(request, enforce_content_headers=True) method. "
                 "See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/signing.html"
@@ -264,21 +248,16 @@ def sign_with_manual_credentials(
     optional_params: dict,
     request_data: dict,
     api_base: str,
-) -> Tuple[dict, bytes]:
+) -> tuple[dict, bytes]:
     """Sign a request using manually provided OCI credentials (user/fingerprint/tenancy/key)."""
-    creds = resolve_oci_credentials(optional_params)
-    oci_user = creds["oci_user"]
-    oci_fingerprint = creds["oci_fingerprint"]
-    oci_tenancy = creds["oci_tenancy"]
-    oci_key = creds["oci_key"]
-    oci_key_file = creds["oci_key_file"]
+    creds: Final = resolve_oci_credentials(optional_params)
+    oci_user: Final = creds["oci_user"]
+    oci_fingerprint: Final = creds["oci_fingerprint"]
+    oci_tenancy: Final = creds["oci_tenancy"]
+    oci_key: Final = creds["oci_key"]
+    oci_key_file: Final = creds["oci_key_file"]
 
-    if (
-        not oci_user
-        or not oci_fingerprint
-        or not oci_tenancy
-        or not (oci_key or oci_key_file)
-    ):
+    if not oci_user or not oci_fingerprint or not oci_tenancy or not (oci_key or oci_key_file):
         raise OCIError(
             status_code=401,
             message=(
@@ -290,18 +269,18 @@ def sign_with_manual_credentials(
             ),
         )
 
-    method = str(optional_params.get("method", "POST")).upper()
-    body = json.dumps(request_data).encode("utf-8")
-    parsed = urlparse(api_base)
-    path = parsed.path or "/"
-    host = parsed.netloc
+    method: Final = str(optional_params.get("method", "POST")).upper()
+    body: Final = json.dumps(request_data).encode("utf-8")
+    parsed: Final = urlparse(api_base)
+    path: Final = parsed.path or "/"
+    host: Final = parsed.netloc
 
-    date = formatdate(usegmt=True)
-    content_type = headers.get("content-type", "application/json")
-    content_length = str(len(body))
-    x_content_sha256 = sha256_base64(body)
+    date: Final = formatdate(usegmt=True)
+    content_type: Final = headers.get("content-type", "application/json")
+    content_length: Final = str(len(body))
+    x_content_sha256: Final = sha256_base64(body)
 
-    headers_to_sign: Dict[str, str] = {
+    headers_to_sign: Final[dict[str, str]] = {
         "date": date,
         "host": host,
         "content-type": content_type,
@@ -309,7 +288,7 @@ def sign_with_manual_credentials(
         "x-content-sha256": x_content_sha256,
     }
 
-    signed_header_names = [
+    signed_header_names: Final = [
         "date",
         "(request-target)",
         "host",
@@ -317,14 +296,12 @@ def sign_with_manual_credentials(
         "content-type",
         "x-content-sha256",
     ]
-    signing_string = build_signature_string(
-        method, path, headers_to_sign, signed_header_names
-    )
+    signing_string: Final = build_signature_string(method, path, headers_to_sign, signed_header_names)
 
     _require_cryptography()
 
     # Resolve the private key — prefer inline PEM content over file path
-    oci_key_content: Optional[str] = None
+    oci_key_content: str | None = None
     if oci_key:
         if not isinstance(oci_key, str):
             raise OCIError(
@@ -336,10 +313,12 @@ def sign_with_manual_credentials(
             )
         oci_key_content = oci_key.replace("\\n", "\n").replace("\r\n", "\n")
 
-    private_key = (
+    private_key: Final = (
         load_private_key_from_str(oci_key_content)
         if oci_key_content
-        else load_private_key_from_file(oci_key_file) if oci_key_file else None
+        else load_private_key_from_file(oci_key_file)
+        if oci_key_file
+        else None
     )
 
     if private_key is None:
@@ -348,15 +327,15 @@ def sign_with_manual_credentials(
             message="Private key is required for OCI authentication. Provide either oci_key or oci_key_file.",
         )
 
-    signature = private_key.sign(
+    signature: Final = private_key.sign(
         signing_string.encode("utf-8"),
-        padding.PKCS1v15(),  # type: ignore[union-attr]
-        hashes.SHA256(),  # type: ignore[union-attr]
+        padding.PKCS1v15(),
+        hashes.SHA256(),
     )
-    signature_b64 = base64.b64encode(signature).decode()
+    signature_b64: Final = base64.b64encode(signature).decode()
 
-    key_id = f"{oci_tenancy}/{oci_user}/{oci_fingerprint}"
-    authorization = (
+    key_id: Final = f"{oci_tenancy}/{oci_user}/{oci_fingerprint}"
+    authorization: Final = (
         'Signature version="1",'
         f'keyId="{key_id}",'
         'algorithm="rsa-sha256",'
@@ -382,11 +361,11 @@ def sign_oci_request(
     optional_params: dict,
     request_data: dict,
     api_base: str,
-    api_key: Optional[str] = None,
-    model: Optional[str] = None,
-    stream: Optional[bool] = None,
-    fake_stream: Optional[bool] = None,
-) -> Tuple[dict, bytes]:
+    api_key: str | None = None,
+    model: str | None = None,
+    stream: bool | None = None,
+    fake_stream: bool | None = None,
+) -> tuple[dict, bytes]:
     """
     Route to the appropriate OCI signing method based on what credentials are present.
 
@@ -399,15 +378,13 @@ def sign_oci_request(
     """
     if optional_params.get("oci_signer") is not None:
         return sign_with_oci_signer(headers, optional_params, request_data, api_base)
-    return sign_with_manual_credentials(
-        headers, optional_params, request_data, api_base
-    )
+    return sign_with_manual_credentials(headers, optional_params, request_data, api_base)
 
 
 def validate_oci_environment(
     headers: dict,
     optional_params: dict,
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
 ) -> dict:
     """
     Populate common OCI request headers (content-type, user-agent).
@@ -433,7 +410,7 @@ def validate_oci_environment(
 
 # Mapping from JSON Schema type names to Python type names, as expected by
 # the OCI Cohere API's CohereParameterDefinition.type field.
-OCI_JSON_TO_PYTHON_TYPES: Dict[str, str] = {
+OCI_JSON_TO_PYTHON_TYPES: Final[dict[str, str]] = {
     "string": "str",
     "number": "float",
     "boolean": "bool",
@@ -444,17 +421,17 @@ OCI_JSON_TO_PYTHON_TYPES: Dict[str, str] = {
 }
 
 
-def resolve_oci_schema_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
+def resolve_oci_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
     """Inline all ``$ref``/``$defs`` references — OCI does not support JSON Schema ``$ref``."""
-    defs = schema.get("$defs", {})
-    resolving_stack: set = set()
+    defs: Final = schema.get("$defs", {})
+    resolving_stack: Final[set] = set()
 
     def _resolve(obj: Any) -> Any:
         if isinstance(obj, dict):
             if "$ref" in obj:
-                ref = obj["$ref"]
+                ref: Final = obj["$ref"]
                 if ref.startswith("#/$defs/"):
-                    key = ref.split("/")[-1]
+                    key: Final = ref.split("/")[-1]
                     if key in resolving_stack:
                         return {"type": "object"}  # break cycles
                     resolving_stack.add(key)
@@ -468,7 +445,7 @@ def resolve_oci_schema_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
             return [_resolve(item) for item in obj]
         return obj
 
-    resolved = _resolve(schema)
+    resolved: Final = _resolve(schema)
     if isinstance(resolved, dict):
         resolved.pop("$defs", None)
     return resolved
@@ -483,13 +460,9 @@ def resolve_oci_schema_anyof(obj: Any) -> Any:
     """
     if isinstance(obj, dict):
         if "anyOf" in obj and "type" not in obj:
-            non_null = [
-                t
-                for t in obj["anyOf"]
-                if not (isinstance(t, dict) and t.get("type") == "null")
-            ]
+            non_null: Final = [t for t in obj["anyOf"] if not (isinstance(t, dict) and t.get("type") == "null")]
             if non_null:
-                resolved = {**obj, **non_null[0]}
+                resolved: Final = {**obj, **non_null[0]}
                 resolved.pop("anyOf", None)
                 return resolve_oci_schema_anyof(resolved)
         return {k: resolve_oci_schema_anyof(v) for k, v in obj.items()}
@@ -510,7 +483,7 @@ def sanitize_oci_schema(schema: Any) -> Any:
     if not isinstance(schema, dict):
         return schema
 
-    sanitized: Dict[str, Any] = {}
+    sanitized: Final[dict[str, Any]] = {}
     for key, value in schema.items():
         if key == "title":
             continue
@@ -529,22 +502,18 @@ def sanitize_oci_schema(schema: Any) -> Any:
     if sanitized.get("type") == "array" and "items" not in sanitized:
         sanitized["items"] = {"type": "object"}
 
-    required = sanitized.get("required")
-    properties = sanitized.get("properties")
+    required: Final = sanitized.get("required")
+    properties: Final = sanitized.get("properties")
     if "required" in sanitized:
         if isinstance(required, list) and isinstance(properties, dict):
-            sanitized["required"] = [
-                f for f in required if isinstance(f, str) and f in properties
-            ]
+            sanitized["required"] = [f for f in required if isinstance(f, str) and f in properties]
         elif not isinstance(required, list):
             sanitized["required"] = []
 
     return sanitized
 
 
-def enrich_cohere_param_description(
-    description: str, param_schema: Dict[str, Any]
-) -> str:
+def enrich_cohere_param_description(description: str, param_schema: dict[str, Any]) -> str:
     """Embed schema constraints into a Cohere parameter description.
 
     ``CohereParameterDefinition`` only has ``type``, ``description``, and
@@ -552,13 +521,13 @@ def enrich_cohere_param_description(
     ``maximum``, ``pattern``) are appended to the description string so the
     model can still see and respect them.
     """
-    parts = [description] if description else []
+    parts: Final = [description] if description else []
     if "enum" in param_schema:
         parts.append(f"Allowed values: {param_schema['enum']}")
     if "format" in param_schema:
         parts.append(f"Format: {param_schema['format']}")
     if "minimum" in param_schema or "maximum" in param_schema:
-        range_parts = []
+        range_parts: Final = []
         if "minimum" in param_schema:
             range_parts.append(f"min={param_schema['minimum']}")
         if "maximum" in param_schema:

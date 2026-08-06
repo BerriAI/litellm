@@ -1,6 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { MessageType } from "@/components/chat_ui/types";
 import { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
+import { buildMcpToolBlocks } from "@/components/llm_calls/mcp_tool_blocks";
+import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
 
@@ -18,8 +20,11 @@ export async function makeAnthropicMessagesRequest(
   vector_store_ids?: string[],
   guardrails?: string[],
   policies?: string[],
-  selectedMCPTools?: string[],
+  selectedMCPServers?: string[],
   customBaseUrl?: string,
+  mcpServers?: MCPServer[],
+  mcpServerToolRestrictions?: Record<string, string[]>,
+  mcpToolsets?: MCPToolset[],
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -58,6 +63,13 @@ export async function makeAnthropicMessagesRequest(
       litellm_trace_id: traceId,
     };
 
+    const tools = buildMcpToolBlocks({
+      selectedMCPServers,
+      mcpServers,
+      mcpToolsets,
+      mcpServerToolRestrictions,
+    });
+    if (tools.length > 0) requestBody.tools = tools;
     if (vector_store_ids) requestBody.vector_store_ids = vector_store_ids;
     if (guardrails) requestBody.guardrails = guardrails;
     if (policies) requestBody.policies = policies;
@@ -66,8 +78,6 @@ export async function makeAnthropicMessagesRequest(
     const stream = client.messages.stream(requestBody, { signal });
 
     for await (const messageStreamEvent of stream) {
-      console.log("Stream event:", messageStreamEvent);
-
       // Process content block deltas
       if (messageStreamEvent.type === "content_block_delta") {
         const delta = messageStreamEvent.delta;
@@ -76,7 +86,6 @@ export async function makeAnthropicMessagesRequest(
         if (!firstTokenReceived) {
           firstTokenReceived = true;
           const timeToFirstToken = Date.now() - startTime;
-          console.log("First token received! Time:", timeToFirstToken, "ms");
           if (onTimingData) {
             onTimingData(timeToFirstToken);
           }
@@ -96,7 +105,6 @@ export async function makeAnthropicMessagesRequest(
       // Process usage data from message_delta events
       if (messageStreamEvent.type === "message_delta" && (messageStreamEvent as any).usage && onUsageData) {
         const usage = (messageStreamEvent as any).usage;
-        console.log("Usage data found:", usage);
         const usageData: TokenUsage = {
           completionTokens: usage.output_tokens,
           promptTokens: usage.input_tokens,
@@ -107,7 +115,6 @@ export async function makeAnthropicMessagesRequest(
     }
   } catch (error) {
     if (signal?.aborted) {
-      console.log("Anthropic messages request was cancelled");
     } else {
       NotificationManager.fromBackend(
         `Error occurred while generating model response. Please try again. Error: ${error}`,

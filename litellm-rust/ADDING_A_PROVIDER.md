@@ -1,10 +1,29 @@
 # Adding a provider / route to litellm-rust
 
-- Keep the route contract pure in `crates/core/src/<route>/`: define the typed request/response structs and a provider config trait with no network, env, auth, or logging.
-- Add provider identity to the repo-root `provider_endpoints_support.json`: use the LiteLLM provider slug, display name, docs URL, and endpoint support flags. Put optional stable provider-level base URL defaults under the top-level `default_creds` map; keep route-specific API key env vars in provider config/transform code so key resolution has one owner.
-- Put provider-specific transforms in `crates/providers/src/<provider>/<route>/transformation.rs`, mirroring the Python provider tree and exposing a `const <PROVIDER>_<ROUTE>_CONFIG`.
-- The provider config owns three pure steps: map LiteLLM params, transform the LiteLLM request into the provider request, and transform the provider response back into the LiteLLM response.
-- If the provider has a reverse or normalization step, keep it pure and explicit next to the transforms; do not hide reverse mapping inside the HTTP transport.
-- Route host functions in `crates/providers/src/<route>.rs` must be async: resolve auth/base URL, call the transforms, send with async transport, then call the response transform. Use Tokio/async all the way through Rust route I/O; only the PyO3 sync compatibility wrapper should `block_on` the async route, and it must release the GIL while waiting.
-- Do not add per-provider HTTP clients casually. Today Rust cannot call Python's `BaseLLMHTTPHandler`; if a route needs end-to-end Rust I/O, keep the async transport route-scoped, opt-in from Python, and do not broaden it to more providers until there is a shared Rust HTTP abstraction.
-- Register modules in `lib.rs` / `mod.rs`, add parity tests for params/request/response behavior, then run `cargo fmt && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked`.
+Everything for a route lives in `crates/core/src/<route>/`; `crates/core/src/messages` is the reference. A host (the axum gateway, the Python bridge) only calls the route's entrypoint.
+
+1. **Entrypoint** — `mod.rs`: `pub async fn <route>(request) -> CoreResult<Response>`, the Rust equivalent of `litellm.<route>()`, plus a `<route>_stream` variant when the route streams. It is the only thing a host touches.
+2. **Transform contract** — `transformation.rs`: a `…ProviderConfig` trait (URL build + request/response transforms) with types in `types.rs`.
+3. **Provider config** — `crates/core/src/providers/<provider>/<route>/transformation.rs`: implement that trait as a `const <PROVIDER>_<ROUTE>_CONFIG`, mirroring the Python provider tree. Add parity unit tests.
+4. **Prepare + handler** — `prepare.rs` resolves provider/model, credentials, auth headers, and URL, then transforms the request; `handler.rs` performs the provider call through the shared client in `client.rs` and transforms the response.
+
+## Coding standards
+
+Before writing new logic, look for an existing base to extend. When a change is
+“the same behavior for one more provider/endpoint/integration”, the codebase
+almost always already has a shared abstraction for it (for example, provider
+`BaseConfig` transformation classes in `litellm/llms/base_llm/`, shared
+helpers in `litellm_core_utils/`, typed request/response models, or factory
+functions). Find it first with a search, then add the new variant by inheriting
+from or composing that base, overriding only what genuinely differs (model
+name, parameter mapping, or auth).
+
+Never copy an existing implementation and edit it in place, and never hand-roll
+a parallel version of logic a base already provides. If you catch yourself
+writing a second copy of a pattern that exists twice already, stop and extract a
+base instead: put the shared shape in one place and make both call sites thin
+variants of it. The test for a good abstraction is that adding the next provider
+is a few declarative lines, not a new file of duplicated flow. Only diverge from
+the base when behavior is genuinely different, and say so explicitly in the PR.
+
+**Calling:** hosts invoke the core entrypoint — the Python bridge and the `ai-gateway` route service both call `litellm_core::messages::messages`. Never add a provider handler to `ai-gateway`. Register new modules in `lib.rs` / `mod.rs`, then run `cargo fmt && cargo clippy --workspace -- -D warnings && cargo test --workspace`.

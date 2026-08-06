@@ -84,7 +84,7 @@ class TestVertexAIBatchPassthroughHandler:
                             "input_file_id": "file-123",
                             "output_file_id": "file-456",
                             "error_file_id": None,
-                            "completion_window": "24hrs",
+                            "completion_window": "24h",
                         }
                         mock_transformation._get_batch_id_from_vertex_ai_batch_response.return_value = (
                             "123456789"
@@ -451,7 +451,7 @@ class TestVertexAIBatchPassthroughHandler:
                         "input_file_id": "file-123",
                         "output_file_id": "file-456",
                         "error_file_id": None,
-                        "completion_window": "24hrs",
+                        "completion_window": "24h",
                     }
                     mock_transformation._get_batch_id_from_vertex_ai_batch_response.return_value = (
                         "123456789"
@@ -590,22 +590,20 @@ class TestVertexAIBatchCostCalculation:
         assert usage.completion_tokens == 0
         assert usage.total_tokens == 0
 
-    def test_openai_shaped_output_records_nonzero_cost_and_usage(self):
+    @pytest.mark.asyncio
+    async def test_openai_shaped_output_records_nonzero_cost_and_usage(self):
         """
         Regression test for the bug where Vertex batch cost/usage was always 0.
 
         After PR #25627 (transform_file_content_response), the GCS predictions.jsonl
         is rewritten into OpenAI batch shape before the cost-tracking path sees it.
-        With disable_vertex_batch_output_transformation=False (default), the content
-        is OpenAI-shaped, so _batch_cost_calculator must fall through to the generic
-        path rather than calling calculate_vertex_ai_batch_cost_and_usage (which only
-        reads raw usageMetadata fields).
+        With disable_vertex_batch_output_transformation=False (default), the cost
+        dispatch must fall through to the generic aggregation path rather than
+        calling calculate_vertex_ai_batch_cost_and_usage (which only reads raw
+        usageMetadata fields).
         """
         import litellm
-        from litellm.batches.batch_utils import (
-            _batch_cost_calculator,
-            _get_batch_job_total_usage_from_file_content,
-        )
+        from litellm.batches.batch_utils import calculate_batch_cost_and_usage
 
         openai_shaped_responses = [
             {
@@ -668,12 +666,7 @@ class TestVertexAIBatchCostCalculation:
         try:
             litellm.disable_vertex_batch_output_transformation = False
 
-            cost = _batch_cost_calculator(
-                file_content_dictionary=openai_shaped_responses,
-                custom_llm_provider="vertex_ai",
-                model_name="gemini-2.0-flash-001",
-            )
-            usage = _get_batch_job_total_usage_from_file_content(
+            cost, usage, _ = await calculate_batch_cost_and_usage(
                 file_content_dictionary=openai_shaped_responses,
                 custom_llm_provider="vertex_ai",
                 model_name="gemini-2.0-flash-001",
@@ -694,16 +687,14 @@ class TestVertexAIBatchCostCalculation:
             cost > 0
         ), f"expected non-zero cost for completed Vertex batch, got {cost}"
 
-    def test_raw_vertex_output_still_works_when_transformation_disabled(self):
+    @pytest.mark.asyncio
+    async def test_raw_vertex_output_still_works_when_transformation_disabled(self):
         """
         When disable_vertex_batch_output_transformation=True the GCS file is returned
         as raw Vertex predictions.jsonl; the specialized reader must be used.
         """
         import litellm
-        from litellm.batches.batch_utils import (
-            _batch_cost_calculator,
-            _get_batch_job_total_usage_from_file_content,
-        )
+        from litellm.batches.batch_utils import calculate_batch_cost_and_usage
 
         raw_vertex_responses = [
             {
@@ -727,12 +718,7 @@ class TestVertexAIBatchCostCalculation:
         try:
             litellm.disable_vertex_batch_output_transformation = True
 
-            cost = _batch_cost_calculator(
-                file_content_dictionary=raw_vertex_responses,
-                custom_llm_provider="vertex_ai",
-                model_name="gemini-2.0-flash-001",
-            )
-            usage = _get_batch_job_total_usage_from_file_content(
+            cost, usage, _ = await calculate_batch_cost_and_usage(
                 file_content_dictionary=raw_vertex_responses,
                 custom_llm_provider="vertex_ai",
                 model_name="gemini-2.0-flash-001",

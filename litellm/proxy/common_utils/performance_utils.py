@@ -13,22 +13,23 @@ import cProfile
 import functools
 import inspect
 import threading
+from collections.abc import Callable
 from pathlib import Path as PathLib
-from typing import Any, Callable, Optional
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 
 # Global profiling state
-_profile_lock = threading.Lock()
+_profile_lock: Final = threading.Lock()
 _profiler = None
 _last_profile_file_path = None
 _sample_counter = 0
-_sample_counter_lock = threading.Lock()
+_sample_counter_lock: Final = threading.Lock()
 
 # Global line_profiler state
-_line_profiler: Optional[Any] = None
-_line_profiler_lock = threading.Lock()
-_wrapped_functions: dict[str, Callable] = {}  # Store original functions
+_line_profiler: Any | None = None
+_line_profiler_lock: Final = threading.Lock()
+_wrapped_functions: Final[dict[str, Callable]] = {}  # Store original functions
 
 
 def _should_sample(profile_sampling_rate: float) -> bool:
@@ -43,7 +44,7 @@ def _should_sample(profile_sampling_rate: float) -> bool:
     with _sample_counter_lock:
         _sample_counter += 1
         # Sample based on rate (e.g., 0.1 means sample every 10th request)
-        should_sample = (_sample_counter % int(1.0 / profile_sampling_rate)) == 0
+        should_sample: Final = (_sample_counter % int(1.0 / profile_sampling_rate)) == 0
         return should_sample
 
 
@@ -54,9 +55,7 @@ def _start_profiling(profile_sampling_rate: float) -> None:
         if _profiler is None:
             _profiler = cProfile.Profile()
             _profiler.enable()
-            verbose_proxy_logger.info(
-                f"Profiling started with sampling rate: {profile_sampling_rate}"
-            )
+            verbose_proxy_logger.info("Profiling started with sampling rate: %s", profile_sampling_rate)
 
 
 def _start_profiling_for_request(profile_sampling_rate: float) -> bool:
@@ -78,9 +77,9 @@ def _save_stats(profile_file: PathLib) -> None:
             _profiler.dump_stats(str(profile_file))
             # Re-enable profiler to continue profiling
             _profiler.enable()
-            verbose_proxy_logger.debug(f"Profiling stats saved to {profile_file}")
+            verbose_proxy_logger.debug("Profiling stats saved to %s", profile_file)
         except Exception as e:
-            verbose_proxy_logger.error(f"Error saving profiling stats: {e}")
+            verbose_proxy_logger.error("Error saving profiling stats: %s", e)
             # Make sure profiler is re-enabled even if there's an error
             try:
                 _profiler.enable()
@@ -107,11 +106,11 @@ def profile_endpoint(sampling_rate: float = 1.0):
 
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
-                is_sampling = _start_profiling_for_request(sampling_rate)
-                file_path_obj = PathLib("endpoint_profile.pstat")
+                is_sampling: Final = _start_profiling_for_request(sampling_rate)
+                file_path_obj: Final = PathLib("endpoint_profile.pstat")
                 set_last_profile_path(file_path_obj)
                 try:
-                    result = await func(*args, **kwargs)
+                    result: Final = await func(*args, **kwargs)
                     if is_sampling:
                         _save_stats(file_path_obj)
                     return result
@@ -125,11 +124,11 @@ def profile_endpoint(sampling_rate: float = 1.0):
 
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
-                is_sampling = _start_profiling_for_request(sampling_rate)
-                file_path_obj = PathLib("endpoint_profile.pstat")
+                is_sampling: Final = _start_profiling_for_request(sampling_rate)
+                file_path_obj: Final = PathLib("endpoint_profile.pstat")
                 set_last_profile_path(file_path_obj)
                 try:
-                    result = func(*args, **kwargs)
+                    result: Final = func(*args, **kwargs)
                     if is_sampling:
                         _save_stats(file_path_obj)
                     return result
@@ -177,11 +176,9 @@ def wrap_function_with_line_profiler(module: Any, function_name: str) -> bool:
         return False
 
     try:
-        original_function = getattr(module, function_name, None)
+        original_function: Final = getattr(module, function_name, None)
         if original_function is None:
-            verbose_proxy_logger.warning(
-                f"Function {function_name} not found in module {module.__name__}"
-            )
+            verbose_proxy_logger.warning("Function %s not found in module %s", function_name, module.__name__)
             return False
 
         # Store original function if not already wrapped
@@ -189,17 +186,13 @@ def wrap_function_with_line_profiler(module: Any, function_name: str) -> bool:
             _wrapped_functions[function_name] = original_function
 
         # Wrap with line_profiler
-        profiled_function = _line_profiler(original_function)
+        profiled_function: Final = _line_profiler(original_function)
         setattr(module, function_name, profiled_function)
 
-        verbose_proxy_logger.info(
-            f"Wrapped {module.__name__}.{function_name} with line_profiler"
-        )
+        verbose_proxy_logger.info("Wrapped %s.%s with line_profiler", module.__name__, function_name)
         return True
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error wrapping {function_name} with line_profiler: {e}"
-        )
+        verbose_proxy_logger.error("Error wrapping %s with line_profiler: %s", function_name, e)
         return False
 
 
@@ -228,18 +221,16 @@ def wrap_function_directly(func: Callable) -> Callable:
 
     # Suppress warnings about __wrapped__ - we intentionally want to profile the wrapper
     with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", message=".*__wrapped__.*", category=UserWarning
-        )
+        warnings.filterwarnings("ignore", message=".*__wrapped__.*", category=UserWarning)
         # Add function to line_profiler and wrap it
         _line_profiler.add_function(func)
-        profiled_function = _line_profiler(func)
+        profiled_function: Final = _line_profiler(func)
 
-    verbose_proxy_logger.info(f"Wrapped function {func.__name__} with line_profiler")
+    verbose_proxy_logger.info("Wrapped function %s with line_profiler", func.__name__)
     return profiled_function
 
 
-def collect_line_profiler_stats(output_file: Optional[str] = None) -> None:
+def collect_line_profiler_stats(output_file: str | None = None) -> None:
     """Collect and save line_profiler statistics.
 
     This can be called manually to collect stats at any time, or it's
@@ -258,22 +249,22 @@ def collect_line_profiler_stats(output_file: Optional[str] = None) -> None:
         try:
             if output_file:
                 # Save to file
-                output_path = PathLib(output_file)
+                output_path: Final = PathLib(output_file)
                 _line_profiler.dump_stats(str(output_path))
-                verbose_proxy_logger.info(f"Line profiler stats saved to {output_path}")
+                verbose_proxy_logger.info("Line profiler stats saved to %s", output_path)
             else:
                 # Print to stdout
                 from io import StringIO
 
-                stream = StringIO()
+                stream: Final = StringIO()
                 _line_profiler.print_stats(stream=stream)
-                stats_output = stream.getvalue()
+                stats_output: Final = stream.getvalue()
                 verbose_proxy_logger.info("Line profiler stats:\n" + stats_output)
         except Exception as e:
-            verbose_proxy_logger.error(f"Error collecting line profiler stats: {e}")
+            verbose_proxy_logger.error("Error collecting line profiler stats: %s", e)
 
 
-def register_shutdown_handler(output_file: Optional[str] = None) -> None:
+def register_shutdown_handler(output_file: str | None = None) -> None:
     """Register a shutdown handler to collect line_profiler stats.
 
     This registers an atexit handler that will automatically save profiling
@@ -291,6 +282,4 @@ def register_shutdown_handler(output_file: Optional[str] = None) -> None:
         collect_line_profiler_stats(output_file=output_file)
 
     atexit.register(shutdown_handler)
-    verbose_proxy_logger.debug(
-        f"Registered line_profiler shutdown handler for {output_file}"
-    )
+    verbose_proxy_logger.debug("Registered line_profiler shutdown handler for %s", output_file)

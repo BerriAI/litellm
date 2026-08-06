@@ -7,15 +7,18 @@ Phoenix + any other OpenInference-aware backend simultaneously.
 """
 
 import json
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
+from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
+    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
     collect,
     drop_none,
     json_if,
     message_content,
     output_messages,
+    tool_definition_attrs,
 )
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
@@ -70,6 +73,9 @@ class OpenInferenceMapper:
         ),
     }
 
+    def __init__(self, tool_attr_budget: int = MAX_TOOL_DEFINITION_ATTRS_PER_SPAN) -> None:
+        self._tool_attr_budget = tool_attr_budget
+
     def map(self, data: SpanData) -> AttributeMap:
         match data:
             case LLMCallSpanData():
@@ -77,28 +83,20 @@ class OpenInferenceMapper:
             case _:
                 return {}
 
-    @classmethod
-    def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
+    def _llm_call(self, data: LLMCallSpanData) -> AttributeMap:
         return {
-            **collect(cls._LLM_CALL_ATTRS, data),
-            **collect(cls._BLOB_ATTRS, data),
-            **cls._messages("llm.input_messages", "input.value", data.messages_in),
-            **cls._messages(
-                "llm.output_messages", "output.value", output_messages(data)
-            ),
-            **cls._tools(data),
+            **collect(self._LLM_CALL_ATTRS, data),
+            **collect(self._BLOB_ATTRS, data),
+            **self._messages("llm.input_messages", "input.value", data.messages_in),
+            **self._messages("llm.output_messages", "output.value", output_messages(data)),
+            **self._tools(data),
         }
 
     @staticmethod
-    def _messages(
-        prefix: str, value_key: str, messages: Sequence[object]
-    ) -> AttributeMap:
+    def _messages(prefix: str, value_key: str, messages: Sequence[object]) -> AttributeMap:
         """Per-message ``{prefix}.{idx}.message.*`` keys + the ``value_key`` blob."""
-        parsed = [
-            (m.get("role") if isinstance(m, dict) else None, message_content(m))
-            for m in messages
-        ]
-        attrs = drop_none(
+        parsed: Final = [(m.get("role") if isinstance(m, dict) else None, message_content(m)) for m in messages]
+        attrs: Final = drop_none(
             {
                 key: value
                 for idx, (role, content) in enumerate(parsed)
@@ -112,17 +110,13 @@ class OpenInferenceMapper:
             }
         )
         if parsed:
-            attrs[value_key] = json.dumps(
-                [{"role": role, "content": content} for role, content in parsed]
-            )
+            attrs[value_key] = json.dumps([{"role": role, "content": content} for role, content in parsed])
         return attrs
 
-    @classmethod
-    def _tools(cls, data: LLMCallSpanData) -> AttributeMap:
-        return drop_none(
-            {
-                f"llm.tools.{idx}.{suffix}": extract(tool)
-                for idx, tool in enumerate(data.tools)
-                for suffix, extract in cls._TOOL_ATTRS.items()
-            }
+    def _tools(self, data: LLMCallSpanData) -> AttributeMap:
+        return tool_definition_attrs(
+            lambda idx, suffix: f"llm.tools.{idx}.{suffix}",
+            data.tools,
+            self._TOOL_ATTRS,
+            self._tool_attr_budget,
         )

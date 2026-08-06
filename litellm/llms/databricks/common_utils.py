@@ -12,7 +12,7 @@ Authentication priority:
 
 import os
 import re
-from typing import Any, Dict, Literal, Optional, Tuple
+from typing import Any, Final, Literal
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -71,7 +71,7 @@ class DatabricksBase:
             return result
 
         if isinstance(data, dict):
-            redacted = {}
+            redacted: Final = {}
             for key, value in data.items():
                 lower_key = key.lower()
                 if any(
@@ -97,7 +97,7 @@ class DatabricksBase:
         return data
 
     @classmethod
-    def redact_headers_for_logging(cls, headers: Dict[str, str]) -> Dict[str, str]:
+    def redact_headers_for_logging(cls, headers: dict[str, str]) -> dict[str, str]:
         """
         Create a copy of headers with sensitive values redacted for safe logging.
 
@@ -113,8 +113,8 @@ class DatabricksBase:
         if not headers:
             return {}
 
-        redacted = {}
-        sensitive_headers = {
+        redacted: Final = {}
+        sensitive_headers: Final = {
             "authorization",
             "x-api-key",
             "api-key",
@@ -133,7 +133,7 @@ class DatabricksBase:
         return redacted
 
     @staticmethod
-    def _build_user_agent(custom_user_agent: Optional[str] = None) -> str:
+    def _build_user_agent(custom_user_agent: str | None = None) -> str:
         """
         Build the User-Agent string for Databricks API calls.
 
@@ -170,16 +170,13 @@ class DatabricksBase:
                 partner_name = custom_user_agent
 
             # Validate partner name: alphanumeric, underscore, hyphen only
-            if (
-                partner_name
-                and partner_name.replace("_", "").replace("-", "").isalnum()
-            ):
+            if partner_name and partner_name.replace("_", "").replace("-", "").isalnum():
                 return f"{partner_name}_litellm/{version}"
 
         # Default: just litellm
         return f"litellm/{version}"
 
-    def _get_api_base(self, api_base: Optional[str]) -> str:
+    def _get_api_base(self, api_base: str | None) -> str:
         """
         Get the Databricks API base URL.
 
@@ -189,7 +186,7 @@ class DatabricksBase:
             try:
                 from databricks.sdk import WorkspaceClient
 
-                databricks_client = WorkspaceClient()
+                databricks_client: Final = WorkspaceClient()
                 api_base = f"{databricks_client.config.host}/serving-endpoints"
                 return api_base
             except ImportError:
@@ -232,10 +229,10 @@ class DatabricksBase:
         if "/serving-endpoints" in workspace_url:
             workspace_url = workspace_url.replace("/serving-endpoints", "")
 
-        token_url = f"{workspace_url}/oidc/v1/token"
+        token_url: Final = f"{workspace_url}/oidc/v1/token"
 
         try:
-            response = requests.post(
+            response: Final = requests.post(
                 token_url,
                 data={
                     "grant_type": "client_credentials",
@@ -248,7 +245,7 @@ class DatabricksBase:
         except requests.RequestException as e:
             raise DatabricksException(
                 status_code=500,
-                message=f"OAuth M2M token request failed: {str(e)}",
+                message=f"OAuth M2M token request failed: {e}",
             )
 
         if response.status_code != 200:
@@ -257,12 +254,12 @@ class DatabricksBase:
                 message=f"OAuth M2M token request failed: {response.text}",
             )
 
-        token_data = response.json()
+        token_data: Final = response.json()
         return token_data["access_token"]
 
     def _get_databricks_credentials(
-        self, api_key: Optional[str], api_base: Optional[str], headers: Optional[dict]
-    ) -> Tuple[str, dict]:
+        self, api_key: str | None, api_base: str | None, headers: dict | None
+    ) -> tuple[str, dict]:
         """
         Get Databricks credentials using the Databricks SDK.
 
@@ -284,14 +281,12 @@ class DatabricksBase:
             # Register LiteLLM as partner for Databricks telemetry attribution
             useragent.with_partner("litellm")
 
-            databricks_client = WorkspaceClient()
+            databricks_client: Final = WorkspaceClient()
 
             api_base = api_base or f"{databricks_client.config.host}/serving-endpoints"
 
             if api_key is None:
-                databricks_auth_headers: dict[str, str] = (
-                    databricks_client.config.authenticate()
-                )
+                databricks_auth_headers: Final[dict[str, str]] = databricks_client.config.authenticate()
                 headers = {**databricks_auth_headers, **headers}
 
             return api_base, headers
@@ -308,13 +303,13 @@ class DatabricksBase:
 
     def databricks_validate_environment(
         self,
-        api_key: Optional[str],
-        api_base: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
         endpoint_type: Literal["chat_completions", "embeddings"],
-        custom_endpoint: Optional[bool],
-        headers: Optional[dict],
-        custom_user_agent: Optional[str] = None,
-    ) -> Tuple[str, dict]:
+        custom_endpoint: bool | None,
+        headers: dict | None,
+        custom_user_agent: str | None = None,
+    ) -> tuple[str, dict]:
         """
         Validate and configure the Databricks environment.
 
@@ -337,8 +332,8 @@ class DatabricksBase:
         from litellm._logging import verbose_logger
 
         # Check for OAuth M2M credentials (recommended for production)
-        client_id = os.getenv("DATABRICKS_CLIENT_ID")
-        client_secret = os.getenv("DATABRICKS_CLIENT_SECRET")
+        client_id: Final = os.getenv("DATABRICKS_CLIENT_ID")
+        client_secret: Final = os.getenv("DATABRICKS_CLIENT_SECRET")
 
         # Determine api_base first
         if api_base is None:
@@ -347,7 +342,7 @@ class DatabricksBase:
         if client_id and client_secret and api_base:
             # Use OAuth M2M flow (preferred for production)
             verbose_logger.debug("Using OAuth M2M authentication for Databricks")
-            access_token = self._get_oauth_m2m_token(api_base, client_id, client_secret)
+            access_token: Final = self._get_oauth_m2m_token(api_base, client_id, client_secret)
             headers = headers or {}
             headers["Authorization"] = f"Bearer {access_token}"
             headers["Content-Type"] = "application/json"
@@ -377,12 +372,12 @@ class DatabricksBase:
 
         if headers is None:
             headers = {
-                "Authorization": "Bearer {}".format(api_key),
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             }
         else:
             if api_key is not None:
-                headers.update({"Authorization": "Bearer {}".format(api_key)})
+                headers.update({"Authorization": f"Bearer {api_key}"})
 
         if api_key is not None:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -391,13 +386,11 @@ class DatabricksBase:
         headers["User-Agent"] = self._build_user_agent(custom_user_agent)
 
         # Debug logging with redaction (never log actual tokens)
-        verbose_logger.debug(
-            f"Databricks request headers: {self.redact_headers_for_logging(headers)}"
-        )
+        verbose_logger.debug("Databricks request headers: %s", self.redact_headers_for_logging(headers))
 
         if endpoint_type == "chat_completions" and custom_endpoint is not True:
-            api_base = "{}/chat/completions".format(api_base)
+            api_base = f"{api_base}/chat/completions"
         elif endpoint_type == "embeddings" and custom_endpoint is not True:
-            api_base = "{}/embeddings".format(api_base)
+            api_base = f"{api_base}/embeddings"
 
         return api_base, headers

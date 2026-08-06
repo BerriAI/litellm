@@ -31,11 +31,6 @@
       }
     }
   },
-  "default_creds": {
-    "mistral": {
-      "default_api_base": "https://api.mistral.ai/v1"
-    }
-  },
   "providers": {
     "a2a": {
       "display_name": "A2A (Agent-to-Agent) (`a2a`)",
@@ -184,7 +179,6 @@
     },
     "apertis": {
       "display_name": "Apertis (`apertis`)",
-      "url": "https://docs.litellm.ai/docs/providers/apertis",
       "endpoints": {
         "chat_completions": true,
         "messages": false,
@@ -501,7 +495,6 @@
     },
     "chutes": {
       "display_name": "Chutes (`chutes`)",
-      "url": "https://docs.litellm.ai/docs/providers/chutes",
       "endpoints": {
         "chat_completions": true,
         "messages": false,
@@ -1066,6 +1059,16 @@
         "interactions": true
       }
     },
+    "gdc": {
+      "display_name": "Google Distributed Cloud (GDC)",
+      "url": "https://docs.litellm.ai/docs/providers/gdc",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false
+      }
+    },
     "github_copilot": {
       "display_name": "GitHub Copilot (`github_copilot`)",
       "url": "https://docs.litellm.ai/docs/providers/github_copilot",
@@ -1600,7 +1603,6 @@
     },
     "nanogpt": {
       "display_name": "NanoGPT (`nanogpt`)",
-      "url": "https://docs.litellm.ai/docs/providers/nanogpt",
       "endpoints": {
         "chat_completions": true,
         "messages": false,
@@ -1982,6 +1984,23 @@
         "interactions": true
       }
     },
+    "meta": {
+      "display_name": "Meta Model API (`meta`)",
+      "url": "https://docs.litellm.ai/docs/providers/meta",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "pinstripes": {
       "display_name": "Pinstripes (`pinstripes`)",
       "url": "https://docs.litellm.ai/docs/providers/pinstripes",
@@ -2001,7 +2020,6 @@
     },
     "poe": {
       "display_name": "Poe (`poe`)",
-      "url": "https://docs.litellm.ai/docs/providers/poe",
       "endpoints": {
         "chat_completions": true,
         "messages": false,
@@ -2262,7 +2280,6 @@
     },
     "synthetic": {
       "display_name": "Synthetic (`synthetic`)",
-      "url": "https://docs.litellm.ai/docs/providers/synthetic",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
@@ -2293,6 +2310,24 @@
         "rerank": false,
         "a2a": false,
         "text_completion": true
+      }
+    },
+    "tencent": {
+      "display_name": "Tencent TokenHub (`tencent`)",
+      "url": "https://docs.litellm.ai/docs/providers/tencent",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "text_completion": false
       }
     },
     "text-completion-codestral": {

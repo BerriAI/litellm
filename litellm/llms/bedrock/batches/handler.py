@@ -1,13 +1,18 @@
 from datetime import datetime
-from typing import Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Metadata as OpenAIBatchMetadata
 
 from litellm.types.utils import LiteLLMBatch
 
-# AWS Bedrock model-invocation-job statuses -> OpenAI Batch statuses.
-_BEDROCK_MIJ_STATUS_TO_OPENAI = {
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+# AWS Bedrock model-invocation-job statuses → OpenAI Batch statuses.
+# Mirrors the mapping used by `BedrockBatchesConfig.transform_create_batch_response`
+# so create / retrieve return consistent statuses.
+_BEDROCK_MIJ_STATUS_TO_OPENAI: Final = {
     "Submitted": "validating",
     "Validating": "validating",
     "Scheduled": "validating",
@@ -21,10 +26,10 @@ _BEDROCK_MIJ_STATUS_TO_OPENAI = {
 }
 
 
-def _extract_region_from_bedrock_arn(arn: str) -> Optional[str]:
+def _extract_region_from_bedrock_arn(arn: str) -> str | None:
     """ARN shape: ``arn:aws:bedrock:<region>:<account>:<type>/<id>``"""
     try:
-        parts = arn.split(":")
+        parts: Final = arn.split(":")
         if len(parts) >= 4 and parts[2] == "bedrock":
             return parts[3] or None
     except Exception:
@@ -32,27 +37,36 @@ def _extract_region_from_bedrock_arn(arn: str) -> Optional[str]:
     return None
 
 
-def _extract_job_id_from_arn(arn: str) -> Optional[str]:
+def _extract_job_id_from_arn(arn: str) -> str | None:
     """``arn:aws:bedrock:<region>:<acct>:model-invocation-job/<job-id>`` -> ``<job-id>``."""
     if ":model-invocation-job/" not in arn:
         return None
     return arn.rsplit("/", 1)[-1] or None
 
 
-def _predict_output_file_uri(
-    output_prefix: str, input_uri: str, job_id: Optional[str]
-) -> Optional[str]:
+def _predict_output_file_uri(output_prefix: str, input_uri: str, job_id: str | None) -> str | None:
+    """
+    Compute the deterministic per-job result file URI Bedrock writes to.
+
+    Bedrock lays results out as::
+
+        <output_prefix>/<job-id>/<basename(input_uri)>.out
+
+    We compute it client-side so OpenAI-style ``client.files.content(output_file_id)``
+    works without an extra S3 ``ListObjectsV2`` round-trip. Returns ``None`` if we
+    don't have enough info; callers should fall back to the bare prefix.
+    """
     if not output_prefix or not input_uri or not job_id:
         return None
     if not output_prefix.endswith("/"):
         output_prefix = output_prefix + "/"
-    input_basename = input_uri.rsplit("/", 1)[-1]
+    input_basename: Final = input_uri.rsplit("/", 1)[-1]
     if not input_basename:
         return None
     return f"{output_prefix}{job_id}/{input_basename}.out"
 
 
-def _to_epoch(value: Any) -> Optional[int]:
+def _to_epoch(value: Any) -> int | None:
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -63,46 +77,54 @@ def _to_epoch(value: Any) -> Optional[int]:
 
 
 class BedrockBatchesHandler:
-    """Handler for Bedrock Batches."""
+    """
+    Handler for Bedrock Batches.
+
+    Specific providers/models needed some special handling.
+
+    E.g. Twelve Labs Embedding Async Invoke
+    """
 
     @staticmethod
     def cancel_batch(
         batch_id: str,
-        aws_region_name: Optional[str] = None,
-        logging_obj=None,
-        **kwargs,
+        aws_region_name: str | None = None,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+        aws_access_key_id: str | None = None,
+        aws_secret_access_key: str | None = None,
+        aws_session_token: str | None = None,
+        aws_session_name: str | None = None,
+        aws_profile_name: str | None = None,
+        aws_role_name: str | None = None,
+        aws_web_identity_token: str | None = None,
+        aws_sts_endpoint: str | None = None,
+        aws_external_id: str | None = None,
+        **kwargs: object,  # kwargs-ok: litellm.cancel_batch forwards arbitrary user kwargs verbatim
     ) -> "LiteLLMBatch":
-        """
-        Cancel an AWS Bedrock batch model invocation job using StopModelInvocationJob.
-        """
         try:
             import boto3
             from botocore.exceptions import ClientError
         except ImportError as exc:
-            raise ImportError(
-                "Missing boto3/botocore to call bedrock. Run 'pip install boto3'."
-            ) from exc
+            raise ImportError("Missing boto3/botocore to call bedrock. Run 'pip install boto3'.") from exc
 
-        region = (
-            aws_region_name or _extract_region_from_bedrock_arn(batch_id) or "us-east-1"
-        )
+        region: Final = aws_region_name or _extract_region_from_bedrock_arn(batch_id) or "us-east-1"
 
         from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 
-        creds = BedrockBatchesConfig().get_credentials(
-            aws_access_key_id=kwargs.get("aws_access_key_id"),
-            aws_secret_access_key=kwargs.get("aws_secret_access_key"),
-            aws_session_token=kwargs.get("aws_session_token"),
+        creds: Final = BedrockBatchesConfig().get_credentials(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
             aws_region_name=region,
-            aws_session_name=kwargs.get("aws_session_name"),
-            aws_profile_name=kwargs.get("aws_profile_name"),
-            aws_role_name=kwargs.get("aws_role_name"),
-            aws_web_identity_token=kwargs.get("aws_web_identity_token"),
-            aws_sts_endpoint=kwargs.get("aws_sts_endpoint"),
-            aws_external_id=kwargs.get("aws_external_id"),
+            aws_session_name=aws_session_name,
+            aws_profile_name=aws_profile_name,
+            aws_role_name=aws_role_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
+            aws_external_id=aws_external_id,
         )
 
-        client = boto3.client(
+        client: Final = boto3.client(
             "bedrock",
             region_name=region,
             aws_access_key_id=creds.access_key,
@@ -113,56 +135,77 @@ class BedrockBatchesHandler:
         try:
             client.stop_model_invocation_job(jobIdentifier=batch_id)
         except ClientError as e:
-            error_code = e.response.get("Error", {}).get("Code")
-            error_msg = e.response.get("Error", {}).get("Message", "").lower()
-            if error_code == "ValidationException" and any(
-                term in error_msg for term in ["stop", "terminal", "completed", "already"]
-            ):
-                pass
-            else:
-                raise e
+            error_code: Final = e.response.get("Error", {}).get("Code")
+            error_msg: Final = e.response.get("Error", {}).get("Message", "").lower()
+            already_terminal: Final = error_code == "ValidationException" and any(
+                term in error_msg for term in ("stop", "terminal", "completed", "already")
+            )
+            if not already_terminal:
+                raise
 
         return BedrockBatchesHandler._handle_model_invocation_job_status(
             batch_id=batch_id,
             aws_region_name=region,
             logging_obj=logging_obj,
-            **kwargs,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            aws_session_name=aws_session_name,
+            aws_profile_name=aws_profile_name,
+            aws_role_name=aws_role_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
+            aws_external_id=aws_external_id,
         )
 
     @staticmethod
-    def _handle_async_invoke_status(
-        batch_id: str, aws_region_name: str, logging_obj=None, **kwargs
-    ) -> "LiteLLMBatch":
+    def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
+        """
+        Handle async invoke status check for AWS Bedrock.
+
+        This is for Twelve Labs Embedding Async Invoke.
+
+        Args:
+            batch_id: The async invoke ARN
+            aws_region_name: AWS region name
+            **kwargs: Additional parameters
+
+        Returns:
+            dict: Status information including status, output_file_id (S3 URL), etc.
+        """
         import asyncio
+
         from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
 
         async def _async_get_status():
-            embedding_handler = BedrockEmbedding()
-            status_response = await embedding_handler._get_async_invoke_status(
+            # Create embedding handler instance
+            embedding_handler: Final = BedrockEmbedding()
+
+            # Get the status of the async invoke job
+            status_response: Final = await embedding_handler._get_async_invoke_status(
                 invocation_arn=batch_id,
                 aws_region_name=aws_region_name,
                 logging_obj=logging_obj,
                 **kwargs,
             )
 
-            openai_batch_metadata: OpenAIBatchMetadata = {
+            # Transform response to a LiteLLMBatch object
+            from litellm.types.utils import LiteLLMBatch
+
+            openai_batch_metadata: Final[OpenAIBatchMetadata] = {
                 "output_file_id": status_response["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"],
                 "failure_message": status_response.get("failureMessage") or "",
                 "model_arn": status_response["modelArn"],
             }
 
-            return LiteLLMBatch(
+            result: Final = LiteLLMBatch(
                 id=status_response["invocationArn"],
                 object="batch",
                 status=status_response["status"],
                 created_at=status_response["submitTime"],
                 in_progress_at=status_response["lastModifiedTime"],
                 completed_at=status_response.get("endTime"),
-                failed_at=(
-                    status_response.get("endTime")
-                    if status_response["status"] == "failed"
-                    else None
-                ),
+                failed_at=(status_response.get("endTime") if status_response["status"] == "failed" else None),
                 request_counts=BatchRequestCounts(
                     total=1,
                     completed=1 if status_response["status"] == "completed" else 0,
@@ -174,10 +217,14 @@ class BedrockBatchesHandler:
                 input_file_id="",
             )
 
+            return result
+
+        # Since this function is called from within an async context via run_in_executor,
+        # we need to create a new event loop in a thread to avoid conflicts
         import concurrent.futures
 
         def run_in_thread():
-            new_loop = asyncio.new_event_loop()
+            new_loop: Final = asyncio.new_event_loop()
             asyncio.set_event_loop(new_loop)
             try:
                 return new_loop.run_until_complete(_async_get_status())
@@ -185,30 +232,62 @@ class BedrockBatchesHandler:
                 new_loop.close()
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(run_in_thread)
+            future: Final = executor.submit(run_in_thread)
             return future.result()
 
     @staticmethod
     def _handle_model_invocation_job_status(
         batch_id: str,
-        aws_region_name: Optional[str] = None,
+        aws_region_name: str | None = None,
         logging_obj=None,
         **kwargs,
     ) -> "LiteLLMBatch":
+        """
+        Handle ``GetModelInvocationJob`` status check for AWS Bedrock bulk batch
+        inference jobs (the ARN type returned by ``CreateModelInvocationJob``).
+
+        ``CreateModelInvocationJob`` lives on the Bedrock **control plane**
+        (``bedrock.<region>.amazonaws.com``), distinct from the data-plane
+        ``bedrock-runtime`` endpoint that serves Twelve Labs async-invoke ARNs.
+        The two ARN families therefore can't share a handler — see
+        ``litellm/batches/main.py`` for the dispatch.
+
+        Args:
+            batch_id: A ``arn:aws:bedrock:<region>:<acct>:model-invocation-job/<id>``
+                ARN (or just the trailing job id; both are accepted by
+                ``GetModelInvocationJob``).
+            aws_region_name: Region for the boto3 ``bedrock`` client. If omitted,
+                we fall back to parsing the region out of ``batch_id`` itself.
+            logging_obj: Optional litellm logging object.
+            **kwargs: Optional AWS credential overrides
+                (``aws_access_key_id``, ``aws_secret_access_key``,
+                ``aws_session_token``, ``aws_profile_name``,
+                ``aws_role_name``, ``aws_session_name``,
+                ``aws_web_identity_token``, ``aws_sts_endpoint``,
+                ``aws_external_id``). Unknown keys are ignored.
+
+        Returns:
+            ``LiteLLMBatch`` shaped like an OpenAI Batch resource. Note that
+            ``request_counts`` is always ``(0, 0, 0)`` because
+            ``GetModelInvocationJob`` does not surface per-record counts;
+            callers that need accurate counts should parse
+            ``manifest.json.out`` from the output S3 prefix.
+        """
         try:
             import boto3
         except ImportError as exc:
-            raise ImportError(
-                "Missing boto3 to call bedrock. Run 'pip install boto3'."
-            ) from exc
+            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.") from exc
 
-        region = (
-            aws_region_name or _extract_region_from_bedrock_arn(batch_id) or "us-east-1"
-        )
+        # Resolve region: explicit > parsed-from-ARN > us-east-1 (boto3 default).
+        region: Final = aws_region_name or _extract_region_from_bedrock_arn(batch_id) or "us-east-1"
 
+        # Resolve credentials through the same path the rest of the bedrock
+        # provider uses, so model_list / env / role-assumption configs are
+        # honored. We instantiate BedrockBatchesConfig (which extends
+        # BaseAWSLLM) lazily to avoid a circular import at module load.
         from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 
-        creds = BedrockBatchesConfig().get_credentials(
+        creds: Final = BedrockBatchesConfig().get_credentials(
             aws_access_key_id=kwargs.get("aws_access_key_id"),
             aws_secret_access_key=kwargs.get("aws_secret_access_key"),
             aws_session_token=kwargs.get("aws_session_token"),
@@ -221,7 +300,7 @@ class BedrockBatchesHandler:
             aws_external_id=kwargs.get("aws_external_id"),
         )
 
-        client = boto3.client(
+        client: Final = boto3.client(
             "bedrock",
             region_name=region,
             aws_access_key_id=creds.access_key,
@@ -230,20 +309,21 @@ class BedrockBatchesHandler:
         )
 
         if logging_obj is not None:
-            url_path_id = _extract_job_id_from_arn(batch_id) or batch_id
+            # Use the bare job id in the logged URL so we don't double up the
+            # `model-invocation-job/` segment when `batch_id` is a full ARN.
+            # `GetModelInvocationJob` accepts either form, but only the bare id
+            # produces a sensible-looking URL in logs.
+            url_path_id: Final = _extract_job_id_from_arn(batch_id) or batch_id
             logging_obj.pre_call(
                 input=batch_id,
                 api_key="",
                 additional_args={
                     "complete_input_dict": {"jobIdentifier": batch_id},
-                    "api_base": (
-                        f"https://bedrock.{region}.amazonaws.com/"
-                        f"model-invocation-job/{url_path_id}"
-                    ),
+                    "api_base": (f"https://bedrock.{region}.amazonaws.com/model-invocation-job/{url_path_id}"),
                 },
             )
 
-        response = client.get_model_invocation_job(jobIdentifier=batch_id)
+        response: Final = client.get_model_invocation_job(jobIdentifier=batch_id)
 
         if logging_obj is not None:
             logging_obj.post_call(
@@ -253,30 +333,36 @@ class BedrockBatchesHandler:
                 additional_args={"complete_input_dict": {"jobIdentifier": batch_id}},
             )
 
-        bedrock_status = str(response.get("status", ""))
-        openai_status = cast(
+        bedrock_status: Final = str(response.get("status", ""))
+        openai_status: Final = cast(
             Any,
             _BEDROCK_MIJ_STATUS_TO_OPENAI.get(bedrock_status, "in_progress"),
         )
 
-        input_uri = (
-            response.get("inputDataConfig", {})
-            .get("s3InputDataConfig", {})
-            .get("s3Uri", "")
-        )
-        output_prefix = (
-            response.get("outputDataConfig", {})
-            .get("s3OutputDataConfig", {})
-            .get("s3Uri", "")
-        )
+        input_uri: Final = response.get("inputDataConfig", {}).get("s3InputDataConfig", {}).get("s3Uri", "")
+        output_prefix: Final = response.get("outputDataConfig", {}).get("s3OutputDataConfig", {}).get("s3Uri", "")
 
-        job_arn = response.get("jobArn", batch_id)
-        job_id = _extract_job_id_from_arn(job_arn)
-        output_file_uri = _predict_output_file_uri(output_prefix, input_uri, job_id)
+        # Bedrock returns the output *prefix* the user supplied at job creation.
+        # Actual results land at <prefix>/<job-id>/<basename(input)>.out — we
+        # surface that single-file URI as `output_file_id` so the OpenAI-style
+        # download flow works without an extra S3 listing call. We deliberately
+        # do NOT fall back to the bare prefix when prediction fails: a prefix
+        # is not a downloadable object, so handing it back as `output_file_id`
+        # would reproduce the very NoSuchKey bug this handler exists to fix.
+        # The bare prefix is preserved in metadata for callers that want the
+        # `manifest.json.out` or want to do their own listing.
+        job_arn: Final = response.get("jobArn", batch_id)
+        job_id: Final = _extract_job_id_from_arn(job_arn)
+        output_file_uri: Final = _predict_output_file_uri(output_prefix, input_uri, job_id)
 
-        completed_at = _to_epoch(response.get("endTime"))
+        completed_at: Final = _to_epoch(response.get("endTime"))
 
-        openai_batch_metadata: OpenAIBatchMetadata = {
+        # Note: metadata uses "" (not None) for unknown URIs to satisfy the
+        # OpenAI Batch metadata schema, which is `dict[str, str]`. The
+        # `output_file_id` field on the LiteLLMBatch itself does carry None
+        # correctly (see below), so callers should branch on that, not on
+        # `metadata["output_file_uri"]`.
+        openai_batch_metadata: Final[OpenAIBatchMetadata] = {
             "model_arn": response.get("modelId", ""),
             "job_arn": job_arn,
             "job_name": response.get("jobName", ""),

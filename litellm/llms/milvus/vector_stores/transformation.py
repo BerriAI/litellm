@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-MILVUS_OPTIONAL_PARAMS = {
+MILVUS_OPTIONAL_PARAMS: Final = {
     "annsField",
     "limit",
     "filter",
@@ -47,10 +47,8 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
     def __init__(self):
         super().__init__()
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
-        api_key: Optional[str] = None
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+        api_key: str | None = None
         if litellm_params is not None:
             api_key = litellm_params.api_key or get_secret_str("MILVUS_API_KEY")
 
@@ -63,10 +61,8 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
 
         return headers
 
-    def get_auth_credentials(
-        self, litellm_params: dict
-    ) -> BaseVectorStoreAuthCredentials:
-        api_key = litellm_params.get("api_key")
+    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+        api_key: Final = litellm_params.get("api_key")
         if not api_key:
             raise ValueError(
                 "MILVUS_API_KEY is not set. Either set it in the litellm_params or set the MILVUS_API_KEY environment variable."
@@ -90,9 +86,7 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
             ],
         }
 
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict, drop_params: bool
-    ) -> dict:
+    def map_openai_params(self, non_default_params: dict, optional_params: dict, drop_params: bool) -> dict:
         for param, value in non_default_params.items():
             if param in MILVUS_OPTIONAL_PARAMS:
                 optional_params[param] = value
@@ -100,7 +94,7 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -123,13 +117,13 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict[str, Any]]:
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict[str, Any]]:
         """
         Transform search request for Azure AI Search API
 
@@ -140,14 +134,14 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
             query = " ".join(query)
 
         # Get embedding model from litellm_params (required)
-        embedding_model = litellm_params.get("litellm_embedding_model")
+        embedding_model: Final = litellm_params.get("litellm_embedding_model")
         if not embedding_model:
             raise ValueError(
                 "embedding_model is required in litellm_params for Milvus. You can call any litellm embedding model."
                 "Example: litellm_params['embedding_model'] = 'azure/text-embedding-3-large'"
             )
 
-        embedding_config = litellm_params.get("litellm_embedding_config", {})
+        embedding_config: Final = litellm_params.get("litellm_embedding_config", {})
         if not embedding_config:
             raise ValueError(
                 "embedding_config is required in litellm_params for Milvus. You can call any litellm embedding model."
@@ -157,32 +151,32 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         # Get top_k (number of results to return)
         # Generate embedding for the query using litellm.embeddings
         try:
-            embedding_response = litellm.embedding(
+            embedding_response: Final = litellm.embedding(
                 model=embedding_model,
                 input=[query],
                 **embedding_config,
             )
-            query_vector = embedding_response.data[0]["embedding"]
+            query_vector: Final = embedding_response.data[0]["embedding"]
         except Exception as e:
-            raise Exception(f"Failed to generate embedding for query: {str(e)}")
+            raise Exception(f"Failed to generate embedding for query: {e}")
 
         # Azure AI Search endpoint for search
-        index_name = vector_store_id  # vector_store_id is the index name
-        url = f"{api_base}/v2/vectordb/entities/search"
+        index_name: Final = vector_store_id  # vector_store_id is the index name
+        url: Final = f"{api_base}/v2/vectordb/entities/search"
 
         # Build the request body for Azure AI Search with vector search
-        request_body: Dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "collectionName": index_name,
             "data": [query_vector],
             "annsField": "book_intro_vector",
             **vector_store_search_optional_params,
         }
 
-        db_name = litellm_params.get("milvus_db_name")
+        db_name: Final = litellm_params.get("milvus_db_name")
         if db_name:
             request_body["dbName"] = db_name
 
-        partition_names = litellm_params.get("milvus_partition_names")
+        partition_names: Final = litellm_params.get("milvus_partition_names")
         if partition_names:
             request_body["partitionNames"] = partition_names
 
@@ -212,26 +206,24 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         }
         """
         try:
-            response_json = response.json()
+            response_json: Final = response.json()
 
             # Extract results from Azure AI Search API response
-            results = response_json.get("data", [])
+            results: Final = response_json.get("data", [])
 
             # Try to get text_field from optional_params first, then litellm_params
-            optional_params = litellm_logging_obj.model_call_details.get(
-                "optional_params", {}
-            )
+            optional_params: Final = litellm_logging_obj.model_call_details.get("optional_params", {})
             text_field = optional_params.get("milvus_text_field", "")
 
             # Fallback to litellm_params if not in optional_params
 
             if not text_field:
-                text_field = litellm_logging_obj.model_call_details.get(
-                    "litellm_params", {}
-                ).get("milvus_text_field", "")
+                text_field = litellm_logging_obj.model_call_details.get("litellm_params", {}).get(
+                    "milvus_text_field", ""
+                )
 
             # Transform results to standard format
-            search_results: List[VectorStoreSearchResult] = []
+            search_results: Final[list[VectorStoreSearchResult]] = []
             for result in results:
                 # Extract text content
                 text_content = result.get(text_field, "")
@@ -279,10 +271,8 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         raise NotImplementedError
 
-    def transform_create_vector_store_response(
-        self, response: httpx.Response
-    ) -> VectorStoreCreateResponse:
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         raise NotImplementedError

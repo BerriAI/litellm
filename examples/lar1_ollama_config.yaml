@@ -1,0 +1,45 @@
+model_list:
+  - model_name: agent-router
+    litellm_params:
+      model: ollama/qwen3.5:9b
+      api_base: http://127.0.0.1:11434
+    model_info:
+      id: cloud-smart
+      type: cloud-smart
+
+  - model_name: agent-router
+    litellm_params:
+      model: ollama/phi4-mini:latest
+      api_base: http://127.0.0.1:11434
+    model_info:
+      id: cloud-fast
+      type: cloud-fast
+
+  - model_name: agent-router
+    litellm_params:
+      model: ollama/llama3.2:3b
+      api_base: http://127.0.0.1:11434
+    model_info:
+      id: local
+      type: local
+
+  - model_name: agent-router
+    litellm_params:
+      model: ollama/lfm2.5-thinking:latest
+      api_base: http://127.0.0.1:11434
+    model_info:
+      id: deep
+      type: deep
+
+router_settings:
+  routing_strategy: lar1
+  routing_strategy_args:
+    confidence_threshold_low: 0.3
+    confidence_threshold_medium: 0.5
+    confidence_threshold_high: 0.7
+
+general_settings:
+  master_key: sk-lar1-demo
+
+litellm_settings:
+  set_verbose: true

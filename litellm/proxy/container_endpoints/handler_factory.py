@@ -7,7 +7,7 @@ FastAPI route handlers for ALL container file endpoints.
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Final
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
@@ -25,16 +25,16 @@ from litellm.proxy.container_endpoints.ownership import (
 )
 
 
-def _load_endpoints_config() -> Dict:
+def _load_endpoints_config() -> dict:
     """Load the endpoints configuration from JSON file."""
-    config_path = Path(__file__).parent.parent.parent / "containers" / "endpoints.json"
+    config_path: Final = Path(__file__).parent.parent.parent / "containers" / "endpoints.json"
     with open(config_path) as f:
         return json.load(f)
 
 
-def get_all_route_types() -> List[str]:
+def get_all_route_types() -> list[str]:
     """Get all async route types for registration in route_llm_request.py"""
-    config = _load_endpoints_config()
+    config: Final = _load_endpoints_config()
     return [endpoint["async_name"] for endpoint in config["endpoints"]]
 
 
@@ -52,7 +52,7 @@ def _get_container_provider_config(custom_llm_provider: str):
 
 
 def _create_handler_for_path_params(
-    path_params: List[str],
+    path_params: list[str],
     route_type: str,
     returns_binary: bool = False,
     is_multipart: bool = False,
@@ -183,7 +183,7 @@ async def _process_binary_request(
         version,
     )
 
-    custom_llm_provider = (
+    custom_llm_provider: Final = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
@@ -194,7 +194,7 @@ async def _process_binary_request(
         user_api_key_dict=user_api_key_dict,
         custom_llm_provider=custom_llm_provider,
     )
-    data: Dict[str, Any] = {
+    data: Final[dict[str, Any]] = {
         "file_id": file_id,
         **(
             await get_container_forwarding_params(
@@ -204,10 +204,10 @@ async def _process_binary_request(
             )
         ),
     }
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
 
     try:
-        content = await processor.base_process_llm_request(
+        content: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -228,7 +228,7 @@ async def _process_binary_request(
 
         # Determine content type based on common file extensions in the file_id
         content_type = "application/octet-stream"
-        file_id_lower = file_id.lower()
+        file_id_lower: Final = file_id.lower()
         if ".png" in file_id_lower or file_id_lower.endswith("png"):
             content_type = "image/png"
         elif ".jpg" in file_id_lower or ".jpeg" in file_id_lower:
@@ -245,10 +245,7 @@ async def _process_binary_request(
             content_type = "application/pdf"
 
         if not isinstance(content, bytes):
-            raise TypeError(
-                "aretrieve_container_file_content expected bytes, got "
-                f"{type(content).__name__}"
-            )
+            raise TypeError(f"aretrieve_container_file_content expected bytes, got {type(content).__name__}")
 
         return Response(
             content=content,
@@ -292,8 +289,8 @@ async def _process_multipart_upload_request(
     )
 
     # Parse multipart form data and convert files
-    form_data = await get_form_data(request)
-    data = await convert_upload_files_to_file_data(form_data)
+    form_data: Final = await get_form_data(request)
+    data: Final = await convert_upload_files_to_file_data(form_data)
 
     if "file" not in data:
         from fastapi import HTTPException
@@ -301,11 +298,11 @@ async def _process_multipart_upload_request(
         raise HTTPException(status_code=400, detail="Missing required 'file' field")
 
     # convert_upload_files_to_file_data returns list of tuples, extract single file
-    file_list = data["file"]
+    file_list: Final = data["file"]
     if isinstance(file_list, list) and len(file_list) > 0:
         data["file"] = file_list[0]
 
-    custom_llm_provider = (
+    custom_llm_provider: Final = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
@@ -325,13 +322,13 @@ async def _process_multipart_upload_request(
         )
     )
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
-            route_type=route_type,  # type: ignore[arg-type]
+            route_type=route_type,
             proxy_logging_obj=proxy_logging_obj,
             llm_router=llm_router,
             general_settings=general_settings,
@@ -359,7 +356,7 @@ async def _process_request(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
     route_type: str,
-    path_params: Dict[str, str],
+    path_params: dict[str, str],
 ):
     """Common request processing logic."""
     from litellm.proxy.proxy_server import (
@@ -376,13 +373,13 @@ async def _process_request(
         version,
     )
 
-    query_params = dict(request.query_params)
-    data: Dict[str, Any] = {
+    query_params: Final = dict(request.query_params)
+    data: Final[dict[str, Any]] = {
         "query_params": query_params,
         **path_params,
     }
 
-    custom_llm_provider = (
+    custom_llm_provider: Final = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
@@ -390,12 +387,13 @@ async def _process_request(
 
     # Validate container_id ownership if present in path_params.
     if "container_id" in path_params:
-        original_container_id, resolved_provider = (
-            await assert_user_can_access_container(
-                container_id=path_params["container_id"],
-                user_api_key_dict=user_api_key_dict,
-                custom_llm_provider=custom_llm_provider,
-            )
+        (
+            original_container_id,
+            resolved_provider,
+        ) = await assert_user_can_access_container(
+            container_id=path_params["container_id"],
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider=custom_llm_provider,
         )
         data.update(
             await get_container_forwarding_params(
@@ -407,13 +405,13 @@ async def _process_request(
     else:
         data["custom_llm_provider"] = custom_llm_provider
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
-            route_type=route_type,  # type: ignore[arg-type]
+            route_type=route_type,
             proxy_logging_obj=proxy_logging_obj,
             llm_router=llm_router,
             general_settings=general_settings,
@@ -443,7 +441,7 @@ def register_container_file_endpoints(router: APIRouter) -> None:
     This single function registers all endpoints defined in endpoints.json,
     eliminating the need for manual endpoint definitions.
     """
-    config = _load_endpoints_config()
+    config: Final = _load_endpoints_config()
 
     for endpoint_config in config["endpoints"]:
         path = endpoint_config["path"]
@@ -454,9 +452,7 @@ def register_container_file_endpoints(router: APIRouter) -> None:
         is_multipart = endpoint_config.get("is_multipart", False)
 
         # Create handler with correct signature for path params
-        handler = _create_handler_for_path_params(
-            path_params, route_type, returns_binary, is_multipart
-        )
+        handler = _create_handler_for_path_params(path_params, route_type, returns_binary, is_multipart)
 
         # Register routes
         route_method = getattr(router, method)

@@ -36,7 +36,7 @@ Example: block when response rejects the user (input_type response only):
 
 import asyncio
 import threading
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Type, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
 from fastapi import HTTPException
 
@@ -59,7 +59,7 @@ if TYPE_CHECKING:
 class CustomCodeGuardrailError(Exception):
     """Raised when custom code guardrail execution fails."""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.details = details or {}
 
@@ -105,7 +105,7 @@ class CustomCodeGuardrail(CustomGuardrail):
     def __init__(
         self,
         custom_code: str,
-        guardrail_name: Optional[str] = "custom_code",
+        guardrail_name: str | None = "custom_code",
         **kwargs: Any,
     ) -> None:
         """
@@ -117,11 +117,27 @@ class CustomCodeGuardrail(CustomGuardrail):
             **kwargs: Additional arguments passed to CustomGuardrail
         """
         self.custom_code = custom_code
-        self._compiled_function: Optional[Any] = None
+        self._compiled_function: Any | None = None
         self._compile_lock = threading.Lock()
-        self._compile_error: Optional[str] = None
+        self._compile_error: str | None = None
 
-        supported_event_hooks = [
+        super().__init__(
+            guardrail_name=guardrail_name,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
+            **kwargs,
+        )
+
+        # Compile the code on initialization
+        self._compile_custom_code()
+
+    @staticmethod
+    def get_config_model() -> type[GuardrailConfigModel] | None:
+        """Returns the config model for the UI."""
+        return CustomCodeGuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
@@ -130,24 +146,10 @@ class CustomCodeGuardrail(CustomGuardrail):
             GuardrailEventHooks.logging_only,
         ]
 
-        super().__init__(
-            guardrail_name=guardrail_name,
-            supported_event_hooks=supported_event_hooks,
-            **kwargs,
-        )
-
-        # Compile the code on initialization
-        self._compile_custom_code()
-
-    @staticmethod
-    def get_config_model() -> Optional[Type[GuardrailConfigModel]]:
-        """Returns the config model for the UI."""
-        return CustomCodeGuardrailConfigModel
-
     def _do_compile(self) -> None:
         """Internal compilation method without lock. Expected to run inside _compile_lock."""
-        exec_globals = build_sandbox_globals()
-        compiled = compile_sandboxed(self.custom_code)
+        exec_globals: Final = build_sandbox_globals()
+        compiled: Final = compile_sandboxed(self.custom_code)
         exec(compiled, exec_globals)  # noqa: S102
 
         if "apply_guardrail" not in exec_globals:
@@ -156,11 +158,9 @@ class CustomCodeGuardrail(CustomGuardrail):
                 "Expected signature: apply_guardrail(inputs, request_data, input_type)"
             )
 
-        apply_fn = exec_globals["apply_guardrail"]
+        apply_fn: Final = exec_globals["apply_guardrail"]
         if not callable(apply_fn):
-            raise CustomCodeCompilationError(
-                "'apply_guardrail' must be a callable function"
-            )
+            raise CustomCodeCompilationError("'apply_guardrail' must be a callable function")
 
         self._compiled_function = apply_fn
 
@@ -176,9 +176,7 @@ class CustomCodeGuardrail(CustomGuardrail):
 
             try:
                 self._do_compile()
-                verbose_proxy_logger.debug(
-                    f"Custom code guardrail '{self.guardrail_name}' compiled successfully"
-                )
+                verbose_proxy_logger.debug("Custom code guardrail '%s' compiled successfully", self.guardrail_name)
 
             except SyntaxError as e:
                 self._compile_error = f"Syntax error in custom code: {e}"
@@ -225,16 +223,14 @@ class CustomCodeGuardrail(CustomGuardrail):
         """
         if self._compiled_function is None:
             if self._compile_error:
-                raise CustomCodeExecutionError(
-                    f"Custom code guardrail not compiled: {self._compile_error}"
-                )
+                raise CustomCodeExecutionError(f"Custom code guardrail not compiled: {self._compile_error}")
             raise CustomCodeExecutionError("Custom code guardrail not compiled")
 
         try:
             # Prepare inputs dict for the function
 
             # Prepare request_data with safe subset of information
-            safe_request_data = self._prepare_safe_request_data(request_data)
+            safe_request_data: Final = self._prepare_safe_request_data(request_data)
 
             # Execute the custom function - handle both sync and async functions
             result = self._compiled_function(inputs, safe_request_data, input_type)
@@ -258,9 +254,7 @@ class CustomCodeGuardrail(CustomGuardrail):
             # Pre-call block uses passthrough; must not wrap as execution error (500)
             raise
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Custom code guardrail '{self.guardrail_name}' execution error: {e}"
-            )
+            verbose_proxy_logger.error("Custom code guardrail '%s' execution error: %s", self.guardrail_name, e)
             raise CustomCodeExecutionError(
                 f"Custom code guardrail execution failed: {e}",
                 details={
@@ -269,7 +263,7 @@ class CustomCodeGuardrail(CustomGuardrail):
                 },
             ) from e
 
-    def _prepare_safe_request_data(self, request_data: dict) -> Dict[str, Any]:
+    def _prepare_safe_request_data(self, request_data: dict) -> dict[str, Any]:
         """
         Prepare a safe subset of request_data for code execution.
 
@@ -314,28 +308,27 @@ class CustomCodeGuardrail(CustomGuardrail):
         """
         if not isinstance(result, dict):
             verbose_proxy_logger.warning(
-                f"Custom code guardrail '{self.guardrail_name}': "
-                f"Expected dict result, got {type(result).__name__}. Treating as allow."
+                "Custom code guardrail '%s': Expected dict result, got %s. Treating as allow.",
+                self.guardrail_name,
+                type(result).__name__,
             )
             return inputs
 
-        action = result.get("action", "allow")
+        action: Final = result.get("action", "allow")
 
         if action == "allow":
-            verbose_proxy_logger.debug(
-                f"Custom code guardrail '{self.guardrail_name}': Allowing {input_type}"
-            )
+            verbose_proxy_logger.debug("Custom code guardrail '%s': Allowing %s", self.guardrail_name, input_type)
             return inputs
 
         elif action == "block":
-            reason = result.get("reason", "Blocked by custom code guardrail")
-            detection_info = result.get("detection_info", {})
+            reason: Final = result.get("reason", "Blocked by custom code guardrail")
+            detection_info: Final = result.get("detection_info", {})
 
             verbose_proxy_logger.info(
-                f"Custom code guardrail '{self.guardrail_name}': Blocking {input_type} - {reason}"
+                "Custom code guardrail '%s': Blocking %s - %s", self.guardrail_name, input_type, reason
             )
 
-            is_output = input_type == "response"
+            is_output: Final = input_type == "response"
 
             # For pre-call, raise passthrough exception to return synthetic response
             if not is_output:
@@ -356,12 +349,10 @@ class CustomCodeGuardrail(CustomGuardrail):
             )
 
         elif action == "modify":
-            verbose_proxy_logger.debug(
-                f"Custom code guardrail '{self.guardrail_name}': Modifying {input_type}"
-            )
+            verbose_proxy_logger.debug("Custom code guardrail '%s': Modifying %s", self.guardrail_name, input_type)
 
             # Apply modifications
-            modified_inputs = dict(inputs)
+            modified_inputs: Final = dict(inputs)
 
             if "texts" in result and result["texts"] is not None:
                 modified_inputs["texts"] = result["texts"]
@@ -376,8 +367,7 @@ class CustomCodeGuardrail(CustomGuardrail):
 
         else:
             verbose_proxy_logger.warning(
-                f"Custom code guardrail '{self.guardrail_name}': "
-                f"Unknown action '{action}'. Treating as allow."
+                "Custom code guardrail '%s': Unknown action '%s'. Treating as allow.", self.guardrail_name, action
             )
             return inputs
 
@@ -396,17 +386,15 @@ class CustomCodeGuardrail(CustomGuardrail):
         """
         with self._compile_lock:
             # Reset state
-            old_function = self._compiled_function
-            old_code = self.custom_code
+            old_function: Final = self._compiled_function
+            old_code: Final = self.custom_code
             self._compiled_function = None
             self._compile_error = None
 
             try:
                 self.custom_code = new_code
                 self._do_compile()
-                verbose_proxy_logger.info(
-                    f"Custom code guardrail '{self.guardrail_name}': Code updated successfully"
-                )
+                verbose_proxy_logger.info("Custom code guardrail '%s': Code updated successfully", self.guardrail_name)
             except SyntaxError as e:
                 # Rollback on failure
                 self.custom_code = old_code

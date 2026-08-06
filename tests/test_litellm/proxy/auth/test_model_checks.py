@@ -552,7 +552,8 @@ def test_get_key_models_all_team_models_recursive_team():
     from litellm.proxy._types import SpecialModelNames
 
     user_api_key_dict = type(
-        "obj", (object,),
+        "obj",
+        (object,),
         {
             "models": [SpecialModelNames.all_team_models.value],
             "team_id": "team-1",
@@ -617,3 +618,120 @@ def test_get_team_models_all_team_models_expands_with_access_groups():
     assert "model-b" in result
     assert "group-1" in result
     assert "group-2" in result
+
+
+def test_get_key_models_teamless_all_team_models_returns_unrestricted():
+    """Teamless key with all-team-models must resolve the same as leaving the
+    models field empty ([] = unrestricted). The sentinel must not leak into
+    the returned list. Fails if someone adds a team_id guard to the sentinel
+    expansion in get_key_models."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.model_checks import get_key_models
+
+    user_api_key_dict = type(
+        "obj",
+        (object,),
+        {
+            "models": [SpecialModelNames.all_team_models.value],
+            "team_id": None,
+            "team_models": [],
+        },
+    )()
+    proxy_model_list = ["gpt-4o", "claude-sonnet-4-20250514"]
+    result = get_key_models(user_api_key_dict, proxy_model_list, {})
+    assert SpecialModelNames.all_team_models.value not in result
+    assert result == [], "should return [] (unrestricted), same as an unscoped key"
+
+
+def test_expand_wildcard_deployments_non_wildcard_passthrough():
+    """Non-wildcard deployments must be returned unchanged."""
+    from litellm.proxy.auth.model_checks import (
+        expand_wildcard_deployments_for_model_info,
+    )
+
+    deployment = {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}
+    result = expand_wildcard_deployments_for_model_info([deployment])
+    assert result == [deployment]
+
+
+def test_expand_wildcard_deployments_openai_wildcard():
+    """openai/* should expand into ≥1 known openai model entries."""
+    from unittest.mock import patch
+
+    from litellm.proxy.auth.model_checks import (
+        expand_wildcard_deployments_for_model_info,
+    )
+
+    fake_models = ["openai/gpt-4o", "openai/gpt-4o-mini"]
+    deployment = {
+        "model_name": "openai/*",
+        "litellm_params": {"model": "openai/*"},
+    }
+    with patch(
+        "litellm.proxy.auth.model_checks.get_known_models_from_wildcard",
+        return_value=fake_models,
+    ):
+        result = expand_wildcard_deployments_for_model_info([deployment])
+
+    assert len(result) == 2
+    assert all(r["model_name"] in fake_models for r in result)
+    assert all(r["litellm_params"]["model"] in fake_models for r in result)
+
+
+def test_expand_wildcard_concrete_model_name_with_wildcard_litellm_params():
+    """Concrete model_name must not be overwritten when only litellm_params.model is wildcard."""
+    from litellm.proxy.auth.model_checks import (
+        expand_wildcard_deployments_for_model_info,
+    )
+
+    deployment = {
+        "model_name": "my-custom-alias",
+        "litellm_params": {"model": "openai/*"},
+    }
+    result = expand_wildcard_deployments_for_model_info([deployment])
+    # model_name is not a wildcard, so the deployment passes through unchanged
+    assert result == [deployment]
+
+
+def test_expand_wildcard_invalid_litellm_params_passthrough():
+    """Deployments with invalid litellm_params must pass through unchanged (no 500)."""
+    from litellm.proxy.auth.model_checks import (
+        expand_wildcard_deployments_for_model_info,
+    )
+
+    deployment = {
+        "model_name": "openai/*",
+        "litellm_params": {
+            "model": "openai/*",
+            "max_retries": "not-an-int-field-that-breaks",
+        },
+    }
+    # Even if LiteLLM_Params construction fails the deployment should survive
+    result = expand_wildcard_deployments_for_model_info([deployment])
+    assert result == [deployment]
+
+
+def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
+    """models_by_provider was a frozen import-time snapshot of set unions, so cost map
+    reloads (which call add_known_models) never reached wildcard expansion until a
+    process restart (LIT-4947)."""
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    fake_model = "vertex_ai/gemini-lit4947-regression"
+    captured_reference = litellm.models_by_provider
+    assert fake_model not in litellm.models_by_provider["vertex_ai"]
+    try:
+        litellm.add_known_models(
+            model_cost_map={
+                fake_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"}
+            }
+        )
+        assert fake_model in litellm.models_by_provider["vertex_ai"]
+        assert litellm.models_by_provider is captured_reference
+        assert fake_model in captured_reference["vertex_ai"]
+        assert fake_model in get_known_models_from_wildcard("vertex_ai/*")
+    finally:
+        litellm.vertex_language_models.discard(fake_model)
+        litellm.add_known_models(model_cost_map={})
+    assert fake_model not in litellm.models_by_provider["vertex_ai"]

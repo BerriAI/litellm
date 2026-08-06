@@ -1,5 +1,5 @@
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
-import { ArrowRightIcon, PlayIcon, TrashIcon } from "@heroicons/react/outline";
+import { ArrowRightIcon, PencilAltIcon, PlayIcon, TrashIcon } from "@heroicons/react/outline";
 import { Icon, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
 import { Tooltip, Typography } from "antd";
 import openai from "openai";
@@ -10,6 +10,7 @@ import NotificationsManager from "../../../molecules/notifications_manager";
 import { getCallbacksCall, setCallbacksCall } from "../../../networking";
 import { isProxyAdminRole } from "@/utils/roles";
 import AddFallbacks from "./AddFallbacks";
+import EditFallbacks from "./EditFallbacks";
 
 type FallbackEntry = { [modelName: string]: string[] };
 type Fallbacks = FallbackEntry[];
@@ -119,6 +120,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
   const [isDeleting, setIsDeleting] = useState(false);
   const [fallbackToDelete, setFallbackToDelete] = useState<FallbackEntry | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [fallbackToEdit, setFallbackToEdit] = useState<FallbackEntry | null>(null);
 
   const { data: modelCostMapData } = useModelCostMap();
   const getProviderFromModel = (model: string): string => {
@@ -133,7 +135,6 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
       return;
     }
     getCallbacksCall(accessToken, userID, userRole).then((data) => {
-      console.log("callbacks", data);
       let router_settings = data.router_settings;
       if ("model_group_retry_policy" in router_settings) {
         delete router_settings["model_group_retry_policy"];
@@ -145,6 +146,14 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
   const handleDeleteClick = (fallbackEntry: FallbackEntry) => {
     setFallbackToDelete(fallbackEntry);
     setIsDeleteModalOpen(true);
+  };
+
+  const handleEditClick = (fallbackEntry: FallbackEntry) => {
+    setFallbackToEdit(fallbackEntry);
+  };
+
+  const handleEditClose = () => {
+    setFallbackToEdit(null);
   };
 
   const handleDeleteConfirm = async () => {
@@ -282,6 +291,18 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
                             className="cursor-pointer hover:text-blue-600"
                           />
                         </Tooltip>
+                        <Tooltip title="Edit fallback">
+                          <span
+                            data-testid="edit-fallback-button"
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => handleEditClick(item)}
+                            onKeyDown={(e) => e.key === "Enter" && handleEditClick(item)}
+                            className="cursor-pointer inline-flex"
+                          >
+                            <Icon icon={PencilAltIcon} size="sm" className="hover:text-blue-600" />
+                          </span>
+                        </Tooltip>
                         <Tooltip title="Delete fallback">
                           <span
                             data-testid="delete-fallback-button"
@@ -302,6 +323,16 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
             )}
           </TableBody>
         </Table>
+      )}
+      {canModify && fallbackToEdit && (
+        <EditFallbacks
+          key={Object.keys(fallbackToEdit)[0]}
+          accessToken={accessToken || ""}
+          fallbackEntry={fallbackToEdit}
+          value={routerSettings.fallbacks || []}
+          onChange={handleFallbacksChange}
+          onClose={handleEditClose}
+        />
       )}
       <DeleteResourceModal
         isOpen={isDeleteModalOpen}

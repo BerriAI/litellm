@@ -2,11 +2,10 @@
 
 from enum import Enum
 from functools import lru_cache
-from typing import Any, List
+from typing import Annotated, Any, Final
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
-from typing_extensions import Annotated
 
 from litellm.integrations.otel.model.baggage import (
     BAGGAGE_PROMOTED_KEYS,
@@ -15,7 +14,7 @@ from litellm.integrations.otel.model.baggage import (
 )
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
-OTEL_V2_ENV = "LITELLM_OTEL_V2"
+OTEL_V2_ENV: Final = "LITELLM_OTEL_V2"
 
 
 class CaptureMessageContent(str):
@@ -122,12 +121,8 @@ class OpenTelemetryV2Config(BaseSettings):
         default=None,
         validation_alias=AliasChoices("OTEL_HEADERS", "OTEL_EXPORTER_OTLP_HEADERS"),
     )
-    service_name: str = Field(
-        default="litellm", validation_alias=AliasChoices("OTEL_SERVICE_NAME")
-    )
-    deployment_environment: str | None = Field(
-        default=None, validation_alias=AliasChoices("OTEL_ENVIRONMENT_NAME")
-    )
+    service_name: str = Field(default="litellm", validation_alias=AliasChoices("OTEL_SERVICE_NAME"))
+    deployment_environment: str | None = Field(default=None, validation_alias=AliasChoices("OTEL_ENVIRONMENT_NAME"))
 
     enable_metrics: bool = Field(
         default=False,
@@ -139,13 +134,9 @@ class OpenTelemetryV2Config(BaseSettings):
     )
     capture_message_content: str = Field(
         default=CaptureMessageContent.NO_CONTENT,
-        validation_alias=AliasChoices(
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
-        ),
+        validation_alias=AliasChoices("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"),
     )
-    legacy_compat: bool = Field(
-        default=True, validation_alias=AliasChoices("LITELLM_OTEL_LEGACY_COMPAT")
-    )
+    legacy_compat: bool = Field(default=True, validation_alias=AliasChoices("LITELLM_OTEL_LEGACY_COMPAT"))
 
     # ----- explicit multi-destination / vocabulary configuration ------------ #
 
@@ -159,7 +150,7 @@ class OpenTelemetryV2Config(BaseSettings):
         ),
     )
 
-    mapper_names: Annotated[List[str], NoDecode] = Field(
+    mapper_names: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["genai"],
         description=(
             "Ordered attribute vocabularies to emit. ``genai`` is the "
@@ -177,11 +168,9 @@ class OpenTelemetryV2Config(BaseSettings):
         ),
     )
 
-    baggage_promoted_keys: Annotated[List[str], NoDecode] = Field(
+    baggage_promoted_keys: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: list(BAGGAGE_PROMOTED_KEYS),
-        validation_alias=AliasChoices(
-            "baggage_promoted_keys", "LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS"
-        ),
+        validation_alias=AliasChoices("baggage_promoted_keys", "LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS"),
         description=(
             "Identity attribute keys written into Baggage and stamped on every "
             "child span (e.g. ``litellm.team.id``). Configure via the "
@@ -190,11 +179,9 @@ class OpenTelemetryV2Config(BaseSettings):
             "YAML list)."
         ),
     )
-    baggage_metadata_keys: Annotated[List[str], NoDecode] = Field(
+    baggage_metadata_keys: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: list(DEFAULT_BAGGAGE_METADATA_KEYS),
-        validation_alias=AliasChoices(
-            "baggage_metadata_keys", "LITELLM_OTEL_BAGGAGE_METADATA_KEYS"
-        ),
+        validation_alias=AliasChoices("baggage_metadata_keys", "LITELLM_OTEL_BAGGAGE_METADATA_KEYS"),
         description=(
             "Metadata sub-keys promoted under the ``litellm.metadata.*`` "
             "namespace. Configure via the ``LITELLM_OTEL_BAGGAGE_METADATA_KEYS`` "
@@ -202,11 +189,9 @@ class OpenTelemetryV2Config(BaseSettings):
             "``callback_settings.otel.baggage_metadata_keys`` in config.yaml."
         ),
     )
-    baggage_team_metadata_keys: Annotated[List[str], NoDecode] = Field(
+    baggage_team_metadata_keys: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: list(DEFAULT_BAGGAGE_TEAM_METADATA_KEYS),
-        validation_alias=AliasChoices(
-            "baggage_team_metadata_keys", "LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS"
-        ),
+        validation_alias=AliasChoices("baggage_team_metadata_keys", "LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS"),
         description=(
             "Sub-keys of the team's free-form metadata promoted under "
             "``litellm.team.metadata``. Empty by default so none of a team's "

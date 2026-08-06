@@ -20,11 +20,10 @@ import {
 } from "@tremor/react";
 import React, { useEffect, useState } from "react";
 
-import { Button as Button2, Form, Input, Modal, Select, Typography } from "antd";
+import { Button as Button2, Form, Input, Modal, Select } from "antd";
 import EmailSettings from "./email_settings";
+import { Logo } from "@/components/molecules/logo/Logo";
 import NotificationsManager from "./molecules/notifications_manager";
-
-const { Title, Paragraph } = Typography;
 
 import FormItem from "antd/es/form/FormItem";
 import AlertingSettings from "./alerting/alerting_settings";
@@ -47,13 +46,13 @@ interface SettingsPageProps {
   premiumUser: boolean;
 }
 
-interface genericCallbackParams {
-  litellm_callback_name: string; // what to send in request
-  ui_callback_name: string; // what to show on UI
-  litellm_callback_params: string[] | null; // known required params for this callback
-}
+const assetsLogoFolder = "/ui/assets/logos/";
 
-const assetsLogoFolder = "../ui/assets/logos/";
+export const backendCallbackLogoSrc = (logo: string | null | undefined): string | undefined => {
+  if (!logo) return undefined;
+  if (logo.includes("/") || logo.startsWith("data:") || logo.startsWith("http")) return logo;
+  return `${assetsLogoFolder}${logo}`;
+};
 
 interface DynamicParamsFieldsProps {
   params: string[];
@@ -96,14 +95,14 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
               <Input.Password
                 size="large"
                 placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                className="w-full rounded-md border-gray-300 shadow-xs focus:border-blue-500 focus:ring-blue-500"
               />
             ) : paramType === "number" ? (
               <Input
                 type="number"
                 size="large"
                 placeholder={`Enter ${fieldLabel.toLowerCase()}`}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                className="w-full rounded-md border-gray-300 shadow-xs focus:border-blue-500 focus:ring-blue-500"
                 min={0}
                 max={1}
                 step={0.1}
@@ -112,7 +111,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
               <Input
                 size="large"
                 placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                className="w-full rounded-md border-gray-300 shadow-xs focus:border-blue-500 focus:ring-blue-500"
               />
             )}
           </FormItem>
@@ -130,7 +129,7 @@ interface CallbackSelectorProps {
   disabled?: boolean;
 }
 
-const CallbackSelector: React.FC<CallbackSelectorProps> = ({
+export const CallbackSelector: React.FC<CallbackSelectorProps> = ({
   callbackConfigs,
   selectedCallback,
   onCallbackChange,
@@ -155,24 +154,14 @@ const CallbackSelector: React.FC<CallbackSelectorProps> = ({
         onChange={onCallbackChange}
       >
         {callbackConfigs.map((callbackConfig) => {
-          const logo = callbackConfig.logo;
-          const logoSrc =
-            logo && (logo.includes("/") || logo.startsWith("data:") || logo.startsWith("http"))
-              ? logo
-              : `${assetsLogoFolder}${logo}`;
-
           return (
             <SelectItem key={callbackConfig.id} value={callbackConfig.id}>
               <div className="flex items-center space-x-3 py-1">
                 <div className="w-6 h-6 flex items-center justify-center">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={logoSrc}
-                    alt={`${callbackConfig.displayName} logo`}
-                    className="w-6 h-6 rounded object-contain"
-                    onError={(e) => {
-                      e.currentTarget.style.display = "none";
-                    }}
+                  <Logo
+                    src={backendCallbackLogoSrc(callbackConfig.logo)}
+                    label={callbackConfig.displayName}
+                    className="w-6 h-6 rounded-sm object-contain"
                   />
                 </div>
                 <span className="font-medium text-gray-900">{callbackConfig.displayName}</span>
@@ -215,8 +204,8 @@ const buildCallbackPayload = (formValues: Record<string, any>, callbackName: str
 
 const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
+  const [isLoadingCallbacks, setIsLoadingCallbacks] = useState(true);
   const [alerts, setAlerts] = useState<any[]>([]);
-  const [isModalVisible, setIsModalVisible] = useState(false);
   const [addForm] = Form.useForm();
   const [editForm] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
@@ -291,29 +280,35 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   };
 
   useEffect(() => {
-    if (!accessToken || !userRole || !userID) {
-      return;
-    }
-    getCallbacksCall(accessToken, userID, userRole).then((data) => {
-      setCallbacks(data.callbacks);
-      setAllCallbacks(data.available_callbacks);
-      // setCallbacks(callbacks_data);
-
-      let alerts_data = data.alerts;
-      if (alerts_data) {
-        if (alerts_data.length > 0) {
-          let _alert_info = alerts_data[0];
-          let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
-
-          let active_alerts = _alert_info.active_alerts;
-          setActiveAlerts(active_alerts);
-          setCatchAllWebhookURL(catch_all_webhook);
-          setAlertToWebhooks(_alert_info.alerts_to_webhook);
-        }
+    const fetchCallbacks = async () => {
+      if (!accessToken || !userRole || !userID) {
+        setIsLoadingCallbacks(false);
+        return;
       }
+      try {
+        const data = await getCallbacksCall(accessToken, userID, userRole);
+        setCallbacks(data.callbacks);
+        setAllCallbacks(data.available_callbacks);
 
-      setAlerts(alerts_data);
-    });
+        let alerts_data = data.alerts;
+        if (alerts_data) {
+          if (alerts_data.length > 0) {
+            let _alert_info = alerts_data[0];
+            let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
+
+            let active_alerts = _alert_info.active_alerts;
+            setActiveAlerts(active_alerts);
+            setCatchAllWebhookURL(catch_all_webhook);
+            setAlertToWebhooks(_alert_info.alerts_to_webhook);
+          }
+        }
+
+        setAlerts(alerts_data);
+      } finally {
+        setIsLoadingCallbacks(false);
+      }
+    };
+    fetchCallbacks();
   }, [accessToken, userRole, userID]);
 
   const isAlertOn = (alertName: string) => {
@@ -414,119 +409,6 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     }
     NotificationsManager.success("Alerts updated successfully");
   };
-  const handleSaveChanges = (callback: any) => {
-    if (!accessToken) {
-      return;
-    }
-
-    const updatedVariables = Object.fromEntries(
-      Object.entries(callback.variables).map(([key, value]) => [
-        key,
-        (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)?.value || value,
-      ]),
-    );
-
-    const payload = {
-      environment_variables: updatedVariables,
-      litellm_settings: {
-        success_callback: [callback.name],
-      },
-    };
-
-    try {
-      setCallbacksCall(accessToken, payload);
-    } catch (error) {
-      NotificationsManager.fromBackend(error);
-    }
-    NotificationsManager.success("Callback updated successfully");
-  };
-
-  const handleOk = () => {
-    if (!accessToken) {
-      return;
-    }
-    // Handle form submission
-    addForm.validateFields().then((values) => {
-      // Call API to add the callback
-      let payload;
-      if (values.callback === "langfuse" || values.callback === "langfuse_otel") {
-        payload = {
-          environment_variables: {
-            LANGFUSE_PUBLIC_KEY: values.langfusePublicKey,
-            LANGFUSE_SECRET_KEY: values.langfusePrivateKey,
-          },
-          litellm_settings: {
-            success_callback: [values.callback],
-          },
-        };
-        setCallbacksCall(accessToken, payload);
-        let newCallback: AlertingObject = {
-          name: values.callback,
-          variables: {
-            SLACK_WEBHOOK_URL: null,
-            LANGFUSE_HOST: null,
-            LANGFUSE_PUBLIC_KEY: values.langfusePublicKey,
-            LANGFUSE_SECRET_KEY: values.langfusePrivateKey,
-            OPENMETER_API_KEY: null,
-          },
-        };
-        // add langfuse to callbacks
-        setCallbacks(callbacks ? [...callbacks, newCallback] : [newCallback]);
-      } else if (values.callback === "slack") {
-        payload = {
-          general_settings: {
-            alerting: ["slack"],
-            alerting_threshold: 300,
-          },
-          environment_variables: {
-            SLACK_WEBHOOK_URL: values.slackWebhookUrl,
-          },
-        };
-        setCallbacksCall(accessToken, payload);
-
-        let newCallback: AlertingObject = {
-          name: values.callback,
-          variables: {
-            SLACK_WEBHOOK_URL: values.slackWebhookUrl,
-            LANGFUSE_HOST: null,
-            LANGFUSE_PUBLIC_KEY: null,
-            LANGFUSE_SECRET_KEY: null,
-            OPENMETER_API_KEY: null,
-          },
-        };
-        setCallbacks(callbacks ? [...callbacks, newCallback] : [newCallback]);
-      } else if (values.callback == "openmeter") {
-        payload = {
-          environment_variables: {
-            OPENMETER_API_KEY: values.openMeterApiKey,
-          },
-          litellm_settings: {
-            success_callback: [values.callback],
-          },
-        };
-        setCallbacksCall(accessToken, payload);
-        let newCallback: AlertingObject = {
-          name: values.callback,
-          variables: {
-            SLACK_WEBHOOK_URL: null,
-            LANGFUSE_HOST: null,
-            LANGFUSE_PUBLIC_KEY: null,
-            LANGFUSE_SECRET_KEY: null,
-            OPENMETER_API_KEY: values.openMeterAPIKey,
-          },
-        };
-        // add langfuse to callbacks
-        setCallbacks(callbacks ? [...callbacks, newCallback] : [newCallback]);
-      } else {
-        payload = {
-          error: "Invalid callback value",
-        };
-      }
-      setIsModalVisible(false);
-      addForm.resetFields();
-      setSelectedCallback(null);
-    });
-  };
 
   const handleDeleteCallback = (callback: any) => {
     setCallbackToDelete(callback);
@@ -564,7 +446,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   }
 
   return (
-    <div className="w-full mx-4">
+    <div className="mx-4">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <TabGroup>
           <TabList variant="line" defaultValue="1">
@@ -579,6 +461,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               <LoggingCallbacksTable
                 callbacks={callbacks}
                 availableCallbacks={allCallbacks}
+                isLoading={isLoadingCallbacks}
                 onAdd={() => setShowAddCallbacksModal(true)}
                 onEdit={(cb) => {
                   setSelectedEditCallback(cb);

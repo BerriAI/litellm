@@ -29,6 +29,7 @@ export interface KeyListCallOptions {
   organizationID?: string | null;
   teamID?: string | null;
   projectID?: string | null;
+  agentID?: string | null;
   selectedKeyAlias?: string | null;
   userID?: string | null;
   keyHash?: string | null;
@@ -49,6 +50,7 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
       Object.entries({
         team_id: options.teamID,
         project_id: options.projectID,
+        agent_id: options.agentID,
         organization_id: options.organizationID,
         key_alias: options.selectedKeyAlias,
         key_hash: options.keyHash,
@@ -88,7 +90,6 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
     }
 
     const data = await response.json();
-    console.log("/key/list API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to list keys:", error);
@@ -117,10 +118,10 @@ export const useDeletedKeys = (
   page: number,
   pageSize: number,
   options: KeyListCallOptions = {},
-): UseQueryResult<KeysResponse> => {
+): UseQueryResult<DeletedKeysResponse> => {
   const { accessToken } = useAuthorized();
 
-  return useQuery<KeysResponse>({
+  return useQuery<DeletedKeysResponse>({
     queryKey: deletedKeyKeys.list({ page, limit: pageSize, ...options }),
     queryFn: async () => await keyListCall(accessToken!, page, pageSize, { ...options, status: "deleted" }),
     enabled: Boolean(accessToken),

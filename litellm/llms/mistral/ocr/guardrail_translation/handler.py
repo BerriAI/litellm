@@ -5,7 +5,7 @@ Provides guardrail translation support for the OCR endpoint.
 Processes the extracted markdown text from OCR pages.
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -33,7 +33,7 @@ class OCRHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
+        litellm_logging_obj: Any | None = None,
     ) -> Any:
         """
         Process OCR input by applying guardrails to the document reference.
@@ -49,16 +49,14 @@ class OCRHandler(BaseTranslation):
         Returns:
             Modified data with guardrails applied
         """
-        document = data.get("document")
+        document: Final = data.get("document")
         if document is None or not isinstance(document, dict):
-            verbose_proxy_logger.debug(
-                "OCR guardrail: No valid document found in request data"
-            )
+            verbose_proxy_logger.debug("OCR guardrail: No valid document found in request data")
             return data
 
         # Extract the document URL for guardrail checking
-        texts_to_check: List[str] = []
-        doc_type = document.get("type")
+        texts_to_check: Final[list[str]] = []
+        doc_type: Final = document.get("type")
         if doc_type == "document_url":
             url = document.get("document_url")
             if url and isinstance(url, str):
@@ -71,8 +69,8 @@ class OCRHandler(BaseTranslation):
         if not texts_to_check:
             return data
 
-        inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
-        model = data.get("model")
+        inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
+        model: Final = data.get("model")
         if model:
             inputs["model"] = model
 
@@ -89,9 +87,9 @@ class OCRHandler(BaseTranslation):
         self,
         response: "OCRResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
-        user_api_key_dict: Optional[Any] = None,
-        request_data: Optional[dict] = None,
+        litellm_logging_obj: Any | None = None,
+        user_api_key_dict: Any | None = None,
+        request_data: dict | None = None,
     ) -> Any:
         """
         Process OCR output by applying guardrails to extracted page text.
@@ -113,8 +111,8 @@ class OCRHandler(BaseTranslation):
             return response
 
         # Extract markdown text from all pages
-        texts_to_check: List[str] = []
-        page_indices: List[int] = []
+        texts_to_check: Final[list[str]] = []
+        page_indices: Final[list[int]] = []
         for i, page in enumerate(response.pages):
             if hasattr(page, "markdown") and page.markdown:
                 texts_to_check.append(page.markdown)
@@ -123,8 +121,8 @@ class OCRHandler(BaseTranslation):
         if not texts_to_check:
             return response
 
-        inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
-        model = getattr(response, "model", None)
+        inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
+        model: Final = getattr(response, "model", None)
         if model:
             inputs["model"] = model
 
@@ -135,18 +133,16 @@ class OCRHandler(BaseTranslation):
 
         # Add user metadata if available
         if user_api_key_dict is not None:
-            user_metadata = self.transform_user_api_key_dict_to_metadata(
-                user_api_key_dict
-            )
+            user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
             if user_metadata:
                 # Preserve original behavior: inject metadata into inputs for
                 # third-party guardrail providers that read it from there
-                inputs.update(user_metadata)  # type: ignore
+                inputs.update(user_metadata)
                 # Also store in request_data for the logging pipeline
                 if "litellm_metadata" not in request_data:
                     request_data["litellm_metadata"] = user_metadata
 
-        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+        guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
             request_data=request_data,
             input_type="response",
@@ -154,7 +150,7 @@ class OCRHandler(BaseTranslation):
         )
 
         # Map guardrailed text back to pages
-        guardrailed_texts = guardrailed_inputs.get("texts", [])
+        guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
         for idx, page_idx in enumerate(page_indices):
             if idx < len(guardrailed_texts):
                 response.pages[page_idx].markdown = guardrailed_texts[idx]

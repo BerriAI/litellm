@@ -1,7 +1,10 @@
 import asyncio
+import json
+import os
 import time
+from collections.abc import Coroutine, Mapping
+from typing import Any, Final
 from urllib.parse import unquote
-from typing import Any, Coroutine, Optional, Tuple, Union
 
 import httpx
 
@@ -15,19 +18,16 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     should_allow_legacy_cloud_file_ids,
     validate_managed_cloud_file_id,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.openai import (
-    CreateFileRequest,
     FileContentRequest,
     HttpxBinaryResponseContent,
-    OpenAIFileObject,
 )
-from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+from litellm.types.utils import StandardCallbackDynamicParams
 
-from .transformation import VertexAIFilesConfig, VertexAIJsonlFilesTransformation
-
-vertex_ai_files_transformation = VertexAIJsonlFilesTransformation()
+from .transformation import VertexAIFilesConfig
 
 
 class VertexAIFilesHandler(GCSBucketBase):
@@ -43,88 +43,41 @@ class VertexAIFilesHandler(GCSBucketBase):
             llm_provider=LlmProviders.VERTEX_AI,
         )
 
-    async def async_create_file(
+    def _resolve_read_gcs_config(
         self,
-        create_file_data: CreateFileRequest,
-        api_base: Optional[str],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-    ) -> OpenAIFileObject:
-        gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
-            kwargs={}
-        )
-        headers = await self.construct_request_headers(
-            vertex_instance=gcs_logging_config["vertex_instance"],
-            service_account_json=gcs_logging_config["path_service_account"],
-        )
-        bucket_name = gcs_logging_config["bucket_name"]
-        (
-            logging_payload,
-            object_name,
-        ) = vertex_ai_files_transformation.transform_openai_file_content_to_vertex_ai_file_content(
-            openai_file_content=create_file_data.get("file")
-        )
-        gcs_upload_response = await self._log_json_data_on_gcs(
-            headers=headers,
-            bucket_name=bucket_name,
-            object_name=object_name,
-            logging_payload=logging_payload,
-        )
-
-        return vertex_ai_files_transformation.transform_gcs_bucket_response_to_openai_file_object(
-            create_file_data=create_file_data,
-            gcs_upload_response=gcs_upload_response,
-        )
-
-    def create_file(
-        self,
-        _is_async: bool,
-        create_file_data: CreateFileRequest,
-        api_base: Optional[str],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-    ) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
+        litellm_params: Mapping[str, object] | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    ) -> tuple[str | None, str | None]:
         """
-        Creates a file on VertexAI GCS Bucket
+        Resolve the GCS bucket and service-account credentials for the read/content path.
 
-        Only supported for Async litellm.acreate_file
+        Sources them from the deployment's ``litellm_params`` (``gcs_bucket_name`` /
+        ``bucket_name`` and ``vertex_credentials``), mirroring the write path in
+        ``VertexAIFilesConfig._get_configured_bucket_name``, and falls back to the global
+        ``GCS_BUCKET_NAME`` / ``GCS_PATH_SERVICE_ACCOUNT`` env vars. This lets Vertex batch
+        run entirely at the model-group level, so output written to a per-model bucket is
+        readable without setting the global env vars.
         """
+        params: Final[Mapping[str, object]] = litellm_params or {}
+        bucket_candidate: Final = params.get("gcs_bucket_name") or params.get("bucket_name")
+        configured_bucket_name = bucket_candidate if isinstance(bucket_candidate, str) else os.getenv("GCS_BUCKET_NAME")
 
-        if _is_async:
-            return self.async_create_file(
-                create_file_data=create_file_data,
-                api_base=api_base,
-                vertex_credentials=vertex_credentials,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
-                timeout=timeout,
-                max_retries=max_retries,
-            )
+        credentials: Final = params.get("vertex_credentials") or vertex_credentials
+        if isinstance(credentials, dict):
+            path_service_account: str | None = json.dumps(credentials)
+        elif isinstance(credentials, str):
+            path_service_account = credentials
         else:
-            return asyncio.run(
-                self.async_create_file(
-                    create_file_data=create_file_data,
-                    api_base=api_base,
-                    vertex_credentials=vertex_credentials,
-                    vertex_project=vertex_project,
-                    vertex_location=vertex_location,
-                    timeout=timeout,
-                    max_retries=max_retries,
-                )
-            )
+            path_service_account = os.getenv("GCS_PATH_SERVICE_ACCOUNT")
+
+        return configured_bucket_name, path_service_account
 
     def _extract_bucket_and_object_from_file_id(
         self,
         file_id: str,
         configured_bucket_name: str,
-        litellm_params: Optional[dict] = None,
-    ) -> Tuple[str, str]:
+        litellm_params: dict | None = None,
+    ) -> tuple[str, str]:
         """
         Validate and extract bucket name and object path from file_id.
 
@@ -140,20 +93,18 @@ class VertexAIFilesHandler(GCSBucketBase):
             scheme="gs://",
             configured_bucket_name=configured_bucket_name,
             allowed_object_prefixes=(VERTEX_AI_MANAGED_GCS_PREFIX,),
-            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(
-                litellm_params
-            ),
+            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(litellm_params),
         )
 
     async def afile_content(
         self,
         file_content_request: FileContentRequest,
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        litellm_params: Optional[dict] = None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        litellm_params: dict | None = None,
     ) -> HttpxBinaryResponseContent:
         """
         Download file content from GCS bucket for VertexAI files.
@@ -169,12 +120,20 @@ class VertexAIFilesHandler(GCSBucketBase):
         Returns:
             HttpxBinaryResponseContent: Binary content wrapped in compatible response format
         """
-        file_id = file_content_request.get("file_id")
+        file_id: Final = file_content_request.get("file_id")
         if not file_id:
             raise ValueError("file_id is required in file_content_request")
 
-        gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
-            kwargs={}
+        configured_bucket_name, path_service_account = self._resolve_read_gcs_config(
+            litellm_params=litellm_params,
+            vertex_credentials=vertex_credentials,
+        )
+        dynamic_params: Final = StandardCallbackDynamicParams(
+            gcs_bucket_name=configured_bucket_name,
+            gcs_path_service_account=path_service_account,
+        )
+        gcs_logging_config: Final[GCSLoggingConfig] = await self.get_gcs_logging_config(
+            kwargs={"standard_callback_dynamic_params": dynamic_params}
         )
         bucket_name, object_path = self._extract_bucket_and_object_from_file_id(
             file_id=file_id,
@@ -182,22 +141,20 @@ class VertexAIFilesHandler(GCSBucketBase):
             litellm_params=litellm_params,
         )
 
-        download_kwargs = {
+        download_kwargs: Final = {
             "standard_callback_dynamic_params": {
                 "gcs_bucket_name": bucket_name,
                 "gcs_path_service_account": gcs_logging_config["path_service_account"],
             }
         }
 
-        file_content = await self.download_gcs_object(
-            object_name=object_path, **download_kwargs
-        )
-        decoded_file_id = unquote(file_id)
+        file_content: Final = await self.download_gcs_object(object_name=object_path, **download_kwargs)
+        decoded_file_id: Final = unquote(file_id)
 
         if file_content is None:
             raise ValueError(f"Failed to download file from GCS: {decoded_file_id}")
 
-        mock_response = httpx.Response(
+        mock_response: Final = httpx.Response(
             status_code=200,
             content=file_content,
             headers={
@@ -208,10 +165,10 @@ class VertexAIFilesHandler(GCSBucketBase):
         )
 
         # Apply transformation to convert Vertex AI batch outputs to OpenAI format
-        config = VertexAIFilesConfig()
+        config: Final = VertexAIFilesConfig()
 
         # Create a logging object for transformation
-        logging_obj = Logging(
+        logging_obj: Final = Logging(
             model="",
             messages=[],
             stream=False,
@@ -229,16 +186,14 @@ class VertexAIFilesHandler(GCSBucketBase):
         self,
         _is_async: bool,
         file_content_request: FileContentRequest,
-        api_base: Optional[str],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        litellm_params: Optional[dict] = None,
-    ) -> Union[
-        HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
-    ]:
+        api_base: str | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        litellm_params: dict | None = None,
+    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
         """
         Download file content from GCS bucket for VertexAI files.
         Supports both sync and async operations.

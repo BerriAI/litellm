@@ -2,14 +2,14 @@
 CompactifAI chat completion transformation
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.common_utils import OpenAIError
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import ModelResponse
-from litellm.llms.openai.common_utils import OpenAIError
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -29,14 +29,14 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
 
     def _get_openai_compatible_provider_info(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
-    ) -> Tuple[Optional[str], Optional[str]]:
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
         """
         Get API base and key for CompactifAI provider.
         """
         api_base = api_base or "https://api.compactif.ai/v1"
-        dynamic_api_key = api_key or get_secret_str("COMPACTIFAI_API_KEY") or ""
+        dynamic_api_key: Final = api_key or get_secret_str("COMPACTIFAI_API_KEY") or ""
         return api_base, dynamic_api_key
 
     def transform_response(
@@ -46,12 +46,12 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List,
+        messages: list,
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform CompactifAI response to LiteLLM format.
@@ -66,7 +66,7 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
         )
 
         ## RESPONSE OBJECT
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         # Handle JSON mode if needed
         if json_mode:
@@ -76,21 +76,17 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
                     # Convert tool calls to content for JSON mode
                     tool_calls = message.get("tool_calls", [])
                     if len(tool_calls) == 1:
-                        message["content"] = tool_calls[0]["function"].get(
-                            "arguments", ""
-                        )
+                        message["content"] = tool_calls[0]["function"].get("arguments", "")
                         message["tool_calls"] = None
 
-        returned_response = ModelResponse(**response_json)
+        returned_response: Final = ModelResponse(**response_json)
 
         # Set model name with provider prefix
         returned_response.model = f"compactifai/{model}"
 
         return returned_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         """
         Get the appropriate error class for CompactifAI errors.
         Since CompactifAI is OpenAI-compatible, we use OpenAI error handling.

@@ -11,10 +11,10 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Final
 
-SNAPSHOT_FILE = Path(__file__).parent / "_lazy_openapi_snapshot.json"
-HTTP_METHOD_SUFFIXES = {
+SNAPSHOT_FILE: Final = Path(__file__).parent / "_lazy_openapi_snapshot.json"
+HTTP_METHOD_SUFFIXES: Final = {
     "delete",
     "get",
     "head",
@@ -39,7 +39,7 @@ def _stabilize_multi_method_route_ids(routes) -> None:
         route.unique_id = f"{operation_id}_{methods[0].lower()}"
 
 
-def load_snapshot() -> Optional[Dict[str, Dict]]:
+def load_snapshot() -> dict[str, dict] | None:
     if not SNAPSHOT_FILE.exists():
         return None
     try:
@@ -49,7 +49,7 @@ def load_snapshot() -> Optional[Dict[str, Dict]]:
         return None
 
 
-def _normalize_operation_ids(paths: Dict[str, Dict]) -> None:
+def _normalize_operation_ids(paths: dict[str, dict]) -> None:
     """Make FastAPI-generated operation IDs stable for multi-method routes.
 
     FastAPI derives the default operation ID suffix from the first item in the
@@ -76,13 +76,11 @@ def _normalize_operation_ids(paths: Dict[str, Dict]) -> None:
             for suffix in methods:
                 suffix_token = f"_{suffix}"
                 if operation_id.endswith(suffix_token):
-                    operation["operationId"] = (
-                        operation_id[: -len(suffix_token)] + f"_{method}"
-                    )
+                    operation["operationId"] = operation_id[: -len(suffix_token)] + f"_{method}"
                     break
 
 
-def generate_snapshot() -> Dict[str, Dict]:
+def generate_snapshot() -> dict[str, dict]:
     import importlib
 
     from fastapi.openapi.utils import get_openapi
@@ -99,14 +97,10 @@ def generate_snapshot() -> Dict[str, Dict]:
         except Exception as exc:
             sys.stderr.write(f"warning: skip {feat.name}: {exc}\n")
 
-    fragments: Dict[str, Dict] = {}
-    used_operation_ids: Set[str] = set()
+    fragments: Final[dict[str, dict]] = {}
+    used_operation_ids: Final[set[str]] = set()
     for feat in LAZY_FEATURES:
-        feat_routes = [
-            r
-            for r in app.routes
-            if any(getattr(r, "path", "").startswith(p) for p in feat.path_prefixes)
-        ]
+        feat_routes = [r for r in app.routes if any(getattr(r, "path", "").startswith(p) for p in feat.path_prefixes)]
         if not feat_routes:
             continue
         _stabilize_multi_method_route_ids(feat_routes)
@@ -121,9 +115,7 @@ def generate_snapshot() -> Dict[str, Dict]:
                     if isinstance(operation_id, str):
                         for suffix in HTTP_METHOD_SUFFIXES:
                             if operation_id.endswith(f"_{suffix}"):
-                                op["operationId"] = (
-                                    operation_id[: -len(suffix)] + method
-                                )
+                                op["operationId"] = operation_id[: -len(suffix)] + method
                                 break
                     op["tags"] = [feat.name]
         full = ensure_unique_openapi_operation_ids(full, used_operation_ids)
@@ -135,6 +127,6 @@ def generate_snapshot() -> Dict[str, Dict]:
 
 
 if __name__ == "__main__":
-    fragments = generate_snapshot()
+    fragments: Final = generate_snapshot()
     SNAPSHOT_FILE.write_text(json.dumps(fragments, indent=2, sort_keys=True) + "\n")
     sys.stdout.write(f"wrote {len(fragments)} feature fragments to {SNAPSHOT_FILE}\n")

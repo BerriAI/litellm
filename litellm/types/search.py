@@ -4,8 +4,6 @@ LiteLLM Search API Types
 This module defines types for the unified search API across different providers.
 """
 
-from typing import List, Optional
-
 from typing_extensions import Required, TypedDict
 
 from litellm.types.utils import SearchProviders
@@ -22,10 +20,10 @@ class SearchToolLiteLLMParams(TypedDict, total=False):
     """
 
     search_provider: Required[str]
-    api_key: Optional[str]
-    api_base: Optional[str]
-    timeout: Optional[float]
-    max_retries: Optional[int]
+    api_key: str | None
+    api_base: str | None
+    timeout: float | None
+    max_retries: int | None
 
 
 class SearchTool(TypedDict, total=False):
@@ -46,32 +44,30 @@ class SearchTool(TypedDict, total=False):
         }
     """
 
-    search_tool_id: Optional[str]
+    search_tool_id: str | None
     search_tool_name: Required[str]
     litellm_params: Required[SearchToolLiteLLMParams]
-    search_tool_info: Optional[dict]
-    created_at: Optional[str]
-    updated_at: Optional[str]
+    search_tool_info: dict | None
+    created_at: str | None
+    updated_at: str | None
 
 
 class SearchToolInfoResponse(TypedDict, total=False):
     """Response model for search tool information."""
 
-    search_tool_id: Optional[str]
+    search_tool_id: str | None
     search_tool_name: str
     litellm_params: dict
-    search_tool_info: Optional[dict]
-    created_at: Optional[str]
-    updated_at: Optional[str]
-    is_from_config: Optional[
-        bool
-    ]  # True if this tool is defined in config file, False if from DB
+    search_tool_info: dict | None
+    created_at: str | None
+    updated_at: str | None
+    is_from_config: bool | None  # True if this tool is defined in config file, False if from DB
 
 
 class ListSearchToolsResponse(TypedDict):
     """Response model for listing search tools."""
 
-    search_tools: List[SearchToolInfoResponse]
+    search_tools: list[SearchToolInfoResponse]
 
 
 class AvailableSearchProvider(TypedDict):

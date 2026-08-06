@@ -1,8 +1,9 @@
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Final, Literal
 
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.caching.caching import Cache, LiteLLMCacheType
 from litellm.constants import MINIMUM_PROMPT_CACHE_TOKEN_COUNT
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -11,26 +12,24 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
-from litellm._logging import verbose_logger
 from litellm.llms.openai.openai import AllMessageValues
-from litellm.utils import is_prompt_caching_valid_prompt
 from litellm.types.llms.vertex_ai import (
     CachedContentListAllResponseBody,
     VertexAICachedContentResponseObject,
 )
+from litellm.utils import is_prompt_caching_valid_prompt
 
 from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase
 from .transformation import (
+    cached_messages_end_on_supported_turn,
     separate_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
 )
 
-local_cache_obj = Cache(
-    type=LiteLLMCacheType.LOCAL
-)  # only used for calling 'get_cache_key' function
+local_cache_obj: Final = Cache(type=LiteLLMCacheType.LOCAL)  # only used for calling 'get_cache_key' function
 
-MAX_PAGINATION_PAGES = 100  # Reasonable upper bound for pagination
+MAX_PAGINATION_PAGES: Final = 100  # Reasonable upper bound for pagination
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -45,14 +44,14 @@ class ContextCachingEndpoints(VertexBase):
 
     def _get_token_and_url_context_caching(
         self,
-        gemini_api_key: Optional[str],
+        gemini_api_key: str | None,
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-        api_base: Optional[str],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        vertex_auth_header: Optional[str],
-        model: Optional[str] = None,
-    ) -> Tuple[Optional[str], str]:
+        api_base: str | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        vertex_auth_header: str | None,
+        model: str | None = None,
+    ) -> tuple[str | None, str]:
         """
         Internal function. Returns the token and url for the call.
 
@@ -61,11 +60,11 @@ class ContextCachingEndpoints(VertexBase):
         Returns
             token, url
         """
-        auth_header: Optional[str]
+        auth_header: str | None
         if custom_llm_provider == "gemini":
-            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
+            auth_header = {"x-goog-api-key": gemini_api_key}
             endpoint = "cachedContents"
-            url = "https://generativelanguage.googleapis.com/v1beta/{}".format(endpoint)
+            url = f"https://generativelanguage.googleapis.com/v1beta/{endpoint}"
         elif custom_llm_provider == "vertex_ai":
             auth_header = vertex_auth_header
             endpoint = "cachedContents"
@@ -88,9 +87,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_api_version=(
-                "v1beta1" if custom_llm_provider == "vertex_ai_beta" else "v1"
-            ),
+            vertex_api_version=("v1beta1" if custom_llm_provider == "vertex_ai_beta" else "v1"),
         )
 
     def check_cache(
@@ -99,14 +96,14 @@ class ContextCachingEndpoints(VertexBase):
         client: HTTPHandler,
         headers: dict,
         api_key: str,
-        api_base: Optional[str],
+        api_base: str | None,
         logging_obj: Logging,
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        vertex_auth_header: Optional[str],
-        model: Optional[str] = None,
-    ) -> Optional[str]:
+        vertex_project: str | None,
+        vertex_location: str | None,
+        vertex_auth_header: str | None,
+        model: str | None = None,
+    ) -> str | None:
         """
         Checks if content already cached.
 
@@ -128,7 +125,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
         )
 
-        page_token: Optional[str] = None
+        page_token: str | None = None
 
         # Iterate through all pages
         for _ in range(MAX_PAGINATION_PAGES):
@@ -156,9 +153,7 @@ class ContextCachingEndpoints(VertexBase):
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 403:
                     return None
-                raise VertexAIError(
-                    status_code=e.response.status_code, message=e.response.text
-                )
+                raise VertexAIError(status_code=e.response.status_code, message=e.response.text)
             except Exception as e:
                 raise VertexAIError(status_code=500, message=str(e))
 
@@ -193,14 +188,14 @@ class ContextCachingEndpoints(VertexBase):
         client: AsyncHTTPHandler,
         headers: dict,
         api_key: str,
-        api_base: Optional[str],
+        api_base: str | None,
         logging_obj: Logging,
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        vertex_auth_header: Optional[str],
-        model: Optional[str] = None,
-    ) -> Optional[str]:
+        vertex_project: str | None,
+        vertex_location: str | None,
+        vertex_auth_header: str | None,
+        model: str | None = None,
+    ) -> str | None:
         """
         Checks if content already cached.
 
@@ -222,7 +217,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
         )
 
-        page_token: Optional[str] = None
+        page_token: str | None = None
 
         # Iterate through all pages
         for _ in range(MAX_PAGINATION_PAGES):
@@ -250,9 +245,7 @@ class ContextCachingEndpoints(VertexBase):
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 403:
                     return None
-                raise VertexAIError(
-                    status_code=e.response.status_code, message=e.response.text
-                )
+                raise VertexAIError(status_code=e.response.status_code, message=e.response.text)
             except Exception as e:
                 raise VertexAIError(status_code=500, message=str(e))
 
@@ -283,21 +276,21 @@ class ContextCachingEndpoints(VertexBase):
 
     def check_and_create_cache(
         self,
-        messages: List[AllMessageValues],  # receives openai format messages
+        messages: list[AllMessageValues],  # receives openai format messages
         optional_params: dict,  # cache the tools if present, in case cache content exists in messages
         api_key: str,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        client: Optional[HTTPHandler],
-        timeout: Optional[Union[float, httpx.Timeout]],
+        client: HTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
         logging_obj: Logging,
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        vertex_auth_header: Optional[str],
-        extra_headers: Optional[dict] = None,
-        cached_content: Optional[str] = None,
-    ) -> Tuple[List[AllMessageValues], dict, Optional[str]]:
+        vertex_project: str | None,
+        vertex_location: str | None,
+        vertex_auth_header: str | None,
+        extra_headers: dict | None = None,
+        cached_content: str | None = None,
+    ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
         - messages: List of dict - messages in the openai format
@@ -311,11 +304,17 @@ class ContextCachingEndpoints(VertexBase):
         if cached_content is not None:
             return messages, optional_params, cached_content
 
-        cached_messages, non_cached_messages = separate_cached_messages(
-            messages=messages
-        )
+        cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
 
         if len(cached_messages) == 0:
+            return messages, optional_params, None
+
+        if not cached_messages_end_on_supported_turn(cached_messages):
+            verbose_logger.debug(
+                "Vertex AI context caching: cached message block ends on a model turn once "
+                "system messages are extracted, which the cachedContents API rejects. "
+                "Skipping context caching."
+            )
             return messages, optional_params, None
 
         # Gemini requires a minimum of 1024 tokens for context caching.
@@ -332,8 +331,8 @@ class ContextCachingEndpoints(VertexBase):
             )
             return messages, optional_params, None
 
-        tools = optional_params.pop("tools", None)
-        tool_choice = optional_params.pop("tool_choice", None)
+        tools: Final = optional_params.pop("tools", None)
+        tool_choice: Final = optional_params.pop("tool_choice", None)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -346,7 +345,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
         )
 
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json",
         }
         if isinstance(token, dict):
@@ -357,20 +356,20 @@ class ContextCachingEndpoints(VertexBase):
             headers.update(extra_headers)
 
         if client is None or not isinstance(client, HTTPHandler):
-            _params = {}
+            _params: Final = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = HTTPHandler(**_params)  # type: ignore
+            client = HTTPHandler(**_params)
         else:
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key = local_cache_obj.get_cache_key(
+        generated_cache_key: Final = local_cache_obj.get_cache_key(
             messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
-        google_cache_name = self.check_cache(
+        google_cache_name: Final = self.check_cache(
             cache_key=generated_cache_key,
             client=client,
             headers=headers,
@@ -387,15 +386,13 @@ class ContextCachingEndpoints(VertexBase):
             return non_cached_messages, optional_params, google_cache_name
 
         ## TRANSFORM REQUEST
-        cached_content_request_body = (
-            transform_openai_messages_to_gemini_context_caching(
-                model=model,
-                messages=cached_messages,
-                cache_key=generated_cache_key,
-                custom_llm_provider=custom_llm_provider,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
-            )
+        cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
+            model=model,
+            messages=cached_messages,
+            cache_key=generated_cache_key,
+            custom_llm_provider=custom_llm_provider,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
         )
 
         cached_content_request_body["tools"] = tools
@@ -414,18 +411,20 @@ class ContextCachingEndpoints(VertexBase):
         )
 
         try:
-            response = client.post(
-                url=url, headers=headers, json=cached_content_request_body  # type: ignore
+            response: Final = client.post(
+                url=url,
+                headers=headers,
+                json=cached_content_request_body,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code = err.response.status_code
+            error_code: Final = err.response.status_code
             raise VertexAIError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        raw_response_cached = response.json()
-        cached_content_response_obj = VertexAICachedContentResponseObject(
+        raw_response_cached: Final = response.json()
+        cached_content_response_obj: Final = VertexAICachedContentResponseObject(
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
         )
         return (
@@ -436,21 +435,21 @@ class ContextCachingEndpoints(VertexBase):
 
     async def async_check_and_create_cache(
         self,
-        messages: List[AllMessageValues],  # receives openai format messages
+        messages: list[AllMessageValues],  # receives openai format messages
         optional_params: dict,  # cache the tools if present, in case cache content exists in messages
         api_key: str,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        client: Optional[AsyncHTTPHandler],
-        timeout: Optional[Union[float, httpx.Timeout]],
+        client: AsyncHTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
         logging_obj: Logging,
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        vertex_auth_header: Optional[str],
-        extra_headers: Optional[dict] = None,
-        cached_content: Optional[str] = None,
-    ) -> Tuple[List[AllMessageValues], dict, Optional[str]]:
+        vertex_project: str | None,
+        vertex_location: str | None,
+        vertex_auth_header: str | None,
+        extra_headers: dict | None = None,
+        cached_content: str | None = None,
+    ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
         - messages: List of dict - messages in the openai format
@@ -464,11 +463,17 @@ class ContextCachingEndpoints(VertexBase):
         if cached_content is not None:
             return messages, optional_params, cached_content
 
-        cached_messages, non_cached_messages = separate_cached_messages(
-            messages=messages
-        )
+        cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
 
         if len(cached_messages) == 0:
+            return messages, optional_params, None
+
+        if not cached_messages_end_on_supported_turn(cached_messages):
+            verbose_logger.debug(
+                "Vertex AI context caching: cached message block ends on a model turn once "
+                "system messages are extracted, which the cachedContents API rejects. "
+                "Skipping context caching."
+            )
             return messages, optional_params, None
 
         # Gemini requires a minimum of 1024 tokens for context caching.
@@ -485,8 +490,8 @@ class ContextCachingEndpoints(VertexBase):
             )
             return messages, optional_params, None
 
-        tools = optional_params.pop("tools", None)
-        tool_choice = optional_params.pop("tool_choice", None)
+        tools: Final = optional_params.pop("tools", None)
+        tool_choice: Final = optional_params.pop("tool_choice", None)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -499,7 +504,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
         )
 
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json",
         }
         if isinstance(token, dict):
@@ -510,17 +515,15 @@ class ContextCachingEndpoints(VertexBase):
             headers.update(extra_headers)
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(
-                params={"timeout": timeout}, llm_provider=litellm.LlmProviders.VERTEX_AI
-            )
+            client = get_async_httpx_client(params={"timeout": timeout}, llm_provider=litellm.LlmProviders.VERTEX_AI)
         else:
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key = local_cache_obj.get_cache_key(
+        generated_cache_key: Final = local_cache_obj.get_cache_key(
             messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
-        google_cache_name = await self.async_check_cache(
+        google_cache_name: Final = await self.async_check_cache(
             cache_key=generated_cache_key,
             client=client,
             headers=headers,
@@ -538,15 +541,13 @@ class ContextCachingEndpoints(VertexBase):
             return non_cached_messages, optional_params, google_cache_name
 
         ## TRANSFORM REQUEST
-        cached_content_request_body = (
-            transform_openai_messages_to_gemini_context_caching(
-                model=model,
-                messages=cached_messages,
-                cache_key=generated_cache_key,
-                custom_llm_provider=custom_llm_provider,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
-            )
+        cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
+            model=model,
+            messages=cached_messages,
+            cache_key=generated_cache_key,
+            custom_llm_provider=custom_llm_provider,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
         )
 
         cached_content_request_body["tools"] = tools
@@ -565,18 +566,20 @@ class ContextCachingEndpoints(VertexBase):
         )
 
         try:
-            response = await client.post(
-                url=url, headers=headers, json=cached_content_request_body  # type: ignore
+            response: Final = await client.post(
+                url=url,
+                headers=headers,
+                json=cached_content_request_body,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code = err.response.status_code
+            error_code: Final = err.response.status_code
             raise VertexAIError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        raw_response_cached = response.json()
-        cached_content_response_obj = VertexAICachedContentResponseObject(
+        raw_response_cached: Final = response.json()
+        cached_content_response_obj: Final = VertexAICachedContentResponseObject(
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
         )
         return (

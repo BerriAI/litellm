@@ -17,12 +17,14 @@ Symbols pinned here:
 
 import asyncio
 import os
+import signal
 import sys
 import urllib.parse
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
+from prisma import Prisma as GeneratedPrisma
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
@@ -40,11 +42,11 @@ def mock_prisma_binary():
 
 
 def _make_wrapper(engine_pid: int = 111, iam: bool = False) -> PrismaWrapper:
-    mock_prisma = MagicMock()
-    mock_prisma.connect = AsyncMock()
-    mock_prisma._engine = MagicMock()
-    mock_prisma._engine.process.pid = engine_pid
-    return PrismaWrapper(original_prisma=mock_prisma, iam_token_db_auth=iam)
+    prisma = GeneratedPrisma(use_dotenv=False)
+    engine = MagicMock()
+    engine.process.pid = engine_pid
+    setattr(prisma, "_Prisma__engine", engine)
+    return PrismaWrapper(original_prisma=prisma, iam_token_db_auth=iam)
 
 
 def _token_db_url(created: datetime, expires_in: int = 900) -> str:
@@ -55,6 +57,21 @@ def _token_db_url(created: datetime, expires_in: int = 900) -> str:
     )
     quoted = urllib.parse.quote(token, safe="")
     return f"postgresql://user:{quoted}@host:5432/db"
+
+
+def test_wrapper_instruments_generated_prisma_engine() -> None:
+    prisma = GeneratedPrisma(use_dotenv=False)
+    engine = MagicMock()
+    setattr(prisma, "_Prisma__engine", engine)
+
+    wrapper = PrismaWrapper(original_prisma=prisma, iam_token_db_auth=False)
+
+    assert wrapper._active_drain_tracker is not None
+    assert prisma._engine._engine is engine
+
+
+async def _wait_for_retirements(wrapper: PrismaWrapper) -> None:
+    await asyncio.gather(*tuple(wrapper._retirement_tasks))
 
 
 @pytest.mark.asyncio
@@ -235,12 +252,258 @@ async def test_safe_refresh_token_refreshes_when_token_expired(
         patch("asyncio.sleep", new_callable=AsyncMock),
     ):
         await wrapper._safe_refresh_token()
+        await _wait_for_retirements(wrapper)
 
     pinned = {
         "token_minted": wrapper.get_rds_iam_token.call_count,
         "prisma_constructed": mock_prisma_binary.Prisma.call_count,
     }
     assert pinned == {"token_minted": 1, "prisma_constructed": 1}
+
+
+@pytest.mark.asyncio
+async def test_safe_refresh_connects_replacement_before_swapping_and_killing(
+    mock_prisma_binary, monkeypatch
+):
+    wrapper = _make_wrapper(engine_pid=111, iam=True)
+    old_prisma = wrapper._original_prisma
+    expired = datetime.utcnow() - timedelta(seconds=1200)
+    monkeypatch.setenv("DATABASE_URL", _token_db_url(created=expired, expires_in=900))
+    wrapper.get_rds_iam_token = MagicMock(return_value="postgresql://fresh")
+    replacement_prisma = MagicMock()
+
+    async def connect_replacement() -> None:
+        assert wrapper._original_prisma is old_prisma
+        assert mock_kill.call_count == 0
+
+    replacement_prisma.connect = AsyncMock(side_effect=connect_replacement)
+    replacement_prisma.is_connected = MagicMock(return_value=True)
+    replacement_prisma._engine = MagicMock()
+    replacement_prisma._engine.process.pid = 222
+    mock_prisma_binary.Prisma.return_value = replacement_prisma
+
+    def observe_kill(pid: int, sent_signal: int) -> None:
+        assert wrapper._original_prisma is replacement_prisma
+
+    with (
+        patch("os.kill", side_effect=observe_kill) as mock_kill,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        await wrapper._safe_refresh_token()
+        await _wait_for_retirements(wrapper)
+
+    assert wrapper._original_prisma is replacement_prisma
+    mock_kill.assert_any_call(111, signal.SIGTERM)
+    assert wrapper._engine_generation == 1
+
+
+@pytest.mark.asyncio
+async def test_safe_refresh_failure_keeps_old_client_and_token(
+    mock_prisma_binary, monkeypatch
+):
+    wrapper = _make_wrapper(engine_pid=111, iam=True)
+    old_prisma = wrapper._original_prisma
+    expired = datetime.utcnow() - timedelta(seconds=1200)
+    previous_db_url = _token_db_url(created=expired, expires_in=900)
+    monkeypatch.setenv("DATABASE_URL", previous_db_url)
+
+    def mint_token() -> str:
+        monkeypatch.setenv("DATABASE_URL", "postgresql://fresh")
+        return "postgresql://fresh"
+
+    wrapper.get_rds_iam_token = MagicMock(side_effect=mint_token)
+    replacement_prisma = MagicMock(connect=AsyncMock(side_effect=RuntimeError("database unavailable")))
+    mock_prisma_binary.Prisma.return_value = replacement_prisma
+
+    with patch("os.kill") as mock_kill:
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            await wrapper._safe_refresh_token()
+
+    assert wrapper._original_prisma is old_prisma
+    assert os.environ["DATABASE_URL"] == previous_db_url
+    assert wrapper._engine_generation == 0
+    mock_kill.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_safe_refresh_waits_for_active_query_before_retiring_old_engine(
+    mock_prisma_binary, monkeypatch
+):
+    wrapper = _make_wrapper(engine_pid=111, iam=True)
+    old_engine = wrapper._original_prisma._engine
+    query_started = asyncio.Event()
+    release_query = asyncio.Event()
+
+    async def run_query(content: str, *, tx_id: object | None) -> dict[str, str]:
+        query_started.set()
+        await release_query.wait()
+        return {"status": "complete"}
+
+    old_engine._engine.query = AsyncMock(side_effect=run_query)
+    query_task = asyncio.create_task(old_engine.query("query", tx_id=None))
+    await query_started.wait()
+
+    expired = datetime.utcnow() - timedelta(seconds=1200)
+    monkeypatch.setenv("DATABASE_URL", _token_db_url(created=expired, expires_in=900))
+    wrapper.get_rds_iam_token = MagicMock(return_value="postgresql://fresh")
+    replacement_prisma = MagicMock(connect=AsyncMock())
+    replacement_prisma._engine = MagicMock()
+    replacement_prisma._engine.process.pid = 222
+    mock_prisma_binary.Prisma.return_value = replacement_prisma
+
+    with (
+        patch("os.kill") as mock_kill,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        await wrapper._safe_refresh_token()
+        assert mock_kill.call_count == 0
+        assert not query_task.done()
+        release_query.set()
+        await query_task
+        await _wait_for_retirements(wrapper)
+
+    mock_kill.assert_any_call(111, signal.SIGTERM)
+
+
+@pytest.mark.asyncio
+async def test_safe_refresh_waits_for_open_transaction_before_retiring_old_engine(
+    mock_prisma_binary, monkeypatch
+):
+    wrapper = _make_wrapper(engine_pid=111, iam=True)
+    old_engine = wrapper._original_prisma._engine
+    old_engine._engine.start_transaction = AsyncMock(return_value="transaction-1")
+    old_engine._engine.commit_transaction = AsyncMock()
+    transaction_id = await old_engine.start_transaction(content="transaction")
+
+    expired = datetime.utcnow() - timedelta(seconds=1200)
+    monkeypatch.setenv("DATABASE_URL", _token_db_url(created=expired, expires_in=900))
+    wrapper.get_rds_iam_token = MagicMock(return_value="postgresql://fresh")
+    replacement_prisma = MagicMock(connect=AsyncMock())
+    replacement_prisma._engine = MagicMock()
+    replacement_prisma._engine.process.pid = 222
+    mock_prisma_binary.Prisma.return_value = replacement_prisma
+
+    with (
+        patch("os.kill") as mock_kill,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        await wrapper._safe_refresh_token()
+        assert mock_kill.call_count == 0
+        await old_engine.commit_transaction(transaction_id)
+        await _wait_for_retirements(wrapper)
+
+    mock_kill.assert_any_call(111, signal.SIGTERM)
+
+
+@pytest.mark.asyncio
+async def test_retirement_kills_old_engine_when_drain_never_completes(
+    mock_prisma_binary, monkeypatch
+):
+    """A leaked drain count (e.g. a transaction whose owner was hard-cancelled
+    before commit/rollback) must not keep the replaced engine alive forever."""
+    wrapper = _make_wrapper(engine_pid=111, iam=True)
+    monkeypatch.setattr(wrapper, "ENGINE_RETIREMENT_DRAIN_TIMEOUT_SECONDS", 0.05)
+    old_engine = wrapper._original_prisma._engine
+    old_engine._engine.start_transaction = AsyncMock(return_value="transaction-1")
+    await old_engine.start_transaction(content="transaction")
+
+    expired = datetime.utcnow() - timedelta(seconds=1200)
+    monkeypatch.setenv("DATABASE_URL", _token_db_url(created=expired, expires_in=900))
+    wrapper.get_rds_iam_token = MagicMock(return_value="postgresql://fresh")
+    replacement_prisma = MagicMock(connect=AsyncMock())
+    replacement_prisma._engine = MagicMock()
+    replacement_prisma._engine.process.pid = 222
+    mock_prisma_binary.Prisma.return_value = replacement_prisma
+
+    with (
+        patch("os.kill") as mock_kill,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        await wrapper._safe_refresh_token()
+        await asyncio.wait_for(_wait_for_retirements(wrapper), timeout=2)
+
+    mock_kill.assert_any_call(111, signal.SIGTERM)
+
+
+@pytest.mark.asyncio
+async def test_safe_refresh_cancellation_restores_token_and_cleans_replacement(
+    mock_prisma_binary, monkeypatch
+):
+    wrapper = _make_wrapper(engine_pid=111, iam=True)
+    old_prisma = wrapper._original_prisma
+    expired = datetime.utcnow() - timedelta(seconds=1200)
+    previous_db_url = _token_db_url(created=expired, expires_in=900)
+    monkeypatch.setenv("DATABASE_URL", previous_db_url)
+    connect_started = asyncio.Event()
+    block_connect = asyncio.Event()
+
+    def mint_token() -> str:
+        monkeypatch.setenv("DATABASE_URL", "postgresql://fresh")
+        return "postgresql://fresh"
+
+    async def connect_replacement() -> None:
+        connect_started.set()
+        await block_connect.wait()
+
+    wrapper.get_rds_iam_token = MagicMock(side_effect=mint_token)
+    replacement_prisma = MagicMock(connect=AsyncMock(side_effect=connect_replacement))
+    replacement_prisma._engine = MagicMock()
+    replacement_prisma._engine.process.pid = 222
+    mock_prisma_binary.Prisma.return_value = replacement_prisma
+
+    with (
+        patch("os.kill") as mock_kill,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        refresh_task = asyncio.create_task(wrapper._safe_refresh_token())
+        await connect_started.wait()
+        refresh_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await refresh_task
+        await _wait_for_retirements(wrapper)
+
+    assert wrapper._original_prisma is old_prisma
+    assert os.environ["DATABASE_URL"] == previous_db_url
+    assert wrapper._engine_generation == 0
+    assert mock_kill.call_args_list == [
+        call(222, signal.SIGTERM),
+        call(222, signal.SIGKILL),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_repeated_safe_refreshes_retire_each_replaced_engine(
+    mock_prisma_binary, monkeypatch
+):
+    wrapper = _make_wrapper(engine_pid=111, iam=True)
+    replacement_clients = []
+    for engine_pid in (222, 333):
+        replacement_prisma = MagicMock(connect=AsyncMock())
+        replacement_prisma.is_connected = MagicMock(return_value=True)
+        replacement_prisma._engine = MagicMock()
+        replacement_prisma._engine.process.pid = engine_pid
+        replacement_clients.append(replacement_prisma)
+    mock_prisma_binary.Prisma.side_effect = replacement_clients
+    wrapper.get_rds_iam_token = MagicMock(side_effect=("postgresql://first", "postgresql://second"))
+    expired = datetime.utcnow() - timedelta(seconds=1200)
+
+    with (
+        patch("os.kill") as mock_kill,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        for _ in range(2):
+            monkeypatch.setenv("DATABASE_URL", _token_db_url(created=expired, expires_in=900))
+            await wrapper._safe_refresh_token()
+        await _wait_for_retirements(wrapper)
+
+    assert mock_kill.call_args_list == [
+        call(111, signal.SIGTERM),
+        call(111, signal.SIGKILL),
+        call(222, signal.SIGTERM),
+        call(222, signal.SIGKILL),
+    ]
+    assert wrapper._original_prisma is replacement_clients[-1]
+    assert wrapper._engine_generation == 2
 
 
 @pytest.mark.asyncio
@@ -259,6 +522,7 @@ async def test_safe_refresh_token_refreshes_when_token_unparseable(
         patch("asyncio.sleep", new_callable=AsyncMock),
     ):
         await wrapper._safe_refresh_token()
+        await _wait_for_retirements(wrapper)
 
     assert wrapper.get_rds_iam_token.call_count == 1
 

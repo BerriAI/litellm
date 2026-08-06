@@ -3,6 +3,8 @@
 import React, { useState } from "react";
 import { Modal, Input, Switch } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
+import { fetchClient } from "@/lib/http/api";
+import { ApiError } from "@/lib/http/client";
 import {
   KeyOutlined,
   LockOutlined,
@@ -14,21 +16,22 @@ import {
 } from "@ant-design/icons";
 import { MCPServer } from "./types";
 
+const byokSaveErrorMessage = (e: unknown): string => {
+  if (e instanceof ApiError) {
+    const detail = (e.body as { detail?: { error?: string } } | null)?.detail?.error;
+    if (detail) return detail;
+  }
+  return e instanceof Error && e.message ? e.message : "Failed to connect";
+};
+
 interface ByokCredentialModalProps {
   server: MCPServer;
   open: boolean;
   onClose: () => void;
   onSuccess: (serverId: string) => void;
-  accessToken: string;
 }
 
-export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
-  server,
-  open,
-  onClose,
-  onSuccess,
-  accessToken,
-}) => {
+export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server, open, onClose, onSuccess }) => {
   const [step, setStep] = useState<1 | 2>(1);
   const [apiKey, setApiKey] = useState("");
   const [saveKey, setSaveKey] = useState(true);
@@ -52,23 +55,15 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
     }
     setLoading(true);
     try {
-      const response = await fetch(`/v1/mcp/server/${server.server_id}/user-credential`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({ credential: apiKey.trim(), save: saveKey }),
+      await fetchClient.POST("/v1/mcp/server/{server_id}/user-credential", {
+        params: { path: { server_id: server.server_id } },
+        body: { credential: apiKey.trim(), save: saveKey },
       });
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err?.detail?.error || "Failed to save credential");
-      }
       MessageManager.success(`Connected to ${serverDisplayName}`);
       onSuccess(server.server_id);
       handleClose();
-    } catch (e: any) {
-      MessageManager.error(e.message || "Failed to connect");
+    } catch (e) {
+      MessageManager.error(byokSaveErrorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -102,11 +97,11 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
           <div className="text-center">
             {/* Logos */}
             <div className="flex items-center justify-center gap-3 mb-6">
-              <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-teal-400 to-cyan-600 flex items-center justify-center text-white font-bold text-xl shadow">
+              <div className="w-14 h-14 rounded-xl bg-linear-to-br from-teal-400 to-cyan-600 flex items-center justify-center text-white font-bold text-xl shadow-sm">
                 L
               </div>
               <ArrowRightOutlined className="text-gray-400 text-lg" />
-              <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-800 flex items-center justify-center text-white font-bold text-xl shadow">
+              <div className="w-14 h-14 rounded-xl bg-linear-to-br from-blue-600 to-indigo-800 flex items-center justify-center text-white font-bold text-xl shadow-sm">
                 {firstLetter}
               </div>
             </div>
@@ -146,7 +141,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
                 <ul className="space-y-2">
                   {server.byok_description.map((item, i) => (
                     <li key={i} className="flex items-center gap-2 text-sm text-gray-700">
-                      <CheckOutlined className="text-green-500 flex-shrink-0" />
+                      <CheckOutlined className="text-green-500 shrink-0" />
                       {item}
                     </li>
                   ))}
@@ -211,7 +206,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
 
             {/* Security note */}
             <div className="bg-blue-50 rounded-xl p-4 flex items-start gap-3 mb-6">
-              <LockOutlined className="text-blue-400 mt-0.5 flex-shrink-0" />
+              <LockOutlined className="text-blue-400 mt-0.5 shrink-0" />
               <p className="text-sm text-blue-700">
                 Your key is stored securely and transmitted over HTTPS. It is never shared with third parties.
               </p>

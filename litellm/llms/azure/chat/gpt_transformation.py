@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
 
@@ -55,18 +55,18 @@ class AzureOpenAIConfig(BaseConfig):
 
     def __init__(
         self,
-        frequency_penalty: Optional[int] = None,
-        function_call: Optional[Union[str, dict]] = None,
-        functions: Optional[list] = None,
-        logit_bias: Optional[dict] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        stop: Optional[Union[str, list]] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
+        frequency_penalty: int | None = None,
+        function_call: str | dict | None = None,
+        functions: list | None = None,
+        logit_bias: dict | None = None,
+        max_tokens: int | None = None,
+        n: int | None = None,
+        presence_penalty: int | None = None,
+        stop: str | list | None = None,
+        temperature: int | None = None,
+        top_p: int | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -75,7 +75,7 @@ class AzureOpenAIConfig(BaseConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "temperature",
             "n",
@@ -121,24 +121,22 @@ class AzureOpenAIConfig(BaseConfig):
         import re
 
         # Normalize model name: e.g., gpt-3-5-turbo -> gpt-3.5-turbo
-        normalized_model = re.sub(r"(\d)-(\d)", r"\1.\2", model)
+        normalized_model: Final = re.sub(r"(\d)-(\d)", r"\1.\2", model)
 
         if "gpt-3.5" in normalized_model or "gpt-35" in model:
             return False
 
         return True
 
-    def _is_response_format_supported_api_version(
-        self, api_version_year: str, api_version_month: str
-    ) -> bool:
+    def _is_response_format_supported_api_version(self, api_version_year: str, api_version_month: str) -> bool:
         """
         - check if api_version is supported for response_format
         - returns True if the API version is equal to or newer than the supported version
         """
-        api_year = int(api_version_year)
-        api_month = int(api_version_month)
-        supported_year = int(API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT)
-        supported_month = int(API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT)
+        api_year: Final = int(api_version_year)
+        api_month: Final = int(api_version_month)
+        supported_year: Final = int(API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT)
+        supported_month: Final = int(API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT)
 
         # If the year is greater than supported year, it's definitely supported
         if api_year > supported_year:
@@ -158,8 +156,8 @@ class AzureOpenAIConfig(BaseConfig):
         drop_params: bool,
         api_version: str = "",
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model)
-        api_version_times = api_version.split("-")
+        supported_openai_params: Final = self.get_supported_openai_params(model)
+        api_version_times: Final = api_version.split("-")
 
         if len(api_version_times) >= 3:
             api_version_year = api_version_times[0]
@@ -178,25 +176,15 @@ class AzureOpenAIConfig(BaseConfig):
                 tool_choice='required' is not supported as of 2024-05-01-preview
                 """
                 ## check if api version supports this param ##
-                if (
-                    api_version_year is None
-                    or api_version_month is None
-                    or api_version_day is None
-                ):
+                if api_version_year is None or api_version_month is None or api_version_day is None:
                     optional_params["tool_choice"] = value
                 else:
                     if (
                         api_version_year < "2023"
                         or (api_version_year == "2023" and api_version_month < "12")
-                        or (
-                            api_version_year == "2023"
-                            and api_version_month == "12"
-                            and api_version_day < "01"
-                        )
+                        or (api_version_year == "2023" and api_version_month == "12" and api_version_day < "01")
                     ):
-                        if litellm.drop_params is True or (
-                            drop_params is not None and drop_params is True
-                        ):
+                        if litellm.drop_params is True or (drop_params is not None and drop_params is True):
                             pass
                         else:
                             raise UnsupportedParamsError(
@@ -206,9 +194,7 @@ class AzureOpenAIConfig(BaseConfig):
                     elif value == "required" and (
                         api_version_year == "2024" and api_version_month <= "05"
                     ):  ## check if tool_choice value is supported ##
-                        if litellm.drop_params is True or (
-                            drop_params is not None and drop_params is True
-                        ):
+                        if litellm.drop_params is True or (drop_params is not None and drop_params is True):
                             pass
                         else:
                             raise UnsupportedParamsError(
@@ -218,21 +204,16 @@ class AzureOpenAIConfig(BaseConfig):
                     else:
                         optional_params["tool_choice"] = value
             elif param == "response_format" and isinstance(value, dict):
-                _is_response_format_supported_model = (
-                    self._is_response_format_supported_model(model)
-                )
+                _is_response_format_supported_model = self._is_response_format_supported_model(model)
 
                 if api_version_year is None or api_version_month is None:
                     is_response_format_supported_api_version = True
                 else:
-                    is_response_format_supported_api_version = (
-                        self._is_response_format_supported_api_version(
-                            api_version_year, api_version_month
-                        )
+                    is_response_format_supported_api_version = self._is_response_format_supported_api_version(
+                        api_version_year, api_version_month
                     )
                 is_response_format_supported = (
-                    is_response_format_supported_api_version
-                    and _is_response_format_supported_model
+                    is_response_format_supported_api_version and _is_response_format_supported_model
                 )
 
                 optional_params = self._add_response_format_to_tools(
@@ -250,7 +231,7 @@ class AzureOpenAIConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -269,12 +250,12 @@ class AzureOpenAIConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LoggingClass,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         raise NotImplementedError(
             "Azure OpenAI handler.py has custom logic for transforming response, as it uses the OpenAI SDK."
@@ -289,13 +270,13 @@ class AzureOpenAIConfig(BaseConfig):
                 optional_params["azure_ad_token"] = value
         return optional_params
 
-    def get_eu_regions(self) -> List[str]:
+    def get_eu_regions(self) -> list[str]:
         """
         Source: https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models#gpt-4-and-gpt-4-turbo-model-availability
         """
         return ["europe", "sweden", "switzerland", "france", "uk"]
 
-    def get_us_regions(self) -> List[str]:
+    def get_us_regions(self) -> list[str]:
         """
         Source: https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models#gpt-4-and-gpt-4-turbo-model-availability
         """
@@ -312,22 +293,18 @@ class AzureOpenAIConfig(BaseConfig):
             "westus4",
         ]
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return AzureOpenAIError(
-            message=error_message, status_code=status_code, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+        return AzureOpenAIError(message=error_message, status_code=status_code, headers=headers)
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         raise NotImplementedError(
             "Azure OpenAI has custom logic for validating environment, as it uses the OpenAI SDK."

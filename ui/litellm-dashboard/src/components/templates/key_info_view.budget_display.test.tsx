@@ -1,7 +1,7 @@
 import { renderWithProviders } from "../../../tests/test-utils";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { KeyResponse } from "../key_team_helpers/key_list";
+import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "./key_info_view";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
@@ -103,7 +103,25 @@ const baseAuthorized = {
   userEmail: null,
   disabledPersonalKeyCreation: null,
   showSSOBanner: false,
+  isLoading: false,
+  isAuthorized: true,
 };
+
+const makeTeam = (overrides: Partial<Team>): Team => ({
+  team_id: "team-default",
+  team_alias: "Default Team",
+  models: [],
+  max_budget: null,
+  budget_duration: null,
+  tpm_limit: null,
+  rpm_limit: null,
+  organization_id: "",
+  created_at: "2026-01-01T00:00:00Z",
+  keys: [],
+  members_with_roles: [],
+  spend: 0,
+  ...overrides,
+});
 
 describe("KeyInfoView overview budget display (LIT-2845)", () => {
   beforeEach(() => {
@@ -151,7 +169,7 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
   it("renders 'Unlimited' when max_budget is null", async () => {
     renderWithProviders(
       <KeyInfoView
-        keyData={{ ...MOCK_KEY_DATA, max_budget: null }}
+        keyData={{ ...MOCK_KEY_DATA, max_budget: null } as unknown as KeyResponse}
         onClose={() => {}}
         keyId={"test-key-id"}
         onKeyDataUpdate={() => {}}
@@ -161,5 +179,147 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     await waitFor(() => {
       expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
     });
+  });
+
+  it("renders team budget with alias and duration when key has no own budget but team has one", async () => {
+    vi.mocked(useTeams).mockReturnValue({
+      teams: [makeTeam({ team_id: "team-123", team_alias: "Test Budget", max_budget: 1200, budget_duration: "30d" })],
+      setTeams: vi.fn(),
+    });
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, max_budget: null, team_id: "team-123" } as unknown as KeyResponse}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/of \$1,200\.00 \(Team: Test Budget \/ 30d\)/)).toBeInTheDocument();
+    });
+  });
+
+  it("renders team budget without duration when team has no budget_duration", async () => {
+    vi.mocked(useTeams).mockReturnValue({
+      teams: [makeTeam({ team_id: "team-456", team_alias: "No Duration Team", max_budget: 500 })],
+      setTeams: vi.fn(),
+    });
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, max_budget: null, team_id: "team-456" } as unknown as KeyResponse}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/of \$500\.00 \(Team: No Duration Team\)/)).toBeInTheDocument();
+    });
+  });
+
+  it("renders 'Unlimited' when key has no budget and team also has no budget", async () => {
+    vi.mocked(useTeams).mockReturnValue({
+      teams: [makeTeam({ team_id: "team-789", team_alias: "Free Team" })],
+      setTeams: vi.fn(),
+    });
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, max_budget: null, team_id: "team-789" } as unknown as KeyResponse}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
+    });
+  });
+});
+
+describe("KeyInfoView budget reset visibility", () => {
+  beforeEach(() => {
+    vi.mocked(useTeams).mockReturnValue({ teams: [], setTeams: vi.fn() });
+    vi.mocked(useAuthorized).mockReturnValue(baseAuthorized);
+  });
+
+  const KEY_WITH_RESET = {
+    ...MOCK_KEY_DATA,
+    max_budget: 0.1,
+    budget_duration: "1d",
+    budget_reset_at: "2026-07-22T12:00:00+00:00",
+  } as unknown as KeyResponse;
+
+  it("shows the next budget reset in the overview Spend card when budget_reset_at is set", async () => {
+    renderWithProviders(
+      <KeyInfoView
+        keyData={KEY_WITH_RESET}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/^Resets Jul 22, 2026/)).toBeInTheDocument();
+    });
+  });
+
+  it("omits the reset line from the overview Spend card when budget_reset_at is null", async () => {
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, max_budget: 0.1 } as unknown as KeyResponse}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/of \$0\.10/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/^Resets /)).not.toBeInTheDocument();
+  });
+
+  it("shows the duration and next reset in the Settings tab", async () => {
+    renderWithProviders(
+      <KeyInfoView
+        keyData={KEY_WITH_RESET}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Settings" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    await waitFor(() => {
+      expect(screen.getByText("Budget Reset")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Every 1d, next Jul 22, 2026/)).toBeInTheDocument();
+  });
+
+  it("shows 'Never' in the Settings tab when no reset is scheduled", async () => {
+    renderWithProviders(
+      <KeyInfoView
+        keyData={MOCK_KEY_DATA}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Settings" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    await waitFor(() => {
+      expect(screen.getByText("Budget Reset")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Budget Reset").parentElement).toHaveTextContent("Never");
   });
 });

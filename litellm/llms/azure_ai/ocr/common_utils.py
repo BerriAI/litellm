@@ -5,12 +5,23 @@ This module provides routing logic to determine which OCR configuration to use
 based on the model name.
 """
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 from litellm._logging import verbose_logger
 
 if TYPE_CHECKING:
     from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
+
+
+def is_azure_document_intelligence_model(model: str) -> bool:
+    """Whether an azure_ai OCR model routes to Azure Document Intelligence.
+
+    Azure AI exposes two OCR services on the same provider; the sub-route in the
+    model name (`azure_ai/doc-intelligence/<model>`) selects Document Intelligence
+    over Mistral OCR. This is the single source of truth for that routing decision.
+    """
+    lowered: Final = model.lower()
+    return "doc-intelligence" in lowered or "documentintelligence" in lowered
 
 
 def get_azure_ai_ocr_config(model: str) -> Optional["BaseOCRConfig"]:
@@ -41,12 +52,10 @@ def get_azure_ai_ocr_config(model: str) -> Optional["BaseOCRConfig"]:
     from litellm.llms.azure_ai.ocr.transformation import AzureAIOCRConfig
 
     # Check for Azure Document Intelligence models
-    if "doc-intelligence" in model or "documentintelligence" in model:
-        verbose_logger.debug(
-            f"Routing {model} to Azure Document Intelligence OCR config"
-        )
+    if is_azure_document_intelligence_model(model):
+        verbose_logger.debug("Routing %s to Azure Document Intelligence OCR config", model)
         return AzureDocumentIntelligenceOCRConfig()
 
     # Default to Mistral-based OCR for other azure_ai models
-    verbose_logger.debug(f"Routing {model} to Azure AI (Mistral) OCR config")
+    verbose_logger.debug("Routing %s to Azure AI (Mistral) OCR config", model)
     return AzureAIOCRConfig()

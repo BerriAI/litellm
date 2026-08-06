@@ -6,7 +6,7 @@ If weights are provided, it will return a deployment based on the weights.
 """
 
 import random
-from typing import TYPE_CHECKING, Any, Dict, List, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_router_logger
 
@@ -20,9 +20,9 @@ else:
 
 def simple_shuffle(
     llm_router_instance: LitellmRouter,
-    healthy_deployments: Union[List[Any], Dict[Any, Any]],
+    healthy_deployments: list[Any] | dict[Any, Any],
     model: str,
-) -> Dict:
+) -> dict:
     """
     Returns a random deployment from the list of healthy deployments.
 
@@ -43,10 +43,8 @@ def simple_shuffle(
     for weight_by in ["weight", "rpm", "tpm"]:
         weight = healthy_deployments[0].get("litellm_params").get(weight_by, None)
         if weight is not None:
-            weights = [
-                m["litellm_params"].get(weight_by, 0) for m in healthy_deployments
-            ]
-            verbose_router_logger.debug(f"\nweight {weights}")
+            weights = [m["litellm_params"].get(weight_by, 0) for m in healthy_deployments]
+            verbose_router_logger.debug("\nweight %s", weights)
             total_weight = sum(weights)
             if total_weight <= 0:
                 # All remaining candidates have weight 0 for this metric (e.g.
@@ -56,16 +54,19 @@ def simple_shuffle(
                 # through to the uniform random pick at the end.
                 continue
             weights = [weight / total_weight for weight in weights]
-            verbose_router_logger.debug(f"\n weights {weights} by {weight_by}")
+            verbose_router_logger.debug("\n weights %s by %s", weights, weight_by)
             # Perform weighted random pick
             selected_index = random.choices(range(len(weights)), weights=weights)[0]
-            verbose_router_logger.debug(f"\n selected index, {selected_index}")
+            verbose_router_logger.debug("\n selected index, %s", selected_index)
             deployment = healthy_deployments[selected_index]
             verbose_router_logger.info(
-                f"get_available_deployment for model: {model}, Selected deployment: {llm_router_instance.print_deployment(deployment) or deployment[0]} for model: {model}"
+                "get_available_deployment for model: %s, Selected deployment: %s for model: %s",
+                model,
+                llm_router_instance.print_deployment(deployment) or deployment[0],
+                model,
             )
             return deployment or deployment[0]
 
     ############## No RPM/TPM passed, we do a random pick #################
-    item = random.choice(healthy_deployments)
+    item: Final = random.choice(healthy_deployments)
     return item or item[0]

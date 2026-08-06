@@ -63,18 +63,18 @@ export function SearchResultsDisplay({ searchResults }: SearchResultsDisplayProp
                         >
                           <div className="flex items-center gap-2 flex-1 min-w-0">
                             <svg
-                              className={`w-4 h-4 text-gray-400 transition-transform flex-shrink-0 ${isResultExpanded ? "transform rotate-90" : ""}`}
+                              className={`w-4 h-4 text-gray-400 transition-transform shrink-0 ${isResultExpanded ? "transform rotate-90" : ""}`}
                               fill="none"
                               stroke="currentColor"
                               viewBox="0 0 24 24"
                             >
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                             </svg>
-                            <FileTextOutlined className="text-gray-400 flex-shrink-0" style={{ fontSize: "12px" }} />
+                            <FileTextOutlined className="text-gray-400 shrink-0" style={{ fontSize: "12px" }} />
                             <span className="text-xs font-medium text-gray-700 truncate">
                               {result.filename || result.file_id || `Result ${resultIndex + 1}`}
                             </span>
-                            <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700 font-mono flex-shrink-0">
+                            <span className="text-xs px-2 py-0.5 rounded-sm bg-blue-100 text-blue-700 font-mono shrink-0">
                               {result.score.toFixed(3)}
                             </span>
                           </div>
@@ -85,7 +85,7 @@ export function SearchResultsDisplay({ searchResults }: SearchResultsDisplayProp
                             <div className="p-3 space-y-2">
                               {result.content.map((content, contentIndex) => (
                                 <div key={contentIndex}>
-                                  <div className="text-xs font-mono bg-gray-50 p-2 rounded text-gray-800 whitespace-pre-wrap break-words">
+                                  <div className="text-xs font-mono bg-gray-50 p-2 rounded-sm text-gray-800 whitespace-pre-wrap wrap-break-word">
                                     {content.text}
                                   </div>
                                 </div>

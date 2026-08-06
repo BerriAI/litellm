@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, cast
+from typing import Any, Final, cast
 
 from httpx import Response
 
@@ -33,17 +33,17 @@ class AmazonDeepSeekR1Config(AmazonLlamaConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Extract the reasoning content, and return it as a separate field in the response.
         """
-        response = super().transform_response(
+        response: Final = super().transform_response(
             model,
             raw_response,
             model_response,
@@ -56,23 +56,16 @@ class AmazonDeepSeekR1Config(AmazonLlamaConfig):
             api_key,
             json_mode,
         )
-        prompt = cast(Optional[str], request_data.get("prompt"))
-        message_content = cast(
-            Optional[str], cast(Choices, response.choices[0]).message.get("content")
-        )
+        prompt: Final = cast(str | None, request_data.get("prompt"))
+        message_content: Final = cast(str | None, cast(Choices, response.choices[0]).message.get("content"))
         if prompt and prompt.strip().endswith("<think>") and message_content:
-            message_content_with_reasoning_token = "<think>" + message_content
-            reasoning, content = _parse_content_for_reasoning(
-                message_content_with_reasoning_token
-            )
-            provider_specific_fields = (
-                cast(Choices, response.choices[0]).message.provider_specific_fields
-                or {}
-            )
+            message_content_with_reasoning_token: Final = "<think>" + message_content
+            reasoning, content = _parse_content_for_reasoning(message_content_with_reasoning_token)
+            provider_specific_fields: Final = cast(Choices, response.choices[0]).message.provider_specific_fields or {}
             if reasoning:
                 provider_specific_fields["reasoning_content"] = reasoning
 
-            message = Message(
+            message: Final = Message(
                 **{
                     **cast(Choices, response.choices[0]).message.model_dump(),
                     "content": content,
@@ -93,18 +86,16 @@ class AmazonDeepseekR1ResponseIterator(BaseModelResponseIterator):
         Deepseek r1 starts by thinking, then it generates the response.
         """
         try:
-            typed_chunk = AmazonDeepSeekR1StreamingResponse(**chunk)  # type: ignore
+            typed_chunk: Final = AmazonDeepSeekR1StreamingResponse(**chunk)
             generated_content = typed_chunk["generation"]
             if generated_content == "</think>" and not self.has_finished_thinking:
-                verbose_logger.debug(
-                    "Deepseek r1: </think> received, setting has_finished_thinking to True"
-                )
+                verbose_logger.debug("Deepseek r1: </think> received, setting has_finished_thinking to True")
                 generated_content = ""
                 self.has_finished_thinking = True
 
-            prompt_token_count = typed_chunk.get("prompt_token_count") or 0
-            generation_token_count = typed_chunk.get("generation_token_count") or 0
-            usage = ChatCompletionUsageBlock(
+            prompt_token_count: Final = typed_chunk.get("prompt_token_count") or 0
+            generation_token_count: Final = typed_chunk.get("generation_token_count") or 0
+            usage: Final = ChatCompletionUsageBlock(
                 prompt_tokens=prompt_token_count,
                 completion_tokens=generation_token_count,
                 total_tokens=prompt_token_count + generation_token_count,
@@ -115,16 +106,8 @@ class AmazonDeepseekR1ResponseIterator(BaseModelResponseIterator):
                     StreamingChoices(
                         finish_reason=typed_chunk["stop_reason"],
                         delta=Delta(
-                            content=(
-                                generated_content
-                                if self.has_finished_thinking
-                                else None
-                            ),
-                            reasoning_content=(
-                                generated_content
-                                if not self.has_finished_thinking
-                                else None
-                            ),
+                            content=(generated_content if self.has_finished_thinking else None),
+                            reasoning_content=(generated_content if not self.has_finished_thinking else None),
                         ),
                     )
                 ],

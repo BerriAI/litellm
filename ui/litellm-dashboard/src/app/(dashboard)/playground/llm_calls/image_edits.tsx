@@ -17,7 +17,6 @@ export async function makeOpenAIImageEditsRequest(
   if (isLocal !== true) {
     console.log = function () {};
   }
-  console.log("isLocal:", isLocal);
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
 
   const client = new openai.OpenAI({
@@ -37,7 +36,6 @@ export async function makeOpenAIImageEditsRequest(
 
     for (let i = 0; i < imagesToProcess.length; i++) {
       const image = imagesToProcess[i];
-      console.log(`Processing image ${i + 1} of ${imagesToProcess.length}`);
 
       const response = await client.images.edit(
         {
@@ -47,8 +45,6 @@ export async function makeOpenAIImageEditsRequest(
         },
         { signal },
       );
-
-      console.log(`Response for image ${i + 1}:`, response.data);
 
       if (response.data && response.data[0]) {
         // Handle either URL or base64 data from response
@@ -73,7 +69,6 @@ export async function makeOpenAIImageEditsRequest(
     console.error("Error making image edit request:", error);
 
     if (signal?.aborted) {
-      console.log("Image edits request was cancelled");
     } else {
       let errorMessage = "Failed to edit image(s)";
 
