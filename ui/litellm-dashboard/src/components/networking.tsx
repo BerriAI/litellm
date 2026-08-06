@@ -390,7 +390,6 @@ export const getAgentCreateMetadata = async (): Promise<AgentCreateInfo[]> => {
 
 // Global variable for the header name
 let globalLitellmHeaderName: string = "Authorization";
-const MCP_AUTH_HEADER: string = "x-mcp-auth";
 
 // Function to set the global header name
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
