@@ -4,6 +4,7 @@ import { userBulkUpdateUserCall, teamBulkMemberAddCall, Member } from "@/compone
 import { UserEditView } from "./user_edit_view";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import MessageManager from "@/components/molecules/message_manager";
+import { MoneyCell } from "@/components/shared/table_cells";
 
 const { Text, Title } = Typography;
 
@@ -270,7 +271,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
                 key: "max_budget",
                 width: "20%",
                 render: (budget: number | null) => (
-                  <Text style={{ fontSize: "12px" }}>{budget !== null ? `$${budget}` : "Unlimited"}</Text>
+                  <MoneyCell value={budget} decimals={2} emptyText="Unlimited" showZero />
                 ),
               },
             ]}

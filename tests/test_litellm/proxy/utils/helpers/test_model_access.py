@@ -103,18 +103,16 @@ def test_is_known_vector_store_index_error_path_no_registry(monkeypatch):
 
 def test_create_model_info_response_happy_path_no_metadata():
     result = create_model_info_response(model_id="gpt-4o", provider="openai")
-    assert result == {
-        "id": "gpt-4o",
-        "object": "model",
-        "created": result["created"],
-        "owned_by": "openai",
-    }
     snapshot = {
         "id": result["id"],
         "object": result["object"],
         "owned_by": result["owned_by"],
         "created_is_int": isinstance(result["created"], int),
         "metadata_absent": "metadata" not in result,
+        "max_input_tokens_positive_int": isinstance(result["max_input_tokens"], int)
+        and result["max_input_tokens"] > 0,
+        "max_output_tokens_positive_int": isinstance(result["max_output_tokens"], int)
+        and result["max_output_tokens"] > 0,
     }
     assert snapshot == {
         "id": "gpt-4o",
@@ -122,6 +120,8 @@ def test_create_model_info_response_happy_path_no_metadata():
         "owned_by": "openai",
         "created_is_int": True,
         "metadata_absent": True,
+        "max_input_tokens_positive_int": True,
+        "max_output_tokens_positive_int": True,
     }
 
 

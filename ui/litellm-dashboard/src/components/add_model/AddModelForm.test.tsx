@@ -297,4 +297,17 @@ describe("AddModelForm", () => {
 
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
+
+  it("should display the provider field and the Test Connect / Add Model buttons", async () => {
+    const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+    mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+
+    const props = createTestProps();
+
+    renderWithProviders(<AddModelForm {...props} />);
+
+    expect(await screen.findByText("Provider")).toBeInTheDocument();
+    expect((await screen.findAllByRole("button", { name: "Test Connect" })).length).toBeGreaterThan(0);
+    expect(await screen.findByRole("button", { name: "Add Model" })).toBeInTheDocument();
+  });
 });
