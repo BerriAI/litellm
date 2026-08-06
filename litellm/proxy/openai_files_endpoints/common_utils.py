@@ -1148,7 +1148,7 @@ async def update_batch_in_database(
         managed_files_obj: The managed_files proxy hook object
         prisma_client: Prisma database client
         verbose_proxy_logger: Logger instance
-        db_batch_object: Optional existing database object (for comparison)
+        db_batch_object: Optional existing database object; fetched by unified_object_id when omitted
         operation: Description of operation ("update", "cancel", etc.)
         user_api_key_dict: Optional auth context for creating managed file IDs
     """
@@ -1161,6 +1161,12 @@ async def update_batch_in_database(
         if not prisma_client:
             return
 
+        effective_db_batch_object: Final = (
+            db_batch_object
+            if db_batch_object is not None
+            else await ManagedObjectRepository(prisma_client).table.find_first(where={"unified_object_id": batch_id})
+        )
+
         # Always normalize the response's file IDs to unified managed IDs
         # (mutates in place) so the caller returns unified IDs to the user
         # even when we skip the DB update below for an unchanged status.
@@ -1170,16 +1176,17 @@ async def update_batch_in_database(
             prisma_client=prisma_client,
             verbose_proxy_logger=verbose_proxy_logger,
             user_api_key_dict=user_api_key_dict,
-            db_batch_object=db_batch_object,
+            db_batch_object=effective_db_batch_object,
+            unified_batch_id=unified_batch_id,
         )
 
         # Only update if status has changed (when db_batch_object is provided)
-        if db_batch_object and response.status == db_batch_object.status:
+        if effective_db_batch_object and response.status == effective_db_batch_object.status:
             return
 
-        if db_batch_object:
+        if effective_db_batch_object:
             verbose_proxy_logger.info(
-                "Updating batch %s status from %s to %s", batch_id, db_batch_object.status, response.status
+                "Updating batch %s status from %s to %s", batch_id, effective_db_batch_object.status, response.status
             )
         else:
             verbose_proxy_logger.info("Updating batch %s status to %s after %s", batch_id, response.status, operation)
