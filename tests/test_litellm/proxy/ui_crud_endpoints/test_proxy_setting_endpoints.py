@@ -2816,6 +2816,94 @@ def test_update_internal_user_settings_without_teams_skips_team_lookup(mock_prox
     assert mock_proxy_config["save_call_count"]() == 1
 
 
+@pytest.fixture
+def mock_organization_lookup(monkeypatch):
+    """Back /update/default_team_settings with a fake organization table.
+
+    Yields the set of organization ids that exist; the test mutates it before the call.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    existing_organization_ids: set = set()
+
+    async def _find_unique(where):
+        organization_id = where["organization_id"]
+        if organization_id not in existing_organization_ids:
+            return None
+        return {"organization_id": organization_id}
+
+    find_unique = AsyncMock(side_effect=_find_unique)
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_organizationtable.find_unique = find_unique
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "default_team_params", {})
+
+    return {
+        "existing_organization_ids": existing_organization_ids,
+        "find_unique": find_unique,
+    }
+
+
+def test_update_default_team_settings_rejects_unknown_organization(
+    mock_proxy_config, mock_auth, mock_organization_lookup
+):
+    """Regression: an unknown default org saved fine here and then failed every
+    future team creation, far from the admin who typed it."""
+    mock_organization_lookup["existing_organization_ids"].add("real-org")
+
+    resp = client.patch(
+        "/update/default_team_settings",
+        json={"max_budget": 10.0, "organization_id": "ghost-org"},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "ghost-org" in resp.json()["detail"]["error"]
+    assert mock_proxy_config["save_call_count"]() == 0
+
+    import litellm
+
+    assert litellm.default_team_params == {}
+
+
+def test_update_default_team_settings_saves_when_organization_exists(
+    mock_proxy_config, mock_auth, mock_organization_lookup
+):
+    """A real organization id still saves and reaches the in-memory settings."""
+    mock_organization_lookup["existing_organization_ids"].add("real-org")
+
+    resp = client.patch(
+        "/update/default_team_settings",
+        json={"max_budget": 10.0, "organization_id": "real-org"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["settings"]["organization_id"] == "real-org"
+    assert mock_proxy_config["save_call_count"]() == 1
+
+    import litellm
+
+    assert litellm.default_team_params["organization_id"] == "real-org"
+
+
+def test_update_default_team_settings_without_organization_skips_lookup(
+    mock_proxy_config, mock_auth, mock_organization_lookup
+):
+    """Settings changes that don't set an organization must not pay for a DB round trip."""
+    resp = client.patch(
+        "/update/default_team_settings",
+        json={"max_budget": 10.0},
+    )
+
+    assert resp.status_code == 200, resp.text
+    mock_organization_lookup["find_unique"].assert_not_awaited()
+    assert mock_proxy_config["save_call_count"]() == 1
+
+
 def test_update_mcp_semantic_filter_settings_requires_proxy_admin(monkeypatch):
     """Non-admin callers must not mutate global MCP semantic filter settings."""
     from litellm.proxy._types import UserAPIKeyAuth

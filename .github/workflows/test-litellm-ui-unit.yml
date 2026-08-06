@@ -29,13 +29,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: "20"
+          node-version-file: ui/litellm-dashboard/.nvmrc
           cache: "npm"
           cache-dependency-path: ui/litellm-dashboard/package-lock.json
 
@@ -45,11 +45,24 @@ jobs:
       - name: Run UI unit tests (Vitest)
         env:
           CI: "true"
+          GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           if [ -n "$BASE_SHA" ]; then
-            echo "Pull request: running only tests related to changes since $BASE_SHA"
-            npm run test -- --run --changed "$BASE_SHA" --passWithNoTests \
+            merge_base=$(gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
+            test -n "$merge_base"
+            git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA"
+            changed_files=()
+            while IFS= read -r f; do
+              changed_files+=("$f")
+            done < <(git diff --name-only --relative "$merge_base" "$HEAD_SHA" -- .)
+            if [ ${#changed_files[@]} -eq 0 ]; then
+              echo "No UI files changed in this PR; skipping unit tests."
+              exit 0
+            fi
+            echo "Pull request: running tests related to ${#changed_files[@]} changed UI files"
+            npm run test -- related "${changed_files[@]}" --run --passWithNoTests \
               --pool forks --poolOptions.forks.maxForks=14
           else
             echo "Push to $GITHUB_REF_NAME: running the full suite"

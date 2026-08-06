@@ -40,6 +40,7 @@ import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
+  gatewayDailyActivityCall,
   Organization,
   tagListCall,
   userDailyActivityAggregatedCall,
@@ -53,6 +54,15 @@ import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
+import {
+  fetchedRangeKey,
+  selectForRange,
+  selectGatewayActivity,
+  topGatewayRoutes,
+  type FetchedForRange,
+  type FetchedGatewayActivity,
+  type GatewayActivity,
+} from "./gatewayActivity";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
@@ -69,9 +79,16 @@ interface UsagePageProps {
 const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
   // Aggregated endpoint: try first, fall back to paginated if unavailable
-  const [aggregatedData, setAggregatedData] = useState<{ results: DailyData[]; metadata: any } | null>(null);
-  const [aggregatedFailed, setAggregatedFailed] = useState(false);
+  const [aggregatedData, setAggregatedData] = useState<FetchedForRange<{
+    results: DailyData[];
+    metadata: any;
+  }> | null>(null);
+  // Stamped like the data itself: the flag decides whether the paginated
+  // fallback is read, and a flag left over from the previous range would let
+  // that fallback's own leftover rows through.
+  const [aggregatedFailure, setAggregatedFailure] = useState<FetchedForRange<true> | null>(null);
   const [aggregatedLoading, setAggregatedLoading] = useState(false);
+  const [gatewayActivityData, setGatewayActivityData] = useState<FetchedGatewayActivity | null>(null);
 
   // Separate loading states for better UX
   const [isDateChanging, setIsDateChanging] = useState(false);
@@ -190,28 +207,65 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     };
   }, [accessToken, startTime, endTime]);
 
+  // Everything the request tiles read is stamped with the range it answers and
+  // selected during render, rather than cleared in an effect. An effect runs
+  // after the render that follows a date change, so state cleared there is one
+  // render too late: that render still holds the previous range's numbers and
+  // can paint them. One source is not enough, since the tiles read the gateway
+  // counts, fall through to the aggregate, and fall through again to the
+  // paginated pages, so a stamp on any one of them is escaped by the next.
+  const currentAggregatedRangeKey = fetchedRangeKey(startTime, endTime, effectiveUserId);
+  const currentGatewayRangeKey = fetchedRangeKey(startTime, endTime);
+
   // Try aggregated endpoint first, fall back to paginated on failure
   const aggregatedFetchIdRef = useRef(0);
   useEffect(() => {
     if (!accessToken || !startTime || !endTime) return;
     const fetchId = ++aggregatedFetchIdRef.current;
+    const rangeKey = currentAggregatedRangeKey;
     setAggregatedLoading(true);
-    setAggregatedFailed(false);
-    setAggregatedData(null);
 
     userDailyActivityAggregatedCall(accessToken, startTime, endTime, effectiveUserId)
       .then((data) => {
         if (aggregatedFetchIdRef.current !== fetchId) return;
-        setAggregatedData(data);
+        setAggregatedData({ rangeKey, value: data });
         setAggregatedLoading(false);
         setIsDateChanging(false);
       })
       .catch(() => {
         if (aggregatedFetchIdRef.current !== fetchId) return;
-        setAggregatedFailed(true);
+        setAggregatedFailure({ rangeKey, value: true });
         setAggregatedLoading(false);
       });
-  }, [accessToken, startTime, endTime, effectiveUserId]);
+  }, [accessToken, startTime, endTime, effectiveUserId, currentAggregatedRangeKey]);
+
+  // Gateway request counts (SGR). Admin-only: the source table is
+  // deployment-wide, so a non-admin must not see it.
+  const gatewayRequest = useMemo(
+    () => (accessToken && startTime && endTime ? { accessToken, startTime, endTime } : null),
+    [accessToken, startTime, endTime],
+  );
+  const gatewayFetchIdRef = useRef(0);
+  useEffect(() => {
+    if (!isAdmin || !gatewayRequest) return;
+    const fetchId = ++gatewayFetchIdRef.current;
+    gatewayDailyActivityCall(gatewayRequest.accessToken, gatewayRequest.startTime, gatewayRequest.endTime)
+      .then((data) => {
+        if (gatewayFetchIdRef.current !== fetchId) return;
+        setGatewayActivityData({ rangeKey: currentGatewayRangeKey, value: data as GatewayActivity });
+      })
+      .catch(() => {
+        if (gatewayFetchIdRef.current !== fetchId) return;
+        setGatewayActivityData(null);
+      });
+  }, [isAdmin, gatewayRequest, currentGatewayRangeKey]);
+
+  const gatewayActivity = selectGatewayActivity(isAdmin, gatewayActivityData, currentGatewayRangeKey);
+  const activeAggregated = selectForRange(aggregatedData, currentAggregatedRangeKey);
+  // A failure belongs to the range it happened on. Reading it through the same
+  // rule keeps the paginated hook disabled while a new range is in flight, and
+  // disabled is what empties it, so its previous rows never reach a tile.
+  const aggregatedFailed = selectForRange(aggregatedFailure, currentAggregatedRangeKey) === true;
 
   // Paginated fallback — only enabled when aggregated endpoint fails
   const paginatedResult = usePaginatedDailyActivity({
@@ -222,10 +276,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   // Derive userSpendData from whichever source is active
   const userSpendData = useMemo(() => {
-    if (aggregatedData) return aggregatedData;
+    if (activeAggregated) return activeAggregated;
     if (aggregatedFailed) return paginatedResult.data;
     return { results: [] as DailyData[], metadata: {} as any };
-  }, [aggregatedData, aggregatedFailed, paginatedResult.data]);
+  }, [activeAggregated, aggregatedFailed, paginatedResult.data]);
 
   const loading = aggregatedLoading || paginatedResult.loading;
 
@@ -439,6 +493,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     () => [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
     [userSpendData.results],
   );
+  const gatewayRequestsByRoute = useMemo(() => topGatewayRoutes(gatewayActivity), [gatewayActivity]);
   const modelMetrics = useMemo(
     () => processActivityData(userSpendData, modelViewType === "groups" ? "model_groups" : "models", teams),
     [userSpendData, modelViewType, teams],
@@ -616,20 +671,47 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               </Text>
                             </Card>
                             <Card>
-                              <Title>Successful Requests</Title>
+                              <div className="flex items-center gap-2">
+                                <Title>Successful Requests</Title>
+                                {gatewayActivity && (
+                                  <Tooltip title="Counted by the gateway when it answers a request, independent of spend logging. Deployment-wide, so it will not match the per-key or per-model breakdowns below.">
+                                    <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />
+                                  </Tooltip>
+                                )}
+                              </div>
+                              {/*
+                                TODO: drop the userSpendData fallback once every deployment
+                                is writing LiteLLM_DailyGatewayRequests. It covers two cases
+                                today: a non-admin (who may not read deployment-wide counts)
+                                and an admin on a proxy whose table is still backfilling.
+                              */}
                               <Text className="text-2xl font-bold mt-2 text-green-600">
-                                {userSpendData.metadata?.total_successful_requests?.toLocaleString() || 0}
+                                {(
+                                  gatewayActivity?.total_successful_requests ??
+                                  userSpendData.metadata?.total_successful_requests
+                                )?.toLocaleString() || 0}
                               </Text>
                             </Card>
                             <Card>
                               <div className="flex items-center gap-2">
                                 <Title>Failed Requests</Title>
-                                <Tooltip title="Includes requests that failed to route to a provider, tool usage failures, and other request errors where the provider cannot be determined.">
+                                <Tooltip
+                                  title={
+                                    gatewayActivity
+                                      ? "Counted by the gateway when it answers a request, independent of spend logging. Deployment-wide, so it will not match the per-key or per-model breakdowns below."
+                                      : "Includes requests that failed to route to a provider, tool usage failures, and other request errors where the provider cannot be determined."
+                                  }
+                                >
                                   <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />
                                 </Tooltip>
                               </div>
+                              {/* Same source as Successful Requests: the two must agree, or the
+                                  tile disagrees with the endpoint breakdown chart below it. */}
                               <Text className="text-2xl font-bold mt-2 text-red-600">
-                                {userSpendData.metadata?.total_failed_requests?.toLocaleString() || 0}
+                                {(
+                                  gatewayActivity?.total_failed_requests ??
+                                  userSpendData.metadata?.total_failed_requests
+                                )?.toLocaleString() || 0}
                               </Text>
                             </Card>
                             <Card>
@@ -729,6 +811,32 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                           </CardContent>
                         </ShadcnCard>
                       </Col>
+                      {/* Gateway Requests by Endpoint (SGR) */}
+                      {gatewayActivity && gatewayActivity.by_route.length > 0 && (
+                        <Col numColSpan={2}>
+                          <ShadcnCard data-testid="gateway-requests-by-endpoint">
+                            <CardHeader>
+                              <CardTitle className="text-base font-semibold">
+                                Gateway Requests by Endpoint
+                                <Tooltip title="Counted by the gateway middleware as each request is answered. Covers LLM, MCP and A2A endpoints across the whole deployment.">
+                                  <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
+                                </Tooltip>
+                              </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                              <BarChart
+                                data={gatewayRequestsByRoute}
+                                index="route"
+                                categories={["successful_requests", "failed_requests"]}
+                                colors={["green", "red"]}
+                                stack={true}
+                                yAxisWidth={100}
+                                valueFormatter={(value: number) => value.toLocaleString()}
+                              />
+                            </CardContent>
+                          </ShadcnCard>
+                        </Col>
+                      )}
                       {/* Top API Keys */}
                       <Col numColSpan={1}>
                         <Card className="h-full">
@@ -985,40 +1093,5 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 };
 
 // Add this helper function to process model-specific activity data
-const getModelActivityData = (userSpendData: { results: DailyData[]; metadata: any }) => {
-  const modelData: {
-    [key: string]: {
-      total_requests: number;
-      total_tokens: number;
-      daily_data: Array<{
-        date: string;
-        api_requests: number;
-        total_tokens: number;
-      }>;
-    };
-  } = {};
-
-  userSpendData.results.forEach((day: DailyData) => {
-    Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
-      if (!modelData[model]) {
-        modelData[model] = {
-          total_requests: 0,
-          total_tokens: 0,
-          daily_data: [],
-        };
-      }
-
-      modelData[model].total_requests += metrics.metrics.api_requests;
-      modelData[model].total_tokens += metrics.metrics.total_tokens;
-      modelData[model].daily_data.push({
-        date: day.date,
-        api_requests: metrics.metrics.api_requests,
-        total_tokens: metrics.metrics.total_tokens,
-      });
-    });
-  });
-
-  return modelData;
-};
 
 export default UsagePage;
