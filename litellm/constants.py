@@ -279,8 +279,6 @@ TOOL_POLICY_CACHE_TTL_SECONDS: Final = int(os.getenv("TOOL_POLICY_CACHE_TTL_SECO
 GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS: Final = int(
     os.getenv("GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS", 24 * 60 * 60)
 )
-# Batch size Bedrock ApplyGuardrail content is packed into once AWS has rejected a
-# payload as too large. Shared by BedrockGuardrailConfigModel's default and the guardrail
 BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS: Final = 25_000
 # Aggregation threshold: default to 80% of the asyncio queue maxsize so the check can always trigger.
 # Must be < LITELLM_ASYNCIO_QUEUE_MAXSIZE; if set higher the aggregation logic will never fire.

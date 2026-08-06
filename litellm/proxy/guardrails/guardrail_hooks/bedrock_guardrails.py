@@ -1076,6 +1076,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         parse the result. Raises HTTPException on a guardrail block or any
         non-200 response (including 429, handled by the retry wrapper above).
 
+        AWS also reports some failures inside a 200 body, tagging ``Output.__type``
+        with an Exception marker, and those raise here too so the one consolidated
+        log entry for the request records ``guardrail_failed_to_respond`` instead of
+        a success.
+
         A block is logged here rather than by the caller: it ends the whole chunking
         flow immediately, with no further chunks attempted, so there is no later
         merged response for the caller to log instead.
@@ -1104,9 +1109,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
         if httpx_response.status_code == 200:
-            # AWS can report a failure inside a 200 body (Output.__type carries an
-            # Exception marker). Raise so the one consolidated log entry for this
-            # request records guardrail_failed_to_respond rather than success
             if self._check_bedrock_response_for_exception(httpx_response):
                 status_code, detail_message = self._parse_bedrock_guardrail_error_response(httpx_response)
                 raise HTTPException(status_code=status_code, detail=detail_message)
@@ -1224,7 +1226,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         budget: int,
     ) -> list[list[BedrockContentItem]]:
         """Pack whole content items, in order, into batches whose combined text
-        length stays within `budget`.
+        length stays within `budget`, in a single pass that carries the running
+        total rather than re-summing the open batch per item.
 
         This is the fast-path half of the hybrid chunking strategy: bin-packing
         at a conservative fixed budget keeps the common case at O(n / budget)
@@ -1260,8 +1263,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 return batch_index, used + length
             return batch_index + 1, length
 
-        # One pass: give each item a batch number, then group runs of equal numbers.
-        # Carrying the running total avoids re-summing the open batch per item
         batch_numbers: Final = (index for index, _ in tuple(accumulate(lengths, assign, initial=(0, 0)))[1:])
         return [
             [item for _, item in group] for _, group in groupby(zip(batch_numbers, content), key=lambda pair: pair[0])
@@ -1395,6 +1396,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         -- mirroring a real single-call response and matching what
         ``_build_tracing_detail`` treats as "Bedrock didn't report an action".
 
+        Fields this merge has no opinion on (``actionReason``, ``guardrailCoverage``,
+        ``blockedResponse``, anything AWS adds later) are carried over from the chunk
+        responses rather than dropped, so the response and the logged telemetry keep
+        the shape a single unchunked call returned. The merged keys below win.
+
         Per AWS's documented ApplyGuardrail contract, a single call's ``outputs``
         is positionally parallel to the ``content`` items *of that call*: an
         entry per item when anything in the call was masked, or an empty list
@@ -1434,10 +1440,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         ]
         any_usage_reported = any(chunk_result.response.get("usage") for chunk_result in chunk_results)
 
-        # Seed from the raw chunk responses so fields this merge has no opinion on
-        # (actionReason, guardrailCoverage, blockedResponse, anything AWS adds later)
-        # survive instead of being dropped, which is what a single unchunked call
-        # returned before chunking existed. The merged keys below then win
         merged: Final[BedrockGuardrailResponse] = cast(
             BedrockGuardrailResponse,
             {key: value for chunk_result in chunk_results for key, value in chunk_result.response.items()},
@@ -1445,7 +1447,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if merged_action is not None:
             merged["action"] = merged_action
         if merged_outputs and any_masked:
-            # AWS reports both spellings; keep them consistent so every reader agrees
             merged["outputs"] = merged_outputs
             merged["output"] = merged_outputs
         if merged_assessments:

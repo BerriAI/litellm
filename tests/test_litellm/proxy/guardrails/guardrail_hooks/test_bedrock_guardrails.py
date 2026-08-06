@@ -3728,7 +3728,6 @@ async def test_apply_guardrail_accepted_content_costs_exactly_one_call():
     latency on traffic that never had a size problem."""
     guardrail = _bedrock_guardrail_for_chunk_tests()
 
-    # 3 x half-budget items is 1.5x the budget, so eager packing would send 2 calls
     item_text = "x" * (BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS // 2)
     messages = [{"role": "user", "content": item_text} for _ in range(3)]
 
@@ -3825,7 +3824,6 @@ async def test_apply_guardrail_batch_under_budget_still_rejected_falls_back_to_b
         nonlocal call_count
         call_count += 1
         if call_count in (1, 2):
-            # 1 = whole-payload probe, 2 = the first packed batch, both over the real cap
             return _too_large_validation_httpx_response()
         return _passing_bedrock_httpx_response(f"chunk-{call_count}")
 
