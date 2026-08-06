@@ -559,3 +559,55 @@ async def test_authenticate_user_database_login_with_non_ascii_password():
             assert isinstance(result, LoginResult)
             assert result.user_id == "test-user-123"
             assert result.user_email == user_email
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_strips_whitespace_from_username():
+    """Leading/trailing whitespace in username should not prevent login."""
+    master_key = "sk-1234"
+    user_email = "user@example.com"
+    password = "correct-password"
+    hashed_password = hash_token(token=password)
+
+    mock_user = MagicMock()
+    mock_user.user_id = "user-id-123"
+    mock_user.user_email = user_email
+    mock_user.password = hashed_password
+    mock_user.user_role = LitellmUserRoles.INTERNAL_USER
+
+    def mock_find_first(**kwargs):
+        where = kwargs.get("where", {})
+        user_email_filter = where.get("user_email", {})
+        if str(user_email_filter.get("equals", "")).lower() == user_email.lower():
+            return mock_user
+        return None
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
+        side_effect=mock_find_first
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "UI_USERNAME": "admin",
+            "UI_PASSWORD": "admin-password",
+            "DATABASE_URL": "postgresql://test:test@localhost/test",
+        },
+    ):
+        with patch(
+            "litellm.proxy.auth.login_utils.generate_key_helper_fn",
+            new_callable=AsyncMock,
+            return_value={"token": "test-token"},
+        ):
+            # Username with leading and trailing whitespace — should still authenticate
+            result = await authenticate_user(
+                username=f"  {user_email}  ",
+                password=password,
+                master_key=master_key,
+                prisma_client=mock_prisma_client,
+            )
+
+            assert isinstance(result, LoginResult)
+            assert result.user_id == "user-id-123"
+            assert result.user_email == user_email
