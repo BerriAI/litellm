@@ -43,6 +43,17 @@ def convert_b64_uid_to_unified_uid(b64_uid: str) -> str:
         return b64_uid
 
 
+def resolve_managed_output_file_model_name(
+    unified_input_file_id: str | None, fallback_model_name: str | None
+) -> str | None:
+    if not unified_input_file_id:
+        return fallback_model_name
+    target_model_names: Final = get_models_from_unified_file_id(convert_b64_uid_to_unified_uid(unified_input_file_id))
+    if target_model_names:
+        return ",".join(target_model_names)
+    return fallback_model_name
+
+
 def get_models_from_unified_file_id(unified_file_id: str) -> list[str]:
     """
     Extract model names from unified file ID.
@@ -947,13 +958,11 @@ async def ensure_batch_response_managed_file_ids(
     if not model_id:
         return
 
-    model_name = hidden_params.get("model_name")
     unified_file_id: Final = hidden_params.get("unified_file_id")
-    if not model_name and isinstance(unified_file_id, str):
-        decoded_unified_file_id: Final = _is_base64_encoded_unified_file_id(unified_file_id) or unified_file_id
-        target_model_names: Final = get_models_from_unified_file_id(decoded_unified_file_id)
-        if target_model_names:
-            model_name = ",".join(target_model_names)
+    model_name: Final = resolve_managed_output_file_model_name(
+        unified_input_file_id=unified_file_id if isinstance(unified_file_id, str) else None,
+        fallback_model_name=hidden_params.get("model_name"),
+    )
 
     if user_api_key_dict is None and db_batch_object is not None:
         from litellm.proxy._types import UserAPIKeyAuth

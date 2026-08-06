@@ -6,6 +6,7 @@ async_post_call_success_hook when processing completed batch responses.
 """
 
 import asyncio
+import base64
 import json
 
 import pytest
@@ -522,3 +523,80 @@ async def test_concurrent_first_registrations_converge_on_one_row():
     }
     assert minted_ids[0] == minted_ids[1]
     assert upserted_row_keys == {minted_ids[0]}
+
+
+def _b64_unified_input_file_id(target_model_names: str) -> str:
+    unified_input_file_id = (
+        "litellm_proxy:application/octet-stream;unified_id,input-uuid;"
+        f"target_model_names,{target_model_names}"
+    )
+    return base64.urlsafe_b64encode(unified_input_file_id.encode()).decode().rstrip("=")
+
+
+@pytest.mark.asyncio
+async def test_hook_mint_prefers_input_file_target_model_names():
+    managed_files = _make_managed_files_instance()
+    batch_response = _make_batch_response(model_name="model-a")
+    batch_response._hidden_params["unified_file_id"] = _b64_unified_input_file_id(
+        "model-a,model-b"
+    )
+
+    mock_router = MagicMock()
+    mock_router.get_deployment_credentials_with_provider = MagicMock(return_value={})
+
+    with (
+        patch("litellm.afile_retrieve", AsyncMock(return_value=_make_file_object())),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+    ):
+        await managed_files.async_post_call_success_hook(
+            data={},
+            user_api_key_dict=_make_user_api_key_dict(),
+            response=batch_response,
+        )
+
+    assert batch_response.output_file_id == managed_files.get_unified_output_file_id(
+        output_file_id="file-output-abc",
+        model_id="model-deploy-xyz",
+        model_name="model-a,model-b",
+    )
+
+
+def test_cost_job_and_retrieve_paths_mint_identical_unified_output_file_ids():
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        resolve_managed_output_file_model_name,
+    )
+    from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+    managed_files = _make_managed_files_instance()
+    unified_input_file_id = _b64_unified_input_file_id("model-a,model-b")
+
+    retrieve_path_model_name = resolve_managed_output_file_model_name(
+        unified_input_file_id=unified_input_file_id,
+        fallback_model_name="model-a",
+    )
+
+    job = MagicMock()
+    job.file_object = {
+        "id": "batch-123",
+        "completion_window": "24h",
+        "created_at": 1700000000,
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": unified_input_file_id,
+        "object": "batch",
+        "status": "completed",
+    }
+    cost_job_model_name = CheckBatchCost._get_managed_file_model_name(
+        job=job, deployment_info=MagicMock(model_name="model-a")
+    )
+
+    assert retrieve_path_model_name == cost_job_model_name == "model-a,model-b"
+
+    minted_ids = {
+        managed_files.get_unified_output_file_id(
+            output_file_id="file-output-abc",
+            model_id="model-deploy-xyz",
+            model_name=model_name,
+        )
+        for model_name in (retrieve_path_model_name, cost_job_model_name)
+    }
+    assert len(minted_ids) == 1
