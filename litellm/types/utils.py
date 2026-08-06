@@ -258,6 +258,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
     output_cost_per_reasoning_token: float | None
+    output_cost_per_reasoning_token_flex: float | None
+    output_cost_per_reasoning_token_priority: float | None
     output_cost_per_video_per_second: float | None  # only for vertex ai models
     output_cost_per_audio_per_second: float | None  # only for vertex ai models
     output_cost_per_second: float | None  # for OpenAI Speech models
@@ -2801,6 +2803,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     matched_keyword: str
     escalation_keyword: str
     classifier_model: str
+    classifier_cost: float
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
     conversation_continuing: bool
@@ -2824,6 +2827,7 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "request_type",
         "score",
         "classifier_model",
+        "classifier_cost",
         "escalated",
         "tier_boundaries",
         "conversation_continuing",
@@ -3306,6 +3310,8 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_image_token: float | None = None
     output_cost_per_video_token: float | None = None
     output_cost_per_reasoning_token: float | None = None
+    output_cost_per_reasoning_token_flex: float | None = None
+    output_cost_per_reasoning_token_priority: float | None = None
     output_cost_per_video_per_second: float | None = None
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None

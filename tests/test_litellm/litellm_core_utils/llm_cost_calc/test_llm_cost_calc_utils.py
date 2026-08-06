@@ -2620,3 +2620,120 @@ def test_fast_service_tier_matches_priority_above_the_context_threshold(_local_m
     assert fast == priority
     assert fast[0] == pytest.approx(300_000 * 1e-05, rel=1e-9)
     assert fast[1] == pytest.approx(1_000 * 4.5e-05, rel=1e-9)
+
+
+def test_priority_reasoning_tokens_bill_at_the_priority_output_rate(_local_model_cost_map):
+    """Regression: gemini-3.5-flash publishes priority output pricing but no priority
+    reasoning key, so reasoning tokens under priority/fast were billed at the standard
+    output_cost_per_reasoning_token instead of following the tier's output rate."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=5_000,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=4_000),
+    )
+
+    model_info = litellm.get_model_info(model="gemini-3.5-flash", custom_llm_provider="gemini")
+    standard_output_rate = model_info["output_cost_per_token"]
+    standard_reasoning_rate = model_info["output_cost_per_reasoning_token"]
+    priority_output_rate = model_info["output_cost_per_token_priority"]
+    assert priority_output_rate is not None
+    assert priority_output_rate != standard_reasoning_rate
+
+    standard = generic_cost_per_token(
+        model="gemini-3.5-flash", usage=usage, custom_llm_provider="gemini", service_tier=None
+    )
+    priority = generic_cost_per_token(
+        model="gemini-3.5-flash", usage=usage, custom_llm_provider="gemini", service_tier="priority"
+    )
+    fast = generic_cost_per_token(
+        model="gemini-3.5-flash", usage=usage, custom_llm_provider="gemini", service_tier="fast"
+    )
+
+    assert standard[1] == pytest.approx(1_000 * standard_output_rate + 4_000 * standard_reasoning_rate, rel=1e-9)
+    assert priority[1] == pytest.approx(5_000 * priority_output_rate, rel=1e-9)
+    assert fast == priority
+
+
+def test_explicit_tier_reasoning_key_wins_over_the_tier_output_rate():
+    from litellm.types.utils import Usage
+
+    model_info = {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 4e-06,
+        "output_cost_per_reasoning_token": 6e-06,
+        "input_cost_per_token_priority": 2e-06,
+        "output_cost_per_token_priority": 8e-06,
+        "output_cost_per_reasoning_token_priority": 1.2e-05,
+    }
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=1_000,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=600),
+    )
+
+    _, completion_cost = generic_cost_per_token(
+        model="synthetic-model",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="priority",
+        model_info=model_info,
+    )
+
+    assert completion_cost == pytest.approx(400 * 8e-06 + 600 * 1.2e-05, rel=1e-9)
+
+
+def test_null_tier_reasoning_key_falls_back_to_the_tier_output_rate():
+    """get_model_info dumps every ModelInfo field, so an unpublished tier reasoning key
+    arrives as an explicit None and must not shadow the tier output rate."""
+    from litellm.types.utils import Usage
+
+    model_info = {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 4e-06,
+        "output_cost_per_reasoning_token": 6e-06,
+        "output_cost_per_reasoning_token_priority": None,
+        "input_cost_per_token_priority": 2e-06,
+        "output_cost_per_token_priority": 8e-06,
+    }
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=1_000,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=600),
+    )
+
+    _, completion_cost = generic_cost_per_token(
+        model="synthetic-model",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="priority",
+        model_info=model_info,
+    )
+
+    assert completion_cost == pytest.approx(1_000 * 8e-06, rel=1e-9)
+
+
+def test_tier_request_without_tier_pricing_keeps_the_standard_reasoning_rate():
+    from litellm.types.utils import Usage
+
+    model_info = {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 4e-06,
+        "output_cost_per_reasoning_token": 6e-06,
+    }
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=1_000,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=600),
+    )
+
+    _, completion_cost = generic_cost_per_token(
+        model="synthetic-model",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="priority",
+        model_info=model_info,
+    )
+
+    assert completion_cost == pytest.approx(400 * 4e-06 + 600 * 6e-06, rel=1e-9)

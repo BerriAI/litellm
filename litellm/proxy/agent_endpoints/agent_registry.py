@@ -124,18 +124,18 @@ class AgentRegistry:
     def deregister_agent(self, agent_name: str):
         self.agent_list = [agent for agent in self.agent_list if agent.agent_name != agent_name]
 
-    def get_agent_list(self, agent_names: Sequence[str] | None = None):
+    def get_agent_list(self, agent_names: Sequence[str] | None = None) -> tuple[AgentResponse, ...]:
         if agent_names is not None:
-            return [agent for agent in self.agent_list if agent.agent_name in agent_names]
-        return self.agent_list
+            return tuple(agent for agent in self.agent_list if agent.agent_name in agent_names)
+        return tuple(self.agent_list)
 
-    def get_public_agent_list(self) -> list[AgentResponse]:
+    def get_public_agent_list(self) -> tuple[AgentResponse, ...]:
         public_agent_groups: Final = litellm.public_agent_groups
         if public_agent_groups is None:
-            return []
-        return [
+            return ()
+        return tuple(
             agent for agent in self.agent_list if not self.ids_for_agent(agent.agent_id).isdisjoint(public_agent_groups)
-        ]
+        )
 
     def _create_agent_id(self, agent_config: AgentConfig) -> str:
         return hashlib.sha256(agent_config["agent_name"].encode()).hexdigest()

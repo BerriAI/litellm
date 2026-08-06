@@ -112,6 +112,52 @@ class TestComplexityRouterInit:
         assert router.config.tiers["SIMPLE"] == "gpt-4o-mini"
         assert router.config.tiers["REASONING"] == "o1-preview"
 
+    def test_configured_marker_pairs_reach_the_ask_extraction(self, mock_router_instance, basic_config):
+        """Marker pairs configured in YAML must actually reach the code that strips them.
+
+        The config field, the validator and the scan were each covered on their own, but nothing
+        exercised config.reminder_markers -> self._reminder_markers, so the router could have parsed
+        a valid config and still classified on unstripped text. Asserting through the extraction the
+        router feeds its classifier is what makes that wiring a regression rather than a silent gap.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _extract_current_ask_and_system_prompt,
+        )
+
+        ask = "Derive the amortized complexity of a splay tree access"
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "reminder_markers": [
+                    {"open": "<<<BEGIN_MAIN>>>", "close": "<<<END_MAIN>>>"},
+                    {"open": "[[SUBAGENT_BEGIN]]", "close": "[[SUBAGENT_END]]"},
+                ],
+            },
+        )
+
+        assert router._reminder_markers == (
+            ("<<<begin_main>>>", "<<<end_main>>>"),
+            ("[[subagent_begin]]", "[[subagent_end]]"),
+        )
+        messages = [
+            {"role": "user", "content": ask},
+            {"role": "assistant", "content": "Working on it."},
+            {"role": "user", "content": "[[SUBAGENT_BEGIN]]Budget: 42 tokens remaining.[[SUBAGENT_END]]"},
+        ]
+        assert _extract_current_ask_and_system_prompt(messages, router._reminder_markers)[0] == ask
+
+    def test_unconfigured_marker_pairs_fall_back_to_the_builtin_default(self, mock_router_instance, basic_config):
+        """A config that never mentions reminder_markers keeps stripping <system-reminder>."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+
+        assert router._reminder_markers == (("<system-reminder>", "</system-reminder>"),)
+
     def test_init_without_config(self, mock_router_instance):
         """Test initialization without configuration uses defaults."""
         router = ComplexityRouter(
@@ -1334,11 +1380,12 @@ class TestExtractUserMessageAndSystemPrompt:
         assert sys_prompt is None
 
 
-def _llm_response(content: str):
+def _llm_response(content: str, response_cost: float | None = None):
     """Build a fake acompletion response with the given message content."""
     response = MagicMock()
     response.choices = [MagicMock()]
     response.choices[0].message.content = content
+    response._hidden_params = {} if response_cost is None else {"response_cost": response_cost}
     return response
 
 
@@ -1551,6 +1598,61 @@ class TestLLMClassifier:
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
         assert call_kwargs["model"] == "haiku-classifier"
         assert call_kwargs["timeout"] == 0.4
+
+    @pytest.mark.asyncio
+    async def test_aclassify_llm_success_captures_classifier_cost(self, llm_complexity_router, mock_router_instance):
+        """The classifier call is billed, so its cost must ride the outcome.
+
+        The classifier's own spend-log row already accounts for the money; this value is
+        what lets the parent request report it per-request (routing_decision and the
+        x-litellm-classifier-cost header), which is otherwise invisible to the caller."""
+        mock_router_instance.acompletion = AsyncMock(
+            return_value=_llm_response('{"tier": "COMPLEX"}', response_cost=8.1e-05)
+        )
+        outcome = await llm_complexity_router.aclassify("hi")
+        assert outcome.cause == "llm_classifier"
+        assert outcome.classifier_cost == 8.1e-05
+
+    @pytest.mark.asyncio
+    async def test_aclassify_captures_cost_from_the_real_client_pipeline(self, llm_classifier_config):
+        """No injected hidden params here: a real Router serves the classifier via
+        mock_response, so litellm's own client wrapper (update_response_metadata ->
+        ResponseMetadata.set_hidden_params) computes and stamps response_cost from the
+        deployment's per-token pricing. Pins that the capture reads a field the normal
+        success path actually populates."""
+        real_router = Router(
+            model_list=[
+                {
+                    "model_name": "haiku-classifier",
+                    "litellm_params": {
+                        "model": "openai/mock-classifier",
+                        "api_key": "mock-key",
+                        "mock_response": '{"tier": "COMPLEX"}',
+                        "input_cost_per_token": 1.5e-07,
+                        "output_cost_per_token": 6e-07,
+                    },
+                }
+            ]
+        )
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=real_router,
+            complexity_router_config=llm_classifier_config,
+        )
+        outcome = await router.aclassify("hi")
+        assert outcome.cause == "llm_classifier"
+        assert outcome.classifier_cost == pytest.approx(1.35e-05)
+
+    @pytest.mark.asyncio
+    async def test_aclassify_classifier_cost_is_none_when_call_is_unpriced(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """A classifier model with no pricing yields no cost; the outcome must say None,
+        never 0, so the header layer can distinguish unpriced from free."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+        outcome = await llm_complexity_router.aclassify("hi")
+        assert outcome.cause == "llm_classifier"
+        assert outcome.classifier_cost is None
 
     @pytest.mark.asyncio
     async def test_aclassify_forwards_request_metadata_for_spend_tracking(
@@ -2935,17 +3037,68 @@ class TestSemanticConfigValidation:
     def test_reminder_markers_are_normalized(self):
         """Markers are stripped and lowercased, matching how the built-in constants are compared."""
         config = ComplexityRouterConfig(
-            reminder_markers=("  <<<BEGIN_CTX>>>  ", "<<<END_CTX>>>"),
+            reminder_markers=[{"open": "  <<<BEGIN_CTX>>>  ", "close": "<<<END_CTX>>>"}],
         )
-        assert config.reminder_markers == ("<<<begin_ctx>>>", "<<<end_ctx>>>")
+        assert config.reminder_markers is not None
+        assert (config.reminder_markers[0].open, config.reminder_markers[0].close) == (
+            "<<<begin_ctx>>>",
+            "<<<end_ctx>>>",
+        )
+
+    def test_reminder_markers_keep_every_configured_pair_in_order(self):
+        """Every pair a harness emits survives validation, not just the first."""
+        config = ComplexityRouterConfig(
+            reminder_markers=[
+                {"open": "<<<BEGIN_MAIN>>>", "close": "<<<END_MAIN>>>"},
+                {"open": "[[SUBAGENT_BEGIN]]", "close": "[[SUBAGENT_END]]"},
+                {"open": "%%CRON_BEGIN%%", "close": "%%CRON_END%%"},
+            ],
+        )
+        assert config.reminder_markers is not None
+        assert [(pair.open, pair.close) for pair in config.reminder_markers] == [
+            ("<<<begin_main>>>", "<<<end_main>>>"),
+            ("[[subagent_begin]]", "[[subagent_end]]"),
+            ("%%cron_begin%%", "%%cron_end%%"),
+        ]
 
     def test_reminder_markers_reject_blank_entry(self):
         with pytest.raises(ValidationError, match="must not be blank"):
-            ComplexityRouterConfig(reminder_markers=("", "<<<END_CTX>>>"))
+            ComplexityRouterConfig(reminder_markers=[{"open": "", "close": "<<<END_CTX>>>"}])
 
     def test_reminder_markers_reject_identical_open_and_close(self):
         with pytest.raises(ValidationError, match="must be different"):
-            ComplexityRouterConfig(reminder_markers=("<<<CTX>>>", "<<<CTX>>>"))
+            ComplexityRouterConfig(reminder_markers=[{"open": "<<<CTX>>>", "close": "<<<CTX>>>"}])
+
+    def test_reminder_markers_reject_a_bad_pair_anywhere_in_the_list(self):
+        """Validation runs per pair, so a broken entry after a good one is still caught."""
+        with pytest.raises(ValidationError, match="must be different"):
+            ComplexityRouterConfig(
+                reminder_markers=[
+                    {"open": "<<<BEGIN_CTX>>>", "close": "<<<END_CTX>>>"},
+                    {"open": "<<<CTX>>>", "close": "<<<CTX>>>"},
+                ],
+            )
+
+    def test_reminder_markers_reject_empty_list(self):
+        """An explicitly empty list is ambiguous, so it fails loudly instead of silently defaulting.
+
+        Left to fall through, an empty list resolves to the built-in <system-reminder> pair, which
+        reads as "strip nothing" in the config and does the opposite. Matching on the length error
+        keeps this from passing for some unrelated reason if the field type changes.
+        """
+        with pytest.raises(ValidationError, match="at least 1 item"):
+            ComplexityRouterConfig(reminder_markers=[])
+
+    def test_reminder_markers_reject_the_old_flat_pair_form(self):
+        """The pre-list shape is rejected loudly rather than silently routing on unstripped text.
+
+        reminder_markers took a bare (open, close) string pair before it took a list of pairs. A
+        config still using that shape must fail validation at startup and at /model/new write time,
+        because the alternative -- accepting it and stripping nothing -- hands tier selection, and
+        therefore spend, to harness-injected text without any signal that it happened.
+        """
+        with pytest.raises(ValidationError, match="valid dictionary or instance of ReminderMarkerPair"):
+            ComplexityRouterConfig(reminder_markers=("<system-reminder>", "</system-reminder>"))
 
 
 class _StubEncoder:
@@ -4115,6 +4268,45 @@ class TestRoutingDecisionContents:
         assert "tier_boundaries" not in decision
 
     @pytest.mark.asyncio
+    async def test_llm_classifier_decision_carries_classifier_cost(self, llm_complexity_router, mock_router_instance):
+        """The decision must report what the classifier call cost the caller.
+
+        The hook returns the record through PreRoutingHookResponse, whose pydantic
+        validation strips keys the TypedDict does not declare, so this also pins that
+        classifier_cost survives the per-request path end to end."""
+        mock_router_instance.acompletion = AsyncMock(
+            return_value=_llm_response('{"tier": "REASONING"}', response_cost=8.1e-05)
+        )
+        response = await llm_complexity_router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert response is not None
+        decision = response.routing_decision
+        assert decision is not None
+        assert decision["cause"] == "llm_classifier"
+        assert decision["classifier_cost"] == 8.1e-05
+
+    @pytest.mark.asyncio
+    async def test_llm_classifier_decision_omits_cost_when_call_is_unpriced(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """An unpriced classifier call records no classifier_cost key at all, matching
+        how every optional fact on this record is omitted rather than nulled."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+        response = await llm_complexity_router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert response is not None
+        decision = response.routing_decision
+        assert decision is not None
+        assert decision["cause"] == "llm_classifier"
+        assert "classifier_cost" not in decision
+
+    @pytest.mark.asyncio
     async def test_llm_classifier_fallback_decision_reports_heuristic(
         self, llm_complexity_router, mock_router_instance
     ):
@@ -4131,6 +4323,7 @@ class TestRoutingDecisionContents:
         assert decision is not None
         assert decision["cause"] == "heuristic_scorer"
         assert "classifier_model" not in decision
+        assert "classifier_cost" not in decision
         assert isinstance(decision["score"], float)
 
     @pytest.mark.asyncio
@@ -4209,7 +4402,6 @@ class TestRoutingDecisionContents:
         assert decision["cause"] == "reasoning_override"
         # The score is still recorded, but the cause is what says it did not decide.
         assert decision["score"] < decision["tier_boundaries"]["complex_reasoning"]
-
 
     @pytest.mark.asyncio
     async def test_an_unrenamed_router_writes_no_tier_label(self, complexity_router):
@@ -4823,12 +5015,73 @@ class TestContextAwareClassifier:
         """
         from litellm.router_strategy.complexity_router.complexity_router import _extract_current_ask_and_system_prompt
 
-        markers = ("<<<begin_openclaw_internal_context>>>", "<<<end_openclaw_internal_context>>>")
-        follow_up_reminder = f"{markers[0]}Budget: 42 tokens remaining. Do not mention this.{markers[1]}"
+        pair = ("<<<begin_internal_context>>>", "<<<end_internal_context>>>")
+        follow_up_reminder = f"{pair[0]}Budget: 42 tokens remaining. Do not mention this.{pair[1]}"
         messages = [_ASKED, _ANSWERED, {"role": "user", "content": follow_up_reminder}]
 
         assert _extract_current_ask_and_system_prompt(messages)[0] == follow_up_reminder
-        assert _extract_current_ask_and_system_prompt(messages, markers)[0] == _ASK
+        assert _extract_current_ask_and_system_prompt(messages, (pair,))[0] == _ASK
+
+    def test_every_configured_marker_pair_is_stripped_not_just_the_first(self):
+        """One deployment serves a harness whose agent types each use a different envelope.
+
+        Main agent, subagent and cron wrap injected context in different open/close pairs, and they
+        all route through the same auto-router. When only one pair could be configured, the other
+        agent types kept hitting the original bug: their reminder-only turn never stripped to empty,
+        won "newest human ask", and the harness blob got classified in place of the real question.
+        Each pair in turn must be skipped, so this fails if only the first configured pair is used.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _extract_current_ask_and_system_prompt
+
+        pairs = (
+            ("<<<begin_main>>>", "<<<end_main>>>"),
+            ("[[subagent_begin]]", "[[subagent_end]]"),
+            ("%%cron_begin%%", "%%cron_end%%"),
+        )
+        for open_marker, close_marker in pairs:
+            reminder_only_turn = f"{open_marker}Budget: 42 tokens remaining.{close_marker}"
+            messages = [_ASKED, _ANSWERED, {"role": "user", "content": reminder_only_turn}]
+
+            assert _extract_current_ask_and_system_prompt(messages, pairs)[0] == _ASK, open_marker
+
+    def test_a_block_nested_inside_another_pairs_block_does_not_leak(self):
+        """Nested blocks from two pairs must strip whole, not resume inside the outer block.
+
+        Spans are collected per pair and can nest. Resuming the kept text at each block's own end
+        walks backwards into the enclosing block, so the outer block's remainder (and its dangling
+        close marker) survive into the classified ask. That is harness text choosing the tier, and
+        therefore the spend. Overlapping and disjoint spans strip correctly either way, so this
+        nested case is what pins the behavior.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _strip_reminder_blocks
+
+        pairs = (("<<<begin_main>>>", "<<<end_main>>>"), ("[[subagent_begin]]", "[[subagent_end]]"))
+        nested = "<<<begin_main>>>budget[[subagent_begin]]inner[[subagent_end]]do not mention<<<end_main>>>"
+
+        assert _strip_reminder_blocks(f"{nested} what is a splay tree?", pairs) == "what is a splay tree?"
+
+    def test_overlapping_blocks_from_two_pairs_strip_whole(self):
+        """Interleaved (not nested) blocks still strip everything they jointly cover."""
+        from litellm.router_strategy.complexity_router.complexity_router import _strip_reminder_blocks
+
+        pairs = (("<<<begin_main>>>", "<<<end_main>>>"), ("[[subagent_begin]]", "[[subagent_end]]"))
+        overlapping = "<<<begin_main>>>a[[subagent_begin]]b<<<end_main>>>c[[subagent_end]]"
+
+        assert _strip_reminder_blocks(f"{overlapping} what is a splay tree?", pairs) == "what is a splay tree?"
+
+    def test_an_unclosed_marker_in_one_pair_does_not_suppress_another_pairs_blocks(self):
+        """Each pair scans independently, so one pair's dangling opener is not a global stop.
+
+        An unclosed tag ends that pair's scan by design and is left intact as prose. It must not
+        also swallow a different pair's complete block, which would put harness text back in front
+        of the classifier.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _strip_reminder_blocks
+
+        pairs = (("<<<begin_main>>>", "<<<end_main>>>"), ("[[subagent_begin]]", "[[subagent_end]]"))
+        text = "<<<begin_main>>> why is [[subagent_begin]]noise[[subagent_end]] my tag stripped?"
+
+        assert _strip_reminder_blocks(text, pairs) == "<<<begin_main>>> why is my tag stripped?"
 
     @pytest.mark.parametrize(
         "messages,current_ask,window,per_turn_chars,include_assistant,expected",
@@ -4988,6 +5241,28 @@ class TestContextAwareClassifier:
 
         assert _extract_prior_turns(messages, current_ask, window, per_turn_chars, include_assistant) == expected
 
+    def test_prior_turn_context_strips_every_configured_pair(self):
+        """The classifier's context window is stripped with the same pairs as the ask.
+
+        Prior turns are quoted verbatim into the LLM classifier payload, so a pair that is honored
+        when picking the ask but ignored when building context puts the harness blob back in front
+        of the classifier through the other door. This covers the _extract_prior_turns call the ask
+        extraction tests never reach.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _extract_prior_turns
+
+        pairs = (("<<<begin_main>>>", "<<<end_main>>>"), ("[[subagent_begin]]", "[[subagent_end]]"))
+        messages = [
+            {"role": "user", "content": "[[subagent_begin]]budget blob[[subagent_end]]what about b-trees?"},
+            {"role": "user", "content": "<<<begin_main>>>other blob<<<end_main>>>and heaps?"},
+            {"role": "user", "content": "current ask"},
+        ]
+
+        assert _extract_prior_turns(messages, "current ask", 5, 200, False, pairs) == (
+            ("user", "what about b-trees?"),
+            ("user", "and heaps?"),
+        )
+
     def test_reminder_scan_is_linear_on_adversarial_input(self):
         """Unclosed reminder tags must not make stripping superlinear.
 
@@ -5008,6 +5283,29 @@ class TestContextAwareClassifier:
 
         assert elapsed < 1.0, f"stripping {len(adversarial)} chars took {elapsed:.2f}s; scan is not linear"
         assert result == adversarial
+
+    def test_reminder_scan_stays_linear_in_block_count_across_pairs(self):
+        """Many *complete* blocks across several pairs must not go quadratic either.
+
+        Collapsing nested and overlapping spans is required for correctness once more than one pair
+        is configured, and the obvious way to write it -- folding merged spans into a growing tuple
+        -- is quadratic in block count. Unlike the unclosed-tag case above, these blocks all close,
+        so they actually produce spans. This input is a few hundred KB, which any keyholder can send
+        pre-routing, and it fails loudly if the collapse is ever rewritten as a fold.
+        """
+        import time
+
+        from litellm.router_strategy.complexity_router.complexity_router import _strip_reminder_blocks
+
+        pairs = (("<a>", "</a>"), ("<b>", "</b>"))
+        adversarial = "<a>x</a><b>y</b>" * 25_000
+
+        start = time.perf_counter()
+        result = _strip_reminder_blocks(f"{adversarial} what is a splay tree?", pairs)
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < 1.0, f"stripping {50_000} blocks took {elapsed:.2f}s; collapse is not linear"
+        assert result == "what is a splay tree?"
 
     @pytest.mark.asyncio
     async def test_llm_classifier_includes_prior_turns_context(self, llm_complexity_router, mock_router_instance):
@@ -5665,7 +5963,9 @@ class TestCustomClassifierSystemPrompt:
 
     @pytest.mark.asyncio
     async def test_custom_prompt_is_sent_verbatim_as_the_system_role(self, mock_router_instance, llm_classifier_config):
-        custom = "Classify the data sensitivity: SIMPLE=public, MEDIUM=internal, COMPLEX=confidential, REASONING=regulated."
+        custom = (
+            "Classify the data sensitivity: SIMPLE=public, MEDIUM=internal, COMPLEX=confidential, REASONING=regulated."
+        )
         router = ComplexityRouter(
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,

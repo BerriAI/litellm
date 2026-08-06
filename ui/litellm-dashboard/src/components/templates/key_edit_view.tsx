@@ -50,22 +50,6 @@ interface KeyEditViewProps {
 }
 
 // Add this helper function
-const getAvailableModelsForKey = (keyData: KeyResponse, teams: any[] | null): string[] => {
-  // If no teams data is available, return empty array
-  if (!teams || !keyData.team_id) {
-    return [];
-  }
-
-  // Find the team that matches the key's team_id
-  const keyTeam = teams.find((team) => team.team_id === keyData.team_id);
-
-  // If team found and has models, return those models
-  if (keyTeam?.models) {
-    return keyTeam.models;
-  }
-
-  return [];
-};
 
 // Helper function to determine key_type display value from allowed_routes
 const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string => {

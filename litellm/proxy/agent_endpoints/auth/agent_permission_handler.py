@@ -56,11 +56,11 @@ class AgentRequestHandler:
             # If team has agent restrictions, handle inheritance and intersection logic
             if allowed_agents_for_team and allowed_agents_for_key:
                 # Key has its own agent permissions - use intersection with team permissions
-                return list(allowed_agents_for_key & allowed_agents_for_team)
+                return sorted(allowed_agents_for_key & allowed_agents_for_team)
             if allowed_agents_for_team:
                 # Key has no agent permissions - inherit from team
-                return list(allowed_agents_for_team)
-            return list(allowed_agents_for_key)
+                return sorted(allowed_agents_for_team)
+            return sorted(allowed_agents_for_key)
         except Exception as e:
             verbose_logger.warning("Failed to get allowed agents: %s", e)
             return []

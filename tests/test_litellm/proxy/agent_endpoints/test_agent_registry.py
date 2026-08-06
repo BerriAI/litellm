@@ -157,7 +157,7 @@ def test_load_agents_from_db_and_config_skips_incomplete_config_entries():
 
     registry.load_agents_from_db_and_config(db_agents=None)
 
-    assert registry.get_agent_list() == []
+    assert registry.get_agent_list() == ()
 
 
 @pytest.mark.parametrize(
@@ -282,7 +282,7 @@ def test_load_agents_from_config_with_an_empty_list_clears_the_remembered_agents
     assert registry.config_agents == ()
 
     registry.load_agents_from_db_and_config(db_agents=None)
-    assert registry.get_agent_list() == [], "a removed config agent must not come back on the next rebuild"
+    assert registry.get_agent_list() == (), "a removed config agent must not come back on the next rebuild"
 
 
 def test_config_agent_id_survives_static_header_secret_rotation():
@@ -364,10 +364,10 @@ def test_public_agent_groups_holding_the_legacy_id_still_mark_the_config_agent_p
     assert [a.agent_id for a in registry.get_public_agent_list()] == [agent.agent_id]
 
     monkeypatch.setattr(litellm, "public_agent_groups", ["unrelated-id"])
-    assert registry.get_public_agent_list() == []
+    assert registry.get_public_agent_list() == ()
 
     monkeypatch.setattr(litellm, "public_agent_groups", None)
-    assert registry.get_public_agent_list() == []
+    assert registry.get_public_agent_list() == ()
 
 
 @pytest.mark.asyncio

@@ -305,7 +305,7 @@ describe("useAuthorized", () => {
     const token = createJwt(decodedPayload);
     document.cookie = `token=${token}; path=/;`;
 
-    const { result } = renderHook(() => useAuthorized(), { wrapper });
+    renderHook(() => useAuthorized(), { wrapper });
 
     await waitFor(() => {
       expect(clearTokenCookiesMock).toHaveBeenCalled();

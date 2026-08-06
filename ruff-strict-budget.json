@@ -9,7 +9,7 @@
     "limit": 836
   },
   "ANN201": {
-    "limit": 2037
+    "limit": 2036
   },
   "ANN202": {
     "limit": 869
@@ -42,7 +42,7 @@
     "limit": 81
   },
   "B010": {
-    "limit": 194
+    "limit": 190
   },
   "B018": {
     "limit": 2
@@ -135,7 +135,7 @@
     "limit": 27
   },
   "PERF401": {
-    "limit": 18
+    "limit": 16
   },
   "PERF402": {
     "limit": 0

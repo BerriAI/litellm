@@ -421,6 +421,134 @@ class TestCheckBatchCost:
         assert update_data["status"] == "complete"
 
     @pytest.mark.asyncio
+    async def test_completed_batch_with_no_attributable_owner_still_writes_spend_log(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """Regression: a batch created with the master key or a team-less key has
+        created_by=None and team_id=None on LiteLLM_ManagedObjectTable (the table
+        never stores the raw key hash). CheckBatchCost's synthetic logging_obj for
+        such a batch then carries no attributable key/user/team/end-user, and
+        before the fix _should_track_cost_callback silently skipped the DB write
+        with no error or warning: batch_processed still became True, but no
+        LiteLLM_SpendLogs row was ever written.
+
+        Unlike the other tests in this file, this one does NOT mock
+        litellm_logging.Logging or async_success_handler -- it runs the real
+        logging pipeline through to _ProxyDBLogger, which is the exact gap that
+        let the original bug ship undetected.
+        """
+        import litellm
+        from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=0)
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+        mock_job = MagicMock()
+        mock_job.id = "job-unattributed-1"
+        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        mock_job.created_by = None
+        mock_job.team_id = None
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
+
+        # A real LiteLLMBatch (not a bare MagicMock): this test runs the real
+        # litellm_logging.Logging pipeline, which type-checks the result via
+        # isinstance(..., LiteLLMBatch) before it will compute/attach a cost.
+        from litellm.types.utils import LiteLLMBatch
+
+        mock_response = LiteLLMBatch(
+            id="batch-1",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-input-123",
+            object="batch",
+            status="completed",
+            output_file_id="file-output-123",
+        )
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+
+        mock_deployment = MagicMock()
+        mock_deployment.litellm_params.custom_llm_provider = "openai"
+        mock_deployment.litellm_params.model = "gpt-4"
+        mock_deployment.model_info.model_dump.return_value = {}
+        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+
+        mock_file_content = MagicMock()
+        mock_file_content.content = b'{"id":"req-1"}'
+
+        decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
+
+        db_logger = _ProxyDBLogger()
+        mock_update_database = AsyncMock()
+
+        # Unlike the other tests in this file, this one runs the real
+        # litellm_logging.Logging pipeline, which calls
+        # _is_base64_encoded_unified_file_id an extra time (checking result.id
+        # after it's reset to job.unified_object_id). Key off the argument
+        # instead of a fixed-length side_effect list so the exact call count
+        # doesn't matter.
+        def _fake_is_base64_encoded(file_id):
+            return decoded_id if file_id == mock_job.unified_object_id else None
+
+        with (
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+                side_effect=_fake_is_base64_encoded,
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                return_value="model-123",
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                return_value="batch-456",
+            ),
+            patch(
+                "litellm.files.main.afile_content",
+                new_callable=AsyncMock,
+                return_value=mock_file_content,
+            ),
+            patch(
+                "litellm.batches.batch_utils._get_file_content_as_dictionary",
+                return_value=[{"id": "req-1"}],
+            ),
+            patch(
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                new_callable=AsyncMock,
+                return_value=(
+                    0.01,
+                    {"prompt_tokens": 10, "completion_tokens": 5},
+                    ["gpt-4"],
+                ),
+            ),
+            patch(
+                "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+                return_value=("gpt-4", "openai", None, None),
+            ),
+            patch.object(litellm, "_async_success_callback", [db_logger]),
+            patch(
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                MagicMock(
+                    db_spend_update_writer=MagicMock(update_database=mock_update_database),
+                    slack_alerting_instance=MagicMock(customer_spend_alert=AsyncMock()),
+                ),
+            ),
+            patch("litellm.proxy.proxy_server.increment_spend_counters", AsyncMock()),
+            patch("litellm.proxy.proxy_server.update_cache", AsyncMock()),
+        ):
+            await check_batch_cost_instance.check_batch_cost()
+
+        mock_update_database.assert_awaited_once()
+        assert mock_update_database.call_args.kwargs["response_cost"] == 0.01
+        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1, (
+            "the job must still be marked processed once cost tracking succeeds"
+        )
+
+    @pytest.mark.asyncio
     async def test_cost_tracking_failure_leaves_job_unprocessed(
         self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
     ):

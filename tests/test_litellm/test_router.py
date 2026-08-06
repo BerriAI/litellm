@@ -4024,6 +4024,42 @@ def test_get_deployment_credentials_with_provider_resolves_credential_name():
     litellm.credential_list = []
 
 
+def test_get_deployment_credentials_with_provider_bedrock_batch_fields():
+    """
+    Test that get_deployment_credentials_with_provider returns the deployment's
+    model and the Bedrock batch/S3 fields (s3_region_name, s3_encryption_key_id,
+    aws_batch_role_arn) instead of silently dropping them (#25104).
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_region_name": "us-west-2",
+                    "s3_bucket_name": "my-batch-bucket",
+                    "s3_region_name": "us-east-1",
+                    "s3_encryption_key_id": "arn:aws:kms:us-west-2:123:key/abc",
+                    "aws_batch_role_arn": "arn:aws:iam::123:role/batch-role",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="bedrock-batch-model"
+    )
+
+    assert credentials is not None
+    assert credentials["custom_llm_provider"] == "bedrock"
+    assert credentials["model"] == "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    assert credentials["aws_region_name"] == "us-west-2"
+    assert credentials["s3_bucket_name"] == "my-batch-bucket"
+    assert credentials["s3_region_name"] == "us-east-1"
+    assert credentials["s3_encryption_key_id"] == "arn:aws:kms:us-west-2:123:key/abc"
+    assert credentials["aws_batch_role_arn"] == "arn:aws:iam::123:role/batch-role"
+
+
 def _team_wildcard_model(api_key: str, model_id: str = "team-wildcard-id") -> dict:
     return {
         "model_name": f"model_name_team-1_{model_id}",

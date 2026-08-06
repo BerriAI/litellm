@@ -390,7 +390,6 @@ export const getAgentCreateMetadata = async (): Promise<AgentCreateInfo[]> => {
 
 // Global variable for the header name
 let globalLitellmHeaderName: string = "Authorization";
-const MCP_AUTH_HEADER: string = "x-mcp-auth";
 
 // Function to set the global header name
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
@@ -1389,6 +1388,7 @@ export const userDailyActivityCall = async (
   endTime: Date,
   page: number = 1,
   userId: string | null = null,
+  includeCurrentUtcDay: boolean = false,
 ) => {
   /**
    * Get daily user activity on proxy
@@ -1401,6 +1401,7 @@ export const userDailyActivityCall = async (
     page,
     extraQueryParams: {
       user_id: userId,
+      include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
     },
   });
 };

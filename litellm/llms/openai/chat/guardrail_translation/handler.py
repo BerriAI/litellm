@@ -23,10 +23,14 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     StreamTransformSink,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
-    openai_messages_without_system,
-    openai_messages_without_tool,
+    merge_guardrailed_scoped_messages,
+    merge_returned_tools_into_request_tools,
+    openai_tool_name,
+    role_out_of_guardrail_scope,
+    scoped_structured_message_indices,
 )
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -82,6 +86,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
 
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
@@ -101,6 +106,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 tool_call_task_mappings=tool_call_task_mappings,
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
+                scan_only_tool_results=scan_only_tool_results,
             )
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -110,16 +116,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check
-            structured_messages = self.get_structured_messages(data)
+            structured_messages: Final = self.get_structured_messages(data)
+            scoped_message_indices: Final = scoped_structured_message_indices(
+                structured_messages or [],
+                scan_only_tool_results=scan_only_tool_results,
+                skip_system=skip_system,
+                skip_tool=skip_tool,
+            )
             if structured_messages:
-                if skip_system:
-                    structured_messages = openai_messages_without_system(structured_messages)
-                if skip_tool:
-                    structured_messages = openai_messages_without_tool(structured_messages)
-                inputs["structured_messages"] = structured_messages
+                inputs["structured_messages"] = [structured_messages[index] for index in scoped_message_indices]
             # Pass tools (function definitions) to the guardrail
             tools: Final = data.get("tools")
-            if tools:
+            if tools and not scan_only_tool_results:
                 inputs["tools"] = tools
             # Include model information if available
             model: Final = data.get("model")
@@ -138,14 +146,30 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrailed_tool_calls: Final = guardrailed_inputs.get("tool_calls", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
-                data["tools"] = guardrailed_tools
+                data["tools"] = (
+                    merge_returned_tools_into_request_tools(
+                        request_tools=tools,
+                        returned_tools=guardrailed_tools,
+                        tool_name=openai_tool_name,
+                    )
+                    if scan_only_tool_results
+                    else guardrailed_tools
+                )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")
             if (
                 guardrailed_structured_messages is not None
                 and guardrailed_structured_messages is not original_structured_messages
             ):
-                data["messages"] = guardrailed_structured_messages
+                data["messages"] = (
+                    guardrailed_structured_messages
+                    if guardrail_to_apply.structured_messages_cover_full_request()
+                    else merge_guardrailed_scoped_messages(
+                        full_messages=structured_messages or [],
+                        scoped_indices=scoped_message_indices,
+                        guardrailed_scoped=guardrailed_structured_messages,
+                    )
+                )
             else:
                 # Step 3: Map guardrail responses back to original message structure
                 if guardrailed_texts and texts_to_check:
@@ -194,16 +218,19 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         tool_call_task_mappings: list[tuple[int, int]],
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
+        scan_only_tool_results: bool = False,
     ) -> None:
         """
         Extract text content, images, and tool calls from a message.
 
         Override this method to customize text/image/tool call extraction logic.
         """
-        role: Final = str(message.get("role") or "").lower()
-        if skip_system_message and role == "system":
-            return
-        if skip_tool_message and role == "tool":
+        if role_out_of_guardrail_scope(
+            str(message.get("role") or "").lower(),
+            skip_system_message=skip_system_message,
+            skip_tool_message=skip_tool_message,
+            scan_only_tool_results=scan_only_tool_results,
+        ):
             return
 
         content: Final = message.get("content", None)
