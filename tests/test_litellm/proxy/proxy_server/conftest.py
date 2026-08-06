@@ -511,3 +511,28 @@ def make_key(
         max_budget=max_budget,
         **kwargs,
     )
+
+
+@pytest.fixture(autouse=True)
+def reset_login_throttle(monkeypatch):
+    """Clear the Admin UI failed-login counters between tests.
+
+    `client` is session scoped and the counters live in the shared `user_api_key_cache`
+    with a 900s window, so without this any test that fails a sign-in enough times would
+    start returning 429 from unrelated tests later in the same process. Only the throttle's
+    own keys are removed, so nothing else in that cache is disturbed.
+    """
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.auth.login_throttle import _FAILED_LOGIN_CACHE, _CACHE_KEY_PREFIX
+
+    def _drop_throttle_keys() -> None:
+        in_memory = getattr(_FAILED_LOGIN_CACHE, "in_memory_cache", None)
+        cache_dict = getattr(in_memory, "cache_dict", None)
+        if isinstance(cache_dict, dict):
+            for key in [k for k in cache_dict if str(k).startswith(_CACHE_KEY_PREFIX)]:
+                cache_dict.pop(key, None)
+
+    monkeypatch.setattr(ps, "redis_usage_cache", None)
+    _drop_throttle_keys()
+    yield _drop_throttle_keys
+    _drop_throttle_keys()
