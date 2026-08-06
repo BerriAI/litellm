@@ -979,8 +979,8 @@ def calculate_image_response_cost_from_usage(
     prompt_tokens_details: PromptTokensDetailsWrapper | None = None
     if input_tokens_details is not None:
         prompt_tokens_details = PromptTokensDetailsWrapper(
-            text_tokens=getattr(input_tokens_details, "text_tokens", None),
-            image_tokens=getattr(input_tokens_details, "image_tokens", None),
+            text_tokens=_get_token_detail_value(input_tokens_details, "text_tokens"),
+            image_tokens=_get_token_detail_value(input_tokens_details, "image_tokens"),
             cached_tokens=0,
         )
 

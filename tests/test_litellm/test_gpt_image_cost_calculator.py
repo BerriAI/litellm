@@ -469,5 +469,37 @@ class TestGPTImage2OutputImageTokensNoBreakdown:
         assert abs(cost - expected_cost) < 1e-6, f"Expected {expected_cost}, got {cost}"
 
 
+class TestGPTImage2DictInputTokensDetails:
+    def test_gpt_image_2_dict_input_tokens_details_priced_at_image_rate(self):
+        from litellm.llms.openai.image_generation.cost_calculator import (
+            cost_calculator,
+        )
+
+        usage = Usage(
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=3363,
+            input_tokens=1607,
+            output_tokens=1756,
+            input_tokens_details={"text_tokens": 163, "image_tokens": 1444},
+        )
+
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(b64_json="test")],
+        )
+        image_response.usage = usage
+        image_response._hidden_params = {"custom_llm_provider": "openai"}
+
+        cost = cost_calculator(
+            model="gpt-image-2",
+            image_response=image_response,
+            custom_llm_provider="openai",
+        )
+
+        expected_cost = 163 * 5e-6 + 1444 * 8e-6 + 1756 * 3e-5
+        assert abs(cost - expected_cost) < 1e-6, f"Expected {expected_cost}, got {cost}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
