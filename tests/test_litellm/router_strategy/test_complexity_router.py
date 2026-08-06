@@ -37,6 +37,7 @@ from litellm.router_strategy.complexity_router.config import (
     DEFAULT_TECHNICAL_KEYWORDS,
     ComplexityRouterConfig,
     ComplexityTier,
+    TierTarget,
 )
 from litellm.types.router import (
     Deployment,
@@ -155,6 +156,126 @@ class TestComplexityRouterInit:
         assert result is not None
         metadata = request_kwargs.get("metadata", {})
         assert metadata.get(RETURN_RAW_MODEL_NAME_METADATA_KEY, False) is return_raw_model_name
+
+    @pytest.mark.parametrize(
+        "tier_value",
+        [
+            "",
+            [],
+            {"reasoning_effort": "low"},
+            {"model": 3},
+        ],
+    )
+    def test_tier_target_validation_errors_are_clear(self, tier_value):
+        with pytest.raises(ValidationError, match="tier|model|pool"):
+            ComplexityRouterConfig(tiers={"SIMPLE": tier_value})
+
+    def test_tier_target_accepts_pool_and_extra_params(self):
+        config = ComplexityRouterConfig(
+            tiers={"SIMPLE": {"model": ["gpt-5", "o3"], "reasoning_effort": "high"}}
+        )
+        target = config.tiers["SIMPLE"]
+        assert isinstance(target, TierTarget)
+        assert target.model == ["gpt-5", "o3"]
+        assert target.params == {"reasoning_effort": "high"}
+
+    def test_unknown_tier_param_warns_and_is_preserved(self, caplog):
+        with caplog.at_level(logging.WARNING, logger=verbose_router_logger.name):
+            config = ComplexityRouterConfig(tiers={"SIMPLE": {"model": "gpt-5", "thinking_level": "high"}})
+        assert "thinking_level" in caplog.text
+        assert isinstance(config.tiers["SIMPLE"], TierTarget)
+        assert config.tiers["SIMPLE"].params["thinking_level"] == "high"
+
+    @pytest.mark.asyncio
+    async def test_tier_params_are_applied_with_request_and_alias_precedence(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "temperature": 0.1,
+                        "complexity_router_config": {
+                            "tiers": {
+                                "SIMPLE": {"model": "cheap", "temperature": 0.2},
+                                "MEDIUM": "cheap",
+                                "COMPLEX": "cheap",
+                                "REASONING": "cheap",
+                            },
+                            "keyword_tier_rules": [{"keywords": ["force"], "tier": "SIMPLE"}],
+                            "session_affinity": False,
+                        },
+                    },
+                },
+                {"model_name": "cheap", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+            ]
+        )
+        request_kwargs = {"temperature": 0.3}
+        response = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "force this request"}],
+        )
+        assert response is not None
+        assert request_kwargs["temperature"] == 0.3
+
+        request_kwargs = {}
+        await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "force this request"}],
+        )
+        assert request_kwargs["temperature"] == 0.2
+
+    @pytest.mark.asyncio
+    async def test_adaptive_cross_tier_model_uses_model_pool_tier_params(self, mock_router_instance):
+        router = ComplexityRouter(
+            model_name="hybrid",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "adaptive": True,
+                "adaptive_eligible": "all",
+                "tiers": {
+                    "SIMPLE": {"model": "cheap", "reasoning_effort": "low"},
+                    "MEDIUM": {"model": "premium", "reasoning_effort": "high"},
+                },
+            },
+        )
+        router.adaptive_router = MagicMock()
+        with patch.object(router, "_soft_floor_pick", return_value="premium"):
+            response = await router.async_pre_routing_hook(
+                model="hybrid",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "hello"}],
+            )
+        assert response is not None
+        assert response.params == {"reasoning_effort": "high"}
+
+    @pytest.mark.asyncio
+    async def test_session_affinity_pin_keeps_pinned_tier_params(self, mock_router_instance):
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="hybrid",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "session_affinity": True,
+                "tiers": {
+                    "SIMPLE": {"model": "cheap", "reasoning_effort": "low"},
+                    "MEDIUM": "mid",
+                },
+            },
+        )
+        request_kwargs = {"metadata": {"session_id": "session-params"}}
+        cache_key = router._get_session_affinity_cache_key("session-params", request_kwargs)
+        await mock_router_instance.cache.async_set_cache(key=cache_key, value="cheap")
+
+        response = await router.async_pre_routing_hook(
+            model="hybrid",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        assert response is not None
+        assert response.params == {"reasoning_effort": "low"}
 
 
 class TestTokenScoring:
@@ -750,10 +871,7 @@ class TestSingletonMutation:
 
     def test_default_config_not_mutated(self, mock_router_instance):
         """Test that creating routers without config doesn't mutate defaults."""
-        from litellm.router_strategy.complexity_router.config import (
-            DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
-            ComplexityRouterConfig,
-        )
+        from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 
         # Get original default
         original_default = ComplexityRouterConfig().default_model

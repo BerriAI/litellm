@@ -81,6 +81,37 @@ Where the names show up depends on your classifier. Under the default heuristic 
 
 Spend logs keep `routing_decision.tier` canonical so rows from before and after a rename stay comparable, and gain `routing_decision.tier_label` on the tiers you renamed.
 
+### Per-tier generation parameters
+
+Each tier can use an object instead of a model string. The object keeps the model
+or model pool alongside generation parameters, so similar deployments do not need
+near-duplicate entries:
+
+```yaml
+tiers:
+  SIMPLE: {model: gpt-5-mini, reasoning_effort: low}
+  MEDIUM: {model: gpt-5-mini, reasoning_effort: high}
+  COMPLEX: gpt-5
+  REASONING: [gpt-5, o3]
+```
+
+An object can also contain a pool:
+
+```yaml
+tiers:
+  COMPLEX:
+    model: [gpt-5, o3]
+    thinking: {type: enabled}
+```
+
+Caller-supplied request parameters take precedence over tier parameters, which
+take precedence over alias `litellm_params` defaults. Parameters unsupported by
+the selected model follow LiteLLM's existing `drop_params` behavior. Unknown
+parameter names produce a configuration warning but remain available for
+provider-specific parameters. `thinking` is the supported structured parameter;
+`thinking_budget` is not a top-level LiteLLM parameter and therefore produces a
+warning, as intended.
+
 ### Full Configuration
 
 ```yaml

@@ -31737,7 +31737,7 @@ export interface components {
              * @description Mapping of complexity tiers to a model or model pool. A list is randomly picked from when adaptive=False, and used as a soft-floor home pool when adaptive=True
              */
             tiers?: {
-                [key: string]: string | string[];
+                [key: string]: string | string[] | components["schemas"]["TierTarget"];
             };
             /**
              * Token Thresholds
@@ -33258,6 +33258,13 @@ export interface components {
             litellm_params: {
                 [key: string]: unknown;
             };
+        };
+        /** TierTarget */
+        TierTarget: {
+            /** Model */
+            model: string | string[];
+        } & {
+            [key: string]: unknown;
         };
         /**
          * TokenCountDetailsResponse

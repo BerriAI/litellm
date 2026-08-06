@@ -819,6 +819,7 @@ class PreRoutingHookResponse(BaseModel):
 
     model: str
     messages: list[dict[str, Any]] | None
+    params: dict[str, Any] | None = None
     routing_decision: StandardLoggingRoutingDecision | None = None
 
 
