@@ -272,7 +272,7 @@ async def test_update_daily_spend_with_null_entity_id():
         entity_type="user",
         entity_id_field="user_id",
         table_name="litellm_dailyuserspend",
-        unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+        unique_constraint_name="user_id_date_api_key_model_model_group_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
     )
 
     # Verify that table.upsert was called
@@ -281,12 +281,13 @@ async def test_update_daily_spend_with_null_entity_id():
     # Verify the where clause contains null entity_id
     call_args = mock_table.upsert.call_args[1]
     where_clause = call_args["where"][
-        "user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint"
+        "user_id_date_api_key_model_model_group_custom_llm_provider_mcp_namespaced_tool_name_endpoint"
     ]
     assert where_clause["user_id"] is None
     assert where_clause["date"] == "2024-01-01"
     assert where_clause["api_key"] == "test-api-key"
     assert where_clause["model"] == "gpt-4"
+    assert where_clause["model_group"] == ""
     assert where_clause["custom_llm_provider"] == "openai"
     assert where_clause["mcp_namespaced_tool_name"] == ""
     assert where_clause["endpoint"] == ""
@@ -325,6 +326,45 @@ def _daily_txn(user_id: str = "user1") -> dict:
 
 
 @pytest.mark.asyncio
+async def test_daily_user_transaction_key_includes_model_group():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+    writer.daily_spend_update_queue.add_update = AsyncMock()
+    base_payload = {
+        "request_id": "req-model-group-key",
+        "user": "test-user",
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "test-key",
+        "model": "openai/gpt-4o-mini",
+        "custom_llm_provider": "openai",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "spend": 0.2,
+        "metadata": '{"usage_object": {}}',
+    }
+
+    await writer.add_spend_log_transaction_to_daily_user_transaction(
+        payload={**base_payload, "model_group": "a"},
+        prisma_client=mock_prisma,
+    )
+    await writer.add_spend_log_transaction_to_daily_user_transaction(
+        payload={**base_payload, "model_group": "b"},
+        prisma_client=mock_prisma,
+    )
+
+    queued_keys = [
+        next(iter(call_kwargs.kwargs["update"].keys()))
+        for call_kwargs in writer.daily_spend_update_queue.add_update.call_args_list
+    ]
+
+    assert queued_keys == [
+        "test-user_2024-01-01_test-key_openai/gpt-4o-mini_a_openai_",
+        "test-user_2024-01-01_test-key_openai/gpt-4o-mini_b_openai_",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_update_daily_spend_does_not_retry_post_send_ambiguous_errors():
     # Regression for the double-apply hazard: a ReadTimeout means the batch was
     # sent and its outcome is unknown; the engine can leave the transaction open
@@ -347,7 +387,7 @@ async def test_update_daily_spend_does_not_retry_post_send_ambiguous_errors():
             entity_type="user",
             entity_id_field="user_id",
             table_name="litellm_dailyuserspend",
-            unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+            unique_constraint_name="user_id_date_api_key_model_model_group_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
     mock_prisma_client.db.batch_.assert_called_once()
@@ -380,7 +420,7 @@ async def test_update_daily_spend_retries_connect_errors(monkeypatch):
         entity_type="user",
         entity_id_field="user_id",
         table_name="litellm_dailyuserspend",
-        unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+        unique_constraint_name="user_id_date_api_key_model_model_group_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
     )
 
     assert mock_prisma_client.db.batch_.call_count == 2
@@ -421,11 +461,12 @@ async def test_update_daily_spend_sorting():
         upsert_calls.append(
             call(
                 where={
-                    "user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {
+                    "user_id_date_api_key_model_model_group_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {
                         "user_id": f"user{i+11}",  # user11 ... user60, sorted order
                         "date": "2024-01-01",
                         "api_key": "test-api-key",
                         "model": "gpt-4",
+                        "model_group": "",
                         "custom_llm_provider": "openai",
                         "mcp_namespaced_tool_name": "",
                         "endpoint": "",
@@ -437,7 +478,7 @@ async def test_update_daily_spend_sorting():
                         "date": "2024-01-01",
                         "api_key": "test-api-key",
                         "model": "gpt-4",
-                        "model_group": None,
+                        "model_group": "",
                         "mcp_namespaced_tool_name": "",
                         "custom_llm_provider": "openai",
                         "endpoint": "",
@@ -470,7 +511,7 @@ async def test_update_daily_spend_sorting():
         entity_type="user",
         entity_id_field="user_id",
         table_name="litellm_dailyuserspend",
-        unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+        unique_constraint_name="user_id_date_api_key_model_model_group_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
     )
 
     # Verify that table.upsert was called
@@ -517,7 +558,7 @@ async def test_update_daily_spend_drains_all_batches_over_batch_size():
         entity_type="user",
         entity_id_field="user_id",
         table_name="litellm_dailyuserspend",
-        unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+        unique_constraint_name="user_id_date_api_key_model_model_group_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
     )
 
     assert mock_table.upsert.call_count == num_entities
@@ -565,7 +606,7 @@ async def test_update_daily_spend_tag_with_request_id():
         entity_type="tag",
         entity_id_field="tag",
         table_name="litellm_dailytagspend",
-        unique_constraint_name="tag_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name",
+        unique_constraint_name="tag_date_api_key_model_model_group_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
     )
 
     # Verify that table.upsert was called
@@ -672,7 +713,7 @@ async def test_update_daily_spend_with_none_values_in_sorting_fields():
         entity_type="user",
         entity_id_field="user_id",
         table_name="litellm_dailyuserspend",
-        unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+        unique_constraint_name="user_id_date_api_key_model_model_group_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
     )
 
     # Verify that table.upsert was called (should be called 5 times, once for each transaction)
@@ -687,7 +728,7 @@ async def test_update_tag_db_with_valid_tags():
     """
     Test that _update_tag_db correctly processes valid tags and adds them to the spend update queue.
     """
-    from litellm.proxy._types import Litellm_EntityType, SpendUpdateQueueItem
+    from litellm.proxy._types import Litellm_EntityType
 
     writer = DBSpendUpdateWriter()
     mock_prisma = MagicMock()
@@ -1029,8 +1070,6 @@ async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_i
         "metadata": '{"usage_object": {}}',
     }
 
-    # Mock the add_update method to capture what's being added
-    original_add_update = writer.daily_tag_spend_update_queue.add_update
     writer.daily_tag_spend_update_queue.add_update = AsyncMock()
 
     await writer.add_spend_log_transaction_to_daily_tag_transaction(
@@ -1042,8 +1081,8 @@ async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_i
     assert writer.daily_tag_spend_update_queue.add_update.call_count == 2
 
     # Check that request_id is included in both transactions
-    for call in writer.daily_tag_spend_update_queue.add_update.call_args_list:
-        transaction_dict = call[1]["update"]
+    for update_call in writer.daily_tag_spend_update_queue.add_update.call_args_list:
+        transaction_dict = update_call[1]["update"]
         # Each transaction should have one key with the format tag_date_api_key_model_provider
         for key, transaction in transaction_dict.items():
             assert (
@@ -1091,7 +1130,7 @@ async def test_add_spend_log_transaction_to_daily_org_transaction_injects_org_id
     update_dict = call_args["update"]
     assert len(update_dict) == 1
     for key, transaction in update_dict.items():
-        assert key == f"{org_id}_2024-01-01_test-key_gpt-4_openai_"
+        assert key == f"{org_id}_2024-01-01_test-key_gpt-4_gpt-4-group_openai_"
         assert transaction["organization_id"] == org_id
         assert transaction["date"] == "2024-01-01"
         assert transaction["api_key"] == "test-key"
@@ -1168,7 +1207,7 @@ async def test_add_spend_log_transaction_to_daily_end_user_transaction_injects_e
     update_dict = call_args["update"]
     assert len(update_dict) == 1
     for key, transaction in update_dict.items():
-        assert key == f"{end_user_id}_2024-01-01_test-key_gpt-4_openai_"
+        assert key == f"{end_user_id}_2024-01-01_test-key_gpt-4_gpt-4-group_openai_"
         assert transaction["end_user_id"] == end_user_id
         assert transaction["date"] == "2024-01-01"
         assert transaction["api_key"] == "test-key"
@@ -1244,7 +1283,7 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agen
     update_dict = call_args["update"]
     assert len(update_dict) == 1
     for key, transaction in update_dict.items():
-        assert key == f"{agent_id}_2024-01-01_test-key_gpt-4_openai_"
+        assert key == f"{agent_id}_2024-01-01_test-key_gpt-4_gpt-4-group_openai_"
         assert transaction["agent_id"] == agent_id
         assert transaction["date"] == "2024-01-01"
         assert transaction["api_key"] == "test-key"
@@ -1365,7 +1404,7 @@ async def test_endpoint_field_is_correctly_mapped_from_call_type():
 
     for key, transaction in update_dict.items():
         # Verify endpoint is included in the key
-        assert key == f"test-user_2024-01-01_test-key_gpt-4_openai_/chat/completions"
+        assert key == "test-user_2024-01-01_test-key_gpt-4_gpt-4-group_openai_/chat/completions"
 
         # Verify endpoint is set in the transaction
         assert transaction["endpoint"] == "/chat/completions"
@@ -1433,7 +1472,7 @@ async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
                 entity_type="user",
                 entity_id_field="user_id",
                 table_name="litellm_dailyuserspend",
-                unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+                unique_constraint_name="user_id_date_api_key_model_model_group_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
             )
 
         # Verify that the error was logged with detailed information.
@@ -1445,7 +1484,7 @@ async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
         assert "Daily user spend batch upsert failed" in formatted
         assert "Table: litellm_dailyuserspend" in formatted
         assert (
-            "Constraint: user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint"
+            "Constraint: user_id_date_api_key_model_model_group_custom_llm_provider_mcp_namespaced_tool_name_endpoint"
             in formatted
         )
         assert "Batch size: 1" in formatted
@@ -1502,7 +1541,7 @@ async def test_update_daily_spend_re_raises_exception_after_logging():
             entity_type="user",
             entity_id_field="user_id",
             table_name="litellm_dailyuserspend",
-            unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+            unique_constraint_name="user_id_date_api_key_model_model_group_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
 
