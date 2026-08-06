@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -367,3 +368,42 @@ def test_public_agent_groups_holding_the_legacy_id_still_mark_the_config_agent_p
 
     monkeypatch.setattr(litellm, "public_agent_groups", None)
     assert registry.get_public_agent_list() == []
+
+
+@pytest.mark.asyncio
+async def test_migrate_legacy_grant_ids_persists_stable_ids_into_grant_rows():
+    """LIT-5144: the startup migration rewrites stored legacy full-entry hashes to the stable
+    name id, so a later secret rotation (which re-mints the legacy hash) cannot orphan grants."""
+    entry: Final = {
+        "agent_name": "migrated-agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "static_headers": {"x-upstream-token": "token-v1"},
+    }
+    registry: Final = AgentRegistry()
+    registry.load_agents_from_config([entry])
+    agent: Final = registry.get_agent_by_name("migrated-agent")
+    assert agent is not None
+    legacy_id: Final = hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest()
+
+    row: Final = SimpleNamespace(object_permission_id="op-1", agents=[legacy_id, "unrelated-id", agent.agent_id])
+    table: Final = MagicMock()
+    table.find_many = AsyncMock(return_value=[row])
+    table.update = AsyncMock()
+
+    assert await registry.migrate_legacy_grant_ids(table=table) == 1
+    table.find_many.assert_awaited_once_with(where={"agents": {"has_some": [legacy_id]}})
+    table.update.assert_awaited_once_with(
+        where={"object_permission_id": "op-1"},
+        data={"agents": [agent.agent_id, "unrelated-id"]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_migrate_legacy_grant_ids_no_ops_without_config_agents():
+    """Without config agents there are no legacy hashes to translate, so the DB is never queried."""
+    registry: Final = AgentRegistry()
+    table: Final = MagicMock()
+    table.find_many = AsyncMock()
+
+    assert await registry.migrate_legacy_grant_ids(table=table) == 0
+    table.find_many.assert_not_awaited()

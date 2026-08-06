@@ -1013,6 +1013,25 @@ async def proxy_startup_event(app: FastAPI):
 
         asyncio.create_task(_run_pw_migration())
 
+        async def _run_agent_grant_id_migration():
+            from litellm.proxy.agent_endpoints.agent_registry import (
+                global_agent_registry,
+                object_permission_table,
+            )
+
+            try:
+                migrated: Final = await global_agent_registry.migrate_legacy_grant_ids(
+                    table=object_permission_table(prisma_client)
+                )
+                if migrated:
+                    verbose_proxy_logger.info(
+                        "Rewrote %s object_permission rows from legacy config agent ids", migrated
+                    )
+            except Exception as e:
+                verbose_proxy_logger.warning("Legacy agent grant id migration skipped: %s", e)
+
+        asyncio.create_task(_run_agent_grant_id_migration())
+
     ## A coordination_redis block saved from the admin UI lives in the database,
     ## which is only reachable once the prisma client exists. Apply it here, before
     ## the coordination Redis is published to its consumers below.

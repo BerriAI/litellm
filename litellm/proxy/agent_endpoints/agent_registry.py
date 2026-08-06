@@ -11,7 +11,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.table_repositories import AgentsRepository
+from litellm.repositories.table_repositories import AgentsRepository, ObjectPermissionRepository
 from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
 
 
@@ -84,6 +84,22 @@ class AgentTableClient(Protocol):
 
 def agents_table(prisma_client: PrismaClient) -> AgentTableClient:
     table: Final[AgentTableClient] = AgentsRepository(prisma_client).table
+    return table
+
+
+class ObjectPermissionGrantRecord(Protocol):
+    object_permission_id: str
+    agents: list[str] | None
+
+
+class ObjectPermissionTableClient(Protocol):
+    async def find_many(self, where: Mapping[str, object]) -> Sequence[ObjectPermissionGrantRecord]: ...
+
+    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
+
+
+def object_permission_table(prisma_client: PrismaClient) -> ObjectPermissionTableClient:
+    table: Final[ObjectPermissionTableClient] = ObjectPermissionRepository(prisma_client).table
     return table
 
 
@@ -200,6 +216,35 @@ class AgentRegistry:
 
         self.load_agents_from_config(agent_config if agent_config is not None else self.config_agents)
         return self.agent_list
+
+    async def migrate_legacy_grant_ids(self, table: ObjectPermissionTableClient) -> int:
+        """
+        Rewrite object_permission.agents rows holding a legacy full-entry hash to the
+        stable name-derived id.
+
+        Only the running proxy can do this: the legacy hash is computed from the
+        resolved config entry (secrets included), so no SQL migration can know it.
+        Persisting the stable id here is what keeps a grant alive across a later
+        secret rotation, which re-mints the legacy hash and would otherwise orphan
+        the stored value. Idempotent; runs of it after the first find no rows.
+        """
+        legacy_ids: Final = [legacy for legacy, stable in self.config_agent_legacy_ids.items() if legacy != stable]
+        if not legacy_ids:
+            return 0
+        rows: Final = await table.find_many(where={"agents": {"has_some": legacy_ids}})
+        updates: Final = tuple(
+            (
+                row.object_permission_id,
+                list(dict.fromkeys(self.stable_agent_id(agent_id) for agent_id in row.agents or [])),
+            )
+            for row in rows
+        )
+        for object_permission_id, translated_agents in updates:
+            await table.update(
+                where={"object_permission_id": object_permission_id},
+                data={"agents": translated_agents},
+            )
+        return len(updates)
 
     ###########################################################
     ########### DB management helpers for agents ###########
