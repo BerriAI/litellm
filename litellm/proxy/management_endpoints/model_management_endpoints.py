@@ -15,10 +15,10 @@ import datetime
 import json
 from collections.abc import Mapping, Sequence
 from json import JSONDecodeError
-from typing import Any, Final, Literal, cast
+from typing import Final, Literal, Protocol, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -86,6 +86,7 @@ from litellm.types.router import (
 from litellm.utils import get_utc_datetime
 
 router: Final = APIRouter()
+_JSON_VALUE_ADAPTER: Final = TypeAdapter(object)
 
 
 async def update_team(*args, **kwargs):
@@ -768,8 +769,17 @@ async def _setup_new_team_model_assignment(
     )
 
 
+class _ProxyModelTableRow(Protocol):
+    model_id: str
+    model_info: object
+
+
+class _ProxyModelTableReader(Protocol):
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_ProxyModelTableRow]: ...
+
+
 async def _get_team_deployments(
-    team_id: str, prisma_client: PrismaClient, table: Any | None = None
+    team_id: str, prisma_client: PrismaClient, table: _ProxyModelTableReader | None = None
 ) -> list[LiteLLM_ProxyModelTable]:
     """
     Fetch all deployments for a given team_id from the database.
@@ -785,8 +795,8 @@ async def _get_team_deployments(
     existing transaction.
     """
     prefix: Final = f"model_name_{team_id}_"
-    table = table or ModelRepository(prisma_client).table
-    response: Final = await table.find_many(
+    resolved_table: Final = table or ModelRepository(prisma_client).table
+    response: Final = await resolved_table.find_many(
         where={
             "model_name": {"startswith": prefix},
         }
@@ -806,7 +816,7 @@ async def _get_team_deployments(
 async def delete_team_models(
     team_ids: list[str],
     prisma_client: PrismaClient,
-    llm_router: Any | None,
+    llm_router: Router | None,
 ) -> list[str]:
     """
     Delete every BYOK model owned by the given teams, from the DB and the router.
@@ -1863,7 +1873,7 @@ def model_info_as_mapping(model_info: object) -> Mapping[str, object] | None:
     if not isinstance(model_info, str):
         return None
     try:
-        parsed: Final = json.loads(model_info)
+        parsed: Final = _JSON_VALUE_ADAPTER.validate_json(model_info)
     except (TypeError, ValueError):
         return None
     return parsed if isinstance(parsed, Mapping) else None
