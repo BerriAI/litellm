@@ -9,6 +9,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.experimental_pass_through.messages import streaming_iterator as streaming_iterator_module
 from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
     INCOMPLETE_STREAM_ERROR_MESSAGE,
     BaseAnthropicMessagesStreamingIterator,
@@ -440,3 +441,129 @@ async def test_async_sse_wrapper_salvages_partial_spend_on_upstream_error_after_
     assert len(received) == 2
     # Partial spend was still recorded rather than the whole request being dropped.
     assert iterator.logged_chunks == received
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_applies_backpressure_to_slow_client(monkeypatch):
+    """
+    Regression: the relay queue is bounded, so a slow client throttles the
+    upstream read instead of letting the pump buffer the whole response in
+    memory. With a tiny queue and a client that reads a single chunk, the pump
+    must stall after producing only a queue's worth of chunks ahead, not race
+    to the end of a large stream.
+    """
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 2)
+
+    total = 200
+    produced = 0
+
+    async def _fast_stream():
+        nonlocal produced
+        for i in range(total):
+            produced += 1
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"t{i}"}}
+
+    iterator = _make_iterator("test_backpressure_slow_client")
+    gen = iterator.async_sse_wrapper(_fast_stream())
+    try:
+        await gen.__anext__()  # read exactly one chunk, then stall
+        # Let the pump run as far as the bounded queue permits.
+        for _ in range(500):
+            await asyncio.sleep(0)
+        # Bounded by queue maxsize + the one in-flight put + the one delivered
+        # chunk; nowhere near the full 200-chunk stream.
+        assert produced <= 2 + 3, f"pump ran ahead unthrottled: produced {produced} of {total}"
+        assert produced < total
+    finally:
+        await gen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_bills_partial_when_detached_drain_cap_reached(monkeypatch):
+    """
+    Regression: when the concurrent detached-drain cap is already reached, a
+    pump whose client has disconnected must bill what it collected instead of
+    continuing to drain (and accumulating) the rest of a large upstream stream,
+    so slow/abandoned clients can't pin unbounded worker state.
+
+    The cap slot set is pre-occupied so the single slot is unavailable when this
+    pump reaches its first post-disconnect chunk; that isolates the cap decision
+    from multi-pump scheduling races.
+    """
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 1)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 4)
+
+    # Occupy the only detached-drain slot with a placeholder task.
+    async def _hold_slot():
+        await asyncio.sleep(3600)
+
+    holder = asyncio.ensure_future(_hold_slot())
+    streaming_iterator_module._DETACHED_STREAM_DRAINS.add(holder)
+    tail_reached = False
+
+    async def _long_stream():
+        nonlocal tail_reached
+        yield {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5, "output_tokens": 1}}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "x"}}
+        # These arrive only after the client has disconnected.
+        for i in range(100):
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"more{i}"}}
+        tail_reached = True
+        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 42}}
+        yield {"type": "message_stop"}
+
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("drain_cap_full"), request_body={})
+    try:
+        gen = iterator.async_sse_wrapper(_long_stream())
+        await gen.__anext__()  # message_start
+        await gen.__anext__()  # first delta
+        await gen.aclose()  # client disconnects; 100+ chunks remain upstream
+
+        for _ in range(200):
+            if iterator.logged_chunks:
+                break
+            await asyncio.sleep(0)
+
+        # Billed a small bounded partial (the prefix plus at most a queue's
+        # worth the pump ran ahead before disconnect) without draining the
+        # 100-chunk tail. The exact count depends on how far the bounded queue
+        # let the pump run ahead, so assert the bound, not an exact number.
+        assert iterator.logged_chunks, "capped pump never billed"
+        assert len(iterator.logged_chunks) <= 2 + streaming_iterator_module.ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE
+        assert len(iterator.logged_chunks) < 100
+        assert not any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
+        assert tail_reached is False, "pump kept draining past the cap instead of stopping"
+    finally:
+        holder.cancel()
+        streaming_iterator_module._DETACHED_STREAM_DRAINS.discard(holder)
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_drains_detached_when_cap_available(monkeypatch):
+    """Complement to the cap test: with a slot free, a disconnected pump drains
+    the full upstream and bills the terminal usage, and releases its slot after."""
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 1)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 4)
+
+    async def _stream():
+        yield {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5, "output_tokens": 1}}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "x"}}
+        for i in range(20):
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"m{i}"}}
+        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 42}}
+        yield {"type": "message_stop"}
+
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("drain_cap_free"), request_body={})
+    gen = iterator.async_sse_wrapper(_stream())
+    await gen.__anext__()
+    await gen.__anext__()
+    await gen.aclose()
+
+    for _ in range(300):
+        if iterator.logged_chunks:
+            break
+        await asyncio.sleep(0.01)
+
+    assert any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
+    # Slot released once the drain finished.
+    assert len(streaming_iterator_module._DETACHED_STREAM_DRAINS) == 0
