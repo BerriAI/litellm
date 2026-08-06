@@ -22,6 +22,7 @@ import weakref
 from collections import defaultdict
 from collections.abc import AsyncGenerator, Callable, Generator, Mapping, Sequence
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, Union, cast
 
 import anyio
@@ -563,6 +564,8 @@ class Router:
         )
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployment_ids: list[str] = []
+        self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
+        self.model_group_affinity_config: dict[str, list[str]] | None = model_group_affinity_config
         self.pattern_router = PatternMatchRouter()
         self.team_pattern_routers: dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: dict[str, list[TaggedPreRoutingStrategy[AutoRouter]]] = {}
@@ -737,7 +740,6 @@ class Router:
             litellm.failure_callback = [self.deployment_callback_on_failure]
         self.routing_strategy_args = routing_strategy_args
         self.provider_budget_config = provider_budget_config
-        self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
         self.router_budget_logger: RouterBudgetLimiting | None = None
         if RouterBudgetLimiting.should_init_router_budget_limiter(
             model_list=model_list, provider_budget_config=self.provider_budget_config
@@ -759,7 +761,6 @@ class Router:
                 )
 
         self.model_group_retry_policy: dict[str, RetryPolicy] | None = model_group_retry_policy
-        self.model_group_affinity_config: dict[str, list[str]] | None = model_group_affinity_config
 
         self.allowed_fails_policy: AllowedFailsPolicy | None = None
         if allowed_fails_policy is not None:
@@ -779,24 +780,8 @@ class Router:
         if optional_pre_call_checks is not None:
             self.add_optional_pre_call_checks(optional_pre_call_checks)
 
-        # If model_group_affinity_config is set but no global affinity checks were
-        # enabled, we still need the DeploymentAffinityCheck callback (with global
-        # flags all False) so per-group config can activate affinity per model group.
-        if self.model_group_affinity_config and not any(
-            isinstance(cb, DeploymentAffinityCheck) for cb in (self.optional_callbacks or [])
-        ):
-            if self.optional_callbacks is None:
-                self.optional_callbacks = []
-            affinity_callback: Final = DeploymentAffinityCheck(
-                cache=self.cache,
-                ttl_seconds=self.deployment_affinity_ttl_seconds,
-                enable_user_key_affinity=False,
-                enable_responses_api_affinity=False,
-                enable_session_id_affinity=False,
-                model_group_affinity_config=self.model_group_affinity_config,
-            )
-            self.optional_callbacks.append(affinity_callback)
-            litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
+        if self.model_group_affinity_config:
+            self._ensure_deployment_affinity_check()
 
         if self.alerting_config is not None:
             self._initialize_alerting()
@@ -1686,6 +1671,9 @@ class Router:
                     existing_affinity_callback.enable_session_id_affinity or enable_session_id_affinity
                 )
                 existing_affinity_callback.ttl_seconds = self.deployment_affinity_ttl_seconds
+                existing_affinity_callback.session_affinity_group_ttls = (
+                    self._get_complexity_router_session_affinity_group_ttls
+                )
                 if self.model_group_affinity_config:
                     existing_affinity_callback.model_group_affinity_config = self.model_group_affinity_config
             else:
@@ -1696,6 +1684,7 @@ class Router:
                     enable_responses_api_affinity=enable_responses_api_affinity,
                     enable_session_id_affinity=enable_session_id_affinity,
                     model_group_affinity_config=self.model_group_affinity_config,
+                    session_affinity_group_ttls=self._get_complexity_router_session_affinity_group_ttls,
                 )
                 self.optional_callbacks.append(affinity_callback)
                 litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
@@ -7632,6 +7621,68 @@ class Router:
         """
         return classify_strategy_router_model(litellm_params.model) == "complexity"
 
+    def _get_complexity_router_session_affinity_group_ttls(self) -> Mapping[str, int]:
+        entries: Final = tuple(
+            (model_group, tagged_strategy.strategy.config.session_affinity_ttl_seconds)
+            for strategies in self.complexity_routers.values()
+            for tagged_strategy in strategies
+            if tagged_strategy.strategy.config.session_affinity and not tagged_strategy.strategy.config.plugins
+            for configured_models in (
+                tuple(
+                    model
+                    for tier_value in tagged_strategy.strategy.config.tiers.values()
+                    for model in (tier_value if isinstance(tier_value, list) else (tier_value,))
+                ),
+            )
+            for model_group in configured_models
+        )
+        entries_with_defaults: Final = entries + tuple(
+            (
+                tagged_strategy.strategy.config.default_model,
+                tagged_strategy.strategy.config.session_affinity_ttl_seconds,
+            )
+            for strategies in self.complexity_routers.values()
+            for tagged_strategy in strategies
+            if tagged_strategy.strategy.config.session_affinity
+            and not tagged_strategy.strategy.config.plugins
+            and tagged_strategy.strategy.config.default_model is not None
+        )
+        groups: Final = frozenset(model_group for model_group, _ in entries_with_defaults)
+        return MappingProxyType(
+            {
+                model_group: min(
+                    ttl for candidate_group, ttl in entries_with_defaults if candidate_group == model_group
+                )
+                for model_group in groups
+            }
+        )
+
+    def _ensure_deployment_affinity_check(self) -> None:
+        if self.optional_callbacks is None:
+            self.optional_callbacks = []
+
+        existing_affinity_callback: DeploymentAffinityCheck | None = next(
+            (callback for callback in self.optional_callbacks if isinstance(callback, DeploymentAffinityCheck)),
+            None,
+        )
+        if existing_affinity_callback is not None:
+            existing_affinity_callback.session_affinity_group_ttls = (
+                self._get_complexity_router_session_affinity_group_ttls
+            )
+            return
+
+        affinity_callback: Final = DeploymentAffinityCheck(
+            cache=self.cache,
+            ttl_seconds=self.deployment_affinity_ttl_seconds,
+            enable_user_key_affinity=False,
+            enable_responses_api_affinity=False,
+            enable_session_id_affinity=False,
+            model_group_affinity_config=self.model_group_affinity_config,
+            session_affinity_group_ttls=self._get_complexity_router_session_affinity_group_ttls,
+        )
+        self.optional_callbacks.append(affinity_callback)
+        litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
+
     def init_complexity_router_deployment(self, deployment: Deployment):
         """
         Initialize the complexity-router deployment.
@@ -7677,6 +7728,7 @@ class Router:
             strategy=complexity_router,
             strategy_label="Complexity-router",
         )
+        self._ensure_deployment_affinity_check()
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
