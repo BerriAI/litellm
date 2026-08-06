@@ -196,32 +196,28 @@ vi.mock("lucide-react", async () => {
 });
 
 // Heavy children -> async factories & local React
-vi.mock("../organisms/RegenerateKeyModal", async () => {
-  const React = await import("react");
+vi.mock("../organisms/RegenerateKeyModal", () => {
   function RegenerateKeyModal() {
     return null;
   }
   (RegenerateKeyModal as any).displayName = "RegenerateKeyModal";
   return { RegenerateKeyModal };
 });
-vi.mock("../object_permissions_view", async () => {
-  const React = await import("react");
+vi.mock("../object_permissions_view", () => {
   function ObjectPermissionsView() {
     return null;
   }
   (ObjectPermissionsView as any).displayName = "ObjectPermissionsView";
   return { __esModule: true, default: ObjectPermissionsView };
 });
-vi.mock("../logging_settings_view", async () => {
-  const React = await import("react");
+vi.mock("../logging_settings_view", () => {
   function LoggingSettingsView() {
     return null;
   }
   (LoggingSettingsView as any).displayName = "LoggingSettingsView";
   return { __esModule: true, default: LoggingSettingsView };
 });
-vi.mock("../common_components/AutoRotationView", async () => {
-  const React = await import("react");
+vi.mock("../common_components/AutoRotationView", () => {
   function AutoRotationView() {
     return null;
   }
