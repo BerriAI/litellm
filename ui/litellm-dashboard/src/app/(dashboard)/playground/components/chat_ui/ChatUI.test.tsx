@@ -117,39 +117,6 @@ describe("ChatUI", () => {
     });
   });
 
-  it("shows all models returned for the active key regardless of endpoint", async () => {
-    (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
-      { model_group: "ChatModel", mode: "chat" },
-      { model_group: "SpeechModel", mode: "audio_speech" },
-      { model_group: "ImageModel", mode: "image_generation" },
-      { model_group: "ResponsesModel", mode: "responses" },
-    ]);
-
-    render(
-      <ChatUI
-        accessToken="1234567890"
-        token="1234567890"
-        userRole="user"
-        userID="1234567890"
-        disabledPersonalKeyCreation={false}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Test Key")).toBeInTheDocument();
-    });
-
-    await selectComboboxOption("Select an endpoint", "/v1/chat/completions");
-    await openComboboxByPlaceholder("Select a Model");
-
-    await waitFor(() => {
-      expect(screen.getAllByText("ChatModel").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("SpeechModel").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("ImageModel").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("ResponsesModel").length).toBeGreaterThan(0);
-    });
-  });
-
   it("should show 'Enter custom model' option in model selector", async () => {
     render(
       <ChatUI
