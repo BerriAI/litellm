@@ -1962,8 +1962,12 @@ class CustomStreamWrapper:
         cache_hit = False
         if self.custom_llm_provider is not None and self.custom_llm_provider == "cached_response":
             cache_hit = True
-        self._check_max_streaming_duration()
         try:
+            # Inside the try (not before it) so a raised litellm.Timeout flows
+            # through the same except Exception -> _handle_stream_fallback_error
+            # path as every other failure, restoring the consumer's correlation
+            # context - a check before the try would bypass that entirely.
+            self._check_max_streaming_duration()
             if self.completion_stream is None:
                 await self.fetch_stream()
 

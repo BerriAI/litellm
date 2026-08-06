@@ -3968,6 +3968,53 @@ async def test_stream_wrapper_anext_keeps_context_active_through_synthesized_fin
 
 
 @pytest.mark.asyncio
+async def test_stream_wrapper_anext_max_duration_timeout_restores_consumer_correlation_context(monkeypatch):
+    """_check_max_streaming_duration() raises litellm.Timeout when a client keeps
+    an async stream open past LITELLM_MAX_STREAMING_DURATION_SECONDS. That raise
+    must flow through the same except Exception -> _handle_stream_fallback_error
+    path as every other failure so the consumer's outer correlation context gets
+    restored - calling the check before entering __anext__()'s try block would
+    let the Timeout bypass that restoration entirely."""
+    monkeypatch.setattr(litellm.constants, "LITELLM_MAX_STREAMING_DURATION_SECONDS", 1)
+    trace_id_var.set("outer-trace-max-duration")
+    session_id_var.set("outer-session-max-duration")
+    try:
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="max-duration-call",
+            function_id="fn-max-duration",
+            kwargs={"litellm_session_id": "max-duration-session"},
+        )
+
+        async def _empty_aiter():
+            return
+            yield  # pragma: no cover - makes this an async generator
+
+        wrapper = CustomStreamWrapper(
+            completion_stream=_empty_aiter(),
+            model="gpt-3.5-turbo",
+            logging_obj=log_obj,
+        )
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "max-duration-session"
+
+        wrapper._stream_created_time = time.time() - 10
+
+        with pytest.raises(Exception):
+            await wrapper.__anext__()
+
+        assert trace_id_var.get() == "outer-trace-max-duration"
+        assert session_id_var.get() == "outer-session-max-duration"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+@pytest.mark.asyncio
 async def test_stream_wrapper_aclose_restores_consumer_correlation_context():
     """Explicit early termination (aclose(), e.g. on client disconnect or a
     router fallback aborting an in-progress stream) must restore the caller's
