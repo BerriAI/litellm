@@ -40070,8 +40070,8 @@
         "supports_web_search": true
     },
     "xai/grok-4.5": {
-        "cache_read_input_token_cost": 5e-07,
-        "cache_read_input_token_cost_above_200k_tokens": 1e-06,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 6e-07,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_200k_tokens": 4e-06,
         "litellm_provider": "xai",
@@ -40081,7 +40081,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-06,
         "output_cost_per_token_above_200k_tokens": 1.2e-05,
-        "source": "https://docs.x.ai/docs/models",
+        "source": "https://docs.x.ai/developers/pricing",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -40091,8 +40091,8 @@
         "supports_web_search": true
     },
     "xai/grok-4.5-latest": {
-        "cache_read_input_token_cost": 5e-07,
-        "cache_read_input_token_cost_above_200k_tokens": 1e-06,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 6e-07,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_200k_tokens": 4e-06,
         "litellm_provider": "xai",
@@ -40102,7 +40102,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-06,
         "output_cost_per_token_above_200k_tokens": 1.2e-05,
-        "source": "https://docs.x.ai/docs/models",
+        "source": "https://docs.x.ai/developers/pricing",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
