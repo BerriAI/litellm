@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -243,3 +244,123 @@ def test_incomplete_stream_error_sse_event_is_valid_anthropic_error():
         "error": {"type": "api_error", "message": INCOMPLETE_STREAM_ERROR_MESSAGE},
     }
     assert event.endswith("\n\n")
+
+
+# The full stream a provider (Bedrock invoke) generates: a short prefix the
+# client reads before disconnecting, then the tail (including the terminal
+# ``message_delta`` carrying the real output_tokens) that arrives only after
+# the client is gone. output_tokens=64 is the authoritative billed count; a
+# naive "log whatever the client drained" implementation would instead see the
+# ``message_start`` placeholder (output_tokens=1) and undercount ~64x.
+_STREAM_PREFIX = (
+    {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 52, "output_tokens": 1}}},
+    {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "The Roman"}},
+)
+_STREAM_TAIL = (
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " Empire ..."}},
+    {"type": "content_block_stop", "index": 0},
+    {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 64}},
+    {"type": "message_stop"},
+)
+
+
+def _output_tokens_from_logged_chunks(chunks: list[bytes]) -> int | None:
+    """Read the last output_tokens the billing path would see from the SSE bytes."""
+    latest: int | None = None
+    for raw in chunks:
+        for line in raw.decode().splitlines():
+            if not line.startswith("data:"):
+                continue
+            data = json.loads(line[len("data:"):].strip())
+            usage = data.get("usage") if isinstance(data, dict) else None
+            if isinstance(usage, dict) and usage.get("output_tokens") is not None:
+                latest = usage["output_tokens"]
+    return latest
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_bills_full_stream_after_client_disconnect():
+    """
+    Regression: on a client disconnect mid-stream the upstream provider keeps
+    generating (and billing) the full response. The wrapper must keep draining
+    that upstream to its terminal ``message_delta`` and bill the real
+    output_tokens (64), not the partial count the client drained before leaving
+    (the message_start placeholder, 1).
+
+    A ``tail_gated`` event holds back the stream tail until the client has
+    disconnected, so the tail can only be captured by a drain that survives the
+    client teardown - exactly the path the previous implementation dropped.
+    """
+    tail_gated = asyncio.Event()
+    upstream_fully_drained = asyncio.Event()
+
+    async def _gated_stream():
+        for event in _STREAM_PREFIX:
+            yield event
+        # Block until the test releases the tail (after the client disconnects).
+        await tail_gated.wait()
+        for event in _STREAM_TAIL:
+            yield event
+        upstream_fully_drained.set()
+
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("test_bills_full_stream_after_disconnect"),
+        request_body={},
+    )
+
+    gen = iterator.async_sse_wrapper(_gated_stream())
+
+    # Client reads the prefix, then disconnects (closes the generator).
+    client_chunks = []
+    async for chunk in gen:
+        client_chunks.append(chunk)
+        if len(client_chunks) == len(_STREAM_PREFIX):
+            break
+    await gen.aclose()  # client disconnect tears down the client-facing generator
+
+    # Now let the provider finish. The detached pump must still be alive.
+    tail_gated.set()
+    await asyncio.wait_for(upstream_fully_drained.wait(), timeout=5)
+    # Give the pump's finally (billing) a turn to run.
+    for _ in range(100):
+        if iterator.logged_chunks:
+            break
+        await asyncio.sleep(0.01)
+
+    # The client only ever saw the prefix.
+    assert len(client_chunks) == len(_STREAM_PREFIX)
+
+    # Billing saw the WHOLE stream, including the terminal usage event.
+    assert iterator.logged_chunks, "pump never billed after client disconnect"
+    assert _output_tokens_from_logged_chunks(iterator.logged_chunks) == 64
+    assert any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
+    # No synthetic incomplete-stream error, because the real message_stop arrived.
+    assert not any(c.startswith(b"event: error\n") for c in iterator.logged_chunks)
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_bills_full_stream_when_client_reads_all():
+    """Happy path: when the client drains the whole stream, billing still sees
+    the terminal output_tokens (64) and the client gets every chunk."""
+    tail_gated = asyncio.Event()
+    tail_gated.set()  # no gating; full stream flows immediately
+
+    async def _full_stream():
+        for event in (*_STREAM_PREFIX, *_STREAM_TAIL):
+            yield event
+
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("test_bills_full_stream_happy_path"),
+        request_body={},
+    )
+    client_chunks = [chunk async for chunk in iterator.async_sse_wrapper(_full_stream())]
+
+    for _ in range(100):
+        if iterator.logged_chunks:
+            break
+        await asyncio.sleep(0.01)
+
+    assert len(client_chunks) == len(_STREAM_PREFIX) + len(_STREAM_TAIL)
+    assert _output_tokens_from_logged_chunks(iterator.logged_chunks) == 64
+    assert not any(c.startswith(b"event: error\n") for c in iterator.logged_chunks)
