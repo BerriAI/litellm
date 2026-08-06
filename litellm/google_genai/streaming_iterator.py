@@ -66,6 +66,7 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         request_body: dict,
         model: str,
         hidden_params: dict[str, Any] | None = None,
+        custom_llm_provider: str | None = None,
     ):
         self.litellm_logging_obj = litellm_logging_obj
         self.request_body = request_body
@@ -73,11 +74,18 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         self.collected_chunks: list[bytes] = []
         self.model = model
         self._hidden_params: dict[str, Any] = hidden_params or {}
+        self.custom_llm_provider = custom_llm_provider
 
     async def _handle_async_streaming_logging(
         self,
     ):
-        """Handle the logging after all chunks have been collected."""
+        """Handle the logging after all chunks have been collected.
+
+        ``url_route`` below carries no hostname, so the pass-through handler cannot
+        sniff the provider off it and would price every Google stream at Vertex rates.
+        ``custom_llm_provider`` is forwarded so costing uses the provider already
+        resolved for this request.
+        """
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
         )
@@ -94,6 +102,7 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
                 raw_bytes=self.collected_chunks,
                 end_time=end_time,
                 model=self.model,
+                custom_llm_provider=self.custom_llm_provider,
             )
         )
 
@@ -119,12 +128,12 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
             request_body=request_body or {},
             model=model,
             hidden_params=hidden_params,
+            custom_llm_provider=custom_llm_provider,
         )
         self.response = response
         self.model = model
         self.generate_content_provider_config = generate_content_provider_config
         self.litellm_metadata = litellm_metadata
-        self.custom_llm_provider = custom_llm_provider
         # Gemini streamGenerateContent uses SSE line framing; iter_lines keeps
         # large inlineData payloads (e.g. image/jpeg) intact within one event.
         self.stream_iterator = response.iter_lines()
@@ -170,12 +179,12 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
             request_body=request_body or {},
             model=model,
             hidden_params=hidden_params,
+            custom_llm_provider=custom_llm_provider,
         )
         self.response = response
         self.model = model
         self.generate_content_provider_config = generate_content_provider_config
         self.litellm_metadata = litellm_metadata
-        self.custom_llm_provider = custom_llm_provider
         # Gemini streamGenerateContent uses SSE line framing; aiter_lines keeps
         # large inlineData payloads (e.g. image/jpeg) intact within one event.
         self.stream_iterator = response.aiter_lines()

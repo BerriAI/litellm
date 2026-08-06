@@ -1,5 +1,6 @@
+import asyncio
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -53,9 +54,7 @@ async def test_async_streaming_iterator_yields_complete_sse_events():
     assert chunk.startswith(b"data: ")
     assert chunk.endswith(b"\n\n")
     assert (
-        json.loads(chunk[len(b"data: ") : -2])["candidates"][0]["content"]["parts"][0][
-            "inlineData"
-        ]["mimeType"]
+        json.loads(chunk[len(b"data: ") : -2])["candidates"][0]["content"]["parts"][0]["inlineData"]["mimeType"]
         == "image/jpeg"
     )
 
@@ -76,9 +75,9 @@ def test_sync_streaming_iterator_yields_complete_sse_events():
     chunk = next(iterator)
     assert chunk.startswith(b"data: ")
     assert chunk.endswith(b"\n\n")
-    assert json.loads(chunk[len(b"data: ") : -2])["candidates"][0]["content"]["parts"][
-        0
-    ]["inlineData"]["data"].startswith("A")
+    assert json.loads(chunk[len(b"data: ") : -2])["candidates"][0]["content"]["parts"][0]["inlineData"][
+        "data"
+    ].startswith("A")
 
 
 @pytest.mark.asyncio
@@ -126,3 +125,42 @@ async def test_async_streaming_iterator_forwards_sse_comment_events():
 
     chunk = await iterator.__anext__()
     assert chunk == b": keepalive\n\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+async def test_async_streaming_iterator_forwards_custom_llm_provider_to_logging(
+    custom_llm_provider,
+):
+    """
+    The url_route handed to the pass-through logging handler carries no hostname, so
+    the handler cannot sniff the provider off it and used to price every Google stream
+    at Vertex rates. The iterator must forward the provider it already resolved.
+    """
+    mock_response = MagicMock()
+
+    async def _aiter_lines():
+        yield 'data: {"text":"hi"}'
+        yield ""
+
+    mock_response.aiter_lines = _aiter_lines
+
+    iterator = AsyncGoogleGenAIGenerateContentStreamingIterator(
+        response=mock_response,
+        model="gemini-3.1-flash-image",
+        logging_obj=MagicMock(spec=LiteLLMLoggingObj),
+        generate_content_provider_config=MagicMock(),
+        litellm_metadata={},
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.streaming_handler.PassThroughStreamingHandler._route_streaming_logging_to_handler",
+        new=AsyncMock(),
+    ) as mock_route:
+        async for _ in iterator:
+            pass
+        await asyncio.sleep(0)
+
+    mock_route.assert_called_once()
+    assert mock_route.call_args.kwargs["custom_llm_provider"] == custom_llm_provider
