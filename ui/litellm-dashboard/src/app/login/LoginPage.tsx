@@ -107,8 +107,9 @@ function LoginPageContent() {
       switchToWorkerUrl(selectedWorker.url);
     }
 
+    // Trim username so a stray pasted space doesn't break login (#28880).
     loginMutation.mutate(
-      { username, password, useV3: !!selectedWorker },
+      { username: username.trim(), password, useV3: !!selectedWorker },
       {
         onSuccess: (data) => {
           // Update the worker context with the selected worker

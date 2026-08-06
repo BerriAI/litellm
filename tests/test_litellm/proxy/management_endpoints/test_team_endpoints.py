@@ -7945,6 +7945,71 @@ async def test_team_member_me_returns_404_for_unknown_team(mock_db_client):
     assert exc_info.value.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_new_team_encrypts_callback_vars(
+    mock_db_client, mock_admin_auth, monkeypatch
+):
+    """/team/new must encrypt callback_vars values before they reach the DB."""
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.common_utils.callback_utils import decrypt_callback_vars
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+    from litellm.proxy.utils import PrismaClient
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+
+    # Use the real jsonify helpers so the encrypted dict goes through the
+    # actual JSON serialization production uses (catches non-serializable
+    # ciphertext, missing fields, etc.).
+    mock_db_client.jsonify_object = PrismaClient.jsonify_object.__get__(mock_db_client)
+    mock_db_client.jsonify_team_object = PrismaClient.jsonify_team_object.__get__(
+        mock_db_client
+    )
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.db = MagicMock()
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    team_create_result = MagicMock(team_id="team-456", object_permission_id=None)
+    team_create_result.model_dump.return_value = {"team_id": "team-456"}
+    mock_team_create = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_teamtable.create = mock_team_create
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(
+        return_value=team_create_result
+    )
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    team_request = NewTeamRequest(
+        team_alias="my-team",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {
+                        "langfuse_public_key": "pk-real",
+                        "langfuse_secret_key": "sk-real",
+                    },
+                }
+            ]
+        },
+    )
+
+    await new_team(
+        data=team_request,
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    written = mock_team_create.call_args.kwargs["data"]
+    # jsonify_team_object serializes the metadata dict to a JSON string before
+    # the DB write, so we round-trip through json.loads to inspect it.
+    metadata = json.loads(written["metadata"])
+    cv = metadata["logging"][0]["callback_vars"]
+    assert cv["langfuse_secret_key"] != "sk-real"
+    recovered = decrypt_callback_vars(metadata)["logging"][0]["callback_vars"]
+    assert recovered["langfuse_secret_key"] == "sk-real"
 def _non_admin_auth():
     return UserAPIKeyAuth(
         user_id="u-team-admin", user_role=LitellmUserRoles.INTERNAL_USER

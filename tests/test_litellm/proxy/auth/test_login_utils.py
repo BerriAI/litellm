@@ -559,3 +559,56 @@ async def test_authenticate_user_database_login_with_non_ascii_password():
             assert isinstance(result, LoginResult)
             assert result.user_id == "test-user-123"
             assert result.user_email == user_email
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_strips_whitespace_in_username():
+    """Regression for #28880: a username pasted with padding still resolves
+    to the stored user. Case is preserved at the login boundary; the existing
+    case-insensitive DB query handles casing."""
+    master_key = "sk-1234"
+    stored_email = "padded@test.com"
+    correct_password = "correct-password"
+    hashed_password = hash_token(token=correct_password)
+
+    mock_user = MagicMock()
+    mock_user.user_id = "test-user-padded"
+    mock_user.user_email = stored_email
+    mock_user.password = hashed_password
+    mock_user.user_role = LitellmUserRoles.INTERNAL_USER
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
+        return_value=mock_user
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "DATABASE_URL": "postgresql://test:test@localhost/test",
+            "UI_USERNAME": "admin",
+            "UI_PASSWORD": "admin-password",
+        },
+    ):
+        with patch(
+            "litellm.proxy.auth.login_utils.generate_key_helper_fn",
+            new_callable=AsyncMock,
+        ) as mock_generate_key:
+            mock_generate_key.return_value = {"token": "token-trim"}
+
+            result = await authenticate_user(
+                username="  Padded@test.com  ",
+                password=correct_password,
+                master_key=master_key,
+                prisma_client=mock_prisma_client,
+            )
+
+    assert isinstance(result, LoginResult)
+    assert result.user_id == "test-user-padded"
+
+    where = mock_prisma_client.db.litellm_usertable.find_first.await_args.kwargs[
+        "where"
+    ]
+    # Username trimmed but casing preserved (DB query is case-insensitive).
+    assert where["user_email"]["equals"] == "Padded@test.com"
+    assert where["user_email"]["mode"] == "insensitive"

@@ -1,3 +1,4 @@
+import copy
 import sys
 import os
 from types import SimpleNamespace
@@ -7,6 +8,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.common_utils.callback_utils import (
+    decrypt_callback_vars,
+    encrypt_callback_vars,
     initialize_callbacks_on_proxy,
     get_remaining_tokens_and_requests_from_request_data,
     normalize_callback_names,
@@ -119,3 +122,143 @@ def test_initialize_callbacks_on_proxy_instantiates_compression_interception(
         assert "compression_interception" not in litellm.callbacks
     finally:
         litellm.callbacks = original_callbacks
+
+
+# ---------------------------------------------------------------------------
+# encrypt_callback_vars / decrypt_callback_vars
+# ---------------------------------------------------------------------------
+
+
+def _sample_metadata():
+    return {
+        "logging": [
+            {
+                "callback_name": "langfuse",
+                "callback_type": "success_and_failure",
+                "callback_vars": {
+                    "langfuse_public_key": "pk-lf-public",
+                    "langfuse_secret_key": "sk-lf-secret",
+                    "langfuse_host": "https://cloud.langfuse.com",
+                },
+            }
+        ],
+        "callback_settings": {
+            "callback_vars": {"langsmith_api_key": "ls-api-key"},
+        },
+        "tags": ["unrelated"],
+    }
+
+
+def _set_salt_key(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+
+
+def test_encrypt_callback_vars_round_trip(monkeypatch):
+    _set_salt_key(monkeypatch)
+    original = _sample_metadata()
+    encrypted = encrypt_callback_vars(original)
+
+    enc_vars = encrypted["logging"][0]["callback_vars"]
+    assert enc_vars["langfuse_secret_key"] != "sk-lf-secret"
+    assert enc_vars["langfuse_public_key"] != "pk-lf-public"
+    assert (
+        encrypted["callback_settings"]["callback_vars"]["langsmith_api_key"]
+        != "ls-api-key"
+    )
+
+    decrypted = decrypt_callback_vars(encrypted)
+    assert (
+        decrypted["logging"][0]["callback_vars"]
+        == original["logging"][0]["callback_vars"]
+    )
+    assert (
+        decrypted["callback_settings"]["callback_vars"]
+        == original["callback_settings"]["callback_vars"]
+    )
+
+
+def test_encrypt_callback_vars_is_idempotent(monkeypatch):
+    _set_salt_key(monkeypatch)
+    once = encrypt_callback_vars(_sample_metadata())
+    twice = encrypt_callback_vars(once)
+    assert once == twice
+
+
+def test_encrypt_callback_vars_does_not_mutate_input(monkeypatch):
+    _set_salt_key(monkeypatch)
+    original = _sample_metadata()
+    snapshot = copy.deepcopy(original)
+    encrypt_callback_vars(original)
+    assert original == snapshot
+
+
+def test_decrypt_callback_vars_passes_through_legacy_plaintext(monkeypatch):
+    _set_salt_key(monkeypatch)
+    plaintext = _sample_metadata()
+    decrypted = decrypt_callback_vars(plaintext)
+    # legacy rows decrypt-fail and fall through unchanged
+    assert (
+        decrypted["logging"][0]["callback_vars"]["langfuse_secret_key"]
+        == "sk-lf-secret"
+    )
+
+
+def test_callback_vars_helpers_handle_edge_shapes(monkeypatch):
+    _set_salt_key(monkeypatch)
+    assert encrypt_callback_vars(None) is None
+    assert encrypt_callback_vars({}) == {}
+    assert decrypt_callback_vars(None) is None
+    assert decrypt_callback_vars({}) == {}
+
+    # logging not a list / callback_vars not a dict — leave alone
+    weird = {"logging": "not-a-list", "callback_settings": {"callback_vars": None}}
+    assert encrypt_callback_vars(weird) == weird
+
+    # empty/None callback_vars values stay as-is
+    has_blanks = {
+        "logging": [
+            {
+                "callback_vars": {
+                    "langfuse_public_key": "",
+                    "langfuse_secret_key": None,
+                    "langfuse_host": "https://cloud.langfuse.com",
+                }
+            }
+        ]
+    }
+    out = encrypt_callback_vars(has_blanks)
+    cv = out["logging"][0]["callback_vars"]
+    assert cv["langfuse_public_key"] == ""
+    assert cv["langfuse_secret_key"] is None
+    # langfuse_host is a routing field, not a credential — stays plain.
+    assert cv["langfuse_host"] == "https://cloud.langfuse.com"
+
+
+def test_encrypt_callback_vars_only_encrypts_credential_fields(monkeypatch):
+    """Routing/identifier fields stay plaintext; credential fields encrypt."""
+    _set_salt_key(monkeypatch)
+    metadata = {
+        "logging": [
+            {
+                "callback_vars": {
+                    "langfuse_secret_key": "sk-real",
+                    "langfuse_public_key": "pk-real",
+                    "langfuse_host": "https://cloud.langfuse.com",
+                    "langsmith_project": "my-proj",
+                    "langsmith_base_url": "https://smith.example",
+                    "gcs_path_service_account": "{json contents}",
+                }
+            }
+        ]
+    }
+    cv = encrypt_callback_vars(metadata)["logging"][0]["callback_vars"]
+
+    # Sensitive (key-name segments match SensitiveDataMasker patterns):
+    assert cv["langfuse_secret_key"] != "sk-real"
+    assert cv["langfuse_public_key"] != "pk-real"
+    # Sensitive via the explicit gcs override:
+    assert cv["gcs_path_service_account"] != "{json contents}"
+    # Routing / identifiers stay plaintext:
+    assert cv["langfuse_host"] == "https://cloud.langfuse.com"
+    assert cv["langsmith_project"] == "my-proj"
+    assert cv["langsmith_base_url"] == "https://smith.example"
