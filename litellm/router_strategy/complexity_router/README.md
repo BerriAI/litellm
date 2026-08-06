@@ -109,8 +109,8 @@ take precedence over alias `litellm_params` defaults. Parameters unsupported by
 the selected model follow LiteLLM's existing `drop_params` behavior. Unknown
 parameter names produce a configuration warning but remain available for
 provider-specific parameters. `thinking` is the supported structured parameter;
-`thinking_budget` is not a top-level LiteLLM parameter and therefore produces a
-warning, as intended.
+`thinking_budget` is not a top-level LiteLLM parameter, so a tier naming it gets
+a warning telling it to use `thinking: {type: enabled, budget_tokens: N}`.
 
 ### Full Configuration
 
