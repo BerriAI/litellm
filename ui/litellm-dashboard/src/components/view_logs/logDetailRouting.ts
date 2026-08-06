@@ -1,6 +1,8 @@
 import { parseAsString, useQueryStates } from "nuqs";
 import { useCallback } from "react";
 
+import { useDetailHistoryClose } from "@/app/(dashboard)/hooks/useDetailHistoryClose";
+
 export const LOG_ID_QUERY_PARAM = "log_id";
 export const SESSION_ID_QUERY_PARAM = "session_id";
 
@@ -19,18 +21,25 @@ export function useLogDetailRouting(): LogDetailRouting {
     { history: "push" },
   );
 
+  const clearParams = useCallback(() => {
+    void setParams({ log_id: null, session_id: null }, { history: "replace" });
+  }, [setParams]);
+  const { markOpened, close } = useDetailHistoryClose(clearParams);
+
   const openLog = useCallback(
     (requestId: string) => {
+      markOpened();
       void setParams({ log_id: requestId, session_id: null });
     },
-    [setParams],
+    [markOpened, setParams],
   );
 
   const openSession = useCallback(
     (sessionId: string, requestId: string | null) => {
+      markOpened();
       void setParams({ session_id: sessionId, log_id: requestId });
     },
-    [setParams],
+    [markOpened, setParams],
   );
 
   const selectLog = useCallback(
@@ -41,10 +50,6 @@ export function useLogDetailRouting(): LogDetailRouting {
     },
     [setParams],
   );
-
-  const close = useCallback(() => {
-    void setParams({ log_id: null, session_id: null }, { history: "replace" });
-  }, [setParams]);
 
   return {
     logId: log_id,

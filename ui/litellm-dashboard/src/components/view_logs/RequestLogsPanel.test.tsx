@@ -297,7 +297,8 @@ describe("RequestLogsPanel", () => {
       expect(byIdCall.page_size).toBe(1);
     });
 
-    it("closing the drawer removes ?log_id= from the URL and closes the drawer", async () => {
+    it("closing a drawer opened this session pops the pushed history entry", async () => {
+      const backSpy = vi.spyOn(window.history, "back").mockImplementation(() => {});
       const user = userEvent.setup();
       respondWith([logEntry({ request_id: "req-1" })]);
       renderPanel();
@@ -308,9 +309,26 @@ describe("RequestLogsPanel", () => {
 
       await user.click(screen.getByRole("button", { name: "close-drawer" }));
 
+      await waitFor(() => expect(backSpy).toHaveBeenCalledTimes(1));
+      expect(historyModes()).toEqual(["push"]);
+      backSpy.mockRestore();
+    });
+
+    it("closing a deep-linked drawer clears the URL with replace instead of ejecting the visitor", async () => {
+      const backSpy = vi.spyOn(window.history, "back").mockImplementation(() => {});
+      const user = userEvent.setup();
+      respondWith([logEntry({ request_id: "req-1" })]);
+      renderPanel("?log_id=req-1");
+
+      await waitFor(() => expect(drawer()).toHaveTextContent("open"));
+
+      await user.click(screen.getByRole("button", { name: "close-drawer" }));
+
       await waitFor(() => expect(urlParams().get("log_id")).toBeNull());
       await waitFor(() => expect(drawer()).toHaveTextContent("closed"));
-      expect(historyModes()).toEqual(["push", "replace"]);
+      expect(historyModes()).toEqual(["replace"]);
+      expect(backSpy).not.toHaveBeenCalled();
+      backSpy.mockRestore();
     });
 
     it("switching logs inside the drawer replaces the URL, so back closes the drawer in one step", async () => {
@@ -371,7 +389,8 @@ describe("RequestLogsPanel", () => {
       });
     });
 
-    it("closing a drawer opened via a session id clears both params", async () => {
+    it("closing a session drawer opened this session pops the pushed history entry", async () => {
+      const backSpy = vi.spyOn(window.history, "back").mockImplementation(() => {});
       const user = userEvent.setup();
       respondWith([logEntry({ request_id: "req-solo", session_id: "sess-solo", session_total_count: 1 })]);
       renderPanel();
@@ -382,9 +401,23 @@ describe("RequestLogsPanel", () => {
 
       await user.click(screen.getByRole("button", { name: "close-drawer" }));
 
+      await waitFor(() => expect(backSpy).toHaveBeenCalledTimes(1));
+      backSpy.mockRestore();
+    });
+
+    it("closing a deep-linked session drawer clears both params with replace", async () => {
+      const user = userEvent.setup();
+      respondWith([logEntry({ request_id: "req-solo", session_id: "sess-solo", session_total_count: 1 })]);
+      renderPanel("?log_id=req-solo&session_id=sess-solo");
+
+      await waitFor(() => expect(drawer()).toHaveTextContent("open"));
+
+      await user.click(screen.getByRole("button", { name: "close-drawer" }));
+
       await waitFor(() => expect(drawer()).toHaveTextContent("closed"));
       expect(urlParams().get("session_id")).toBeNull();
       expect(urlParams().get("log_id")).toBeNull();
+      expect(historyModes()).toEqual(["replace"]);
     });
 
     it("opens a deep-linked multi-call session log in session mode", async () => {

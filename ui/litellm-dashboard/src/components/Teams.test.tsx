@@ -500,6 +500,22 @@ describe("Teams - team detail deep link (?team=)", () => {
     expect(onUrlUpdate.mock.calls.at(-1)![0].options.history).toBe("replace");
     await waitFor(() => expect(screen.queryByTestId("team-info-view")).not.toBeInTheDocument());
   });
+
+  it("closing a team opened this session pops history instead of writing the URL", async () => {
+    const backSpy = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    const onUrlUpdate = vi.fn();
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />, { onUrlUpdate });
+
+    await waitFor(() => expect(mockTeamsTableProps).not.toBeNull());
+    act(() => mockTeamsTableProps.onSelectTeam({ ...baseTableTeam, team_id: "team-in-session" }));
+    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
+
+    act(() => mockTeamInfoView.mock.calls.at(-1)?.[0].onClose());
+
+    expect(backSpy).toHaveBeenCalledTimes(1);
+    expect(onUrlUpdate.mock.calls.at(-1)![0].options.history).toBe("push");
+    backSpy.mockRestore();
+  });
 });
 
 describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {

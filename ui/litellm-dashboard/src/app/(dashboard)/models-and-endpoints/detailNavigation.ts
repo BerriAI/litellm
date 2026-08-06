@@ -1,6 +1,8 @@
 import { parseAsString, useQueryStates } from "nuqs";
 import { useCallback } from "react";
 
+import { useDetailHistoryClose } from "@/app/(dashboard)/hooks/useDetailHistoryClose";
+
 export interface ModelDetailRouting {
   modelId: string | null;
   teamId: string | null;
@@ -15,23 +17,26 @@ export function useModelDetailRouting(): ModelDetailRouting {
     { history: "push" },
   );
 
+  const clearParams = useCallback(() => {
+    void setParams({ model: null, team: null }, { history: "replace" });
+  }, [setParams]);
+  const { markOpened, close } = useDetailHistoryClose(clearParams);
+
   const openModel = useCallback(
     (id: string) => {
+      markOpened();
       void setParams({ model: id, team: null });
     },
-    [setParams],
+    [markOpened, setParams],
   );
 
   const openTeam = useCallback(
     (id: string) => {
+      markOpened();
       void setParams({ model: null, team: id });
     },
-    [setParams],
+    [markOpened, setParams],
   );
-
-  const close = useCallback(() => {
-    void setParams({ model: null, team: null }, { history: "replace" });
-  }, [setParams]);
 
   return {
     modelId: model,

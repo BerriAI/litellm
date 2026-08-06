@@ -1,5 +1,6 @@
 "use client";
 
+import { useDetailHistoryClose } from "@/app/(dashboard)/hooks/useDetailHistoryClose";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
@@ -50,6 +51,8 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const allTeams = useMemo<Team[]>(() => fetchedTeams ?? [], [fetchedTeams]);
 
   const [selectedKeyId, setSelectedKeyId] = useQueryState("key", parseAsString.withOptions({ history: "push" }));
+  const clearSelectedKey = useCallback(() => void setSelectedKeyId(null, { history: "replace" }), [setSelectedKeyId]);
+  const { markOpened, close: closeKeyDetail } = useDetailHistoryClose(clearSelectedKey);
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
   const [tablePagination, setTablePagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -105,8 +108,16 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   }, []);
 
   const columns = useMemo(
-    () => getKeyTableColumns({ allTeams, organizations, onSelectKey: (key) => void setSelectedKeyId(key.token) }),
-    [allTeams, organizations, setSelectedKeyId],
+    () =>
+      getKeyTableColumns({
+        allTeams,
+        organizations,
+        onSelectKey: (key) => {
+          markOpened();
+          void setSelectedKeyId(key.token);
+        },
+      }),
+    [allTeams, organizations, markOpened, setSelectedKeyId],
   );
 
   const selectedKeyFromList = useMemo(
@@ -161,7 +172,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
       <div className="w-full h-full overflow-hidden">
         <KeyInfoView
           keyId={selectedKeyId}
-          onClose={() => void setSelectedKeyId(null, { history: "replace" })}
+          onClose={closeKeyDetail}
           keyData={selectedKey}
           teams={allTeams}
           onDelete={refetch}

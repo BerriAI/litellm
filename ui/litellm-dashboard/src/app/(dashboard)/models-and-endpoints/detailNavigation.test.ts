@@ -47,6 +47,24 @@ describe("useModelDetailRouting", () => {
     expect(event?.options.history).toBe("replace");
   });
 
+  it("close after an in-session open pops the pushed entry instead of writing the URL", async () => {
+    const backSpy = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+    const { result } = renderHook(() => useModelDetailRouting(), {
+      wrapper: withNuqsTestingAdapter({ onUrlUpdate }),
+    });
+    await act(async () => {
+      result.current.openModel("abc-1");
+    });
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    await act(async () => {
+      result.current.close();
+    });
+    expect(backSpy).toHaveBeenCalledTimes(1);
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].options.history).toBe("push");
+    backSpy.mockRestore();
+  });
+
   it("reads modelId and teamId from the query string", () => {
     const { result } = renderHook(() => useModelDetailRouting(), {
       wrapper: withNuqsTestingAdapter({ searchParams: "?model=xyz" }),

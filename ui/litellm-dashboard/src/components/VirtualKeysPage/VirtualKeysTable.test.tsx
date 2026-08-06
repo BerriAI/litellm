@@ -392,6 +392,29 @@ it("renders KeyInfoView when the URL has ?key= for a key on the current page, wi
   expect(screen.getByTestId("pagination-range")).toBeInTheDocument();
 });
 
+it("closing a key opened this session pops history instead of writing the URL", async () => {
+  const backSpy = vi.spyOn(window.history, "back").mockImplementation(() => {});
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
+
+  await waitFor(() => {
+    expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+  });
+  fireEvent.click(screen.getByText("Test Key Alias"));
+  await waitFor(() => {
+    expect(screen.getByText("Back to Keys")).toBeInTheDocument();
+  });
+  expect(lastKeyParam(onUrlUpdate)).toBe(mockKey.token);
+
+  fireEvent.click(screen.getByText("Back to Keys"));
+
+  await waitFor(() => {
+    expect(backSpy).toHaveBeenCalledTimes(1);
+  });
+  expect(onUrlUpdate.mock.calls.at(-1)?.[0].options.history).toBe("push");
+  backSpy.mockRestore();
+});
+
 it("fetches the key by id when the URL has ?key= for a key not in the loaded page", async () => {
   mockUseKeyInfo.mockReturnValue(
     keyInfoResult({ ...mockKey, token: "other-key-hash", key_alias: "Fetched Key Alias" }),

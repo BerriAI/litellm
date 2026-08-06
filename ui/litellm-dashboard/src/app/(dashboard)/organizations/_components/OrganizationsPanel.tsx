@@ -1,9 +1,10 @@
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useUserModels } from "@/app/(dashboard)/hooks/models/useModels";
 import OrganizationFilters, { FilterState } from "@/app/(dashboard)/organizations/OrganizationFilters";
+import { useDetailHistoryClose } from "@/app/(dashboard)/hooks/useDetailHistoryClose";
 import { useQueryClient } from "@tanstack/react-query";
 import { parseAsString, useQueryState } from "nuqs";
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { organizationDeleteCall } from "@/components/networking";
@@ -21,6 +22,8 @@ interface OrganizationsPanelProps {
 
 const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, accessToken, premiumUser }) => {
   const [selectedOrgId, setSelectedOrgId] = useQueryState("org", parseAsString.withOptions({ history: "push" }));
+  const clearSelectedOrg = useCallback(() => void setSelectedOrgId(null, { history: "replace" }), [setSelectedOrgId]);
+  const { markOpened: markOrgOpened, close: closeOrgDetail } = useDetailHistoryClose(clearSelectedOrg);
   const [editOrg, setEditOrg] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [orgToDelete, setOrgToDelete] = useState<string | null>(null);
@@ -109,7 +112,7 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
         <OrganizationInfoView
           organizationId={selectedOrgId}
           onClose={() => {
-            void setSelectedOrgId(null, { history: "replace" });
+            closeOrgDetail();
             setEditOrg(false);
           }}
           accessToken={accessToken}
@@ -135,9 +138,11 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
             searchActive={searchActive}
             onOrganizationClick={(organizationId) => {
               setEditOrg(false);
+              markOrgOpened();
               void setSelectedOrgId(organizationId);
             }}
             onEditClick={(organizationId) => {
+              markOrgOpened();
               void setSelectedOrgId(organizationId);
               setEditOrg(true);
             }}

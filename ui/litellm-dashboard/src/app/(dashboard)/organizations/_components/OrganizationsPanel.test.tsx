@@ -142,6 +142,19 @@ describe("OrganizationsPanel - org detail deep link (?org=)", () => {
     expect(screen.getByTestId("organizations-table")).toBeInTheDocument();
   });
 
+  it("closing an org opened this session pops history instead of writing the URL", async () => {
+    const backSpy = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    renderPanel();
+
+    act(() => capturedTableProps?.onOrganizationClick("org-in-session"));
+    await waitFor(() => expect(mockOrgInfoView).toHaveBeenCalled());
+
+    act(() => mockOrgInfoView.mock.calls.at(-1)?.[0].onClose());
+
+    expect(backSpy).toHaveBeenCalledTimes(1);
+    backSpy.mockRestore();
+  });
+
   it("the edit action opens the detail in edit mode with ?org= set", async () => {
     renderPanel();
 
