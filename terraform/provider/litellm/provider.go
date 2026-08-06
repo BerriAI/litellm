@@ -19,10 +19,12 @@ func Provider() *schema.Provider {
 			"litellm_mcp_server":              resourceLiteLLMMCPServer(),
 			"litellm_credential":              resourceLiteLLMCredential(),
 			"litellm_vector_store":            resourceLiteLLMVectorStore(),
+			"litellm_guardrail":               resourceLiteLLMGuardrail(),
 		},
 		DataSourcesMap: map[string]*schema.Resource{
 			"litellm_credential":   dataSourceLiteLLMCredential(),
 			"litellm_vector_store": dataSourceLiteLLMVectorStore(),
+			"litellm_guardrail":    dataSourceLiteLLMGuardrail(),
 		},
 		Schema: map[string]*schema.Schema{
 			"api_base": {
