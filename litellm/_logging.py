@@ -21,16 +21,20 @@ _MAX_CORRELATION_ID_LENGTH: Final = 256
 
 
 def _sanitize_correlation_id(value: str) -> str:
-    """Strip control characters and bound length before a caller-controlled
-    trace_id/session_id (e.g. litellm_session_id, x-litellm-trace-id) is
-    stamped into log lines.
+    """Strip control characters, bound length, and redact credential-shaped
+    content before a caller-controlled trace_id/session_id (e.g.
+    litellm_session_id, x-litellm-trace-id) is stamped into log lines.
 
-    Without this, a caller could embed \\r/\\n or terminal escape sequences to
-    forge fake log entries, or submit an oversized value repeated across every
-    log line for the request.
+    Without the first two, a caller could embed \\r/\\n or terminal escape
+    sequences to forge fake log entries, or submit an oversized value repeated
+    across every log line for the request. Without the redaction, a caller
+    could smuggle a real credential (e.g. an sk-... key) through this field:
+    CorrelationContextFilter stamps trace_id/session_id onto the record after
+    SecretRedactionFilter has already run, so those two fields never otherwise
+    pass through credential redaction.
     """
     stripped: Final = "".join(ch for ch in value if ch.isprintable())
-    return stripped[:_MAX_CORRELATION_ID_LENGTH]
+    return _redact_string(stripped[:_MAX_CORRELATION_ID_LENGTH])
 
 
 def set_session_id(session_id: str) -> "contextvars.Token[str]":

@@ -476,6 +476,30 @@ def test_trace_id_and_session_id_cannot_be_injected_with_no_active_context(monke
     assert "session_id" not in cap.records[0]
 
 
+def test_trace_id_and_session_id_are_redacted_when_credential_shaped(monkeypatch):
+    """A caller-controlled trace_id/session_id (e.g. from x-litellm-trace-id or a W3C
+    baggage header) that happens to look like a real credential must not reach log
+    records unredacted. CorrelationContextFilter stamps trace_id/session_id onto the
+    record after SecretRedactionFilter has already run, so those two fields would
+    otherwise bypass credential redaction entirely - the fix redacts at set_trace_id()/
+    set_session_id() time instead, before the value ever reaches a log record."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_capture_logger("test.credential_shaped_correlation_id")
+    poisoned_trace_id = "sk-ant-api03-" + "A" * 40
+    poisoned_session_id = "AKIA" + "B" * 16
+    set_trace_id(poisoned_trace_id)
+    set_session_id(poisoned_session_id)
+    try:
+        lg.info("some benign log line")
+        assert cap.records[0]["trace_id"] == "REDACTED"
+        assert cap.records[0]["session_id"] == "REDACTED"
+        assert poisoned_trace_id not in json.dumps(cap.records[0])
+        assert poisoned_session_id not in json.dumps(cap.records[0])
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
 def test_session_id_absent_when_not_set():
     """session_id must NOT appear in JSON record when not set for this context."""
     lg, cap = _make_capture_logger("test.no_session")
