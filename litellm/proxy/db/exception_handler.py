@@ -176,7 +176,11 @@ class PrismaDBExceptionHandler:
         if getattr(e, "code", None) == "P2034":
             return True
         error_message = str(e).lower()
-        return "deadlock detected" in error_message or "40p01" in error_message
+        return (
+            "deadlock detected" in error_message
+            or "40p01" in error_message
+            or "write conflict or a deadlock" in error_message
+        )
 
     @staticmethod
     def is_prisma_engine_internal_error(e: Exception) -> bool:
