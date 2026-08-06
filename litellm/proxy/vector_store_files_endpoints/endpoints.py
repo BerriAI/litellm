@@ -30,6 +30,29 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 
+def _merge_credentials_keeping_requested_model(
+    data: dict,
+    credentials: dict,
+    requested_model: str | None,
+    file_id: str | None = None,
+) -> None:
+    """
+    Merge deployment credentials into the request while keeping the caller's
+    model group name in ``model``.
+
+    Vector store file routes dispatch through the Router, which resolves the
+    deployment from ``data["model"]``. ``get_deployment_credentials_with_provider``
+    returns the deployment's underlying ``litellm_params.model``, so merging it
+    verbatim erases the requested group: when several groups share one provider
+    model, the Router falls back to matching by litellm model and can serve the
+    request from a different group, with that group's access restrictions,
+    settings and spend attribution.
+    """
+    prepare_data_with_credentials(data=data, credentials=credentials, file_id=file_id)
+    if requested_model is not None:
+        data["model"] = requested_model
+
+
 def _update_request_data_with_managed_file_id(
     data: dict,
     file_id: str,
@@ -104,9 +127,10 @@ def _update_request_data_with_managed_file_id(
                 if llm_router:
                     credentials = llm_router.get_deployment_credentials_with_provider(model_id=routing_model)
                     if credentials:
-                        prepare_data_with_credentials(
+                        _merge_credentials_keeping_requested_model(
                             data=data,
                             credentials=credentials,
+                            requested_model=routing_model,
                             file_id=llm_output_file_id,  # Use the actual provider file ID
                         )
                         verbose_logger.info(
@@ -141,9 +165,10 @@ def _update_request_data_with_managed_file_id(
 
     if should_route:
         # Use model-based routing with credentials from config
-        prepare_data_with_credentials(
+        _merge_credentials_keeping_requested_model(
             data=data,
             credentials=credentials,
+            requested_model=model_used,
             file_id=original_file_id,  # Use decoded file ID if from encoded ID
         )
 
@@ -236,6 +261,7 @@ async def _update_request_data_with_model_routing_hint(
 
     should_route = False
     credentials = None
+    routed_model: str | None = None
     if isinstance(model_hint, str) and "*" in model_hint:
         if llm_router is not None:
             if should_authorize_model_hint:
@@ -248,6 +274,7 @@ async def _update_request_data_with_model_routing_hint(
                 model_id=model_hint, team_id=caller_team_id
             )
             should_route = credentials is not None
+            routed_model = model_hint
     else:
         if isinstance(model_hint, str) and should_authorize_model_hint:
             await _authorize_model_routing_hint(
@@ -257,7 +284,7 @@ async def _update_request_data_with_model_routing_hint(
             )
         (
             should_route,
-            _model_used,
+            routed_model,
             _original_file_id,
             credentials,
         ) = handle_model_based_routing(
@@ -269,9 +296,10 @@ async def _update_request_data_with_model_routing_hint(
         )
 
     if should_route and credentials is not None:
-        prepare_data_with_credentials(
+        _merge_credentials_keeping_requested_model(
             data=data,
             credentials=credentials,
+            requested_model=routed_model,
         )
         return data
 
@@ -293,6 +321,7 @@ async def _update_request_data_with_model_routing_hint(
         model_names_to_check.append(model_name)
 
     openai_credentials = None
+    openai_credentials_model = None
     for model_name in model_names_to_check:
         credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_name, team_id=caller_team_id)
         if credentials is None:
@@ -313,9 +342,14 @@ async def _update_request_data_with_model_routing_hint(
         if openai_credentials is not None:
             return data
         openai_credentials = credentials
+        openai_credentials_model = model_name
 
     if openai_credentials is not None:
-        prepare_data_with_credentials(data=data, credentials=openai_credentials)
+        _merge_credentials_keeping_requested_model(
+            data=data,
+            credentials=openai_credentials,
+            requested_model=openai_credentials_model,
+        )
     elif len(model_names_to_check) == 1:
         await _authorize_model_routing_hint(
             model=model_names_to_check[0],
