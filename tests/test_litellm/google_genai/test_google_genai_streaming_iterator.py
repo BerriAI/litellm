@@ -1,5 +1,6 @@
+import asyncio
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -8,6 +9,43 @@ from litellm.google_genai.streaming_iterator import (
     GoogleGenAIGenerateContentStreamingIterator,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "custom_llm_provider, expected_endpoint_type",
+    [("gemini", EndpointType.GEMINI), ("vertex_ai", EndpointType.VERTEX_AI)],
+)
+async def test_streaming_logging_routes_to_the_provider_that_served_the_request(
+    custom_llm_provider, expected_endpoint_type
+):
+    """Routing every google stream through the vertex handler bills gemini/* at vertex_ai/ rates."""
+    mock_response = MagicMock()
+
+    async def _aiter_lines():
+        yield 'data: {"candidates": []}'
+
+    mock_response.aiter_lines = _aiter_lines
+
+    iterator = AsyncGoogleGenAIGenerateContentStreamingIterator(
+        response=mock_response,
+        model="gemini-3.1-flash-image",
+        logging_obj=MagicMock(spec=LiteLLMLoggingObj),
+        generate_content_provider_config=MagicMock(),
+        litellm_metadata={},
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.streaming_handler.PassThroughStreamingHandler._route_streaming_logging_to_handler",
+        new=AsyncMock(),
+    ) as mock_route:
+        async for _ in iterator:
+            pass
+
+    await asyncio.sleep(0)
+    assert mock_route.call_args.kwargs["endpoint_type"] == expected_endpoint_type
 
 
 def _large_inline_data_event() -> str:
