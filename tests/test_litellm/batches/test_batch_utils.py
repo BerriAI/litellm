@@ -708,6 +708,27 @@ async def test_handle_completed_batch_orchestration(monkeypatch):
     assert models == ["gpt-4o"]
 
 
+@pytest.mark.asyncio
+async def test_handle_completed_batch_no_output_file_is_zero(monkeypatch):
+    """
+    Regression: an all-error batch completes with output_file_id=None (results go
+    to a separate error_file_id). _handle_completed_batch must report an empty
+    result set - zero cost, zero usage, no models - instead of letting the file
+    fetch raise "Output file id is None" on every aretrieve_batch logging poll.
+    """
+    # The output-file fetch must not even be attempted when there is no output file.
+    async def _must_not_fetch(*args, **kwargs):
+        pytest.fail("_get_batch_output_file_content_as_dictionary should not be called")
+
+    monkeypatch.setattr(bu, "_get_batch_output_file_content_as_dictionary", _must_not_fetch)
+
+    cost, usage, models = await bu._handle_completed_batch(_batch(None), custom_llm_provider="openai")
+
+    assert cost == 0.0
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (0, 0, 0)
+    assert models == []
+
+
 # =========================================================================== #
 # Remaining branch: vertex usage disable-transform path.
 #
