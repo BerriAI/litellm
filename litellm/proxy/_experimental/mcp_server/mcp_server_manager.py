@@ -3375,10 +3375,10 @@ class MCPServerManager:
 
                 static_headers: Final = server.static_headers or {}
                 has_static_authorization: Final = any(
-                    isinstance(k, str) and k.lower() == "authorization" for k in static_headers.keys()
+                    isinstance(k, str) and k.lower() == "authorization" for k in static_headers
                 )
                 has_extra_authorization: Final = bool(extra_headers) and any(
-                    isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or {}).keys()
+                    isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or {})
                 )
 
                 if (
@@ -4419,7 +4419,7 @@ class MCPServerManager:
         allowed_params_list: Final = allowed_params[matched]
 
         # Filter arguments to only include allowed parameters
-        disallowed_params: Final = [param for param in arguments.keys() if param not in allowed_params_list]
+        disallowed_params: Final = [param for param in arguments if param not in allowed_params_list]
 
         if disallowed_params:
             raise HTTPException(

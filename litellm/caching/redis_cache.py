@@ -18,7 +18,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextvars import ContextVar
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Final, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     cluster_pipeline = ClusterPipeline
     async_redis_client = Redis
     async_redis_cluster_client = RedisCluster
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     pipeline = Any
     cluster_pipeline = Any

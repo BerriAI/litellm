@@ -26,9 +26,14 @@ export interface ComplexityTiers {
 export interface ClassifierLLMConfig {
   model: string;
   timeout_ms: number;
+  system_prompt?: string;
 }
 
 export type ClassifierType = "heuristic" | "llm";
+
+export type ClassifierFallback = "heuristic" | "default_model";
+
+export const DEFAULT_CLASSIFIER_FALLBACK: ClassifierFallback = "heuristic";
 
 export interface AdaptiveRouterWeights {
   quality: number;
@@ -49,6 +54,7 @@ export interface ComplexityRouterConfigValue {
   classifier_context_window_size?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
+  classifier_fallback?: ClassifierFallback;
   session_affinity?: boolean;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
@@ -127,6 +133,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onEscalationKeywordsChange,
   showValidationErrors = false,
 }) => {
+  // The deployment's default model is derived from the tiers on submit, mirroring the order
+  // add_auto_router_tab uses, so the fallback option is offered exactly when one will exist.
+  const hasDefaultModel = Boolean(
+    value.tiers.MEDIUM[0] || value.tiers.SIMPLE[0] || value.tiers.COMPLEX[0] || value.tiers.REASONING[0],
+  );
+
   // Embedding models can't serve a chat-completion role, so they're excluded here.
   const modelOptions = modelInfo
     .filter((model) => model.mode !== "embedding")
@@ -251,6 +263,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 customTechnicalKeywords={customTechnicalKeywords}
                 onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
                 showValidationErrors={showValidationErrors}
+                hasDefaultModel={hasDefaultModel}
               />
             ),
           },

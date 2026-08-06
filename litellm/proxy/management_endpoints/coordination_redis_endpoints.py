@@ -33,6 +33,7 @@ from litellm.proxy._types import (
     LitellmTableNames,
     LitellmUserRoles,
     UserAPIKeyAuth,
+    user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.utils import invalidate_config_param
@@ -302,7 +303,8 @@ async def get_coordination_redis_settings(
     - fields: all configurable settings with their metadata (type, description, default, section)
     - source: "coordination_redis" | "cache_backend" | "environment" | null
     """
-    _enforce_proxy_admin(user_api_key_dict)
+    if not user_api_key_has_admin_view(user_api_key_dict):
+        _enforce_proxy_admin(user_api_key_dict)
 
     settings: Final = await _current_coordination_redis_settings()
     source: Final = _coordination_redis_source(settings)
