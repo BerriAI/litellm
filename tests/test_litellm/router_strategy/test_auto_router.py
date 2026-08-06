@@ -1,7 +1,8 @@
 import asyncio
+import json
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Final, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -316,3 +317,165 @@ class TestAutoRouter:
 
         # Assert
         assert result is None
+
+
+semantic_router = pytest.importorskip("semantic_router", reason="auto-router needs the semantic-router extra")
+
+ROUTER_CONFIG: Final = json.dumps(
+    {
+        "routes": [
+            {
+                "name": "code-model",
+                "description": "coding asks",
+                "utterances": ["fix this stack trace", "refactor this function"],
+                "score_threshold": 0.5,
+            }
+        ]
+    }
+)
+
+
+class FailingRouteLayer:
+    """Route layer whose embedding call fails, as it does when the prompt exceeds the encoder's window."""
+
+    def __call__(self, text: str) -> Any:
+        raise ValueError(
+            "Internal_litellm_router API call failed. Error: litellm.InternalServerError: "
+            "input is too large to process. increase the physical batch size"
+        )
+
+
+class FixedRouteLayer:
+    """Route layer that returns whatever the test tells it to, recording the text it was asked about."""
+
+    def __init__(self, route_choice: Any) -> None:
+        self.route_choice = route_choice
+        self.seen_text: str | None = None
+
+    def __call__(self, text: str) -> Any:
+        self.seen_text = text
+        return self.route_choice
+
+
+class StubEmbeddingRouter:
+    """Stands in for the LiteLLM Router when the route index has to be built for real."""
+
+    def embedding(self, input: List[str], model: str, **kwargs: Any) -> Any:
+        import litellm
+
+        return litellm.EmbeddingResponse(
+            data=[{"embedding": [0.1, 0.2], "index": i, "object": "embedding"} for i in range(len(input))]
+        )
+
+
+def _auto_router(routelayer: Any, litellm_router_instance: Any = None, **kwargs: Any) -> AutoRouter:
+    auto_router: Final = AutoRouter(
+        model_name="my-auto-router",
+        auto_router_config=ROUTER_CONFIG,
+        default_model="fallback-model",
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=litellm_router_instance or MagicMock(),
+        **kwargs,
+    )
+    auto_router.routelayer = routelayer
+    return auto_router
+
+
+class TestAutoRouterAlwaysResolvesARoutableModel:
+    """The hook returns the alias's default model instead of failing or leaking the alias downstream."""
+
+    @pytest.mark.asyncio
+    async def test_should_fall_back_to_default_model_when_the_embedding_call_fails(self):
+        auto_router: Final = _auto_router(FailingRouteLayer())
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "a" * 100_000}],
+        )
+
+        assert result is not None
+        assert result.model == "fallback-model"
+
+    @pytest.mark.asyncio
+    async def test_should_fall_back_to_default_model_when_no_route_matches(self):
+        auto_router: Final = _auto_router(FixedRouteLayer(None))
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "nothing like any route"}],
+        )
+
+        assert result is not None
+        # Leaving "my-auto-router" here fails downstream with "Unmapped LLM provider".
+        assert result.model == "fallback-model"
+
+    @pytest.mark.asyncio
+    async def test_should_fall_back_to_default_model_when_the_route_layer_returns_an_empty_list(self):
+        auto_router: Final = _auto_router(FixedRouteLayer([]))
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "nothing like any route"}],
+        )
+
+        assert result is not None
+        assert result.model == "fallback-model"
+
+    @pytest.mark.asyncio
+    async def test_should_route_to_the_first_choice_when_the_route_layer_returns_a_populated_list(self):
+        from semantic_router.schema import RouteChoice
+
+        auto_router: Final = _auto_router(
+            FixedRouteLayer([RouteChoice(name="code-model"), RouteChoice(name="chat-model")])
+        )
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "fix this stack trace"}],
+        )
+
+        assert result is not None
+        assert result.model == "code-model"
+
+    @pytest.mark.asyncio
+    async def test_should_still_route_to_the_matched_route_when_one_matches(self):
+        from semantic_router.schema import RouteChoice
+
+        layer: Final = FixedRouteLayer(RouteChoice(name="code-model"))
+        auto_router: Final = _auto_router(layer)
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "fix this stack trace"}],
+        )
+
+        assert result is not None
+        assert result.model == "code-model"
+        assert layer.seen_text == "fix this stack trace"
+
+
+class TestAutoRouterEmbeddingInputCap:
+    """The cap configured on the deployment is what the encoder enforces."""
+
+    def test_should_default_the_cap_to_the_shared_constant(self):
+        from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
+
+        assert _auto_router(FixedRouteLayer(None)).max_input_chars == DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
+
+    @pytest.mark.asyncio
+    async def test_should_build_its_encoder_with_the_configured_cap(self):
+        auto_router: Final = _auto_router(None, litellm_router_instance=StubEmbeddingRouter(), max_input_chars=777)
+
+        await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "fix this stack trace"}],
+        )
+
+        assert auto_router.routelayer is not None
+        assert auto_router.routelayer.encoder.max_input_chars == 777

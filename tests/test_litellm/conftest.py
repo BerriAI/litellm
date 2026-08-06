@@ -19,6 +19,7 @@ sys.path.insert(
 import asyncio
 
 import litellm
+from litellm import utils as litellm_utils_module
 from litellm._logging import ALL_LOGGERS
 from litellm.litellm_core_utils.prompt_templates import (
     image_handling as image_handling_module,
@@ -238,6 +239,11 @@ def isolate_litellm_state():
         if hasattr(litellm, _attr):
             original_state[_attr] = getattr(litellm, _attr)
 
+    original_runtime_registered_model_cost = {
+        model_key: dict(model_value)
+        for model_key, model_value in litellm_utils_module._runtime_registered_model_cost.items()
+    }
+
     # Store LiteLLM logger state. Some tests reconfigure handlers/propagation for
     # JSON logging and do not restore them, which breaks later caplog-based tests.
     logger_state = {}
@@ -303,6 +309,9 @@ def isolate_litellm_state():
     for attr_name, original_value in original_state.items():
         if hasattr(litellm, attr_name):
             setattr(litellm, attr_name, original_value)
+
+    litellm_utils_module._runtime_registered_model_cost.clear()
+    litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
 
     # Restore logger configuration mutated by logging-focused tests.
     for logger in ALL_LOGGERS:
