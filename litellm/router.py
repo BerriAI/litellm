@@ -20,8 +20,8 @@ import time
 import traceback
 import weakref
 from collections import defaultdict
-from collections.abc import AsyncGenerator, Callable, Generator, Mapping, Sequence
-from functools import lru_cache
+from collections.abc import AsyncGenerator, Callable, Generator, Iterator, Mapping, Sequence
+from functools import lru_cache, reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, Union, cast
 
@@ -252,6 +252,35 @@ else:
     AdaptiveRouter = Any
     QualityRouter = Any
     PreRoutingHookResponse = Any
+
+
+def _iter_complexity_router_session_affinity_groups(
+    complexity_router: "ComplexityRouter",
+) -> Iterator[tuple[str, int]]:
+    config: Final = complexity_router.config
+    if not config.session_affinity or config.plugins:
+        return
+
+    for tier_value in config.tiers.values():
+        for model_group in tier_value if isinstance(tier_value, list) else (tier_value,):
+            yield model_group, config.session_affinity_ttl_seconds
+
+    if config.default_model is not None:
+        yield config.default_model, config.session_affinity_ttl_seconds
+
+
+def _merge_minimum_session_affinity_ttl(
+    group_ttls: Mapping[str, int],
+    group_ttl: tuple[str, int],
+) -> Mapping[str, int]:
+    model_group, ttl = group_ttl
+    existing_ttl: Final[int | None] = group_ttls.get(model_group)
+    return MappingProxyType(
+        {
+            **group_ttls,
+            model_group: ttl if existing_ttl is None else min(existing_ttl, ttl),
+        }
+    )
 
 
 def _cost_value_as_float(value: str | float | None) -> float | None:
@@ -7622,42 +7651,24 @@ class Router:
         return classify_strategy_router_model(litellm_params.model) == "complexity"
 
     def _get_complexity_router_session_affinity_group_ttls(self) -> Mapping[str, int]:
-        entries: Final = tuple(
-            (model_group, tagged_strategy.strategy.config.session_affinity_ttl_seconds)
-            for strategies in self.complexity_routers.values()
-            for tagged_strategy in strategies
-            if tagged_strategy.strategy.config.session_affinity and not tagged_strategy.strategy.config.plugins
-            for configured_models in (
-                tuple(
-                    model
-                    for tier_value in tagged_strategy.strategy.config.tiers.values()
-                    for model in (tier_value if isinstance(tier_value, list) else (tier_value,))
-                ),
-            )
-            for model_group in configured_models
-        )
-        entries_with_defaults: Final = entries + tuple(
+        return reduce(
+            _merge_minimum_session_affinity_ttl,
             (
-                tagged_strategy.strategy.config.default_model,
-                tagged_strategy.strategy.config.session_affinity_ttl_seconds,
-            )
-            for strategies in self.complexity_routers.values()
-            for tagged_strategy in strategies
-            if tagged_strategy.strategy.config.session_affinity
-            and not tagged_strategy.strategy.config.plugins
-            and tagged_strategy.strategy.config.default_model is not None
-        )
-        groups: Final = frozenset(model_group for model_group, _ in entries_with_defaults)
-        return MappingProxyType(
-            {
-                model_group: min(
-                    ttl for candidate_group, ttl in entries_with_defaults if candidate_group == model_group
-                )
-                for model_group in groups
-            }
+                group_ttl
+                for strategies in self.complexity_routers.values()
+                for tagged_strategy in strategies
+                for group_ttl in _iter_complexity_router_session_affinity_groups(tagged_strategy.strategy)
+            ),
+            MappingProxyType({}),
         )
 
     def _ensure_deployment_affinity_check(self) -> None:
+        """
+        Ensure deployment affinity exists when explicit group settings or complexity routing require it.
+
+        Explicit model-group settings can enable affinity while global flags remain false, so those settings
+        also require the callback to exist. Otherwise the callback stays absent when nothing needs pinning.
+        """
         if self.optional_callbacks is None:
             self.optional_callbacks = []
 
@@ -7728,7 +7739,8 @@ class Router:
             strategy=complexity_router,
             strategy_label="Complexity-router",
         )
-        self._ensure_deployment_affinity_check()
+        if self._get_complexity_router_session_affinity_group_ttls():
+            self._ensure_deployment_affinity_check()
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""

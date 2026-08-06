@@ -70,8 +70,7 @@ class DeploymentAffinityCheck(CustomLogger):
             unknown = set(flags) - self.VALID_FLAGS
             if unknown:
                 verbose_router_logger.warning(
-                    "DeploymentAffinityCheck: unknown flag(s) %s for model group '%s'; will be ignored. "
-                    "Valid flags: %s",
+                    "DeploymentAffinityCheck: unknown flag(s) %s for model group '%s'; will be ignored. Valid flags: %s",
                     unknown,
                     group,
                     self.VALID_FLAGS,
@@ -464,7 +463,7 @@ class DeploymentAffinityCheck(CustomLogger):
             self._get_session_id_from_request_kwargs(request_kwargs=kwargs) if enable_session_id else None
         )
 
-        if user_key is None and session_id is None:
+        if (enable_user_key and user_key is None) and (enable_session_id and session_id is None):
             return None
 
         model_info = kwargs.get("model_info")
@@ -488,7 +487,7 @@ class DeploymentAffinityCheck(CustomLogger):
             verbose_router_logger.warning("DeploymentAffinityCheck: model_id missing; skipping affinity cache update.")
             return None
 
-        if user_key is not None:
+        if enable_user_key and user_key is not None:
             try:
                 cache_key: Final = self.get_affinity_cache_key(model_group=deployment_model_name, user_key=user_key)
                 await self.cache.async_set_cache(
@@ -525,8 +524,7 @@ class DeploymentAffinityCheck(CustomLogger):
                     ttl=session_affinity_ttl,
                 )
                 verbose_router_logger.debug(
-                    "DeploymentAffinityCheck: set session affinity mapping model_map_key=%s deployment=%s "
-                    "ttl=%s session_id=%s",
+                    "DeploymentAffinityCheck: set session affinity mapping model_map_key=%s deployment=%s ttl=%s session_id=%s",
                     deployment_model_name,
                     model_id,
                     session_affinity_ttl,

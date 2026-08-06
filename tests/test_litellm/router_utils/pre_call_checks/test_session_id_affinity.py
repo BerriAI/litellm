@@ -1,6 +1,6 @@
+import asyncio
 import os
 import sys
-import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -99,7 +99,7 @@ def _responses_mock() -> MockResponse:
     )
 
 
-def _deterministic_choice():
+def _first_then_last_choice():
     choice_calls = {"count": 0}
 
     def choose(sequence):
@@ -212,6 +212,32 @@ async def test_async_session_id_affinity_routes_to_same_deployment():
 
 @pytest.mark.asyncio
 async def test_complexity_router_session_affinity_pins_deployment_and_scopes_api_key():
+    baseline_router = _complexity_router(session_affinity=False)
+
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post,
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=_first_then_last_choice(),
+        ),
+    ):
+        mock_post.return_value = _responses_mock()
+        baseline_first = await baseline_router.aresponses(
+            model="smart-router",
+            input="Hello",
+            metadata={"session_id": "shared-session", "user_api_key_hash": "key-1"},
+        )
+        baseline_second = await baseline_router.aresponses(
+            model="smart-router",
+            input="Follow-up",
+            metadata={"session_id": "shared-session", "user_api_key_hash": "key-1"},
+        )
+
+    assert baseline_first._hidden_params["model_id"] != baseline_second._hidden_params["model_id"]
+
     router = _complexity_router()
 
     with (
@@ -221,7 +247,7 @@ async def test_complexity_router_session_affinity_pins_deployment_and_scopes_api
         ) as mock_post,
         patch(
             "litellm.router_strategy.simple_shuffle.random.choice",
-            side_effect=_deterministic_choice(),
+            side_effect=_first_then_last_choice(),
         ),
     ):
         mock_post.return_value = _responses_mock()
@@ -262,7 +288,7 @@ async def test_complexity_router_affinity_falls_back_when_pinned_deployment_is_i
         ) as mock_post,
         patch(
             "litellm.router_strategy.simple_shuffle.random.choice",
-            side_effect=_deterministic_choice(),
+            side_effect=_first_then_last_choice(),
         ),
     ):
         mock_post.return_value = _responses_mock()
@@ -313,9 +339,11 @@ async def test_complexity_router_session_affinity_uses_router_configured_ttl():
         session_id="ttl-session",
         user_key="key-1",
     )
-    assert (session_cache_key, {"model_id": "deployment-1"}) in [
-        (call.args[0], call.args[1]) for call in cache.async_set_cache.call_args_list
-    ]
+    assert cache.async_set_cache.call_count == 1
+    assert cache.async_set_cache.call_args.args[:2] == (
+        session_cache_key,
+        {"model_id": "deployment-1"},
+    )
     assert any(call.kwargs.get("ttl") == 17 for call in cache.async_set_cache.call_args_list)
 
 
@@ -330,7 +358,7 @@ async def test_complexity_router_session_affinity_expires_and_reselects():
         ) as mock_post,
         patch(
             "litellm.router_strategy.simple_shuffle.random.choice",
-            side_effect=_deterministic_choice(),
+            side_effect=_first_then_last_choice(),
         ),
     ):
         mock_post.return_value = _responses_mock()
@@ -349,7 +377,7 @@ async def test_complexity_router_session_affinity_expires_and_reselects():
     assert second_response._hidden_params["model_id"] != first_response._hidden_params["model_id"]
 
 
-def test_complexity_router_registers_model_pool_groups_and_respects_disabled_affinity():
+def test_complexity_router_registers_model_pool_groups():
     router = _complexity_router(
         session_affinity=True,
         tiers={"SIMPLE": ["target-group", "pool-group"], "MEDIUM": "target-group"},
@@ -358,13 +386,11 @@ def test_complexity_router_registers_model_pool_groups_and_respects_disabled_aff
         "target-group": 7,
         "pool-group": 7,
     }
-    disabled_router = _complexity_router(session_affinity=False)
-    callback = next(
-        callback
-        for callback in disabled_router.optional_callbacks or []
-        if isinstance(callback, DeploymentAffinityCheck)
-    )
-    assert callback._get_effective_flags("target-group")[2] is False
+
+
+def test_complexity_router_without_session_affinity_does_not_register_callback():
+    router = _complexity_router(session_affinity=False)
+    assert not any(isinstance(callback, DeploymentAffinityCheck) for callback in router.optional_callbacks or [])
 
 
 def test_complexity_router_plugins_do_not_enable_deployment_affinity():
@@ -374,6 +400,40 @@ def test_complexity_router_plugins_do_not_enable_deployment_affinity():
 
     router = _complexity_router(plugins=[NoOpPlugin()])
     assert dict(router._get_complexity_router_session_affinity_group_ttls()) == {}
+    assert not any(isinstance(callback, DeploymentAffinityCheck) for callback in router.optional_callbacks or [])
+
+
+@pytest.mark.asyncio
+async def test_session_affinity_without_stable_model_map_key_falls_back_to_normal_selection():
+    callback = DeploymentAffinityCheck(
+        cache=DualCache(),
+        ttl_seconds=60,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        session_affinity_group_ttls=lambda: {"mixed-group": 60},
+    )
+    healthy_deployments = [
+        {
+            "model_name": "mixed-group",
+            "litellm_params": {"model": "azure/deployment-1"},
+            "model_info": {"id": "deployment-1"},
+        },
+        {
+            "model_name": "mixed-group",
+            "litellm_params": {"model": "bedrock/deployment-2"},
+            "model_info": {"id": "deployment-2"},
+        },
+    ]
+
+    filtered_deployments = await callback.async_filter_deployments(
+        model="mixed-group",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={"metadata": {"session_id": "mixed-session"}},
+        parent_otel_span=None,
+    )
+
+    assert filtered_deployments == healthy_deployments
 
 
 @pytest.mark.asyncio
