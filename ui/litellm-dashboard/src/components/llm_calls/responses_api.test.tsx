@@ -280,14 +280,14 @@ describe("responses_api", () => {
       {
         type: "mcp",
         server_label: "Alpha",
-        server_url: "https://example.com/mcp/Alpha",
+        server_url: "litellm_proxy/mcp/Alpha",
         require_approval: "never",
         allowed_tools: ["toolA"],
       },
       {
         type: "mcp",
         server_label: "Beta",
-        server_url: "https://example.com/mcp/Beta",
+        server_url: "litellm_proxy/mcp/Beta",
         require_approval: "never",
         allowed_tools: ["toolB", "toolC"],
       },

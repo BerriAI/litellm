@@ -103,6 +103,7 @@ const MCP_SUPPORTED_ENDPOINTS = new Set<EndpointType>([
   EndpointType.RESPONSES,
   EndpointType.MCP,
   EndpointType.ANTHROPIC_MESSAGES,
+  EndpointType.INTERACTIONS,
 ]);
 
 const CUSTOM_MODEL_DEBOUNCE_WAIT_MS = 500;
@@ -1069,6 +1070,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedTags,
             signal,
             customProxyBaseUrl || undefined,
+            undefined,
+            selectedMCPServers,
+            mcpServers,
+            mcpServerToolRestrictions,
+            mcpToolsets,
           );
         }
       }

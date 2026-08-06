@@ -172,23 +172,22 @@ describe("chat_completion", () => {
 
     const callArgs = mockCreate.mock.calls[0][0];
     expect(callArgs.tool_choice).toBe("auto");
-    expect(callArgs.tools).toHaveLength(2);
-
-    // Check first tool
-    const firstTool = callArgs.tools[0];
-    expect(firstTool.type).toBe("mcp");
-    expect(firstTool.server_label).toBe("litellm");
-    expect(firstTool.server_url).toBe("litellm_proxy/mcp/alpha");
-    expect(firstTool.require_approval).toBe("never");
-    expect(firstTool.allowed_tools).toEqual(["toolA", "toolB"]);
-
-    // Check second tool
-    const secondTool = callArgs.tools[1];
-    expect(secondTool.type).toBe("mcp");
-    expect(secondTool.server_label).toBe("litellm");
-    expect(secondTool.server_url).toBe("litellm_proxy/mcp/Beta");
-    expect(secondTool.require_approval).toBe("never");
-    expect(secondTool.allowed_tools).toEqual(["toolC"]);
+    expect(callArgs.tools).toEqual([
+      {
+        type: "mcp",
+        server_label: "Alpha",
+        server_url: "litellm_proxy/mcp/Alpha",
+        require_approval: "never",
+        allowed_tools: ["toolA", "toolB"],
+      },
+      {
+        type: "mcp",
+        server_label: "Beta",
+        server_url: "litellm_proxy/mcp/Beta",
+        require_approval: "never",
+        allowed_tools: ["toolC"],
+      },
+    ]);
   });
 
   it("should include mock_testing_fallbacks in request body when mockTestFallbacks is true", async () => {

@@ -11,6 +11,7 @@ import {
   handleCodeInterpreterCall,
   handleCodeInterpreterOutput,
 } from "./code_interpreter_handler";
+import { buildMcpToolBlocks } from "./mcp_tool_blocks";
 
 export type { CodeInterpreterResult } from "./code_interpreter_handler";
 
@@ -134,53 +135,15 @@ export async function makeOpenAIResponsesRequest(
       };
     });
 
-    // Build tools array
-    const tools: any[] = [];
+    const tools: Array<Record<string, unknown>> = [
+      ...buildMcpToolBlocks({
+        selectedMCPServers,
+        mcpServers,
+        mcpToolsets,
+        mcpServerToolRestrictions,
+      }),
+    ];
 
-    // Add MCP servers if selected
-    if (selectedMCPServers && selectedMCPServers.length > 0) {
-      if (selectedMCPServers.includes("__all__")) {
-        // All MCP Servers selected
-        tools.push({
-          type: "mcp",
-          server_label: "litellm",
-          server_url: `${proxyBaseUrl}/mcp`,
-          require_approval: "never",
-        });
-      } else {
-        // Individual servers/toolsets selected - create one entry per item
-        selectedMCPServers.forEach((serverId) => {
-          if (serverId.startsWith("toolset:")) {
-            // Toolset: same /{name}/mcp pattern as individual servers
-            const toolsetId = serverId.slice("toolset:".length);
-            const toolset = mcpToolsets?.find((t) => t.toolset_id === toolsetId);
-            const toolsetName = toolset?.toolset_name || toolsetId;
-            tools.push({
-              type: "mcp",
-              server_label: toolsetName,
-              server_url: `${proxyBaseUrl}/mcp/${encodeURIComponent(toolsetName)}`,
-              require_approval: "never",
-            });
-          } else {
-            const server = mcpServers?.find((s) => s.server_id === serverId);
-            // Use server_name for both routing and labelling. server_name is the
-            // unique registered identifier; aliases can collide across servers.
-            const routeName = server?.server_name || serverId;
-            const allowedTools = mcpServerToolRestrictions?.[serverId] || [];
-
-            tools.push({
-              type: "mcp",
-              server_label: routeName, // unique per request — collisions cause silent tool-routing failures
-              server_url: `${proxyBaseUrl}/mcp/${encodeURIComponent(routeName)}`,
-              require_approval: "never",
-              ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
-            });
-          }
-        });
-      }
-    }
-
-    // Add code_interpreter tool if enabled (OpenAI auto-creates container)
     if (codeInterpreterEnabled) {
       tools.push({
         type: "code_interpreter",

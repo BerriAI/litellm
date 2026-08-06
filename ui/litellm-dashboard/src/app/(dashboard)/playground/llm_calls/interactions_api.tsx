@@ -1,5 +1,7 @@
 import NotificationManager from "@/components/molecules/notifications_manager";
 import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
+import { buildMcpToolBlocks } from "@/components/llm_calls/mcp_tool_blocks";
+import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 
 export async function makeInteractionsRequest(
   input: string,
@@ -10,6 +12,10 @@ export async function makeInteractionsRequest(
   signal?: AbortSignal,
   customBaseUrl?: string,
   previousInteractionId?: string,
+  selectedMCPServers?: string[],
+  mcpServers?: MCPServer[],
+  mcpServerToolRestrictions?: Record<string, string[]>,
+  mcpToolsets?: MCPToolset[],
 ): Promise<void> {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -32,10 +38,18 @@ export async function makeInteractionsRequest(
     headers["x-litellm-tags"] = tags.join(",");
   }
 
+  const tools = buildMcpToolBlocks({
+    selectedMCPServers,
+    mcpServers,
+    mcpToolsets,
+    mcpServerToolRestrictions,
+  });
+
   const body: Record<string, unknown> = {
     model: selectedModel,
     input,
     stream: true,
+    ...(tools.length > 0 ? { tools } : {}),
   };
   if (previousInteractionId) {
     body.previous_interaction_id = previousInteractionId;

@@ -249,6 +249,30 @@ describe("ChatUI", () => {
     });
   });
 
+  it("should enable the MCP tools selector for interactions", async () => {
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    const mcpInput = () => screen.getByLabelText("Select MCP servers");
+
+    await selectComboboxOption("Select an endpoint", "/v1beta/interactions");
+
+    await waitFor(() => {
+      expect(mcpInput()).not.toBeDisabled();
+    });
+  });
+
   it("should show Simulate failure to test fallbacks in Model Settings when chat endpoint is selected", async () => {
     const user = userEvent.setup();
     render(
