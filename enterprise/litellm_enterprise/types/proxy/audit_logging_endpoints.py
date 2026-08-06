@@ -17,6 +17,8 @@ class AuditLogResponse(BaseModel):
     before_value: Optional[Dict[str, Any]] = None
     updated_values: Optional[Dict[str, Any]] = None
     object_alias: str | None = None
+    object_team_id: str | None = None
+    object_team_alias: str | None = None
     changed_by_user_email: str | None = None
     changed_by_key_alias: str | None = None
 
