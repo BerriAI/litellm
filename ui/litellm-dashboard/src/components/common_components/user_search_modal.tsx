@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Modal, Form, Button, Select, Tooltip } from "antd";
+import { Modal, Form, Button, Select, Tooltip, Alert } from "antd";
 import { UserAddOutlined } from "@ant-design/icons";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { userFilterUICall } from "@/components/networking";
@@ -140,6 +140,14 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
           role: defaultRole,
         }}
       >
+        <Alert
+          type="info"
+          showIcon
+          className="mb-4"
+          message="Search selects from users that already exist. To add someone new, ask a proxy admin to create their account first."
+          data-testid="member-existing-users-notice"
+        />
+
         <Form.Item label="Email" name="user_email" className="mb-4">
           <Select
             showSearch

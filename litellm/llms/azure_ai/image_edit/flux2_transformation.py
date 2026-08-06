@@ -1,6 +1,6 @@
 import base64
 from io import BufferedReader
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Final
 
 from httpx._types import RequestFiles
 
@@ -42,13 +42,13 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         """
         Map OpenAI params to FLUX 2 params.
         FLUX 2 uses the same param names as OpenAI for supported params.
         """
-        mapped_params: Dict[str, Any] = {}
-        supported_params = self.get_supported_openai_params(model)
+        mapped_params: Final[dict[str, Any]] = {}
+        supported_params: Final = self.get_supported_openai_params(model)
 
         for key, value in dict(image_edit_optional_params).items():
             if key in supported_params and value is not None:
@@ -64,9 +64,9 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate Azure AI Foundry environment and set up authentication
@@ -89,12 +89,12 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: Optional[str],
-        image: Optional[FileTypes],
-        image_edit_optional_request_params: Dict,
+        prompt: str | None,
+        image: FileTypes | None,
+        image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, RequestFiles]:
+    ) -> tuple[dict, RequestFiles]:
         """
         Transform image edit request for FLUX 2.
 
@@ -107,10 +107,10 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         if image is None:
             raise ValueError("FLUX 2 image edit requires an image.")
 
-        image_b64 = self._convert_image_to_base64(image)
+        image_b64: Final = self._convert_image_to_base64(image)
 
         # Build request body with required params
-        request_body: Dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "prompt": prompt,
             "image": image_b64,
             "model": model,
@@ -136,7 +136,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         elif isinstance(image, bytes):
             image_bytes = image
         elif hasattr(image, "read"):
-            image_bytes = image.read()  # type: ignore
+            image_bytes = image.read()
         else:
             raise ValueError(f"Unsupported image type: {type(image)}")
 
@@ -145,7 +145,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -160,7 +160,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
                 "Azure AI API base is required. Set AZURE_AI_API_BASE environment variable or pass api_base parameter."
             )
 
-        api_version = (
+        api_version: Final = (
             litellm_params.get("api_version")
             or litellm.api_version
             or get_secret_str("AZURE_AI_API_VERSION")
