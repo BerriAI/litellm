@@ -235,18 +235,6 @@ const DownloadIcon = () => (
   </svg>
 );
 
-const ExternalLinkIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="inline ml-1">
-    <path
-      d="M6 2H3a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1V8M8 2h4m0 0v4m0-4L6.5 7.5"
-      stroke="currentColor"
-      strokeWidth="1.2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
-
 // ── Sub-components ──────────────────────────────────────────────────────────
 
 const MatchDetailsTable = ({ matchDetails }: { matchDetails: MatchDetail[] }) => {
@@ -645,10 +633,6 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
 
   const totalOverheadMs = useMemo(() => {
     return Math.round(guardrailEntries.reduce((sum, e) => sum + (e.duration ?? 0), 0) * 1000);
-  }, [guardrailEntries]);
-
-  const policyTemplates = useMemo(() => {
-    return Array.from(new Set(guardrailEntries.map((e) => e.policy_template).filter(Boolean)));
   }, [guardrailEntries]);
 
   if (guardrailEntries.length === 0) {

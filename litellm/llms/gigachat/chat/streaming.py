@@ -4,7 +4,7 @@ GigaChat Streaming Response Handler
 
 import json
 import uuid
-from typing import Any
+from typing import Any, Final
 
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
@@ -33,7 +33,7 @@ class GigaChatModelResponseIterator:
         is_finished = False
         finish_reason: str | None = None
 
-        choices = chunk.get("choices", [])
+        choices: Final = chunk.get("choices", [])
         if not choices:
             return GenericStreamingChunk(
                 text="",
@@ -44,8 +44,8 @@ class GigaChatModelResponseIterator:
                 index=0,
             )
 
-        choice = choices[0]
-        delta = choice.get("delta", {})
+        choice: Final = choices[0]
+        delta: Final = choice.get("delta", {})
         finish_reason = choice.get("finish_reason")
 
         # Extract text content
@@ -53,7 +53,7 @@ class GigaChatModelResponseIterator:
 
         # Handle function_call in stream
         if finish_reason == "function_call" and delta.get("function_call"):
-            func_call = delta["function_call"]
+            func_call: Final = delta["function_call"]
             args = func_call.get("arguments", {})
 
             if isinstance(args, dict):
