@@ -52,6 +52,7 @@ import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatIma
 import CodeInterpreterTool from "./CodeInterpreterTool";
 import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
+import { filterModelsForEndpoint } from "./EndpointUtils";
 import FilePreviewCard from "./FilePreviewCard";
 import ChatMessageBubble from "./ChatMessageBubble";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
@@ -1141,11 +1142,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const supportsStreamingToggle = endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES;
+  const modelsForEndpoint = useMemo(
+    () => filterModelsForEndpoint(modelInfo, endpointType as EndpointType),
+    [modelInfo, endpointType],
+  );
   let modelEmptyText = "No models available for this key";
   if (modelLoadError) {
     modelEmptyText = "Unable to load models for this key";
   } else if (apiKeySource === "custom" && !apiKey.trim()) {
     modelEmptyText = "Enter a Virtual Key to load models";
+  } else if (modelInfo.length > 0 && modelsForEndpoint.length === 0) {
+    modelEmptyText = "No models available for this endpoint";
   }
 
   const inputPlaceholder =
@@ -1394,7 +1401,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       onValueChange={onModelChange}
                       options={[
                         { value: "custom", label: "Enter custom model" },
-                        ...modelInfo.map((model) => ({
+                        ...modelsForEndpoint.map((model) => ({
                           value: model.model_group,
                           label: model.model_group,
                           sublabel: model.mode ? `Mode: ${model.mode}` : undefined,
