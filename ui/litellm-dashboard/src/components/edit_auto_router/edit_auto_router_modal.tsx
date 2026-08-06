@@ -6,7 +6,14 @@ import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_m
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
 import { normalizeTierModels } from "../add_model/complexity_router_tiers";
 import { isComplexityRouter } from "../add_model/auto_router_strategies";
-import { getKeywordTierRulesError, getSemanticConfigError } from "../add_model/build_complexity_router_config";
+import {
+  getKeywordTierRulesError,
+  getSemanticConfigError,
+  getTierLabelsError,
+  hydrateTierLabels,
+  normalizeClassifierLlmConfig,
+  serializeTierLabels,
+} from "../add_model/build_complexity_router_config";
 import { KeywordTierRule } from "../add_model/KeywordTierRules";
 import { DEFAULT_MATCH_THRESHOLD } from "../add_model/SemanticKeywordMatching";
 import { hydrateKeywordTierRules, serializeKeywordTierRules } from "../add_model/complexity_router_keywords";
@@ -32,11 +39,13 @@ interface EditAutoRouterModalProps {
 // actually renders a control that can set it.
 const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tiers",
+  "tier_labels",
   "classifier_type",
   "classifier_llm_config",
   "classifier_context_window_size",
   "classifier_context_per_turn_chars",
   "classifier_context_include_assistant_turns",
+  "classifier_fallback",
   "session_affinity",
   "adaptive",
   "adaptive_weights",
@@ -85,12 +94,18 @@ export const buildUpdatedComplexityRouterConfig = (
   const preservedConfig = Object.fromEntries(Object.entries(toRecord(storedConfig)).filter(([key]) => !isManaged(key)));
   const adaptiveEligible = value.adaptive_eligible ?? "all";
   const storedKeywordRules = keywordMatching ? serializeKeywordTierRules(keywordMatching.keywordTierRules) : [];
+  const serializedTierLabels = serializeTierLabels(value.tier_labels);
 
   return {
     ...preservedConfig,
     tiers: value.tiers,
+    ...(serializedTierLabels && { tier_labels: serializedTierLabels }),
     classifier_type: value.classifier_type,
-    ...(value.classifier_type === "llm" ? { classifier_llm_config: value.classifier_llm_config } : {}),
+    ...(value.classifier_type === "llm" && value.classifier_llm_config
+      ? { classifier_llm_config: normalizeClassifierLlmConfig(value.classifier_llm_config) }
+      : {}),
+    ...(value.classifier_type === "llm" &&
+      value.classifier_fallback !== undefined && { classifier_fallback: value.classifier_fallback }),
     ...(value.classifier_type === "llm" &&
       value.classifier_context_window_size !== undefined && {
         classifier_context_window_size: value.classifier_context_window_size,
@@ -143,8 +158,6 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
-  const [showCustomDefaultModel, setShowCustomDefaultModel] = useState<boolean>(false);
-  const [showCustomEmbeddingModel, setShowCustomEmbeddingModel] = useState<boolean>(false);
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
   const [routerConfig, setRouterConfig] = useState<any>(null);
   const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
@@ -166,7 +179,9 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
     ? null
     : (Object.values(complexityRouterConfig.tiers).every((models) => models.length === 0)
         ? "Please select at least one model for a complexity tier"
-        : null) ?? getKeywordTierRulesError(keywordTierRules);
+        : null) ??
+      getTierLabelsError(complexityRouterConfig.tier_labels) ??
+      getKeywordTierRulesError(keywordTierRules);
 
   useEffect(() => {
     if (isVisible && modelData) {
@@ -217,6 +232,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             COMPLEX: normalizeTierModels(parsedConfig.tiers?.COMPLEX),
             REASONING: normalizeTierModels(parsedConfig.tiers?.REASONING),
           },
+          tier_labels: hydrateTierLabels(parsedConfig.tier_labels),
           classifier_type: parsedConfig.classifier_type || "heuristic",
           classifier_llm_config: parsedConfig.classifier_llm_config,
           classifier_context_window_size:
@@ -230,6 +246,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           classifier_context_include_assistant_turns:
             typeof parsedConfig.classifier_context_include_assistant_turns === "boolean"
               ? parsedConfig.classifier_context_include_assistant_turns
+              : undefined,
+          classifier_fallback:
+            parsedConfig.classifier_fallback === "default_model" || parsedConfig.classifier_fallback === "heuristic"
+              ? parsedConfig.classifier_fallback
               : undefined,
           session_affinity:
             typeof parsedConfig.session_affinity === "boolean"
@@ -286,11 +306,6 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         auto_router_embedding_model: modelData.litellm_params?.auto_router_embedding_model || "",
         model_access_group: modelData.model_info?.access_groups || [],
       });
-
-      // Check if using custom models
-      const allModelGroups = new Set(modelInfo.map((model) => model.model_group));
-      setShowCustomDefaultModel(!allModelGroups.has(modelData.litellm_params?.auto_router_default_model));
-      setShowCustomEmbeddingModel(!allModelGroups.has(modelData.litellm_params?.auto_router_embedding_model));
     } catch (error) {
       console.error("Error parsing auto router config:", error);
       NotificationsManager.fromBackend("Error loading auto router configuration");
@@ -494,9 +509,6 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
               >
                 <AntdSelect
                   placeholder="Select a default model"
-                  onChange={(value) => {
-                    setShowCustomDefaultModel(value === "custom");
-                  }}
                   options={[...modelOptions, { value: "custom", label: "Enter custom model name" }]}
                   showSearch={true}
                 />
@@ -510,9 +522,6 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
               >
                 <AntdSelect
                   placeholder="Select an embedding model"
-                  onChange={(value) => {
-                    setShowCustomEmbeddingModel(value === "custom");
-                  }}
                   options={[...modelOptions, { value: "custom", label: "Enter custom model name" }]}
                   showSearch={true}
                 />

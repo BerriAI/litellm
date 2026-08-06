@@ -188,7 +188,11 @@ class _CallbackServer(HTTPServer):
         self.server_name = str(host)
         self.server_port = port
 
-    def handle_error(self, request: socket.socket, client_address: tuple[str, int] | tuple[str, int, int, int]) -> None:
+    def handle_error(
+        self,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: tuple[str, int] | tuple[str, int, int, int],
+    ) -> None:
         """Swallow handler tracebacks; they can contain the request path."""
 
 

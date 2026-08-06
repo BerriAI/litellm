@@ -272,9 +272,7 @@ class LiteLLM_Proxy_MCP_Handler:
         tools: Final = listing.tools
 
         allowed_mcp_server_ids: Final = await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
-        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(  # type: ignore[attr-defined]
-            allowed_mcp_server_ids
-        )
+        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(allowed_mcp_server_ids)
 
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
             mcp_servers=effective_server_filter,
@@ -1274,7 +1272,7 @@ class LiteLLM_Proxy_MCP_Handler:
         )
 
         # Add the new output elements to the response
-        response.output.append(mcp_tools_output.model_dump())  # type: ignore
-        response.output.append(tool_results_output.model_dump())  # type: ignore
+        response.output.append(mcp_tools_output.model_dump())
+        response.output.append(tool_results_output.model_dump())
 
         return response

@@ -101,7 +101,7 @@ def encrypt_value_helper(value: str, new_encryption_key: str | None = None):
                 # is returned directly with no extra base64 wrapper.
                 return _encrypt_aes_gcm(value=value, signing_key=cast(str, signing_key))
 
-            encrypted_value = encrypt_value(value=value, signing_key=signing_key)  # type: ignore
+            encrypted_value = encrypt_value(value=value, signing_key=signing_key)
             # Use urlsafe_b64encode for URL-safe base64 encoding (replaces + with - and / with _)
             encrypted_value = base64.urlsafe_b64encode(encrypted_value).decode("utf-8")
 
@@ -139,7 +139,7 @@ def decrypt_value_helper(
                 # If URL-safe decoding fails, try standard base64 decoding for backwards compatibility
                 decoded_b64 = base64.b64decode(value)
 
-            value = decrypt_value(value=decoded_b64, signing_key=signing_key)  # type: ignore
+            value = decrypt_value(value=decoded_b64, signing_key=signing_key)
             return value
 
         # if it's not str - do not decrypt it, return the value
@@ -199,7 +199,7 @@ def decrypt_value(value: bytes, signing_key: str) -> str:
             return ""
 
         plaintext = box.decrypt(value)
-        plaintext = plaintext.decode("utf-8")  # type: ignore
-        return plaintext  # type: ignore
+        plaintext = plaintext.decode("utf-8")
+        return plaintext
     except Exception as e:
         raise e

@@ -197,7 +197,7 @@ export const handleAddModelSubmit = async (values: any, accessToken: string, for
         model_info: modelInfoObj,
       };
 
-      const response: any = await modelCreateCall(accessToken, new_model);
+      await modelCreateCall(accessToken, new_model);
     }
 
     callback && callback();

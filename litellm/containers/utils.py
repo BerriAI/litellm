@@ -53,7 +53,7 @@ class ContainerRequestUtils:
 
         for param in valid_params:
             if param in passed_params and passed_params[param] is not None:
-                container_create_optional_params[param] = passed_params[param]  # type: ignore
+                container_create_optional_params[param] = passed_params[param]
 
         return container_create_optional_params
 
@@ -69,7 +69,7 @@ class ContainerRequestUtils:
         filtered_params: Final = {k: v for k, v in container_create_optional_params.items() if k in supported_params}
 
         return container_provider_config.map_openai_params(
-            container_create_optional_params=filtered_params,  # type: ignore
+            container_create_optional_params=filtered_params,
             drop_params=False,
         )
 
@@ -90,7 +90,7 @@ class ContainerRequestUtils:
 
         for param in valid_params:
             if param in passed_params and passed_params[param] is not None:
-                container_list_optional_params[param] = passed_params[param]  # type: ignore
+                container_list_optional_params[param] = passed_params[param]
 
         return container_list_optional_params
 

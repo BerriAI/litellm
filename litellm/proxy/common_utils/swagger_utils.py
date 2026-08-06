@@ -8,7 +8,7 @@ from litellm.exceptions import LITELLM_EXCEPTION_TYPES
 class ErrorResponse(BaseModel):
     detail: dict[str, Any] = Field(
         ...,
-        example={  # type: ignore
+        example={
             "error": {
                 "message": "Error message",
                 "type": "error_type",

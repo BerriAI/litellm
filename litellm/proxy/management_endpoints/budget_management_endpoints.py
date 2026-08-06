@@ -92,10 +92,10 @@ async def new_budget(
     try:
         response: Final = await BudgetRepository(prisma_client).table.create(
             data={
-                **budget_obj_jsonified,  # type: ignore
+                **budget_obj_jsonified,
                 "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                 "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }  # type: ignore
+            }
         )
     except Exception as e:
         if not isinstance(e, UniqueViolationError):
@@ -174,10 +174,10 @@ async def update_budget(
     response: Final = await BudgetRepository(prisma_client).table.update(
         where={"budget_id": budget_obj.budget_id},
         data={
-            **budget_obj.model_dump(exclude_unset=True),  # type: ignore
+            **budget_obj.model_dump(exclude_unset=True),
             **recomputed_reset_at,
             "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-        },  # type: ignore
+        },
     )
 
     return response

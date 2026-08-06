@@ -29,9 +29,9 @@ try:
     A2A_SDK_AVAILABLE = True
 except ImportError:
     A2A_SDK_AVAILABLE = False
-    Client = None  # type: ignore[misc, assignment]
-    ClientConfig = None  # type: ignore[misc, assignment]
-    create_client = None  # type: ignore[misc, assignment]
+    Client = None
+    ClientConfig = None
+    create_client = None
 
 
 class A2AExceptionCheckers:
@@ -219,6 +219,6 @@ async def handle_a2a_localhost_retry(
             streaming=is_streaming,
         ),
     )
-    new_client._litellm_httpx_client = httpx_client  # type: ignore[attr-defined]
-    new_client._litellm_agent_card = agent_card  # type: ignore[attr-defined]
+    new_client._litellm_httpx_client = httpx_client
+    new_client._litellm_agent_card = agent_card
     return new_client

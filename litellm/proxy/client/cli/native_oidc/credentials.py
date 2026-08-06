@@ -11,7 +11,7 @@ PKCE verifiers/challenges, client secrets, raw provider responses, or ID tokens.
 import errno
 import os
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from typing import Final, Protocol
 
@@ -147,7 +147,7 @@ def refresh_lock(
     *,
     timeout: float = LOCK_ACQUIRE_TIMEOUT_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
-) -> Iterator[None]:
+) -> Generator[None]:
     """Bounded cross-process lock built on O_CREAT|O_EXCL.
 
     Standard library only, so it adds no dependency and works on every platform

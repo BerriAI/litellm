@@ -1,6 +1,8 @@
 import os
 import sys
+from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -868,6 +870,66 @@ class TestAdjustDatesForTimezone:
         assert max(per_day_ends) == multi_day_range[1]
         assert per_day_starts == days
         assert per_day_ends == days
+
+
+class TestAdjustDatesForTimezoneLiveEnd:
+    """
+    Regression tests for the stale-evening bug: a caller west of UTC whose range
+    ends on their local "today" was capped at that local date's UTC bucket, so
+    once UTC rolled past their local midnight (5pm PT), everything sent that
+    evening sat in the next UTC bucket and the dashboard reported $0 for it
+    until local midnight. A range that reaches the caller's current day and
+    opts in via include_current_utc_day must extend to today's UTC bucket; the
+    only part of that bucket outside the range is the future, which is empty,
+    so the extension cannot over-count. Callers that do not opt in keep the
+    pass-through byte for byte.
+    """
+
+    PT_EVENING_UTC: Final = datetime(2026, 8, 6, 4, 30, tzinfo=timezone.utc)
+
+    def test_pt_evening_range_ending_today_extends_to_utc_today(self):
+        start, end = _adjust_dates_for_timezone(
+            "2026-07-06", "2026-08-05", 420, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
+        )
+        assert (start, end) == ("2026-07-06", "2026-08-06")
+
+    def test_without_opt_in_live_range_keeps_pass_through(self):
+        start, end = _adjust_dates_for_timezone(
+            "2026-07-06", "2026-08-05", 420, utc_now=self.PT_EVENING_UTC
+        )
+        assert (start, end) == ("2026-07-06", "2026-08-05")
+
+    def test_pt_historical_range_is_untouched(self):
+        start, end = _adjust_dates_for_timezone(
+            "2026-07-01", "2026-08-04", 420, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
+        )
+        assert (start, end) == ("2026-07-01", "2026-08-04")
+
+    def test_east_of_utc_local_today_already_covers_utc_today(self):
+        ist_evening_utc: Final = datetime(2026, 8, 5, 17, 0, tzinfo=timezone.utc)
+        start, end = _adjust_dates_for_timezone(
+            "2026-07-07", "2026-08-06", -330, include_current_utc_day=True, utc_now=ist_evening_utc
+        )
+        assert (start, end) == ("2026-07-07", "2026-08-06")
+
+    def test_missing_offset_stays_pass_through_even_for_live_range(self):
+        start, end = _adjust_dates_for_timezone(
+            "2026-07-06", "2026-08-05", None, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
+        )
+        assert (start, end) == ("2026-07-06", "2026-08-05")
+
+    def test_utc_caller_range_ending_today_is_unchanged(self):
+        utc_noon: Final = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
+        start, end = _adjust_dates_for_timezone(
+            "2026-07-06", "2026-08-05", 0, include_current_utc_day=True, utc_now=utc_noon
+        )
+        assert (start, end) == ("2026-07-06", "2026-08-05")
+
+    def test_future_end_date_extends_no_further_than_requested(self):
+        start, end = _adjust_dates_for_timezone(
+            "2026-07-06", "2026-08-09", 420, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
+        )
+        assert (start, end) == ("2026-07-06", "2026-08-09")
 
 
 class TestBuildAggregatedSqlQuery:

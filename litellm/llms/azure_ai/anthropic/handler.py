@@ -154,7 +154,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
                 completion_stream, response_headers = make_sync_call(
                     client=client,
                     api_base=api_base,
-                    headers=headers,  # type: ignore
+                    headers=headers,
                     data=json.dumps(data),
                     model=model,
                     messages=messages,
