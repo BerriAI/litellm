@@ -498,6 +498,27 @@ def test_redis_tls_validation_accepts_valid_configuration(redis_kwargs):
     _get_redis_client_logic(**redis_kwargs)
 
 
+@pytest.mark.parametrize("ssl_value", ["true", "True", " TRUE "])
+def test_redis_iam_accepts_string_ssl_flag(ssl_value):
+    _get_redis_client_logic(
+        host="secure-redis.example.com",
+        port=6380,
+        ssl=ssl_value,
+        gcp_service_account="projects/-/serviceAccounts/test@example.com",
+    )
+
+
+@pytest.mark.parametrize("ssl_value", ["false", "no", ""])
+def test_redis_iam_rejects_non_true_string_ssl_flag(ssl_value):
+    with pytest.raises(ValueError, match="Redis IAM authentication requires TLS"):
+        _get_redis_client_logic(
+            host="plain-redis.example.com",
+            port=6379,
+            ssl=ssl_value,
+            gcp_service_account="projects/-/serviceAccounts/test@example.com",
+        )
+
+
 @pytest.mark.parametrize("client_factory", [get_redis_client, get_redis_async_client])
 def test_redis_iam_cluster_requires_ssl_when_explicit_url_is_present(client_factory):
     startup_nodes = [{"host": "cluster-node.example.com", "port": 6380}]

@@ -20,6 +20,7 @@ import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
 
 from litellm import get_secret, get_secret_str
+from litellm.secret_managers.main import str_to_bool
 from litellm._redis_credential_provider import (
     AzureADCredentialProvider,
     GCPIAMCredentialProvider,
@@ -35,6 +36,14 @@ from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from ._logging import verbose_logger
 
 AZURE_REDIS_SCOPE: Final = "https://redis.azure.com/.default"
+
+
+def _is_ssl_enabled(ssl: object) -> bool:
+    if isinstance(ssl, bool):
+        return ssl
+    if isinstance(ssl, str):
+        return str_to_bool(ssl) is True
+    return False
 
 
 def _get_redis_kwargs():
@@ -472,7 +481,7 @@ def _get_redis_client_logic(**env_overrides):
                 and _parsed_redis_url.hostname is not None
             )
             if _parsed_redis_url is not None
-            else redis_kwargs.get("ssl") is True
+            else _is_ssl_enabled(redis_kwargs.get("ssl"))
         )
         if not _uses_tls:
             raise ValueError("Redis IAM authentication requires TLS")
