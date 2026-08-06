@@ -7503,6 +7503,18 @@ class Router:
         - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
         """
         try:
+            # https://github.com/BerriAI/litellm/issues/35691
+            _nested_model_info: Final = _litellm_params.get("model_info")
+            if isinstance(_nested_model_info, dict) and _nested_model_info:
+                verbose_router_logger.warning(
+                    f"model={_model_name}: 'model_info' is nested inside 'litellm_params'. "
+                    "It belongs at the deployment level. Applying it anyway - please move it."
+                )
+                for _k, _v in _nested_model_info.items():
+                    if _k == "id" or _v is None:
+                        continue
+                    if _model_info.get(_k) is None:
+                        _model_info[_k] = _v  # rebind-ok: this dict is populated in place a few lines below too
             litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(**_litellm_params)
             deployment = Deployment(
                 **deployment_info,
@@ -8193,6 +8205,19 @@ class Router:
         _deployment_model_id: Final = deployment.model_info.id
         if _deployment_model_id and self.has_model_id(_deployment_model_id):
             return None
+
+        # https://github.com/BerriAI/litellm/issues/35691 - mirror of _create_deployment
+        _nested_model_info: Final = deployment.litellm_params.get("model_info")
+        if isinstance(_nested_model_info, dict) and _nested_model_info:
+            verbose_router_logger.warning(
+                f"model={deployment.model_name}: 'model_info' is nested inside "
+                "'litellm_params'. It belongs at the deployment level."
+            )
+            for _k, _v in _nested_model_info.items():
+                if _k == "id" or _v is None:
+                    continue
+                if getattr(deployment.model_info, _k, None) is None:
+                    setattr(deployment.model_info, _k, _v)
 
         # add to model list
         _deployment: Final = deployment.to_json(exclude_none=True)
