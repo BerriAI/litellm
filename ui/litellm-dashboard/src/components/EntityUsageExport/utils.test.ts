@@ -1876,7 +1876,7 @@ describe("EntityUsageExport utils", () => {
 
     it("should create CSV file and trigger download", () => {
       const createObjectURLSpy = vi.spyOn(window.URL, "createObjectURL").mockReturnValue("blob:mock-url");
-      const revokeObjectURLSpy = vi.spyOn(window.URL, "revokeObjectURL");
+      vi.spyOn(window.URL, "revokeObjectURL");
       const createElementSpy = vi.spyOn(document, "createElement");
       const appendChildSpy = vi.spyOn(document.body, "appendChild");
       const removeChildSpy = vi.spyOn(document.body, "removeChild");
@@ -1892,7 +1892,7 @@ describe("EntityUsageExport utils", () => {
 
     it("should generate correct filename", () => {
       const anchorElement = document.createElement("a");
-      const createElementSpy = vi.spyOn(document, "createElement").mockReturnValue(anchorElement);
+      vi.spyOn(document, "createElement").mockReturnValue(anchorElement);
 
       const today = new Date().toISOString().split("T")[0];
 
@@ -1935,7 +1935,7 @@ describe("EntityUsageExport utils", () => {
 
     it("should create JSON file and trigger download", () => {
       const createObjectURLSpy = vi.spyOn(window.URL, "createObjectURL").mockReturnValue("blob:mock-url");
-      const revokeObjectURLSpy = vi.spyOn(window.URL, "revokeObjectURL");
+      vi.spyOn(window.URL, "revokeObjectURL");
       const createElementSpy = vi.spyOn(document, "createElement");
       const appendChildSpy = vi.spyOn(document.body, "appendChild");
       const removeChildSpy = vi.spyOn(document.body, "removeChild");
@@ -1955,7 +1955,7 @@ describe("EntityUsageExport utils", () => {
 
     it("should generate correct filename", () => {
       const anchorElement = document.createElement("a");
-      const createElementSpy = vi.spyOn(document, "createElement").mockReturnValue(anchorElement);
+      vi.spyOn(document, "createElement").mockReturnValue(anchorElement);
 
       const today = new Date().toISOString().split("T")[0];
       const mockDateRange: DateRangePickerValue = {

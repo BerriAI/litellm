@@ -158,8 +158,6 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
-  const [showCustomDefaultModel, setShowCustomDefaultModel] = useState<boolean>(false);
-  const [showCustomEmbeddingModel, setShowCustomEmbeddingModel] = useState<boolean>(false);
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
   const [routerConfig, setRouterConfig] = useState<any>(null);
   const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
@@ -308,11 +306,6 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         auto_router_embedding_model: modelData.litellm_params?.auto_router_embedding_model || "",
         model_access_group: modelData.model_info?.access_groups || [],
       });
-
-      // Check if using custom models
-      const allModelGroups = new Set(modelInfo.map((model) => model.model_group));
-      setShowCustomDefaultModel(!allModelGroups.has(modelData.litellm_params?.auto_router_default_model));
-      setShowCustomEmbeddingModel(!allModelGroups.has(modelData.litellm_params?.auto_router_embedding_model));
     } catch (error) {
       console.error("Error parsing auto router config:", error);
       NotificationsManager.fromBackend("Error loading auto router configuration");
@@ -516,9 +509,6 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
               >
                 <AntdSelect
                   placeholder="Select a default model"
-                  onChange={(value) => {
-                    setShowCustomDefaultModel(value === "custom");
-                  }}
                   options={[...modelOptions, { value: "custom", label: "Enter custom model name" }]}
                   showSearch={true}
                 />
@@ -532,9 +522,6 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
               >
                 <AntdSelect
                   placeholder="Select an embedding model"
-                  onChange={(value) => {
-                    setShowCustomEmbeddingModel(value === "custom");
-                  }}
                   options={[...modelOptions, { value: "custom", label: "Enter custom model name" }]}
                   showSearch={true}
                 />
