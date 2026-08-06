@@ -18,6 +18,7 @@ export const MIGRATED_E2E_PAGES: Record<string, string> = {
   projects: "projects",
   "access-groups": "access-groups",
   budgets: "budgets",
+  "active-requests": "active-requests",
   workflows: "workflows",
   "guardrails-monitor": "guardrails-monitor",
   "mcp-servers": "mcp-servers",
@@ -47,4 +48,6 @@ export const MIGRATED_E2E_PAGES: Record<string, string> = {
   organizations: "organizations",
 };
 
-export const MIGRATED_E2E_SEGMENTS: string[] = [...new Set(Object.values(MIGRATED_E2E_PAGES))];
+export const MIGRATED_E2E_SEGMENTS: string[] = [
+  ...new Set(Object.values(MIGRATED_E2E_PAGES)),
+];

@@ -84,6 +84,52 @@ def test_counter_decrements_after_error():
     assert get_in_flight_requests() == 0
 
 
+def test_removes_the_active_request_registered_during_the_call():
+    removed = []
+
+    class Registry:
+        async def remove(self, registry_id):
+            removed.append(registry_id)
+
+    async def handler(request: Request) -> Response:
+        request.state.active_request_registry = Registry()
+        request.state.active_request_registry_id = "registry-id"
+        return JSONResponse({})
+
+    TestClient(_make_app(handler)).get("/")
+
+    assert removed == ["registry-id"]
+    assert get_in_flight_requests() == 0
+
+
+def test_removes_the_active_request_even_when_the_handler_raises():
+    removed = []
+
+    class Registry:
+        async def remove(self, registry_id):
+            removed.append(registry_id)
+
+    async def handler(request: Request) -> Response:
+        request.state.active_request_registry = Registry()
+        request.state.active_request_registry_id = "registry-id"
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        TestClient(_make_app(handler)).get("/")
+
+    assert removed == ["registry-id"]
+    assert get_in_flight_requests() == 0
+
+
+def test_counts_a_request_that_registered_nothing():
+    async def handler(request: Request) -> Response:
+        return JSONResponse({})
+
+    TestClient(_make_app(handler)).get("/")
+
+    assert get_in_flight_requests() == 0
+
+
 def test_non_http_scopes_not_counted():
     """Lifespan / websocket scopes must not touch the counter."""
 

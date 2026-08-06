@@ -6,9 +6,13 @@ Prometheus gauge `litellm_in_flight_requests`.
 """
 
 import os
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+EMPTY_STATE: Final[Mapping[str, object]] = MappingProxyType({})  # mutable-ok: MappingProxyType needs a dict to wrap
 
 
 class InFlightRequestsMiddleware:
@@ -45,6 +49,10 @@ class InFlightRequestsMiddleware:
         try:
             await self.app(scope, receive, send)
         finally:
+            state: Final = scope.get("state", EMPTY_STATE)
+            registry: Final = state.get("active_request_registry")
+            if registry is not None:
+                await registry.remove(state.get("active_request_registry_id"))
             InFlightRequestsMiddleware._in_flight -= 1
             if gauge is not None:
                 gauge.dec()
