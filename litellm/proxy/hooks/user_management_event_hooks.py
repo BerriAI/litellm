@@ -4,6 +4,7 @@ Hooks that are triggered when a litellm user event occurs
 
 import asyncio
 from datetime import datetime, timezone
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -56,7 +57,7 @@ class UserManagementEventHooks:
                 raise Exception(CommonProxyErrors.db_not_connected_error.value)
             if response.user_id is None:
                 raise Exception("no user_id returned for the newly created user")
-            user_row = await UserRepository(prisma_client).find_by_id(response.user_id)
+            user_row: Final = await UserRepository(prisma_client).find_by_id(response.user_id)
             if user_row is None:
                 raise Exception(f"no user row found for user_id={response.user_id}")
             asyncio.create_task(
@@ -71,7 +72,7 @@ class UserManagementEventHooks:
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.warning(f"Unable to create audit log for user on `/user/new` - {e!s}")
+            verbose_proxy_logger.warning("Unable to create audit log for user on `/user/new` - %s", e)
 
     @staticmethod
     async def async_send_user_invitation_email(
@@ -82,7 +83,7 @@ class UserManagementEventHooks:
         """
         Send a user invitation email to the user
         """
-        event = WebhookEvent(
+        event: Final = WebhookEvent(
             event="internal_user_created",
             event_group=Litellm_EntityType.USER,
             event_message="Welcome to LiteLLM Proxy",
@@ -111,13 +112,13 @@ class UserManagementEventHooks:
             use_enterprise_email_hooks = False
 
         if use_enterprise_email_hooks and (data.send_invite_email is True):
-            initialized_email_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
-                callback_type=BaseEmailLogger  # type: ignore
+            initialized_email_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=BaseEmailLogger
             )
             if len(initialized_email_loggers) > 0:
                 for email_logger in initialized_email_loggers:
-                    if isinstance(email_logger, BaseEmailLogger):  # type: ignore
-                        await email_logger.send_user_invitation_email(  # type: ignore
+                    if isinstance(email_logger, BaseEmailLogger):
+                        await email_logger.send_user_invitation_email(
                             event=event,
                         )
 

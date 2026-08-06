@@ -5,7 +5,7 @@ Team repository for database operations on LiteLLM_TeamTable.
 import json
 from collections.abc import Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import TypeAdapter
 
@@ -19,8 +19,8 @@ from litellm.repositories.base_repository import (
 if TYPE_CHECKING:
     from prisma import Prisma
 
-_MEMBERS_WITH_ROLES_ADAPTER = TypeAdapter(list[Member])
-_JSON_ENCODED_TEAM_FIELDS = (
+_MEMBERS_WITH_ROLES_ADAPTER: Final = TypeAdapter(list[Member])
+_JSON_ENCODED_TEAM_FIELDS: Final = (
     "metadata",
     "model_spend",
     "model_max_budget",
@@ -50,7 +50,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if record is None:
             return None
 
-        data = {
+        data: Final = {
             field: json.loads(value) if field in _JSON_ENCODED_TEAM_FIELDS and isinstance(value, str) else value
             for field, value in record_to_dict(record).items()
         }
@@ -65,12 +65,12 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         so the losing writer appends onto the winner's committed result instead
         of overwriting it from a stale snapshot.
         """
-        rows = await tx.query_raw(
+        rows: Final = await tx.query_raw(
             'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = $1 FOR UPDATE',
             team_id,
         )
-        raw_value = rows[0]["members_with_roles"] if rows else None
-        parsed = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+        raw_value: Final = rows[0]["members_with_roles"] if rows else None
+        parsed: Final = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
         if not parsed:
             return []
         return _MEMBERS_WITH_ROLES_ADAPTER.validate_python(parsed)
@@ -80,24 +80,24 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
 
     async def find_by_alias(self, team_alias: str) -> LiteLLM_TeamTable | None:
         """Find a team by alias."""
-        records = await self.table.find_many(where={"team_alias": team_alias})
+        records: Final = await self.table.find_many(where={"team_alias": team_alias})
         if records:
             return self._to_model(records[0])
         return None
 
     async def find_by_organization_id(self, organization_id: str) -> list[LiteLLM_TeamTable]:
         """Find all teams belonging to an organization."""
-        records = await self.table.find_many(where={"organization_id": organization_id})
+        records: Final = await self.table.find_many(where={"organization_id": organization_id})
         return self._to_model_list(records)
 
     async def find_by_member(self, user_id: str) -> list[LiteLLM_TeamTable]:
         """Find all teams where user is a member."""
-        records = await self.table.find_many(where={"members": {"has": user_id}})
+        records: Final = await self.table.find_many(where={"members": {"has": user_id}})
         return self._to_model_list(records)
 
     async def find_by_admin(self, user_id: str) -> list[LiteLLM_TeamTable]:
         """Find all teams where user is an admin."""
-        records = await self.table.find_many(where={"admins": {"has": user_id}})
+        records: Final = await self.table.find_many(where={"admins": {"has": user_id}})
         return self._to_model_list(records)
 
     async def create_team(
@@ -119,7 +119,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         object_permission_id: str | None = None,
     ) -> LiteLLM_TeamTable:
         """Create a new team."""
-        data: dict[str, object] = {"team_id": team_id}
+        data: Final[dict[str, object]] = {"team_id": team_id}
         if team_alias is not None:
             data["team_alias"] = team_alias
         if organization_id is not None:
@@ -171,7 +171,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         object_permission_id: str | None = None,
     ) -> LiteLLM_TeamTable | None:
         """Update a team."""
-        data: dict[str, object] = {}
+        data: Final[dict[str, object]] = {}
         if team_alias is not None:
             data["team_alias"] = team_alias
         if organization_id is not None:
@@ -216,11 +216,11 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
 
         Uses a transaction to ensure atomicity of the archive-then-delete operation.
         """
-        team = await self.find_by_id(team_id)
+        team: Final = await self.find_by_id(team_id)
         if team is None:
             return None
 
-        archive_data = self._build_archive_data(team)
+        archive_data: Final = self._build_archive_data(team)
         archive_data["deleted_by"] = deleted_by
         archive_data["deleted_by_api_key"] = deleted_by_api_key
         archive_data["litellm_changed_by"] = litellm_changed_by
@@ -234,7 +234,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
 
     def _build_archive_data(self, team: LiteLLM_TeamTable) -> dict[str, object]:
         """Build archive data dict with only columns that exist in LiteLLM_DeletedTeamTable."""
-        data: dict[str, object] = {"team_id": team.team_id}
+        data: Final[dict[str, object]] = {"team_id": team.team_id}
         if team.team_alias is not None:
             data["team_alias"] = team.team_alias
         if team.organization_id is not None:
@@ -287,7 +287,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if not await self.exists(team_id, id_field="team_id"):
             return None
 
-        record = await self.table.update(
+        record: Final = await self.table.update(
             where={"team_id": team_id},
             data={"members": {"push": user_id}},
         )
@@ -300,11 +300,11 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         read-modify-write pattern here. For high-concurrency scenarios,
         consider using raw SQL with array_remove().
         """
-        team = await self.find_by_id(team_id)
+        team: Final = await self.find_by_id(team_id)
         if team is None:
             return None
 
-        members = [m for m in team.members if m != user_id]
+        members: Final = [m for m in team.members if m != user_id]
         return await self.update(team_id, {"members": members}, id_field="team_id")
 
     async def add_admin(self, team_id: str, user_id: str) -> LiteLLM_TeamTable | None:
@@ -312,7 +312,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if not await self.exists(team_id, id_field="team_id"):
             return None
 
-        record = await self.table.update(
+        record: Final = await self.table.update(
             where={"team_id": team_id},
             data={"admins": {"push": user_id}},
         )
@@ -325,11 +325,11 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         read-modify-write pattern here. For high-concurrency scenarios,
         consider using raw SQL with array_remove().
         """
-        team = await self.find_by_id(team_id)
+        team: Final = await self.find_by_id(team_id)
         if team is None:
             return None
 
-        admins = [a for a in team.admins if a != user_id]
+        admins: Final = [a for a in team.admins if a != user_id]
         return await self.update(team_id, {"admins": admins}, id_field="team_id")
 
     async def add_models(self, team_id: str, models: list[str]) -> LiteLLM_TeamTable | None:
@@ -337,7 +337,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if not await self.exists(team_id, id_field="team_id"):
             return None
 
-        record = await self.table.update(
+        record: Final = await self.table.update(
             where={"team_id": team_id},
             data={"models": {"push": models}},
         )
@@ -350,9 +350,9 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         read-modify-write pattern here. For high-concurrency scenarios,
         consider using raw SQL with array_remove().
         """
-        team = await self.find_by_id(team_id)
+        team: Final = await self.find_by_id(team_id)
         if team is None:
             return None
 
-        current_models = [m for m in team.models if m not in models]
+        current_models: Final = [m for m in team.models if m not in models]
         return await self.update(team_id, {"models": current_models}, id_field="team_id")
