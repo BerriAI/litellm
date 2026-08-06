@@ -60,7 +60,6 @@ def test_initialize_deployment_for_pass_through_success(reusable_credentials):
     router._initialize_deployment_for_pass_through(
         deployment=deployment,
         custom_llm_provider="vertex_ai",
-        model="vertex_ai/test-model",
     )
 
     # Verify the credentials were properly set
@@ -100,7 +99,6 @@ def test_initialize_deployment_for_pass_through_missing_params():
         router._initialize_deployment_for_pass_through(
             deployment=deployment,
             custom_llm_provider="vertex_ai",
-            model="vertex_ai/test-model",
         )
 
 
@@ -120,7 +118,6 @@ def test_initialize_deployment_when_pass_through_disabled():
     router._initialize_deployment_for_pass_through(
         deployment=deployment,
         custom_llm_provider="vertex_ai",
-        model="vertex_ai/test-model",
     )
 
     # If we reach this point, the test passes as the method exited without raising any errors

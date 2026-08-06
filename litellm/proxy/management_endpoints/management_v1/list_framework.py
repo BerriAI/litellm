@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import partial, reduce
 from math import ceil
-from typing import Generic, Literal, Protocol, TypeVar
+from typing import Final, Generic, Literal, Protocol, TypeVar
 
 from fastapi import Request
 from pydantic import TypeAdapter, ValidationError
@@ -46,16 +46,16 @@ FilterOp = ComparisonOp | Literal["in", "is_null"]
 FilterType = type[str] | type[int] | type[float] | type[datetime]
 FilterValue = str | int | float | datetime
 
-PAGE_PARAM = "page"
-PAGE_SIZE_PARAM = "page_size"
-SORT_PARAM = "sort"
-SEARCH_PARAM = "q"
+PAGE_PARAM: Final = "page"
+PAGE_SIZE_PARAM: Final = "page_size"
+SORT_PARAM: Final = "sort"
+SEARCH_PARAM: Final = "q"
 
 TRow = TypeVar("TRow")
 TRow_co = TypeVar("TRow_co", covariant=True)
 TOut = TypeVar("TOut")
 
-_FILTER_OP_ADAPTER: TypeAdapter[FilterOp] = TypeAdapter(FilterOp)
+_FILTER_OP_ADAPTER: Final[TypeAdapter[FilterOp]] = TypeAdapter(FilterOp)
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,10 +151,10 @@ class ListSpec(Generic[TRow, TOut]):
             )
         if not self.tiebreaker:
             raise ValueError(f"{self.resource}: tiebreaker is required; it is the final sort key on every query.")
-        undeclared = tuple(sorted(frozenset(key.field for key in self.default_sort) - self.sortable))
+        undeclared: Final = tuple(sorted(frozenset(key.field for key in self.default_sort) - self.sortable))
         if undeclared:
             raise ValueError(f"{self.resource}: default_sort orders by non-sortable field(s): {', '.join(undeclared)}.")
-        non_text = tuple(
+        non_text: Final = tuple(
             sorted(field for field, spec in self.filters.items() if "contains" in spec.ops and spec.type is not str)
         )
         if non_text:
@@ -230,7 +230,7 @@ def _render(predicate: Predicate, index: int) -> tuple[str, tuple[object, ...]]:
         case IsNull(field=field, negated=negated):
             return f'"{field}" IS {"NOT NULL" if negated else "NULL"}', ()
         case Within(field=field, values=values):
-            placeholders = ", ".join(_placeholder(index + offset, value) for offset, value in enumerate(values))
+            placeholders: Final = ", ".join(_placeholder(index + offset, value) for offset, value in enumerate(values))
             return f'"{field}" IN ({placeholders})', values
         case AnyOf(clauses=clauses):
             rendered, params = _render_all(clauses, index)
@@ -310,7 +310,7 @@ def _is_known_param(spec: ListSpec[TRow, TOut], name: str) -> bool:
         return bool(spec.sortable)
     if name == SEARCH_PARAM:
         return bool(spec.searchable)
-    parsed = _parse_filter_key(name)
+    parsed: Final = _parse_filter_key(name)
     return parsed is not None and parsed[0] in spec.filters
 
 
@@ -331,7 +331,7 @@ def _allowed_params(spec: ListSpec[TRow, TOut]) -> tuple[str, ...]:
 
 def _parse_positive_int(name: str, raw: str) -> int | ProblemDetail:
     try:
-        value = int(raw)
+        value: Final = int(raw)
     except ValueError:
         return _invalid(f"'{name}' must be an integer.")
     if value < 1:
@@ -340,27 +340,27 @@ def _parse_positive_int(name: str, raw: str) -> int | ProblemDetail:
 
 
 def _parse_page(params: Mapping[str, str]) -> int | ProblemDetail:
-    raw = params.get(PAGE_PARAM)
+    raw: Final = params.get(PAGE_PARAM)
     return 1 if raw is None else _parse_positive_int(PAGE_PARAM, raw)
 
 
 def _parse_page_size(spec: ListSpec[TRow, TOut], params: Mapping[str, str]) -> int | ProblemDetail:
-    raw = params.get(PAGE_SIZE_PARAM)
+    raw: Final = params.get(PAGE_SIZE_PARAM)
     if raw is None:
         return spec.default_page_size
-    value = _parse_positive_int(PAGE_SIZE_PARAM, raw)
+    value: Final = _parse_positive_int(PAGE_SIZE_PARAM, raw)
     if isinstance(value, ProblemDetail):
         return value
     return min(value, spec.max_page_size)
 
 
 def _parse_sort(spec: ListSpec[TRow, TOut], params: Mapping[str, str]) -> tuple[SortKey, ...] | ProblemDetail:
-    raw = params.get(SORT_PARAM)
+    raw: Final = params.get(SORT_PARAM)
     if raw is None:
         return spec.default_sort
-    segments = tuple(segment.strip() for segment in raw.split(","))
+    segments: Final = tuple(segment.strip() for segment in raw.split(","))
     keys = tuple(SortKey(field=segment.removeprefix("-"), descending=segment.startswith("-")) for segment in segments)
-    rejected = tuple(sorted(frozenset(key.field for key in keys) - spec.sortable))
+    rejected: Final = tuple(sorted(frozenset(key.field for key in keys) - spec.sortable))
     if rejected:
         return _problem(
             "invalid-sort-field",
@@ -398,8 +398,8 @@ def _null_predicate(field: str, raw: str) -> Predicate | ProblemDetail:
 
 
 def _within_predicate(field: str, raw: str, target: FilterType) -> Predicate | ProblemDetail:
-    coerced = tuple(_coerce(field, "in", item.strip(), target) for item in raw.split(","))
-    problems = tuple(item for item in coerced if isinstance(item, ProblemDetail))
+    coerced: Final = tuple(_coerce(field, "in", item.strip(), target) for item in raw.split(","))
+    problems: Final = tuple(item for item in coerced if isinstance(item, ProblemDetail))
     if problems:
         return problems[0]
     return Within(field=field, values=tuple(item for item in coerced if not isinstance(item, ProblemDetail)))
@@ -418,27 +418,27 @@ def _parse_filter(field: str, op: FilterOp, raw: str, filter_spec: FilterSpec) -
         return _null_predicate(field, raw)
     if op == "in":
         return _within_predicate(field, raw, filter_spec.type)
-    value = _coerce(field, op, raw, filter_spec.type)
+    value: Final = _coerce(field, op, raw, filter_spec.type)
     if isinstance(value, ProblemDetail):
         return value
     return Compare(field=field, op=op, value=value)
 
 
 def _parse_filters(spec: ListSpec[TRow, TOut], params: Mapping[str, str]) -> tuple[Predicate, ...] | ProblemDetail:
-    keys = tuple(
+    keys: Final = tuple(
         (name, parsed)
         for name in sorted(params)
         if (parsed := _parse_filter_key(name)) is not None and parsed[0] in spec.filters
     )
     parsed = tuple(_parse_filter(field, op, params[name], spec.filters[field]) for name, (field, op) in keys)
-    problems = tuple(item for item in parsed if isinstance(item, ProblemDetail))
+    problems: Final = tuple(item for item in parsed if isinstance(item, ProblemDetail))
     if problems:
         return problems[0]
     return tuple(item for item in parsed if not isinstance(item, ProblemDetail))
 
 
 def _search_predicate(spec: ListSpec[TRow, TOut], params: Mapping[str, str]) -> Predicate | None:
-    raw = params.get(SEARCH_PARAM)
+    raw: Final = params.get(SEARCH_PARAM)
     if not raw:
         return None
     return AnyOf(clauses=tuple(Compare(field=field, op="contains", value=raw) for field in sorted(spec.searchable)))
@@ -462,31 +462,31 @@ def build_query_plan(
     caller: UserAPIKeyAuth,
 ) -> QueryPlan | ProblemDetail:
     """Turn query parameters into a plan, or into the problem that explains why they are not one."""
-    scope_predicates = _scope_predicates(spec.scope(caller))
+    scope_predicates: Final = _scope_predicates(spec.scope(caller))
     if isinstance(scope_predicates, ProblemDetail):
         return scope_predicates
 
-    unknown = tuple(sorted(name for name in params if not _is_known_param(spec, name)))
+    unknown: Final = tuple(sorted(name for name in params if not _is_known_param(spec, name)))
     if unknown:
         return unknown_query_param_problem(unknown=unknown, allowed=_allowed_params(spec))
 
-    page = _parse_page(params)
+    page: Final = _parse_page(params)
     if isinstance(page, ProblemDetail):
         return page
 
-    page_size = _parse_page_size(spec, params)
+    page_size: Final = _parse_page_size(spec, params)
     if isinstance(page_size, ProblemDetail):
         return page_size
 
-    sort = _parse_sort(spec, params)
+    sort: Final = _parse_sort(spec, params)
     if isinstance(sort, ProblemDetail):
         return sort
 
-    filters = _parse_filters(spec, params)
+    filters: Final = _parse_filters(spec, params)
     if isinstance(filters, ProblemDetail):
         return filters
 
-    search = _search_predicate(spec, params)
+    search: Final = _search_predicate(spec, params)
     return QueryPlan(
         # Scope first: conjuncts a caller filter sits behind and cannot replace.
         where=scope_predicates + filters + ((search,) if search is not None else ()),
@@ -499,7 +499,7 @@ def build_query_plan(
 
 
 def _duplicate_params(request: Request) -> tuple[str, ...]:
-    names = tuple(name for name, _ in request.query_params.multi_items())
+    names: Final = tuple(name for name, _ in request.query_params.multi_items())
     return tuple(sorted(frozenset(name for name in names if names.count(name) > 1)))
 
 
@@ -510,14 +510,14 @@ async def handle_list(
     caller: UserAPIKeyAuth,
 ) -> ListResponse[TOut]:
     """Plan, execute, count, serialize, envelope. Failures reach the client as RFC 9457 problems."""
-    plan = build_query_plan(spec=spec, params=request.query_params, caller=caller)
+    plan: Final = build_query_plan(spec=spec, params=request.query_params, caller=caller)
     if isinstance(plan, ProblemDetail):
         raise ManagementProblem(plan)
 
     # Checked here rather than in build_query_plan because a Mapping[str, str] cannot
     # represent a repeat: query_params.get() silently keeps the last one, so ?page=1&page=999
     # would page from 999 without the caller ever being told which value won.
-    duplicates = _duplicate_params(request)
+    duplicates: Final = _duplicate_params(request)
     if duplicates:
         raise ManagementProblem(
             _problem(
@@ -529,10 +529,10 @@ async def handle_list(
             )
         )
 
-    total_count = await executor.count(plan.where)
-    rows = await executor.find_many(plan)
-    total_pages = ceil(total_count / plan.take)
-    page = plan.skip // plan.take + 1
+    total_count: Final = await executor.count(plan.where)
+    rows: Final = await executor.find_many(plan)
+    total_pages: Final = ceil(total_count / plan.take)
+    page: Final = plan.skip // plan.take + 1
     return ListResponse[TOut](
         data=tuple(spec.serialize(row) for row in rows),
         meta=ListMeta(

@@ -5,7 +5,7 @@ This hook is called before making an LLM request when a vector store is configur
 It searches the vector store for relevant context and appends it to the messages.
 """
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 import litellm.vector_stores
@@ -100,14 +100,14 @@ class VectorStorePreCallHook(CustomLogger):
                 return model, messages, non_default_params
 
             # Extract the query from the last user message
-            query = self._extract_query_from_messages(messages)
+            query: Final = self._extract_query_from_messages(messages)
 
             if not query:
                 verbose_logger.debug("No query found in messages for vector store search")
                 return model, messages, non_default_params
 
             modified_messages: list[AllMessageValues] = messages.copy()
-            all_search_results: list[VectorStoreSearchResponse] = []
+            all_search_results: Final[list[VectorStoreSearchResponse]] = []
 
             for vector_store_to_run in vector_stores_to_run:
                 # Get vector store id from the vector store config
@@ -163,11 +163,11 @@ class VectorStorePreCallHook(CustomLogger):
         if not messages or len(messages) == 0:
             return None
 
-        last_message = messages[-1]
+        last_message: Final = messages[-1]
         if not isinstance(last_message, dict) or "content" not in last_message:
             return None
 
-        content = last_message["content"]
+        content: Final = last_message["content"]
 
         if isinstance(content, str):
             return content
@@ -194,7 +194,7 @@ class VectorStorePreCallHook(CustomLogger):
         Returns:
             Modified list of messages with context appended
         """
-        search_response_data: list[VectorStoreSearchResult] | None = search_response.get("data")
+        search_response_data: Final[list[VectorStoreSearchResult] | None] = search_response.get("data")
         if not search_response_data:
             return messages
 
@@ -211,9 +211,9 @@ class VectorStorePreCallHook(CustomLogger):
         # Only add context if we found any content
         if context_content != "Context:\n\n":
             # Create a copy of messages to avoid modifying the original
-            modified_messages = messages.copy()
+            modified_messages: Final = messages.copy()
             # Add context as a new message before the last user message
-            context_message: ChatCompletionUserMessage = {
+            context_message: Final[ChatCompletionUserMessage] = {
                 "role": "user",
                 "content": context_content,
             }
@@ -238,7 +238,7 @@ class VectorStorePreCallHook(CustomLogger):
             verbose_logger.debug("VectorStorePreCallHook.async_post_call_success_deployment_hook called")
 
             # Get logging object from request_data
-            litellm_logging_obj = request_data.get("litellm_logging_obj")
+            litellm_logging_obj: Final = request_data.get("litellm_logging_obj")
             if not litellm_logging_obj:
                 verbose_logger.debug("No litellm_logging_obj in request_data")
                 return None
@@ -246,7 +246,7 @@ class VectorStorePreCallHook(CustomLogger):
             verbose_logger.debug("model_call_details keys: %s", list(litellm_logging_obj.model_call_details.keys()))
 
             # Get search results from model_call_details (already in OpenAI format)
-            search_results: list[VectorStoreSearchResponse] | None = litellm_logging_obj.model_call_details.get(
+            search_results: Final[list[VectorStoreSearchResponse] | None] = litellm_logging_obj.model_call_details.get(
                 "search_results"
             )
 
@@ -295,7 +295,7 @@ class VectorStorePreCallHook(CustomLogger):
             verbose_logger.debug("VectorStorePreCallHook.async_post_call_streaming_deployment_hook called")
 
             # Get search results from model_call_details (already in OpenAI format)
-            search_results: list[VectorStoreSearchResponse] | None = request_data.get("search_results")
+            search_results: Final[list[VectorStoreSearchResponse] | None] = request_data.get("search_results")
 
             verbose_logger.debug("Search results found for streaming chunk: %s", search_results is not None)
 

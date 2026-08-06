@@ -2,14 +2,14 @@ import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, TypeAdapter
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
-UNKNOWN_CALL_TYPE = "Unknown"
+UNKNOWN_CALL_TYPE: Final = "Unknown"
 
 
 class CacheActivityGroup(BaseModel):
@@ -40,7 +40,7 @@ class CacheActivityResponse(BaseModel):
     filter_options: CacheActivityFilterOptions
 
 
-GROUPS_SQL = """
+GROUPS_SQL: Final = """
     SELECT
         CASE WHEN sl."call_type" = '' THEN 'Unknown' ELSE sl."call_type" END AS call_type,
         (COUNT(*)
@@ -65,7 +65,7 @@ GROUPS_SQL = """
     ORDER BY (COUNT(*)) DESC
 """
 
-KEY_ALIAS_OPTIONS_SQL = """
+KEY_ALIAS_OPTIONS_SQL: Final = """
     SELECT DISTINCT COALESCE(vt."key_alias", 'Unnamed Key') AS key_alias
     FROM "LiteLLM_SpendLogs" sl
     LEFT JOIN "LiteLLM_VerificationToken" vt ON sl."api_key" = vt."token"
@@ -75,7 +75,7 @@ KEY_ALIAS_OPTIONS_SQL = """
     ORDER BY 1
 """
 
-MODEL_OPTIONS_SQL = """
+MODEL_OPTIONS_SQL: Final = """
     SELECT DISTINCT sl."model" AS model
     FROM "LiteLLM_SpendLogs" sl
     WHERE
@@ -94,16 +94,16 @@ class _ModelRow(BaseModel):
     model: str
 
 
-_groups_adapter = TypeAdapter(list[CacheActivityGroup])
-_key_alias_rows_adapter = TypeAdapter(list[_KeyAliasRow])
-_model_rows_adapter = TypeAdapter(list[_ModelRow])
+_groups_adapter: Final = TypeAdapter(list[CacheActivityGroup])
+_key_alias_rows_adapter: Final = TypeAdapter(list[_KeyAliasRow])
+_model_rows_adapter: Final = TypeAdapter(list[_ModelRow])
 
 
 def compute_totals(groups: Sequence[CacheActivityGroup]) -> CacheActivityTotals:
-    api_requests = sum(group.api_requests for group in groups)
-    cache_hits = sum(group.cache_hits for group in groups)
-    failed_requests = sum(group.failed_requests for group in groups)
-    all_requests = api_requests + cache_hits + failed_requests
+    api_requests: Final = sum(group.api_requests for group in groups)
+    cache_hits: Final = sum(group.cache_hits for group in groups)
+    failed_requests: Final = sum(group.failed_requests for group in groups)
+    all_requests: Final = api_requests + cache_hits + failed_requests
     return CacheActivityTotals(
         api_requests=api_requests,
         cache_hits=cache_hits,
@@ -127,7 +127,7 @@ async def get_cache_activity(
         prisma_client.db.query_raw(KEY_ALIAS_OPTIONS_SQL, start_date, end_date),
         prisma_client.db.query_raw(MODEL_OPTIONS_SQL, start_date, end_date),
     )
-    groups = _groups_adapter.validate_python(group_rows or [])
+    groups: Final = _groups_adapter.validate_python(group_rows or [])
     return CacheActivityResponse(
         groups=groups,
         totals=compute_totals(groups),

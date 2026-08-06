@@ -4,7 +4,7 @@ Legacy /v1/embedding handler for Bedrock Cohere.
 
 import json
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -24,7 +24,7 @@ from .v1_transformation import CohereEmbeddingConfig
 def validate_environment(api_key, headers: dict):
     # Create a lowercase key lookup to avoid duplicate headers with different cases
     # This is important when headers come from AWS signed requests (which use Title-Case)
-    existing_keys_lower = {k.lower(): k for k in headers}
+    existing_keys_lower: Final = {k.lower(): k for k in headers}
 
     # Only add headers if they don't already exist (case-insensitive check)
     if "request-source" not in existing_keys_lower:
@@ -80,7 +80,7 @@ async def async_embedding(
         )
 
     try:
-        response = await client.post(api_base, headers=headers, data=json.dumps(data))
+        response: Final = await client.post(api_base, headers=headers, data=json.dumps(data))
     except httpx.HTTPStatusError as e:
         ## LOGGING
         logging_obj.post_call(
@@ -129,7 +129,7 @@ def embedding(
     client: HTTPHandler | AsyncHTTPHandler | None = None,
 ):
     headers = validate_environment(api_key, headers=headers)
-    embed_url = complete_api_base or "https://api.cohere.ai/v1/embed"
+    embed_url: Final = complete_api_base or "https://api.cohere.ai/v1/embed"
     model = model
 
     data = data or CohereEmbeddingConfig()._transform_request(
@@ -164,7 +164,7 @@ def embedding(
     if client is None or not isinstance(client, HTTPHandler):
         client = HTTPHandler(concurrent_limit=1)
 
-    response = client.post(embed_url, headers=headers, data=json.dumps(data))
+    response: Final = client.post(embed_url, headers=headers, data=json.dumps(data))
 
     return CohereEmbeddingConfig()._transform_response(
         response=response,

@@ -6,6 +6,7 @@ Use this if you want your logs to be stored in memory and flushed periodically.
 
 import asyncio
 import time
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -56,7 +57,7 @@ class CustomBatchLogger(CustomLogger):
 
         async with self.flush_lock:
             if self.log_queue:
-                log_queue_length = len(self.log_queue)
+                log_queue_length: Final = len(self.log_queue)
                 verbose_logger.debug("CustomLogger: Flushing batch of %s events", len(self.log_queue))
                 try:
                     await self.async_send_batch()
@@ -73,7 +74,7 @@ class CustomBatchLogger(CustomLogger):
                     # Guard against unbounded queue growth if the destination
                     # is persistently unreachable. Drop the oldest events
                     # beyond ``max_queue_size``.
-                    overflow = len(self.log_queue) - self.max_queue_size
+                    overflow: Final = len(self.log_queue) - self.max_queue_size
                     if overflow > 0:
                         del self.log_queue[:overflow]
                         verbose_logger.warning(

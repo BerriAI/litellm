@@ -44,6 +44,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/router/",
     "/router_settings",
     "/adaptive_router/",
+    "/auto_router/",
     "/fallback",
     "/fallbacks",
     "/cache_settings",
@@ -81,6 +82,9 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/user_agent",
     "/usage/",
     "/daily/",
+    # Deployment-wide gateway request counts. Scoped to the analytics read rather
+    # than all of /gateway/, which stays free for data-plane routes.
+    "/gateway/daily/",
     # CloudZero cost-export admin (init / settings / export / dry-run / delete)
     "/cloudzero/",
     # Caching admin

@@ -833,6 +833,63 @@ class TestProxyBaseLLMRequestProcessing:
         assert "x-litellm-response-cost-margin-amount" not in headers
         assert "x-litellm-response-cost-margin-percent" not in headers
 
+    @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+    def test_get_custom_headers_classifier_cost_from_routing_decision(self, metadata_key):
+        """The auto-router's LLM classifier cost must surface as its own header.
+
+        x-litellm-response-cost stays the final routed call's cost (it feeds the
+        margin/discount family and chargeback); the classifier's cost is read from the
+        routing_decision the pre-routing hook recorded in the request metadata. The
+        bucket is metadata on chat-style routes and litellm_metadata on messages-style
+        routes, so both must work.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.00023,
+            request_data={
+                metadata_key: {
+                    "routing_decision": {"cause": "llm_classifier", "classifier_cost": 8.1e-05},
+                }
+            },
+        )
+
+        assert headers["x-litellm-classifier-cost"] == "8.1e-05"
+        assert float(headers["x-litellm-response-cost"]) == 0.00023
+
+    @pytest.mark.parametrize(
+        "request_data",
+        [
+            None,
+            {},
+            {"metadata": {}},
+            {"metadata": {"routing_decision": {"cause": "heuristic_scorer"}}},
+            {"metadata": {"routing_decision": {"cause": "llm_classifier", "classifier_cost": "bogus"}}},
+            {"metadata": {"routing_decision": {"cause": "llm_classifier", "classifier_cost": True}}},
+        ],
+    )
+    def test_get_custom_headers_omits_classifier_cost_without_a_priced_decision(self, request_data):
+        """No routing decision, a decision without a classifier call, or a malformed cost
+        must all omit the header entirely rather than emit 0 or a junk value."""
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.00023,
+            request_data=request_data,
+        )
+
+        assert "x-litellm-classifier-cost" not in headers
+
     def test_get_cost_breakdown_from_logging_obj_helper(self):
         """
         Test the helper function that extracts cost breakdown information.
@@ -2425,14 +2482,14 @@ class TestHandleLLMApiExceptionDictDetail:
     through ProxyException instead of being str()-mangled into a Python repr.
     """
 
-    async def _invoke(self, exc: Exception):
+    async def _invoke(self, exc: Exception, callback_headers: Optional[dict] = None):
         from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 
         processor = ProxyBaseLLMRequestProcessing(data={})
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
-        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=callback_headers or {})
 
         try:
             await processor._handle_llm_api_exception(
@@ -2950,6 +3007,112 @@ class TestHandleLLMApiExceptionRetryAfter:
         )
         assert proxy_exc.headers["retry-after"] == "43"
         assert proxy_exc.headers["x-custom"] == "1"
+
+
+class TestHandleLLMApiExceptionFramingHeaders:
+    """HTTP-framing headers on the provider exception must be stripped before the
+    proxy builds its own response, or they conflict with the framing the proxy
+    itself sets. Non-framing headers must survive unchanged."""
+
+    async def _invoke(self, exc: Exception, callback_headers: Optional[dict] = None):
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        processor = ProxyBaseLLMRequestProcessing(data={})
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=callback_headers or {})
+
+        try:
+            await processor._handle_llm_api_exception(
+                e=exc,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ProxyException as raised:
+            return raised
+        raise AssertionError("ProxyException was not raised")
+
+    async def test_strips_framing_headers_preserves_others(self):
+        exc = litellm.RateLimitError(
+            message="Resource exhausted",
+            llm_provider="vertex_ai",
+            model="gemini-2.0-flash",
+        )
+        exc.headers = {
+            "content-length": "42",
+            "transfer-encoding": "chunked",
+            "content-encoding": "gzip",
+            "content-type": "application/json",
+            "x-request-id": "abc-123",
+        }
+        proxy_exc = await self._invoke(exc)
+        assert "content-length" not in proxy_exc.headers
+        assert "transfer-encoding" not in proxy_exc.headers
+        assert "content-encoding" not in proxy_exc.headers
+        assert "content-type" not in proxy_exc.headers
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
+
+    async def test_strips_framing_headers_on_existing_proxy_exception(self):
+        from litellm.proxy._types import ProxyException
+
+        exc = ProxyException(
+            message="Resource exhausted",
+            type="rate_limit_error",
+            param=None,
+            code=429,
+            headers={
+                "content-length": "42",
+                "transfer-encoding": "chunked",
+                "x-request-id": "abc-123",
+            },
+        )
+        proxy_exc = await self._invoke(exc)
+        assert "content-length" not in proxy_exc.headers
+        assert "transfer-encoding" not in proxy_exc.headers
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
+
+    async def test_strips_browser_security_headers(self):
+        exc = litellm.RateLimitError(
+            message="Resource exhausted",
+            llm_provider="vertex_ai",
+            model="gemini-2.0-flash",
+        )
+        exc.headers = {
+            "access-control-allow-origin": "https://evil.example.com",
+            "content-security-policy": "default-src https://evil.example.com",
+            "clear-site-data": '"cache", "cookies", "storage"',
+            "strict-transport-security": "max-age=0",
+            "x-frame-options": "ALLOWALL",
+            "x-request-id": "abc-123",
+        }
+        proxy_exc = await self._invoke(exc)
+        assert "access-control-allow-origin" not in proxy_exc.headers
+        assert "content-security-policy" not in proxy_exc.headers
+        assert "clear-site-data" not in proxy_exc.headers
+        assert "strict-transport-security" not in proxy_exc.headers
+        assert "x-frame-options" not in proxy_exc.headers
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
+
+    async def test_strips_unsafe_headers_added_by_response_headers_hook(self):
+        exc = litellm.RateLimitError(
+            message="Resource exhausted",
+            llm_provider="vertex_ai",
+            model="gemini-2.0-flash",
+        )
+        exc.headers = {"x-request-id": "abc-123"}
+        proxy_exc = await self._invoke(
+            exc,
+            callback_headers={
+                "x-frame-options": "ALLOWALL",
+                "content-length": "42",
+                "x-custom-safe": "1",
+            },
+        )
+        assert "x-frame-options" not in proxy_exc.headers
+        assert "content-length" not in proxy_exc.headers
+        assert proxy_exc.headers["x-custom-safe"] == "1"
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
 
 
 class TestAsyncStreamingDataGeneratorFastPath:

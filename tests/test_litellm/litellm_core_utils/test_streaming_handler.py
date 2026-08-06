@@ -1449,6 +1449,103 @@ def test_calculate_total_usage_with_dict_usage_cost():
     assert getattr(usage, "cost", None) == 0.00025
 
 
+def test_calculate_total_usage_preserves_prompt_cache_token_details():
+    """Regression for #34801: dropping `prompt_tokens_details` here re-prices OpenAI
+    cache-read tokens at the uncached input rate, overstating spend."""
+    from litellm.litellm_core_utils.streaming_handler import calculate_total_usage
+
+    usage_with_details = Usage(
+        prompt_tokens=6017,
+        completion_tokens=4,
+        total_tokens=6021,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=6004, cache_write_tokens=10
+        ),
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=2),
+    )
+    chunk_with_details = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513206,
+        model="openai/gpt-5.6-sol",
+        choices=[
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))
+        ],
+        usage=usage_with_details,
+    )
+    chunk_without_details = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513207,
+        model="openai/gpt-5.6-sol",
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
+        usage=Usage(prompt_tokens=6017, completion_tokens=4, total_tokens=6021),
+    )
+
+    usage = calculate_total_usage([chunk_with_details, chunk_without_details])
+
+    assert usage.prompt_tokens == 6017
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 6004
+    assert usage.prompt_tokens_details.cache_write_tokens == 10
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 2
+
+
+def test_calculate_total_usage_preserves_anthropic_cache_creation_ttl_breakdown():
+    """Anthropic sends the 5m/1h cache-write split only on `message_start`; the later
+    `message_delta` repeats the flat count without the split. Losing it here bills 1h
+    cache writes at the cheaper 5m rate."""
+    from litellm.litellm_core_utils.streaming_handler import calculate_total_usage
+    from litellm.types.utils import CacheCreationTokenDetails
+
+    message_start_chunk = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513206,
+        model="claude-sonnet-5",
+        choices=[
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))
+        ],
+        usage=Usage(
+            prompt_tokens=120,
+            completion_tokens=1,
+            total_tokens=121,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=0,
+                cache_creation_tokens=100,
+                cache_creation_token_details=CacheCreationTokenDetails(
+                    ephemeral_5m_input_tokens=20, ephemeral_1h_input_tokens=80
+                ),
+            ),
+        ),
+    )
+    message_delta_chunk = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513207,
+        model="claude-sonnet-5",
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
+        usage=Usage(
+            prompt_tokens=120,
+            completion_tokens=4,
+            total_tokens=124,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=0, cache_creation_tokens=100
+            ),
+        ),
+    )
+
+    usage = calculate_total_usage([message_start_chunk, message_delta_chunk])
+
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cache_creation_tokens == 100
+    ttl_breakdown = usage.prompt_tokens_details.cache_creation_token_details
+    assert ttl_breakdown is not None
+    assert ttl_breakdown.ephemeral_5m_input_tokens == 20
+    assert ttl_breakdown.ephemeral_1h_input_tokens == 80
+
+
 @pytest.mark.asyncio
 async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Logging):
     from litellm.utils import ModelResponseListIterator

@@ -1,7 +1,7 @@
 """Abstraction function for OpenAI's realtime API"""
 
 import os
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import litellm
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES, request_timeout
@@ -32,11 +32,11 @@ from ..llms.vertex_ai.vertex_llm_base import VertexBase
 from ..llms.xai.realtime.handler import XAIRealtime
 from ..utils import client as wrapper_client
 
-azure_realtime = AzureOpenAIRealtime()
-openai_realtime = OpenAIRealtime()
-bedrock_realtime = BedrockRealtime()
-xai_realtime = XAIRealtime()
-vertex_llm_base = VertexBase()
+azure_realtime: Final = AzureOpenAIRealtime()
+openai_realtime: Final = OpenAIRealtime()
+bedrock_realtime: Final = BedrockRealtime()
+xai_realtime: Final = XAIRealtime()
+vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 
 
@@ -48,8 +48,8 @@ def _with_resolved_session_model(session: dict[str, Any], model_name: str) -> di
 
 def _build_litellm_metadata(kwargs: dict) -> dict:
     """Build the litellm_metadata dict for guardrail checking (internal only, not forwarded to provider)."""
-    metadata: dict = {**(kwargs.get("litellm_metadata") or {})}
-    guardrails = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
+    metadata: Final[dict] = {**(kwargs.get("litellm_metadata") or {})}
+    guardrails: Final = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
     if guardrails:
         metadata["guardrails"] = guardrails
     return metadata
@@ -79,8 +79,8 @@ def _get_realtime_http_provider_config(
             provider=LlmProviders(custom_llm_provider),
         )
 
-    raw_api_base = dynamic_api_base or litellm_params.api_base
-    raw_api_key = dynamic_api_key or litellm_params.api_key
+    raw_api_base: Final = dynamic_api_base or litellm_params.api_base
+    raw_api_key: Final = dynamic_api_key or litellm_params.api_key
 
     if provider_config is not None:
         resolved_api_base = provider_config.get_api_base(api_base=raw_api_base)
@@ -103,14 +103,14 @@ async def acreate_realtime_client_secret(
     timeout: float | None = None,
     **kwargs,
 ):
-    req = RealtimeClientSecretRequest(
+    req: Final = RealtimeClientSecretRequest(
         model=model,
         session=RealtimeSessionConfig(**session) if session else None,
         expires_after=RealtimeExpiresAfter(**expires_after) if expires_after else None,
     )
     model_name = (req.session.model if req.session is not None else None) or req.model or "gpt-4o-realtime-preview"
-    litellm_logging_obj: LiteLLMLogging = kwargs.get("litellm_logging_obj")  # type: ignore
-    litellm_params = GenericLiteLLMParams(**kwargs)
+    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
+    litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
     (
         model_name,
@@ -139,7 +139,7 @@ async def acreate_realtime_client_secret(
         litellm_params={"api_base": resolved_api_base},
         custom_llm_provider=custom_llm_provider,
     )
-    request_data = req.model_dump(exclude_none=True, exclude={"model"})
+    request_data: Final = req.model_dump(exclude_none=True, exclude={"model"})
     if isinstance(request_data.get("session"), dict):
         request_data["session"] = _with_resolved_session_model(request_data["session"], model_name)
     return await base_llm_http_handler.async_realtime_client_secret_handler(
@@ -172,13 +172,13 @@ async def acreate_realtime_transcription_session(
     routing hint; the provider model lives in
     ``transcription_session.input_audio_transcription.model``.
     """
-    req = RealtimeTranscriptionSessionRequest(
+    req: Final = RealtimeTranscriptionSessionRequest(
         model=model,
         **(transcription_session or {}),
     )
     model_name = req.resolved_model() or "gpt-realtime-whisper"
-    litellm_logging_obj: LiteLLMLogging = kwargs.get("litellm_logging_obj")  # type: ignore
-    litellm_params = GenericLiteLLMParams(**kwargs)
+    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
+    litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
     (
         model_name,
@@ -207,7 +207,7 @@ async def acreate_realtime_transcription_session(
         litellm_params={"api_base": resolved_api_base},
         custom_llm_provider=custom_llm_provider,
     )
-    request_data = req.model_dump(exclude_none=True, exclude={"model"})
+    request_data: Final = req.model_dump(exclude_none=True, exclude={"model"})
     # Ensure the upstream body's input_audio_transcription.model matches the
     # authorized routing model. This prevents a caller from supplying an allowed
     # top-level model for auth while sneaking a different model into the nested
@@ -238,8 +238,8 @@ async def arealtime_calls(
     **kwargs,
 ):
     model_name = model or "gpt-4o-realtime-preview"
-    litellm_logging_obj: LiteLLMLogging = kwargs.get("litellm_logging_obj")  # type: ignore
-    litellm_params = GenericLiteLLMParams(**kwargs)
+    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
+    litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
     (
         model_name,
@@ -300,16 +300,16 @@ async def _arealtime(
     For PROXY use only.
     """
     headers = cast(dict | None, kwargs.get("headers"))
-    extra_headers = cast(dict | None, kwargs.get("extra_headers"))
+    extra_headers: Final = cast(dict | None, kwargs.get("extra_headers"))
     if headers is None:
         headers = {}
     if extra_headers is not None:
         headers.update(extra_headers)
-    litellm_logging_obj: LiteLLMLogging = kwargs.get("litellm_logging_obj")  # type: ignore
-    user = kwargs.get("user", None)
-    litellm_params = GenericLiteLLMParams(**kwargs)
+    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
+    user: Final = kwargs.get("user", None)
+    litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
-    litellm_params_dict = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
 
     model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=model,
@@ -404,17 +404,17 @@ async def _arealtime(
         )
     elif _custom_llm_provider == "bedrock":
         # Extract AWS parameters from kwargs
-        aws_region_name = kwargs.get("aws_region_name")
-        aws_access_key_id = kwargs.get("aws_access_key_id")
-        aws_secret_access_key = kwargs.get("aws_secret_access_key")
-        aws_session_token = kwargs.get("aws_session_token")
-        aws_role_name = kwargs.get("aws_role_name")
-        aws_session_name = kwargs.get("aws_session_name")
-        aws_profile_name = kwargs.get("aws_profile_name")
-        aws_web_identity_token = kwargs.get("aws_web_identity_token")
-        aws_sts_endpoint = kwargs.get("aws_sts_endpoint")
-        aws_bedrock_runtime_endpoint = kwargs.get("aws_bedrock_runtime_endpoint")
-        aws_external_id = kwargs.get("aws_external_id")
+        aws_region_name: Final = kwargs.get("aws_region_name")
+        aws_access_key_id: Final = kwargs.get("aws_access_key_id")
+        aws_secret_access_key: Final = kwargs.get("aws_secret_access_key")
+        aws_session_token: Final = kwargs.get("aws_session_token")
+        aws_role_name: Final = kwargs.get("aws_role_name")
+        aws_session_name: Final = kwargs.get("aws_session_name")
+        aws_profile_name: Final = kwargs.get("aws_profile_name")
+        aws_web_identity_token: Final = kwargs.get("aws_web_identity_token")
+        aws_sts_endpoint: Final = kwargs.get("aws_sts_endpoint")
+        aws_bedrock_runtime_endpoint: Final = kwargs.get("aws_bedrock_runtime_endpoint")
+        aws_external_id: Final = kwargs.get("aws_external_id")
 
         await bedrock_realtime.async_realtime(
             model=model,
@@ -455,25 +455,25 @@ async def _arealtime(
             litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "vertex_ai":
-        vertex_credentials = (
+        vertex_credentials: Final = (
             kwargs.get("vertex_credentials")
             or kwargs.get("vertex_ai_credentials")
             or get_secret_str("VERTEXAI_CREDENTIALS")
         )
-        vertex_project = (
+        vertex_project: Final = (
             kwargs.get("vertex_project")
             or kwargs.get("vertex_ai_project")
             or litellm.vertex_project
             or get_secret_str("VERTEXAI_PROJECT")
         )
-        vertex_location = (
+        vertex_location: Final = (
             kwargs.get("vertex_location")
             or kwargs.get("vertex_ai_location")
             or litellm.vertex_location
             or get_secret_str("VERTEXAI_LOCATION")
         )
 
-        resolved_location = vertex_llm_base.get_vertex_region(vertex_region=vertex_location, model=model)
+        resolved_location: Final = vertex_llm_base.get_vertex_region(vertex_region=vertex_location, model=model)
 
         (
             access_token,
@@ -484,7 +484,7 @@ async def _arealtime(
             custom_llm_provider="vertex_ai",
         )
 
-        vertex_realtime_config = VertexAIRealtimeConfig(
+        vertex_realtime_config: Final = VertexAIRealtimeConfig(
             access_token=access_token,
             project=resolved_project,
             location=resolved_location,
@@ -551,8 +551,8 @@ async def _realtime_health_check(
     elif custom_llm_provider == "xai":
         url = xai_realtime._construct_url(api_base=api_base or "https://api.x.ai/v1", query_params={"model": model})
     elif custom_llm_provider == "vertex_ai":
-        vertex_model_params = model_params or {}
-        resolved_location = vertex_llm_base.get_vertex_region(
+        vertex_model_params: Final = model_params or {}
+        resolved_location: Final = vertex_llm_base.get_vertex_region(
             vertex_region=VertexBase.safe_get_vertex_ai_location(vertex_model_params),
             model=model,
         )
@@ -564,15 +564,15 @@ async def _realtime_health_check(
             project_id=VertexBase.safe_get_vertex_ai_project(vertex_model_params),
             custom_llm_provider="vertex_ai",
         )
-        vertex_realtime_config = VertexAIRealtimeConfig(
+        vertex_realtime_config: Final = VertexAIRealtimeConfig(
             access_token=access_token,
             project=resolved_project,
             location=resolved_location,
         )
         url = vertex_realtime_config.get_complete_url(api_base=api_base, model=model)
         ssl_context = get_shared_realtime_ssl_context()
-        headers = vertex_realtime_config.validate_environment(headers={}, model=model, api_key=None)
-        async with websockets.connect(  # type: ignore
+        headers: Final = vertex_realtime_config.validate_environment(headers={}, model=model, api_key=None)
+        async with websockets.connect(
             url,
             additional_headers=headers,
             max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
@@ -582,10 +582,10 @@ async def _realtime_health_check(
     else:
         raise ValueError(f"Unsupported model: {model}")
     ssl_context = get_shared_realtime_ssl_context()
-    async with websockets.connect(  # type: ignore
+    async with websockets.connect(
         url,
         additional_headers={
-            "api-key": api_key,  # type: ignore
+            "api-key": api_key,
         },
         max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
         ssl=ssl_context,

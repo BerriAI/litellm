@@ -11,7 +11,7 @@ is logged the first time such a deployment is seen.
 """
 
 import contextlib
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -37,7 +37,7 @@ from litellm.utils import get_utc_datetime
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -67,7 +67,7 @@ class ModelRateLimitingCheck(CustomLogger):
         tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
         if tpm_limit is None and rpm_limit is None:
             return
-        model_id = deployment.get("model_info", {}).get("id")
+        model_id: Final = deployment.get("model_info", {}).get("id")
         # Dedup per deployment id; if there is no id (degenerate config) don't
         # collapse every such deployment onto one key - warn each time instead.
         if model_id is not None:
@@ -80,7 +80,7 @@ class ModelRateLimitingCheck(CustomLogger):
         )
 
     def _refund_io_token_reservation_if_any(self) -> None:
-        request_kwargs = get_io_token_rate_limit_request_kwargs()
+        request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
         if request_kwargs is not None:
             io_token_refund_failure(self.dual_cache, request_kwargs)
 
@@ -88,7 +88,7 @@ class ModelRateLimitingCheck(CustomLogger):
         self,
         parent_otel_span: Span | None = None,
     ) -> None:
-        request_kwargs = get_io_token_rate_limit_request_kwargs()
+        request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
         if request_kwargs is not None:
             await async_io_token_refund_failure(
                 self.dual_cache,
@@ -128,11 +128,11 @@ class ModelRateLimitingCheck(CustomLogger):
 
     def _get_cache_keys(self, deployment: dict, current_minute: str) -> tuple[str, str]:
         """Get the cache keys for TPM and RPM tracking."""
-        model_id = deployment.get("model_info", {}).get("id")
-        deployment_name = deployment.get("litellm_params", {}).get("model")
+        model_id: Final = deployment.get("model_info", {}).get("id")
+        deployment_name: Final = deployment.get("litellm_params", {}).get("model")
 
-        tpm_key = f"{model_id}:{deployment_name}:tpm:{current_minute}"
-        rpm_key = f"{model_id}:{deployment_name}:rpm:{current_minute}"
+        tpm_key: Final = f"{model_id}:{deployment_name}:tpm:{current_minute}"
+        rpm_key: Final = f"{model_id}:{deployment_name}:rpm:{current_minute}"
 
         return tpm_key, rpm_key
 
@@ -158,18 +158,18 @@ class ModelRateLimitingCheck(CustomLogger):
             if tpm_limit is None and rpm_limit is None:
                 return deployment
 
-            dt = get_utc_datetime()
-            current_minute = dt.strftime("%H-%M")
+            dt: Final = get_utc_datetime()
+            current_minute: Final = dt.strftime("%H-%M")
             tpm_key, rpm_key = self._get_cache_keys(deployment, current_minute)
 
-            model_id = deployment.get("model_info", {}).get("id")
-            model_name = deployment.get("litellm_params", {}).get("model")
-            model_group = deployment.get("model_name", "")
+            model_id: Final = deployment.get("model_info", {}).get("id")
+            model_name: Final = deployment.get("litellm_params", {}).get("model")
+            model_group: Final = deployment.get("model_name", "")
 
             # Check TPM limit
             if tpm_limit is not None:
                 # First check local cache
-                current_tpm = self.dual_cache.get_cache(key=tpm_key, local_only=True)
+                current_tpm: Final = self.dual_cache.get_cache(key=tpm_key, local_only=True)
                 if current_tpm is not None and current_tpm >= tpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. TPM limit={tpm_limit}, current usage={current_tpm}",
@@ -188,7 +188,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check RPM limit (atomic increment-first to avoid race conditions)
             if rpm_limit is not None:
-                current_rpm = self.dual_cache.increment_cache(key=rpm_key, value=1, ttl=RoutingArgs.ttl)
+                current_rpm: Final = self.dual_cache.increment_cache(key=rpm_key, value=1, ttl=RoutingArgs.ttl)
                 if current_rpm is not None and current_rpm > rpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
@@ -239,18 +239,18 @@ class ModelRateLimitingCheck(CustomLogger):
             if tpm_limit is None and rpm_limit is None:
                 return deployment
 
-            dt = get_utc_datetime()
-            current_minute = dt.strftime("%H-%M")
+            dt: Final = get_utc_datetime()
+            current_minute: Final = dt.strftime("%H-%M")
             tpm_key, rpm_key = self._get_cache_keys(deployment, current_minute)
 
-            model_id = deployment.get("model_info", {}).get("id")
-            model_name = deployment.get("litellm_params", {}).get("model")
-            model_group = deployment.get("model_name", "")
+            model_id: Final = deployment.get("model_info", {}).get("id")
+            model_name: Final = deployment.get("litellm_params", {}).get("model")
+            model_group: Final = deployment.get("model_name", "")
 
             # Check TPM limit
             if tpm_limit is not None:
                 # First check local cache
-                current_tpm = await self.dual_cache.async_get_cache(key=tpm_key, local_only=True)
+                current_tpm: Final = await self.dual_cache.async_get_cache(key=tpm_key, local_only=True)
                 if current_tpm is not None and current_tpm >= tpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. TPM limit={tpm_limit}, current usage={current_tpm}",
@@ -270,7 +270,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check RPM limit (atomic increment-first to avoid race conditions)
             if rpm_limit is not None:
-                current_rpm = await self.dual_cache.async_increment_cache(
+                current_rpm: Final = await self.dual_cache.async_increment_cache(
                     key=rpm_key,
                     value=1,
                     ttl=RoutingArgs.ttl,
@@ -310,15 +310,15 @@ class ModelRateLimitingCheck(CustomLogger):
         )
 
         try:
-            standard_logging_object: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
+            standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
 
             # IO token reconciliation works purely from the cache keys stashed in
             # kwargs/metadata, so it must run before the model_id guard below
             # (which only the TPM-tracking path needs). Otherwise a request whose
             # standard_logging_object lacks model_id would never return its
             # reservation, leaving the counter elevated until the TTL expires.
-            slo_metadata = (standard_logging_object.get("metadata") or {}) if standard_logging_object else {}
-            kwargs_metadata = kwargs.get("metadata") or {}
+            slo_metadata: Final = (standard_logging_object.get("metadata") or {}) if standard_logging_object else {}
+            kwargs_metadata: Final = kwargs.get("metadata") or {}
             if ITPM_RESERVED_KEY in slo_metadata or ITPM_RESERVED_KEY in kwargs_metadata:
                 await async_io_token_reconcile_success(
                     self.dual_cache,
@@ -333,12 +333,12 @@ class ModelRateLimitingCheck(CustomLogger):
             if standard_logging_object is None:
                 return
 
-            model_id = standard_logging_object.get("model_id")
+            model_id: Final = standard_logging_object.get("model_id")
             if model_id is None:
                 return
 
-            total_tokens = standard_logging_object.get("total_tokens", 0)
-            model = standard_logging_object.get("hidden_params", {}).get("litellm_model_name")
+            total_tokens: Final = standard_logging_object.get("total_tokens", 0)
+            model: Final = standard_logging_object.get("hidden_params", {}).get("litellm_model_name")
 
             verbose_router_logger.debug(
                 "[TPM TRACKING] model_id=%s, total_tokens=%s, model=%s", model_id, total_tokens, model
@@ -347,9 +347,9 @@ class ModelRateLimitingCheck(CustomLogger):
             if not model or not total_tokens:
                 return
 
-            dt = get_utc_datetime()
-            current_minute = dt.strftime("%H-%M")
-            tpm_key = f"{model_id}:{model}:tpm:{current_minute}"
+            dt: Final = get_utc_datetime()
+            current_minute: Final = dt.strftime("%H-%M")
+            tpm_key: Final = f"{model_id}:{model}:tpm:{current_minute}"
 
             verbose_router_logger.debug("[TPM TRACKING] Incrementing %s by %s", tpm_key, total_tokens)
 
@@ -381,9 +381,9 @@ class ModelRateLimitingCheck(CustomLogger):
         Always tracks tokens - the pre-call check handles enforcement.
         """
         try:
-            standard_logging_object: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
-            slo_metadata = (standard_logging_object.get("metadata") or {}) if standard_logging_object else {}
-            kwargs_metadata = kwargs.get("metadata") or {}
+            standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
+            slo_metadata: Final = (standard_logging_object.get("metadata") or {}) if standard_logging_object else {}
+            kwargs_metadata: Final = kwargs.get("metadata") or {}
             if ITPM_RESERVED_KEY in slo_metadata or ITPM_RESERVED_KEY in kwargs_metadata:
                 io_token_reconcile_success(
                     self.dual_cache,
@@ -397,19 +397,19 @@ class ModelRateLimitingCheck(CustomLogger):
             if standard_logging_object is None:
                 return
 
-            model_id = standard_logging_object.get("model_id")
+            model_id: Final = standard_logging_object.get("model_id")
             if model_id is None:
                 return
 
-            total_tokens = standard_logging_object.get("total_tokens", 0)
-            model = standard_logging_object.get("hidden_params", {}).get("litellm_model_name")
+            total_tokens: Final = standard_logging_object.get("total_tokens", 0)
+            model: Final = standard_logging_object.get("hidden_params", {}).get("litellm_model_name")
 
             if not model or not total_tokens:
                 return
 
-            dt = get_utc_datetime()
-            current_minute = dt.strftime("%H-%M")
-            tpm_key = f"{model_id}:{model}:tpm:{current_minute}"
+            dt: Final = get_utc_datetime()
+            current_minute: Final = dt.strftime("%H-%M")
+            tpm_key: Final = f"{model_id}:{model}:tpm:{current_minute}"
 
             self.dual_cache.increment_cache(
                 key=tpm_key,

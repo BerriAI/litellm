@@ -11,18 +11,19 @@ the router silently dropping the deployment at load time under
 """
 
 from collections.abc import Mapping
-from typing import Literal
+from typing import Final, Literal
 
-AUTO_ROUTER_MODEL_PREFIX = "auto_router/"
+AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
 StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality"]
 
-STRATEGY_ROUTER_PARAM_FIELDS: frozenset[str] = frozenset(
+STRATEGY_ROUTER_PARAM_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "auto_router_config",
         "auto_router_config_path",
         "auto_router_default_model",
         "auto_router_embedding_model",
+        "auto_router_max_input_chars",
         "complexity_router_config",
         "complexity_router_default_model",
         "adaptive_router_config",
@@ -31,7 +32,7 @@ STRATEGY_ROUTER_PARAM_FIELDS: frozenset[str] = frozenset(
     }
 )
 
-_REQUIRED_FIELD_GROUPS: Mapping[StrategyRouterKind, tuple[tuple[str, ...], ...]] = {
+_REQUIRED_FIELD_GROUPS: Final[Mapping[StrategyRouterKind, tuple[tuple[str, ...], ...]]] = {
     "semantic": (
         ("auto_router_config", "auto_router_config_path"),
         ("auto_router_default_model",),
@@ -52,7 +53,7 @@ def classify_strategy_router_model(model: str) -> StrategyRouterKind | None:
     """
     if not model.startswith(AUTO_ROUTER_MODEL_PREFIX):
         return None
-    remainder = model[len(AUTO_ROUTER_MODEL_PREFIX) :]
+    remainder: Final = model[len(AUTO_ROUTER_MODEL_PREFIX) :]
     if remainder.startswith("complexity_router"):
         return "complexity"
     if remainder.startswith("adaptive_router"):
@@ -81,8 +82,8 @@ def validate_complexity_router_config_write(complexity_router_config: Mapping[st
     try:
         _ = ComplexityRouterConfig.model_validate(complexity_router_config)
     except ValidationError as exc:
-        first = exc.errors()[0]
-        location = ".".join(str(part) for part in first.get("loc", ())) or "complexity_router_config"
+        first: Final = exc.errors()[0]
+        location: Final = ".".join(str(part) for part in first.get("loc", ())) or "complexity_router_config"
         return (
             f"complexity_router_config is invalid at {location}: {first.get('msg', 'invalid value')}. "
             "The router would drop this deployment at load time, so the write is rejected instead."
@@ -99,9 +100,9 @@ def validate_strategy_router_model_write(model: str, present_fields: frozenset[s
     A config's contents are ``validate_complexity_router_config_write``'s to
     judge, since a write may carry one without naming a model at all.
     """
-    kind = classify_strategy_router_model(model)
+    kind: Final = classify_strategy_router_model(model)
     if kind is None:
-        offending = sorted(present_fields & STRATEGY_ROUTER_PARAM_FIELDS)
+        offending: Final = sorted(present_fields & STRATEGY_ROUTER_PARAM_FIELDS)
         if offending:
             return (
                 f"litellm_params.model='{model}' does not start with '{AUTO_ROUTER_MODEL_PREFIX}' but the "
@@ -110,7 +111,7 @@ def validate_strategy_router_model_write(model: str, present_fields: frozenset[s
                 "edit the public model_name instead."
             )
         return None
-    remainder = model[len(AUTO_ROUTER_MODEL_PREFIX) :]
+    remainder: Final = model[len(AUTO_ROUTER_MODEL_PREFIX) :]
     if remainder.startswith(AUTO_ROUTER_MODEL_PREFIX):
         return (
             f"litellm_params.model='{model}' repeats the '{AUTO_ROUTER_MODEL_PREFIX}' prefix, so the router "
@@ -121,7 +122,7 @@ def validate_strategy_router_model_write(model: str, present_fields: frozenset[s
         return (
             f"litellm_params.model='{model}' is missing the router name after the '{AUTO_ROUTER_MODEL_PREFIX}' prefix."
         )
-    missing = tuple(
+    missing: Final = tuple(
         " or ".join(group) for group in _REQUIRED_FIELD_GROUPS[kind] if not any(f in present_fields for f in group)
     )
     if missing:

@@ -1,6 +1,6 @@
 import os
 import time
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from httpx import Headers, Response
 
@@ -64,7 +64,7 @@ class PredibaseConfig(BaseConfig):
         typical_p: float | None = None,
         watermark: bool | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -144,7 +144,7 @@ class PredibaseConfig(BaseConfig):
             additional_args={"complete_input_dict": request_data},
         )
         try:
-            completion_response = raw_response.json()
+            completion_response: Final = raw_response.json()
         except Exception:
             raise PredibaseError(message=raw_response.text, status_code=422)
 
@@ -165,9 +165,7 @@ class PredibaseConfig(BaseConfig):
             )
 
         if len(completion_response["generated_text"]) > 0:
-            model_response.choices[0].message.content = self.output_parser(  # type: ignore
-                completion_response["generated_text"]
-            )
+            model_response.choices[0].message.content = self.output_parser(completion_response["generated_text"])
 
         if "details" in completion_response and "tokens" in completion_response["details"]:
             model_response.choices[0].finish_reason = map_finish_reason(completion_response["details"]["finish_reason"])
@@ -176,7 +174,7 @@ class PredibaseConfig(BaseConfig):
                 if token["logprob"] is not None:
                     sum_logprob += token["logprob"]
             setattr(
-                model_response.choices[0].message,  # type: ignore
+                model_response.choices[0].message,
                 "_logprob",
                 sum_logprob,  # [TODO] move this to using the actual logprobs
             )
@@ -191,7 +189,7 @@ class PredibaseConfig(BaseConfig):
 
         if best_of_value > 1:
             if "details" in completion_response and "best_of_sequences" in completion_response["details"]:
-                choices_list = []
+                choices_list: Final = []
                 for idx, item in enumerate(completion_response["details"]["best_of_sequences"]):
                     sum_logprob = 0
                     for token in item["tokens"]:
@@ -218,7 +216,7 @@ class PredibaseConfig(BaseConfig):
         except Exception:
             # Keep usage calculation non-blocking if token counting fails.
             pass
-        output_text = model_response["choices"][0]["message"].get("content", "")
+        output_text: Final = model_response["choices"][0]["message"].get("content", "")
         if output_text is not None and len(output_text) > 0:
             completion_tokens = 0
             try:
@@ -229,19 +227,19 @@ class PredibaseConfig(BaseConfig):
         else:
             completion_tokens = 0
 
-        total_tokens = prompt_tokens + completion_tokens
+        total_tokens: Final = prompt_tokens + completion_tokens
 
         model_response.created = int(time.time())
         model_response.model = model
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
         )
-        model_response.usage = usage  # type: ignore
+        model_response.usage = usage
 
-        predibase_headers = raw_response.headers
-        response_headers = {}
+        predibase_headers: Final = raw_response.headers
+        response_headers: Final = {}
         for k, v in predibase_headers.items():
             if k.startswith("x-"):
                 response_headers[f"llm_provider-{k}"] = v
@@ -258,9 +256,9 @@ class PredibaseConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        custom_prompt_dict = litellm_params.get("custom_prompt_dict", {})
+        custom_prompt_dict: Final = litellm_params.get("custom_prompt_dict", {})
         if model in custom_prompt_dict:
-            model_prompt_details = custom_prompt_dict[model]
+            model_prompt_details: Final = custom_prompt_dict[model]
             prompt = custom_prompt(
                 role_dict=model_prompt_details["roles"],
                 initial_prompt_value=model_prompt_details["initial_prompt_value"],
@@ -270,8 +268,8 @@ class PredibaseConfig(BaseConfig):
         else:
             prompt = prompt_factory(model=model, messages=messages)
 
-        request_optional_params = {**optional_params}
-        config = self.get_config()
+        request_optional_params: Final = {**optional_params}
+        config: Final = self.get_config()
         for k, v in config.items():
             if k not in request_optional_params:
                 request_optional_params[k] = v
@@ -289,7 +287,7 @@ class PredibaseConfig(BaseConfig):
 
         Initial issue that prompted this - https://github.com/BerriAI/litellm/issues/763
         """
-        chat_template_tokens = [
+        chat_template_tokens: Final = [
             "<|assistant|>",
             "<|system|>",
             "<|user|>",
@@ -312,7 +310,7 @@ class PredibaseConfig(BaseConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        tenant_id = litellm_params.get("predibase_tenant_id") or litellm_params.get("tenant_id")
+        tenant_id: Final = litellm_params.get("predibase_tenant_id") or litellm_params.get("tenant_id")
         if tenant_id is None:
             raise ValueError(
                 "Missing Predibase Tenant ID - Required for making the request. Set dynamically (e.g. `completion(..tenant_id=<MY-ID>)`) or in env - `PREDIBASE_TENANT_ID`."
@@ -325,7 +323,7 @@ class PredibaseConfig(BaseConfig):
             base_url = os.getenv("PREDIBASE_API_BASE", "")
 
         completion_url = f"{base_url}/{tenant_id}/deployments/v2/llms/{model}"
-        should_stream = stream if stream is not None else optional_params.get("stream", False)
+        should_stream: Final = stream if stream is not None else optional_params.get("stream", False)
         if should_stream is True:
             completion_url += "/generate_stream"
         else:
@@ -350,7 +348,7 @@ class PredibaseConfig(BaseConfig):
                 "Missing Predibase API Key - A call is being made to predibase but no key is set either in the environment variables or via params"
             )
 
-        default_headers = {
+        default_headers: Final = {
             "content-type": "application/json",
             "Authorization": f"Bearer {api_key}",
         }

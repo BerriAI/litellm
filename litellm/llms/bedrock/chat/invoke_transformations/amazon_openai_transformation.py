@@ -7,7 +7,7 @@ Model format: bedrock/openai/<model-id>
 Example: bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -80,10 +80,10 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         model_id = self._get_openai_model_id(model)
 
         # Get AWS region
-        aws_region_name = self._get_aws_region_name(optional_params=optional_params, model=model)
+        aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
 
         # Get runtime endpoint
-        aws_bedrock_runtime_endpoint = optional_params.get("aws_bedrock_runtime_endpoint", None)
+        aws_bedrock_runtime_endpoint: Final = optional_params.get("aws_bedrock_runtime_endpoint", None)
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
@@ -145,7 +145,7 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         optional_params.pop("stream", None)
 
         # Remove AWS-specific params that shouldn't be in the request body
-        inference_params = {k: v for k, v in optional_params.items() if k not in self.aws_authentication_params}
+        inference_params: Final = {k: v for k, v in optional_params.items() if k not in self.aws_authentication_params}
 
         # Use parent class transform_request for OpenAI format
         return super().transform_request(

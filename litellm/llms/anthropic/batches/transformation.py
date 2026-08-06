@@ -1,6 +1,6 @@
 import json
 import time
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 from httpx import Headers, Response
@@ -45,12 +45,12 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         """Validate and prepare environment-specific headers and parameters."""
         if api_base is None and isinstance(litellm_params, dict):
             api_base = litellm_params.get("api_base")
-        auth_header = self.anthropic_model_info.get_auth_header(api_key, api_base)
+        auth_header: Final = self.anthropic_model_info.get_auth_header(api_key, api_base)
         if auth_header is None:
             raise ValueError(
                 "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
             )
-        _headers = {
+        _headers: Final = {
             "accept": "application/json",
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
@@ -125,7 +125,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             Complete URL for Anthropic batch retrieval: {api_base}/v1/messages/batches/{batch_id}
         """
         api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
-        encoded_batch_id = encode_url_path_segment(batch_id, field_name="batch_id")
+        encoded_batch_id: Final = encode_url_path_segment(batch_id, field_name="batch_id")
         return f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_batch_id}"
 
     def transform_retrieve_batch_request(
@@ -152,13 +152,13 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     ) -> LiteLLMBatch:
         """Transform Anthropic MessageBatch retrieval response to LiteLLM format."""
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise ValueError(f"Failed to parse Anthropic batch response: {e}")
 
         # Map Anthropic MessageBatch to OpenAI Batch format
-        batch_id = response_data.get("id", "")
-        processing_status = response_data.get("processing_status", "in_progress")
+        batch_id: Final = response_data.get("id", "")
+        processing_status: Final = response_data.get("processing_status", "in_progress")
 
         # Map Anthropic processing_status to OpenAI status
         status_mapping: dict[
@@ -178,7 +178,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             "canceling": "cancelling",
             "ended": "completed",
         }
-        openai_status = status_mapping.get(processing_status, "in_progress")
+        openai_status: Final = status_mapping.get(processing_status, "in_progress")
 
         # Parse timestamps
         def parse_timestamp(ts_str: str | None) -> int | None:
@@ -187,22 +187,22 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             try:
                 from datetime import datetime
 
-                dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                dt: Final = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                 return int(dt.timestamp())
             except Exception:
                 return None
 
-        created_at = parse_timestamp(response_data.get("created_at"))
-        ended_at = parse_timestamp(response_data.get("ended_at"))
-        expires_at = parse_timestamp(response_data.get("expires_at"))
-        cancel_initiated_at = parse_timestamp(response_data.get("cancel_initiated_at"))
-        archived_at = parse_timestamp(response_data.get("archived_at"))
+        created_at: Final = parse_timestamp(response_data.get("created_at"))
+        ended_at: Final = parse_timestamp(response_data.get("ended_at"))
+        expires_at: Final = parse_timestamp(response_data.get("expires_at"))
+        cancel_initiated_at: Final = parse_timestamp(response_data.get("cancel_initiated_at"))
+        archived_at: Final = parse_timestamp(response_data.get("archived_at"))
 
         # Extract request counts
-        request_counts_data = response_data.get("request_counts", {})
+        request_counts_data: Final = response_data.get("request_counts", {})
         from openai.types.batch import BatchRequestCounts
 
-        request_counts = BatchRequestCounts(
+        request_counts: Final = BatchRequestCounts(
             total=sum(
                 [
                     request_counts_data.get("processing", 0),
@@ -268,12 +268,12 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         from litellm.cost_calculator import BaseTokenUsageProcessor
         from litellm.types.utils import Usage
 
-        response_text = raw_response.text.strip()
-        all_usage: list[Usage] = []
+        response_text: Final = raw_response.text.strip()
+        all_usage: Final[list[Usage]] = []
 
         try:
             # Split by newlines and try to parse each line as JSON
-            lines = response_text.split("\n")
+            lines: Final = response_text.split("\n")
             for line in lines:
                 line = line.strip()
                 if not line:
@@ -295,7 +295,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
                     continue
 
             ## SUM ALL USAGE
-            combined_usage = BaseTokenUsageProcessor.combine_usage_objects(all_usage)
+            combined_usage: Final = BaseTokenUsageProcessor.combine_usage_objects(all_usage)
             setattr(model_response, "usage", combined_usage)
 
             return model_response

@@ -1,6 +1,6 @@
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -92,7 +92,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         tool_results: list | None = None,
         seed: int | None = None,
     ) -> None:
-        locals_ = locals()
+        locals_: Final = locals()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -175,7 +175,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         """
         Cohere v2 chat api is in openai format, so we can use the openai transform request function to transform the request.
         """
-        data = super().transform_request(model, messages, optional_params, litellm_params, headers)
+        data: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
 
         return data
 
@@ -194,18 +194,18 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
 
         try:
-            cohere_v2_chat_response = CohereV2ChatResponse(**raw_response_json)  # type: ignore
+            cohere_v2_chat_response: Final = CohereV2ChatResponse(**raw_response_json)
         except Exception:
             raise CohereError(message=raw_response.text, status_code=422)
 
-        cohere_content = cohere_v2_chat_response["message"].get("content", None)
+        cohere_content: Final = cohere_v2_chat_response["message"].get("content", None)
         if cohere_content is not None:
-            model_response.choices[0].message.content = "".join(  # type: ignore
+            model_response.choices[0].message.content = "".join(
                 [content.get("text", "") for content in cohere_content if content is not None]
             )
 
@@ -220,35 +220,35 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             annotations = self._translate_citations_to_openai_annotations(citations)
 
         ## Tool calling response
-        cohere_tools_response = cohere_v2_chat_response["message"].get("tool_calls", [])
+        cohere_tools_response: Final = cohere_v2_chat_response["message"].get("tool_calls", [])
         if cohere_tools_response is not None and cohere_tools_response != []:
             # convert cohere_tools_response to OpenAI response format
-            tool_calls: list[ChatCompletionToolCallChunk] = []
+            tool_calls: Final[list[ChatCompletionToolCallChunk]] = []
             for index, tool in enumerate(cohere_tools_response):
                 tool_call: ChatCompletionToolCallChunk = {
-                    **tool,  # type: ignore
+                    **tool,
                     "index": index,
                 }
                 tool_calls.append(tool_call)
-            _message = litellm.Message(
+            _message: Final = litellm.Message(
                 tool_calls=tool_calls,
                 content=None,
                 annotations=annotations,
             )
-            model_response.choices[0].message = _message  # type: ignore
+            model_response.choices[0].message = _message
         else:
             if annotations:
-                current_message = model_response.choices[0].message  # type: ignore
+                current_message: Final = model_response.choices[0].message
                 current_message.annotations = annotations
 
         ## CALCULATING USAGE - use cohere `billed_units` for returning usage
-        token_usage = cohere_v2_chat_response["usage"].get("tokens", {})
-        prompt_tokens = token_usage.get("input_tokens", 0)
-        completion_tokens = token_usage.get("output_tokens", 0)
+        token_usage: Final = cohere_v2_chat_response["usage"].get("tokens", {})
+        prompt_tokens: Final = token_usage.get("input_tokens", 0)
+        completion_tokens: Final = token_usage.get("output_tokens", 0)
 
         model_response.created = int(time.time())
         model_response.model = model
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
@@ -317,7 +317,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         Returns:
             List of OpenAI ChatCompletionAnnotation objects (one per source)
         """
-        annotations: list[ChatCompletionAnnotation] = []
+        annotations: Final[list[ChatCompletionAnnotation]] = []
 
         for citation in citations:
             start_index = citation.get("start", 0)

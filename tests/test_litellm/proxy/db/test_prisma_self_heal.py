@@ -290,7 +290,7 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_db_error(
             AsyncMock(side_effect=[None, asyncio.CancelledError()]),
         ),
         patch(
-            "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_connection_error",
+            "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_infrastructure_error",
             return_value=True,
         ),
     ):
@@ -321,7 +321,7 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_probe_timeout(
             AsyncMock(side_effect=[None, asyncio.CancelledError()]),
         ),
         patch(
-            "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_connection_error",
+            "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_infrastructure_error",
             return_value=False,
         ),
     ):
