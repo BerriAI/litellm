@@ -159,6 +159,65 @@ def test_invalid_args_fall_back_without_failing_traffic(caplog):
     assert len(warnings) == 1
 
 
+def test_conflict_winner_is_stable_across_model_list_order():
+    ordered = _build_router(
+        [
+            _deployment("quality", "openai/gpt-4o", "a-first", {"routing_strategy": "cost-based-routing"}),
+            _deployment("quality", "openai/gpt-4o-mini", "b-second", {"routing_strategy": "latency-based-routing"}),
+        ]
+    )
+    reversed_router = _build_router(
+        [
+            _deployment("quality", "openai/gpt-4o-mini", "b-second", {"routing_strategy": "latency-based-routing"}),
+            _deployment("quality", "openai/gpt-4o", "a-first", {"routing_strategy": "cost-based-routing"}),
+        ]
+    )
+    assert ordered._get_routing_context("quality")[0] == "cost-based-routing"
+    assert reversed_router._get_routing_context("quality")[0] == "cost-based-routing"
+
+
+def test_invalid_args_evict_previously_cached_selector():
+    router = _build_router(
+        [
+            _deployment(
+                "quality",
+                "openai/gpt-4o",
+                "d1",
+                {"routing_strategy": "latency-based-routing", "routing_strategy_args": {"ttl": 120}},
+            )
+        ]
+    )
+    _, old_selector = router._get_routing_context("quality")
+    assert any("|" in k for k in router._override_selectors)
+
+    for idx in router.model_name_to_deployment_indices["quality"]:
+        router.model_list[idx]["model_info"]["routing_strategy_args"] = {"ttl": "bogus"}
+
+    strategy, _ = router._get_routing_context("quality")
+    assert strategy == "simple-shuffle"
+    assert not any("|" in k for k in router._override_selectors)
+    assert all(c is not old_selector for c in litellm.callbacks)
+
+
+def test_deleting_deployment_evicts_its_selector():
+    router = _build_router(
+        [
+            _deployment(
+                "quality",
+                "openai/gpt-4o",
+                "d1",
+                {"routing_strategy": "latency-based-routing", "routing_strategy_args": {"ttl": 120}},
+            )
+        ]
+    )
+    _, selector = router._get_routing_context("quality")
+    assert any("|" in k for k in router._override_selectors)
+
+    router.delete_deployment(id="d1")
+    assert not any("|" in k for k in router._override_selectors)
+    assert all(c is not selector for c in litellm.callbacks)
+
+
 def test_config_and_args_warnings_fire_independently(caplog):
     router = _build_router(
         [

@@ -429,7 +429,7 @@ export default function ModelInfoView({
           };
         }
         const formRoutingStrategy = values.routing_strategy ?? "";
-        if (formRoutingStrategy !== (modelData.model_info?.routing_strategy ?? "")) {
+        if (formRoutingStrategy !== (localModelData.model_info?.routing_strategy ?? "")) {
           updatedModelInfo = {
             ...updatedModelInfo,
             routing_strategy: formRoutingStrategy,
@@ -437,7 +437,7 @@ export default function ModelInfoView({
         }
         if (values.routing_strategy_args !== undefined) {
           const parsedArgs = values.routing_strategy_args ? JSON.parse(values.routing_strategy_args) : {};
-          const storedArgs = modelData.model_info?.routing_strategy_args ?? {};
+          const storedArgs = localModelData.model_info?.routing_strategy_args ?? {};
           if (JSON.stringify(parsedArgs) !== JSON.stringify(storedArgs)) {
             updatedModelInfo = {
               ...updatedModelInfo,
