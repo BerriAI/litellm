@@ -408,34 +408,45 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
+    let cancelled = false;
+
     const loadModels = async () => {
       setIsLoadingModels(true);
       setModelLoadError(false);
       try {
         const uniqueModels = await fetchAvailableModels(userApiKey);
+        if (cancelled) {
+          return;
+        }
 
         setModelInfo(uniqueModels);
 
-        // check for selection overlap or empty model list
         const hasSelection = uniqueModels.some((m) => m.model_group === selectedModel);
-        if (!uniqueModels.length) {
-          setSelectedModel(undefined);
-        } else if (!hasSelection) {
+        if (!uniqueModels.length || !hasSelection) {
           setSelectedModel(undefined);
         }
       } catch (error) {
+        if (cancelled) {
+          return;
+        }
         console.error("Error fetching model info:", error);
         setModelInfo([]);
         setModelLoadError(true);
       } finally {
-        setIsLoadingModels(false);
+        if (!cancelled) {
+          setIsLoadingModels(false);
+        }
       }
     };
 
     if (!simplified) {
-      loadModels();
+      void loadModels();
     }
-    loadMCPServers();
+    void loadMCPServers();
+
+    return () => {
+      cancelled = true;
+    };
   }, [accessToken, apiKeySource, apiKey, simplified]);
 
   // Load tools when MCP direct mode has a server (or toolset) selected
