@@ -16,10 +16,11 @@ import os
 import random
 import threading
 from datetime import datetime
-from typing import Any, Dict, Optional, Union
 
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import (
+    _get_httpx_client,  # noqa: TID251  # internal API needed for non-blocking HTTP
+)
 
 _REPORT_URL = "https://tickerr.ai/api/v1/report"
 _UA = "litellm-tickerr/1.0"
@@ -40,87 +41,102 @@ class TickerrLogger(CustomLogger):
         TICKERR_SAMPLE_RATE   - fraction of successes to report (0.0-1.0, default 0 = off)
     """
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: object) -> None:  # pyright: ignore[reportAny]  # parent is untyped
         super().__init__(**kwargs)
         self.disabled: bool = os.environ.get("TICKERR_DISABLED", "").lower() in {
             "1",
             "true",
             "yes",
         }
-        self.region: Optional[str] = os.environ.get("TICKERR_REGION")
+        self.region: str | None = os.environ.get("TICKERR_REGION")
         try:
             self.sample_rate: float = min(1.0, max(0.0, float(os.environ.get("TICKERR_SAMPLE_RATE", "0"))))
         except (ValueError, TypeError):
             self.sample_rate = 0.0
 
-    def log_failure_event(
+    def log_failure_event(  # pyright: ignore[reportAny]  # parent is untyped
         self,
-        kwargs: Dict[str, Any],
-        response_obj: Any,
-        start_time: Union[datetime, float],
-        end_time: Union[datetime, float],
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime | float,
+        end_time: datetime | float,
     ) -> None:
         self._report(kwargs, start_time, end_time)
 
-    async def async_log_failure_event(
+    async def async_log_failure_event(  # pyright: ignore[reportAny]  # parent is untyped
         self,
-        kwargs: Dict[str, Any],
-        response_obj: Any,
-        start_time: Union[datetime, float],
-        end_time: Union[datetime, float],
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime | float,
+        end_time: datetime | float,
     ) -> None:
         self._report(kwargs, start_time, end_time)
 
-    def log_success_event(
+    def log_success_event(  # pyright: ignore[reportAny]  # parent is untyped
         self,
-        kwargs: Dict[str, Any],
-        response_obj: Any,
-        start_time: Union[datetime, float],
-        end_time: Union[datetime, float],
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime | float,
+        end_time: datetime | float,
     ) -> None:
         if self.sample_rate > 0 and random.random() < self.sample_rate:
             self._report(kwargs, start_time, end_time, is_success=True)
 
-    async def async_log_success_event(
+    async def async_log_success_event(  # pyright: ignore[reportAny]  # parent is untyped
         self,
-        kwargs: Dict[str, Any],
-        response_obj: Any,
-        start_time: Union[datetime, float],
-        end_time: Union[datetime, float],
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime | float,
+        end_time: datetime | float,
     ) -> None:
         if self.sample_rate > 0 and random.random() < self.sample_rate:
             self._report(kwargs, start_time, end_time, is_success=True)
 
     def _report(
         self,
-        kwargs: Dict[str, Any],
-        start_time: Union[datetime, float],
-        end_time: Union[datetime, float],
+        kwargs: dict[str, object],
+        start_time: datetime | float,
+        end_time: datetime | float,
         is_success: bool = False,
     ) -> None:
         if self.disabled:
             return
 
-        model: str = kwargs.get("model", "") or ""
+        model: str = str(kwargs.get("model", "") or "")
 
         if isinstance(start_time, datetime) and isinstance(end_time, datetime):
             latency = round((end_time - start_time).total_seconds() * 1000)
         else:
-            latency = round((float(end_time) - float(start_time)) * 1000)  # type: ignore[arg-type]
+            latency = round((float(end_time) - float(start_time)) * 1000)
 
-        payload = {
-            k: v
-            for k, v in {
-                "provider": kwargs.get("litellm_params", {}).get("custom_llm_provider")
-                or kwargs.get("custom_llm_provider"),
-                "model": model or None,
-                "latency_ms": latency,
-                "event_type": "success" if is_success else "failure",
-                "status_code": getattr(kwargs.get("exception"), "status_code", None),
-                "region": self.region,
-            }.items()
-            if v is not None
-        }
+        litellm_params = kwargs.get("litellm_params")
+        provider: str | None = None
+        if isinstance(litellm_params, dict):
+            raw = litellm_params.get("custom_llm_provider")
+            if isinstance(raw, str):
+                provider = raw
+        if provider is None:
+            raw_fallback = kwargs.get("custom_llm_provider")
+            if isinstance(raw_fallback, str):
+                provider = raw_fallback
+
+        exception = kwargs.get("exception")
+        status_code: int | None = None
+        raw_code = getattr(exception, "status_code", None)
+        if isinstance(raw_code, int):
+            status_code = raw_code
+
+        payload: dict[str, str | int] = {}
+        if provider is not None:
+            payload["provider"] = provider
+        if model:
+            payload["model"] = model
+        payload["latency_ms"] = latency
+        payload["event_type"] = "success" if is_success else "failure"
+        if status_code is not None:
+            payload["status_code"] = status_code
+        if self.region is not None:
+            payload["region"] = self.region
 
         def _send() -> None:
             if not _MAX_INFLIGHT.acquire(blocking=False):
@@ -133,7 +149,7 @@ class TickerrLogger(CustomLogger):
                     headers={"User-Agent": _UA},
                     timeout=2,
                 )
-            except Exception:
+            except (OSError, ValueError):  # fire-and-forget; network errors are expected
                 pass
             finally:
                 _MAX_INFLIGHT.release()
