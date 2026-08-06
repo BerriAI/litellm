@@ -25,8 +25,8 @@ else:
 
 
 class VectorStoreIndexRegistry:
-    def __init__(self, vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] | None = None):
-        self.vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] = list(vector_store_indexes or ())
+    def __init__(self, vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] | None = None):
+        self.vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] = list(vector_store_indexes or ())
 
     def get_vector_store_indexes(self) -> list[LiteLLM_ManagedVectorStoreIndex]:
         """
@@ -96,9 +96,9 @@ class VectorStoreIndexRegistry:
 
 
 class VectorStoreRegistry:
-    def __init__(self, vector_stores: List[LiteLLM_ManagedVectorStore] | None = None):
-        self.vector_stores: List[LiteLLM_ManagedVectorStore] = list(vector_stores or ())
-        self.vector_store_ids_to_vector_store_map: Dict[str, LiteLLM_ManagedVectorStore] = {}
+    def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] | None = None):
+        self.vector_stores: list[LiteLLM_ManagedVectorStore] = list(vector_stores or ())
+        self.vector_store_ids_to_vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
 
     def _extract_tool_params(self, tool: dict) -> VectorStoreToolParams:
         """
@@ -377,8 +377,8 @@ class VectorStoreRegistry:
         return vector_stores_to_run
 
     def _get_vector_store_ids_from_tool_calls(
-        self, tools: List[Dict] | None = None, vector_store_ids: List[str] | None = None
-    ) -> List[str]:
+        self, tools: list[dict] | None = None, vector_store_ids: list[str] | None = None
+    ) -> list[str]:
         """
         Returns the vector store ids from the tool calls
         """

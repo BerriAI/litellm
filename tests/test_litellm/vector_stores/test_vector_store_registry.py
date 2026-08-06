@@ -281,7 +281,7 @@ def test_delete_vector_store_index_removes_by_name():
 
 def test_get_vector_store_ids_from_tool_calls_does_not_share_or_mutate():
     """
-    Regression test: _get_vector_store_ids_from_tool_calls took `vector_store_ids: List[str] = []`
+    Regression test: _get_vector_store_ids_from_tool_calls took `vector_store_ids: list[str] = []`
     and extended it in place, so the def-time default accumulated ids across every call that
     omitted the argument, and a caller-supplied list was mutated behind the caller's back.
     """
