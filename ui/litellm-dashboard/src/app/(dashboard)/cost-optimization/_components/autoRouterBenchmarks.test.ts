@@ -131,12 +131,25 @@ describe("bucketRows", () => {
 });
 
 describe("expiredMissShare", () => {
-  it("recomputes the expired share from the miss counts", () => {
-    expect(expiredMissShare(cache())).toBeCloseTo((100 * 19) / 70);
+  it("computes the expired share over every measured turn, not just return-to-tier misses", () => {
+    expect(expiredMissShare(cache())).toBeCloseTo((100 * 19) / 818);
   });
 
-  it("is absent when every return turn hit", () => {
-    expect(expiredMissShare(cache({ return_to_tier: { turns: 10, hits: 10, hit_rate_pct: 100 } }))).toBeNull();
+  it("is zero, not absent, when every return turn hit", () => {
+    expect(
+      expiredMissShare(cache({ return_to_tier: { turns: 10, hits: 10, hit_rate_pct: 100 }, return_misses_expired: 0 })),
+    ).toBe(0);
+  });
+
+  it("is absent only when no turns were measured at all", () => {
+    const empty = { turns: 0, hits: 0, hit_rate_pct: 0 };
+    const nothingMeasured = {
+      same_model: empty,
+      first_visit: empty,
+      return_to_tier: empty,
+      return_misses_expired: 0,
+    };
+    expect(expiredMissShare(cache(nothingMeasured))).toBeNull();
   });
 });
 
