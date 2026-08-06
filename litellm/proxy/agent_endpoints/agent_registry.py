@@ -95,7 +95,7 @@ class ObjectPermissionGrantRecord(Protocol):
 class ObjectPermissionTableClient(Protocol):
     async def find_many(self, where: Mapping[str, object]) -> Sequence[ObjectPermissionGrantRecord]: ...
 
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
+    async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
 
 
 def object_permission_table(prisma_client: PrismaClient) -> ObjectPermissionTableClient:
@@ -227,6 +227,10 @@ class AgentRegistry:
         Persisting the stable id here is what keeps a grant alive across a later
         secret rotation, which re-mints the legacy hash and would otherwise orphan
         the stored value. Idempotent; runs of it after the first find no rows.
+
+        Each write is a compare-and-swap against the agents array read above, so a
+        grant edited concurrently is left untouched; the runtime alias keeps covering
+        it and the next boot retries the rewrite.
         """
         legacy_ids: Final = [legacy for legacy, stable in self.config_agent_legacy_ids.items() if legacy != stable]
         if not legacy_ids:
@@ -235,13 +239,14 @@ class AgentRegistry:
         updates: Final = tuple(
             (
                 row.object_permission_id,
+                list(row.agents or []),
                 list(dict.fromkeys(self.stable_agent_id(agent_id) for agent_id in row.agents or [])),
             )
             for row in rows
         )
-        for object_permission_id, translated_agents in updates:
-            await table.update(
-                where={"object_permission_id": object_permission_id},
+        for object_permission_id, snapshot_agents, translated_agents in updates:
+            await table.update_many(
+                where={"object_permission_id": object_permission_id, "agents": {"equals": snapshot_agents}},
                 data={"agents": translated_agents},
             )
         return len(updates)
