@@ -1,8 +1,8 @@
 import React from "react";
 import Image from "next/image";
+import { FileText } from "lucide-react";
 import { MessageType } from "@/components/chat_ui/types";
 import { shouldShowChatAttachedImage } from "./ChatImageUtils";
-import { FilePdfOutlined } from "@ant-design/icons";
 
 interface ChatImageRendererProps {
   message: MessageType;
@@ -18,8 +18,8 @@ const ChatImageRenderer: React.FC<ChatImageRendererProps> = ({ message }) => {
   return (
     <div className="mb-2">
       {isPdf ? (
-        <div className="w-64 h-32 rounded-md border border-gray-200 bg-red-50 flex items-center justify-center">
-          <FilePdfOutlined style={{ fontSize: "48px", color: "#dc2626" }} />
+        <div className="flex h-32 w-64 items-center justify-center rounded-md border border-gray-200 bg-red-50">
+          <FileText className="size-12 text-red-600" aria-label="PDF attachment" />
         </div>
       ) : (
         <Image
