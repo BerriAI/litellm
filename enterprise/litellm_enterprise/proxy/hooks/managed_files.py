@@ -1106,7 +1106,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             resolved_model_name = resolve_managed_output_file_model_name(
                 unified_input_file_id=unified_file_id
                 if isinstance(unified_file_id, str)
-                else None,
+                else response.input_file_id,
                 fallback_model_name=model_name,
             )
             original_response_id = response.id

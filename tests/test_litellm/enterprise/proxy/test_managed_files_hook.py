@@ -561,18 +561,65 @@ async def test_hook_mint_prefers_input_file_target_model_names():
     )
 
 
-def test_cost_job_and_retrieve_paths_mint_identical_unified_output_file_ids():
+@pytest.mark.asyncio
+async def test_hook_mint_falls_back_to_response_input_file_id_target_models():
+    managed_files = _make_managed_files_instance()
+    batch_response = _make_batch_response()
+    batch_response.input_file_id = _b64_unified_input_file_id("model-a,model-b")
+    batch_response._hidden_params = {
+        "unified_batch_id": "some-unified-batch-id",
+        "model_id": "model-deploy-xyz",
+    }
+
+    mock_router = MagicMock()
+    mock_router.get_deployment_credentials_with_provider = MagicMock(return_value={})
+
+    with (
+        patch("litellm.afile_retrieve", AsyncMock(return_value=_make_file_object())),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+    ):
+        await managed_files.async_post_call_success_hook(
+            data={},
+            user_api_key_dict=_make_user_api_key_dict(),
+            response=batch_response,
+        )
+
+    assert batch_response.output_file_id == managed_files.get_unified_output_file_id(
+        output_file_id="file-output-abc",
+        model_id="model-deploy-xyz",
+        model_name="model-a,model-b",
+    )
+
+
+@pytest.mark.asyncio
+async def test_cost_job_and_retrieve_paths_mint_identical_unified_output_file_ids():
     from litellm.proxy.openai_files_endpoints.common_utils import (
-        resolve_managed_output_file_model_name,
+        ensure_batch_response_managed_file_ids,
     )
     from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
 
-    managed_files = _make_managed_files_instance()
-    unified_input_file_id = _b64_unified_input_file_id("model-a,model-b")
+    managed_files, mock_prisma = _make_real_managed_files_instance()
+    mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
+    unified_input_file_id = _b64_unified_input_file_id("model-a")
 
-    retrieve_path_model_name = resolve_managed_output_file_model_name(
-        unified_input_file_id=unified_input_file_id,
-        fallback_model_name="model-a",
+    retrieve_response = LiteLLMBatch(
+        id="batch-123",
+        completion_window="24h",
+        created_at=1700000000,
+        endpoint="/v1/chat/completions",
+        input_file_id=unified_input_file_id,
+        object="batch",
+        status="completed",
+        output_file_id="file-output-abc",
+    )
+    retrieve_response._hidden_params = {"model_id": "model-deploy-xyz"}
+
+    await ensure_batch_response_managed_file_ids(
+        response=retrieve_response,
+        managed_files_obj=managed_files,
+        prisma_client=mock_prisma,
+        verbose_proxy_logger=MagicMock(),
+        user_api_key_dict=_make_user_api_key_dict(),
     )
 
     job = MagicMock()
@@ -586,17 +633,12 @@ def test_cost_job_and_retrieve_paths_mint_identical_unified_output_file_ids():
         "status": "completed",
     }
     cost_job_model_name = CheckBatchCost._get_managed_file_model_name(
-        job=job, deployment_info=MagicMock(model_name="model-a")
+        job=job, deployment_info=MagicMock(model_name="vertex_ai/gemini-3-pro")
     )
 
-    assert retrieve_path_model_name == cost_job_model_name == "model-a,model-b"
-
-    minted_ids = {
-        managed_files.get_unified_output_file_id(
-            output_file_id="file-output-abc",
-            model_id="model-deploy-xyz",
-            model_name=model_name,
-        )
-        for model_name in (retrieve_path_model_name, cost_job_model_name)
-    }
-    assert len(minted_ids) == 1
+    assert cost_job_model_name == "model-a"
+    assert retrieve_response.output_file_id == managed_files.get_unified_output_file_id(
+        output_file_id="file-output-abc",
+        model_id="model-deploy-xyz",
+        model_name=cost_job_model_name,
+    )
