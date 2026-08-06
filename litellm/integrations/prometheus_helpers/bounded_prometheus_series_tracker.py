@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections import OrderedDict
 from threading import RLock
-from typing import Any
+from typing import Any, Final
 
 
 class BoundedPrometheusSeriesTracker:
@@ -31,10 +31,10 @@ class BoundedPrometheusSeriesTracker:
         if max_series is None and ttl_seconds is None:
             return
 
-        now = time.monotonic()
+        now: Final = time.monotonic()
 
         with self.lock:
-            series = self._series.setdefault(metric_name, OrderedDict())
+            series: Final = self._series.setdefault(metric_name, OrderedDict())
             series[label_values] = now
             series.move_to_end(label_values)
 
@@ -43,7 +43,7 @@ class BoundedPrometheusSeriesTracker:
                 now=now,
                 cleanup_interval_seconds=cleanup_interval_seconds,
             ):
-                expired_label_values = [
+                expired_label_values: Final = [
                     tracked_label_values
                     for tracked_label_values, last_seen in series.items()
                     if now - last_seen > ttl_seconds
@@ -70,7 +70,7 @@ class BoundedPrometheusSeriesTracker:
             self._last_ttl_cleanup[metric_name] = now
             return True
 
-        last_cleanup = self._last_ttl_cleanup.get(metric_name)
+        last_cleanup: Final = self._last_ttl_cleanup.get(metric_name)
         if last_cleanup is None or now - last_cleanup >= cleanup_interval_seconds:
             self._last_ttl_cleanup[metric_name] = now
             return True

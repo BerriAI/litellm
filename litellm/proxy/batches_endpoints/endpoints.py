@@ -5,7 +5,7 @@
 
 ######################################################################
 import asyncio
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 
@@ -42,7 +42,7 @@ from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 async def _resolve_managed_input_file_storage_url(input_file_id: str) -> "str | None":
@@ -120,9 +120,10 @@ async def create_batch(
     try:
         data = await _read_request_body(request=request)
         verbose_proxy_logger.debug(
-            f"Request received by LiteLLM:\n{json.dumps(data, indent=4)}",
+            "Request received by LiteLLM:\n%s",
+            json.dumps(data, indent=4),
         )
-        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
             data,
             litellm_logging_obj,
@@ -144,17 +145,17 @@ async def create_batch(
             router_model = data.get("model", None)
             is_router_model = is_known_model(model=router_model, llm_router=llm_router)
 
-        custom_llm_provider = (
+        custom_llm_provider: Final = (
             provider
             or data.pop("custom_llm_provider", None)
             or get_custom_llm_provider_from_request_headers(request=request)
             or "openai"
         )
-        _create_batch_data = LiteLLMBatchCreateRequest(**data)
+        _create_batch_data: Final = LiteLLMBatchCreateRequest(**data)
 
         # Apply team-level batch output expiry enforcement
-        team_metadata = user_api_key_dict.team_metadata or {}
-        enforced_batch_expiry = team_metadata.get("enforced_batch_output_expires_after")
+        team_metadata: Final = user_api_key_dict.team_metadata or {}
+        enforced_batch_expiry: Final = team_metadata.get("enforced_batch_output_expires_after")
         if enforced_batch_expiry is not None:
             if "anchor" not in enforced_batch_expiry or "seconds" not in enforced_batch_expiry:
                 raise HTTPException(
@@ -175,7 +176,7 @@ async def create_batch(
                 "seconds": int(enforced_batch_expiry["seconds"]),
             }
 
-        input_file_id = _create_batch_data.get("input_file_id", None)
+        input_file_id: Final = _create_batch_data.get("input_file_id", None)
         unified_file_id: Union[str, Literal[False]] = False
 
         model_from_file_id = None
@@ -191,7 +192,7 @@ async def create_batch(
                 operation_context="batch creation (file created with model)",
             )
 
-            original_file_id = get_original_file_id(input_file_id)
+            original_file_id: Final = get_original_file_id(input_file_id)
             _create_batch_data["input_file_id"] = original_file_id
             prepare_data_with_credentials(
                 data=_create_batch_data,  # type: ignore
@@ -206,8 +207,8 @@ async def create_batch(
 
             # Encode the batch ID and related file IDs with model information
             if response and hasattr(response, "id") and response.id:
-                original_batch_id = response.id
-                encoded_batch_id = encode_file_id_with_model(
+                original_batch_id: Final = response.id
+                encoded_batch_id: Final = encode_file_id_with_model(
                     file_id=original_batch_id,
                     model=model_from_file_id,
                     id_type="batch",
@@ -225,8 +226,10 @@ async def create_batch(
                     )
 
                 verbose_proxy_logger.debug(
-                    f"Created batch using model: {model_from_file_id}, "
-                    f"original_batch_id: {original_batch_id}, encoded: {encoded_batch_id}"
+                    "Created batch using model: %s, original_batch_id: %s, encoded: %s",
+                    model_from_file_id,
+                    original_batch_id,
+                    encoded_batch_id,
                 )
 
             response.input_file_id = input_file_id
@@ -242,17 +245,17 @@ async def create_batch(
         elif (
             unified_file_id and input_file_id
         ):  # litellm_proxy:application/octet-stream;unified_id,c4843482-b176-4901-8292-7523fd0f2c6e;target_model_names,gpt-4o-mini
-            target_model_names = get_models_from_unified_file_id(unified_file_id)
+            target_model_names: Final = get_models_from_unified_file_id(unified_file_id)
             ## EXPECTS 1 MODEL
             if len(target_model_names) != 1:
                 raise HTTPException(
                     status_code=400,
                     detail={"error": f"Expected 1 model, got {len(target_model_names)}"},
                 )
-            model = target_model_names[0]
+            model: Final = target_model_names[0]
             _create_batch_data["model"] = model
 
-            resolved_storage_url = await _resolve_managed_input_file_storage_url(input_file_id)
+            resolved_storage_url: Final = await _resolve_managed_input_file_storage_url(input_file_id)
             if resolved_storage_url is not None:
                 _create_batch_data["input_file_id"] = resolved_storage_url
 
@@ -267,7 +270,7 @@ async def create_batch(
             response._hidden_params["unified_file_id"] = unified_file_id
         else:
             # Check if model specified via header/query/body param
-            model_param = (
+            model_param: Final = (
                 data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
             )
 
@@ -293,7 +296,7 @@ async def create_batch(
 
                 encode_batch_response_ids(response, model=model_param)
 
-                verbose_proxy_logger.debug(f"Created batch using model: {model_param}")
+                verbose_proxy_logger.debug("Created batch using model: %s", model_param)
             else:
                 # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
                 apply_team_provider_credentials(
@@ -318,10 +321,10 @@ async def create_batch(
         )
 
         ### RESPONSE HEADERS ###
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
+        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+        model_id: Final = hidden_params.get("model_id", None) or ""
+        cache_key: Final = hidden_params.get("cache_key", None) or ""
+        api_base: Final = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -340,7 +343,7 @@ async def create_batch(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.create_batch(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.create_batch(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -389,15 +392,15 @@ async def retrieve_batch(
 
     data: dict = {}
     try:
-        model_from_id = decode_model_from_file_id(batch_id)
-        _retrieve_batch_request = RetrieveBatchRequest(
+        model_from_id: Final = decode_model_from_file_id(batch_id)
+        _retrieve_batch_request: Final = RetrieveBatchRequest(
             batch_id=batch_id,
         )
 
         data = cast(dict, _retrieve_batch_request)
-        unified_batch_id = _is_base64_encoded_unified_file_id(batch_id)
+        unified_batch_id: Final = _is_base64_encoded_unified_file_id(batch_id)
 
-        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
             data,
             litellm_logging_obj,
@@ -412,7 +415,7 @@ async def retrieve_batch(
         )
 
         # FIX: First, try to read from ManagedObjectTable for consistent state
-        managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
+        managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
         from litellm.proxy.proxy_server import prisma_client
 
         db_batch_object, response = await get_batch_from_database(
@@ -471,19 +474,19 @@ async def retrieve_batch(
         # If batch is still processing, sync with provider to get latest state
         if response is not None:
             verbose_proxy_logger.debug(
-                f"Batch {batch_id} is in non-terminal state {response.status}, syncing with provider"
+                "Batch %s is in non-terminal state %s, syncing with provider", batch_id, response.status
             )
 
         # Retrieve from provider (for non-terminal states or if DB lookup failed)
         # SCENARIO 1: Batch ID is encoded with model info
         if model_from_id is not None:
-            credentials = get_credentials_for_model(
+            credentials: Final = get_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_from_id,
                 operation_context="batch retrieval (batch created with model)",
             )
 
-            original_batch_id = get_original_file_id(batch_id)
+            original_batch_id: Final = get_original_file_id(batch_id)
             prepare_data_with_credentials(
                 data=data,
                 credentials=credentials,
@@ -505,7 +508,7 @@ async def retrieve_batch(
             encode_batch_response_ids(response, model=model_from_id)
 
             verbose_proxy_logger.debug(
-                f"Retrieved batch using model: {model_from_id}, original_id: {original_batch_id}"
+                "Retrieved batch using model: %s, original_id: %s", model_from_id, original_batch_id
             )
 
         elif litellm.enable_loadbalancing_on_batch_endpoints is True or unified_batch_id:
@@ -518,13 +521,13 @@ async def retrieve_batch(
             response = await llm_router.aretrieve_batch(**data)  # type: ignore
             response._hidden_params["unified_batch_id"] = unified_batch_id
             if unified_batch_id:
-                model_id_from_batch = get_model_id_from_unified_batch_id(unified_batch_id)
+                model_id_from_batch: Final = get_model_id_from_unified_batch_id(unified_batch_id)
                 if model_id_from_batch:
                     response._hidden_params["model_id"] = model_id_from_batch
 
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
-            custom_llm_provider = (
+            custom_llm_provider: Final = (
                 provider
                 or get_custom_llm_provider_from_request_headers(request=request)
                 or get_custom_llm_provider_from_request_query(request=request)
@@ -592,7 +595,7 @@ async def retrieve_batch(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.retrieve_batch(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.retrieve_batch(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -641,7 +644,7 @@ async def list_batches(
         version,
     )
 
-    verbose_proxy_logger.debug(f"GET /v1/batches after={after} limit={limit}")
+    verbose_proxy_logger.debug("GET /v1/batches after=%s limit=%s", after, limit)
     try:
         if llm_router is None:
             raise HTTPException(
@@ -651,7 +654,7 @@ async def list_batches(
 
         # Include original request and headers in the data
         data = await _read_request_body(request=request)
-        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
             data,
             litellm_logging_obj,
@@ -666,7 +669,7 @@ async def list_batches(
         )
 
         # Try to use managed objects table for listing batches (returns encoded IDs).
-        managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
+        managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
         if managed_files_obj is not None and hasattr(managed_files_obj, "list_user_batches"):
             verbose_proxy_logger.debug("Using managed objects table for batch listing")
             response = await cast(Any, managed_files_obj).list_user_batches(
@@ -681,7 +684,7 @@ async def list_batches(
             data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
         ):
             # SCENARIO 2: Use model-based routing from header/query/body
-            credentials = get_credentials_for_model(
+            credentials: Final = get_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_param,
                 operation_context="batch listing",
@@ -698,19 +701,19 @@ async def list_batches(
 
             # Encode batch IDs in the list response so clients can use
             # them for retrieve/cancel/file downloads through the proxy.
-            response_data = getattr(response, "data", None)
+            response_data: Final = getattr(response, "data", None)
             if response_data:
                 for batch in response_data:
                     encode_batch_response_ids(batch, model=model_param)
 
-            verbose_proxy_logger.debug(f"Listed batches using model: {model_param}")
+            verbose_proxy_logger.debug("Listed batches using model: %s", model_param)
 
         # SCENARIO 2 (alternative): target_model_names based routing
         elif target_model_names or data.get("target_model_names", None):
             target_model_names = target_model_names or data.get("target_model_names", None)
             if target_model_names is None:
                 raise ValueError("target_model_names is required for this routing scenario")
-            model = target_model_names.split(",")[0]
+            model: Final = target_model_names.split(",")[0]
             data.pop("model", None)
             response = await llm_router.alist_batches(
                 model=model,
@@ -721,7 +724,7 @@ async def list_batches(
 
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
-            custom_llm_provider = (
+            custom_llm_provider: Final = (
                 provider
                 or get_custom_llm_provider_from_request_headers(request=request)
                 or get_custom_llm_provider_from_request_query(request=request)
@@ -741,7 +744,7 @@ async def list_batches(
             )
 
         ## POST CALL HOOKS ###
-        _response = await proxy_logging_obj.post_call_success_hook(
+        _response: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
             response=response,  # type: ignore
@@ -750,10 +753,10 @@ async def list_batches(
             response = _response
 
         ### RESPONSE HEADERS ###
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
+        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+        model_id: Final = hidden_params.get("model_id", None) or ""
+        cache_key: Final = hidden_params.get("cache_key", None) or ""
+        api_base: Final = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -773,7 +776,7 @@ async def list_batches(
             original_exception=e,
             request_data={"after": after, "limit": limit},
         )
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.retrieve_batch(): Exception occured - {e!s}")
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.retrieve_batch(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 
@@ -826,17 +829,17 @@ async def cancel_batch(
     data: dict = {}
     try:
         # Check for encoded batch ID with model info
-        model_from_id = decode_model_from_file_id(batch_id)
+        model_from_id: Final = decode_model_from_file_id(batch_id)
 
         # Create CancelBatchRequest with batch_id to enable ownership checking
-        _cancel_batch_request = CancelBatchRequest(
+        _cancel_batch_request: Final = CancelBatchRequest(
             batch_id=batch_id,
         )
         data = cast(dict, _cancel_batch_request)
 
-        unified_batch_id = _is_base64_encoded_unified_file_id(batch_id)
+        unified_batch_id: Final = _is_base64_encoded_unified_file_id(batch_id)
 
-        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
             data,
             litellm_logging_obj,
@@ -862,13 +865,13 @@ async def cancel_batch(
 
         # SCENARIO 1: Batch ID is encoded with model info
         if model_from_id is not None:
-            credentials = get_credentials_for_model(
+            credentials: Final = get_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_from_id,
                 operation_context="batch cancellation (batch created with model)",
             )
 
-            original_batch_id = get_original_file_id(batch_id)
+            original_batch_id: Final = get_original_file_id(batch_id)
             prepare_data_with_credentials(
                 data=data,
                 credentials=credentials,
@@ -886,7 +889,7 @@ async def cancel_batch(
             encode_batch_response_ids(response, model=model_from_id)
 
             verbose_proxy_logger.debug(
-                f"Cancelled batch using model: {model_from_id}, original_id: {original_batch_id}"
+                "Cancelled batch using model: %s, original_id: %s", model_from_id, original_batch_id
             )
 
         # SCENARIO 2: target_model_names based routing
@@ -897,7 +900,7 @@ async def cancel_batch(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
-            model_id_from_batch = get_model_id_from_unified_batch_id(unified_batch_id)
+            model_id_from_batch: Final = get_model_id_from_unified_batch_id(unified_batch_id)
             if model_id_from_batch is None:
                 raise HTTPException(
                     status_code=400,
@@ -913,7 +916,7 @@ async def cancel_batch(
 
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
-            custom_llm_provider = (
+            custom_llm_provider: Final = (
                 provider
                 or data.pop("custom_llm_provider", None)
                 or get_custom_llm_provider_from_request_headers(request=request)
@@ -929,14 +932,14 @@ async def cancel_batch(
                 user_api_key_dict=user_api_key_dict,
                 custom_llm_provider=custom_llm_provider,
             )
-            _cancel_batch_data = CancelBatchRequest(batch_id=batch_id, **data)
+            _cancel_batch_data: Final = CancelBatchRequest(batch_id=batch_id, **data)
             response = await litellm.acancel_batch(
                 custom_llm_provider=custom_llm_provider,  # type: ignore
                 **_cancel_batch_data,
             )
 
         # FIX: Update the database with the new cancelled state
-        managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
+        managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
         from litellm.proxy.proxy_server import prisma_client
 
         await update_batch_in_database(
@@ -960,10 +963,10 @@ async def cancel_batch(
         )
 
         ### RESPONSE HEADERS ###
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
+        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+        model_id: Final = hidden_params.get("model_id", None) or ""
+        cache_key: Final = hidden_params.get("cache_key", None) or ""
+        api_base: Final = hidden_params.get("api_base", None) or ""
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -982,7 +985,7 @@ async def cancel_batch(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception(f"litellm.proxy.proxy_server.create_batch(): Exception occured - {e!s}")
+        verbose_proxy_logger.exception("litellm.proxy.proxy_server.create_batch(): Exception occured - %s", e)
         raise handle_exception_on_proxy(e)
 
 
