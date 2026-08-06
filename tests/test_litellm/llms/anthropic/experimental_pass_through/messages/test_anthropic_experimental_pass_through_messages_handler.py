@@ -905,3 +905,99 @@ def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypat
     assert result == "translated"
     assert translation_calls["count"] == 1
     assert "config" not in captured
+
+
+def _translation_target_stubs(monkeypatch):
+    """Patch the two Anthropic->OpenAI translation handlers with distinguishable fakes.
+
+    Returns a list that records ``"responses"`` or ``"chat_completions"`` for whichever
+    bridge ``anthropic_messages_handler`` dispatched to.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    dispatched: list = []
+
+    def fake_responses(**kwargs):
+        dispatched.append("responses")
+        return "responses-bridge"
+
+    def fake_chat_completions(**kwargs):
+        dispatched.append("chat_completions")
+        return "chat-completions-bridge"
+
+    monkeypatch.setattr(
+        handler.LiteLLMMessagesToResponsesAPIHandler,
+        "anthropic_messages_handler",
+        staticmethod(fake_responses),
+    )
+    monkeypatch.setattr(
+        handler.LiteLLMMessagesToCompletionTransformationHandler,
+        "anthropic_messages_handler",
+        staticmethod(fake_chat_completions),
+    )
+    return dispatched
+
+
+def _call_messages_handler(model_info=None):
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    kwargs = {"model_info": model_info} if model_info is not None else {}
+    return anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="openai/some-gateway-model",
+        api_key="sk-test",
+        api_base="https://custom-gateway.example.com/v1",
+        **kwargs,
+    )
+
+
+def test_messages_uses_chat_completions_when_supported_endpoints_omit_responses(monkeypatch):
+    """Regression: an OpenAI-compatible backend that declares its endpoints without
+    /v1/responses must not have /v1/messages bridged to the Responses API. Guessing
+    /v1/responses from the provider string alone made such gateways 400."""
+    dispatched = _translation_target_stubs(monkeypatch)
+
+    result = _call_messages_handler(model_info={"supported_endpoints": ["/v1/chat/completions"]})
+
+    assert result == "chat-completions-bridge"
+    assert dispatched == ["chat_completions"]
+
+
+def test_messages_uses_responses_when_supported_endpoints_declare_responses(monkeypatch):
+    """A deployment that explicitly declares /v1/responses still gets the Responses bridge."""
+    dispatched = _translation_target_stubs(monkeypatch)
+
+    result = _call_messages_handler(model_info={"supported_endpoints": ["/v1/chat/completions", "/v1/responses"]})
+
+    assert result == "responses-bridge"
+    assert dispatched == ["responses"]
+
+
+@pytest.mark.parametrize(
+    "model_info",
+    [None, {}, {"supported_endpoints": None}, {"supported_endpoints": "/v1/chat/completions"}],
+    ids=["absent", "empty", "null-endpoints", "non-list-endpoints"],
+)
+def test_messages_uses_responses_when_supported_endpoints_undeclared(monkeypatch, model_info):
+    """Backward compatibility: without a usable per-deployment declaration, openai
+    deployments keep going to the Responses API exactly as before."""
+    dispatched = _translation_target_stubs(monkeypatch)
+
+    result = _call_messages_handler(model_info=model_info)
+
+    assert result == "responses-bridge"
+    assert dispatched == ["responses"]
+
+
+def test_global_chat_completions_flag_still_overrides_declared_responses_support(monkeypatch):
+    """The global opt-out wins even when the deployment declares /v1/responses."""
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
+    dispatched = _translation_target_stubs(monkeypatch)
+
+    result = _call_messages_handler(model_info={"supported_endpoints": ["/v1/responses"]})
+
+    assert result == "chat-completions-bridge"
+    assert dispatched == ["chat_completions"]
