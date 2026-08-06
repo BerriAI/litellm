@@ -142,7 +142,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
 
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useQueryState("team", parseAsString.withOptions({ history: "push" }));
-  const clearSelectedTeam = useCallback(() => void setSelectedTeamId(null, { history: "replace" }), [setSelectedTeamId]);
+  const clearSelectedTeam = useCallback(
+    () => void setSelectedTeamId(null, { history: "replace" }),
+    [setSelectedTeamId],
+  );
   const { markOpened: markTeamOpened, close: closeTeamDetail } = useDetailHistoryClose(clearSelectedTeam);
   const [editTeam, setEditTeam] = useState<boolean>(false);
 

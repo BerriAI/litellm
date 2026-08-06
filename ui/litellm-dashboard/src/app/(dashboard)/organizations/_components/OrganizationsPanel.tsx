@@ -51,6 +51,18 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
     setFilters({ org_id: "", org_alias: "" });
   };
 
+  const handleOrganizationOpen = (organizationId: string) => {
+    setEditOrg(false);
+    markOrgOpened();
+    void setSelectedOrgId(organizationId);
+  };
+
+  const handleOrganizationEdit = (organizationId: string) => {
+    markOrgOpened();
+    void setSelectedOrgId(organizationId);
+    setEditOrg(true);
+  };
+
   const handleDelete = (orgId: string | null) => {
     if (!orgId) return;
 
@@ -136,16 +148,8 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
             isLoading={isLoading}
             userRole={userRole}
             searchActive={searchActive}
-            onOrganizationClick={(organizationId) => {
-              setEditOrg(false);
-              markOrgOpened();
-              void setSelectedOrgId(organizationId);
-            }}
-            onEditClick={(organizationId) => {
-              markOrgOpened();
-              void setSelectedOrgId(organizationId);
-              setEditOrg(true);
-            }}
+            onOrganizationClick={handleOrganizationOpen}
+            onEditClick={handleOrganizationEdit}
             onDeleteClick={handleDelete}
           />
         </>
