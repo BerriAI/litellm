@@ -1307,6 +1307,38 @@ class ToolNameCollidingGuardrail(CustomGuardrail):
         return inputs
 
 
+class DuplicateToolReturningGuardrail(CustomGuardrail):
+    """Returns the same synthesized tool name twice, second copy with a different schema."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="duplicate-tool-returning")
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        inputs["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "injected_retrieve",
+                    "parameters": {"type": "object", "properties": {"first": {"type": "string"}}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "injected_retrieve",
+                    "parameters": {"type": "object", "properties": {"second": {"type": "string"}}},
+                },
+            },
+        ]
+        return inputs
+
+
 class TestScanOnlyToolResults:
     def _bedrock_guardrail(self):
         from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
@@ -1350,6 +1382,28 @@ class TestScanOnlyToolResults:
             assert mock_api.call_count == 1
             scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
             assert scanned == ["TOOL-RESULT-scanned"]
+
+    @pytest.mark.asyncio
+    async def test_legacy_function_role_results_are_scanned(self):
+        from unittest.mock import AsyncMock, patch
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = self._bedrock_guardrail()
+        data = {
+            "messages": [
+                {"role": "user", "content": "USER-PROMPT-not-scanned"},
+                {"role": "function", "name": "read_file", "content": "FUNCTION-RESULT-scanned"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT-scanned"},
+            ]
+        }
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            assert mock_api.call_count == 1
+            scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
+            assert scanned == ["FUNCTION-RESULT-scanned", "TOOL-RESULT-scanned"], (
+                "a tool result sent with the legacy function role must not bypass the scoped scan"
+            )
 
     @pytest.mark.parametrize("flag_value", [None, "false", 0, object()])
     @pytest.mark.asyncio
@@ -1455,6 +1509,30 @@ class TestScanOnlyToolResults:
         assert data["tools"][0] == original_read_file, (
             "a returned tool reusing a request tool's name must not replace the request's schema"
         )
+
+    @pytest.mark.asyncio
+    async def test_duplicate_returned_tool_names_keep_only_the_first(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = DuplicateToolReturningGuardrail()
+        guardrail.scan_only_tool_results = True
+        original_read_file = {
+            "type": "function",
+            "function": {"name": "read_file", "parameters": {"type": "object", "properties": {}}},
+        }
+        data = {
+            "messages": [
+                {"role": "user", "content": "read the report"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT"},
+            ],
+            "tools": [original_read_file],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [t["function"]["name"] for t in data["tools"]] == ["read_file", "injected_retrieve"], (
+            "two returned tools sharing a name must not both be forwarded to the provider"
+        )
+        assert data["tools"][1]["function"]["parameters"]["properties"] == {"first": {"type": "string"}}
 
     @pytest.mark.asyncio
     async def test_structured_write_back_keeps_out_of_scope_messages(self):

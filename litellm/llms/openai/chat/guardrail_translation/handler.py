@@ -161,10 +161,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 guardrailed_structured_messages is not None
                 and guardrailed_structured_messages is not original_structured_messages
             ):
-                data["messages"] = merge_guardrailed_scoped_messages(
-                    full_messages=structured_messages or [],
-                    scoped_indices=scoped_message_indices,
-                    guardrailed_scoped=guardrailed_structured_messages,
+                data["messages"] = (
+                    guardrailed_structured_messages
+                    if guardrail_to_apply.structured_messages_cover_full_request()
+                    else merge_guardrailed_scoped_messages(
+                        full_messages=structured_messages or [],
+                        scoped_indices=scoped_message_indices,
+                        guardrailed_scoped=guardrailed_structured_messages,
+                    )
                 )
             else:
                 # Step 3: Map guardrail responses back to original message structure

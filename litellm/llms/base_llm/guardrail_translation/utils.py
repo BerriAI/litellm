@@ -145,7 +145,7 @@ def role_out_of_guardrail_scope(
         return True
     if skip_tool_message and role == "tool":
         return True
-    return scan_only_tool_results and role != "tool"
+    return scan_only_tool_results and role not in ("tool", "function")
 
 
 def scoped_structured_message_indices(
@@ -198,11 +198,16 @@ def merge_returned_tools_into_request_tools(
     user-defined function) nor be discarded (it may carry a tool the guardrail
     synthesized and told the model to call, like Compresr's retrieve tool).
     Keep every request tool and append only returned tools whose names aren't
-    already taken.
+    already taken by a request tool or an earlier returned tool.
     """
     originals: Final = tuple(request_tools or ())
     taken_names: Final = frozenset(name for tool in originals if (name := tool_name(tool)) is not None)
-    additions: Final = tuple(tool for tool in returned_tools if tool_name(tool) not in taken_names)
+    additions: Final = tuple(
+        tool
+        for index, tool in enumerate(returned_tools)
+        if (name := tool_name(tool)) not in taken_names
+        and (name is None or all(tool_name(earlier) != name for earlier in returned_tools[:index]))
+    )
     return [*originals, *additions]
 
 

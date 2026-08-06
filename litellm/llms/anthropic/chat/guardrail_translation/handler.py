@@ -415,7 +415,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             ):
                 self._write_back_structured_messages(
                     data,
-                    merge_guardrailed_scoped_messages(
+                    guardrailed_structured_messages
+                    if guardrail_to_apply.structured_messages_cover_full_request()
+                    else merge_guardrailed_scoped_messages(
                         full_messages=full_structured_messages,
                         scoped_indices=scoped_message_indices,
                         guardrailed_scoped=guardrailed_structured_messages,
