@@ -272,6 +272,7 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
+    _get_models_from_access_groups,
     expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
     get_complete_model_list,
@@ -11122,13 +11123,20 @@ def get_direct_access_models(
 
     The 'all-proxy-models' sentinel grants direct access to every non-team
     deployment, mirroring how get_key_models expands it for the key/team path.
+    Model access group names in the user's model list are expanded to their
+    member models the same way get_key_models/get_team_models resolve them, so a
+    user granted access by group is not treated as having no accessible models.
     """
     if SpecialModelNames.all_proxy_models.value in user_db_object.models:
         return llm_router.get_model_ids(exclude_team_models=True)
 
+    accessible_models = _get_models_from_access_groups(
+        model_access_groups=llm_router.get_model_access_groups(),
+        all_models=list(user_db_object.models),
+    )
     return [
         model_id
-        for model in user_db_object.models
+        for model in accessible_models
         for deployment in (llm_router.get_model_list(model_name=model) or [])
         if (model_id := deployment.get("model_info", {}).get("id", None)) is not None
     ]
