@@ -6086,9 +6086,6 @@ class ProxyConfig:
             else:
                 general_settings["disable_auto_add_proxy_admin_to_teams"] = value if value is None else bool(value)
 
-        ## APPLY USER BUDGET TO TEAM KEYS ##
-        # YAML wins over the DB-cached value so a config-managed deployment is not
-        # silently overridden by a stale Admin UI toggle.
         if "apply_user_budget_to_team_keys" in _general_settings and (
             "apply_user_budget_to_team_keys" not in self._yaml_general_settings_keys
         ):

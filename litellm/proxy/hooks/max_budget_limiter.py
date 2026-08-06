@@ -32,8 +32,6 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
             if max_budget is None or user_id is None:
                 return
 
-            # Personal budget applies only to non-team requests unless the operator
-            # opts in, matching the team-key exemption in common_checks section 4.1.
             from litellm.proxy.proxy_server import general_settings
 
             if (

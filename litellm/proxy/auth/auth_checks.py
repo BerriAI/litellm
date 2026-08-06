@@ -648,8 +648,7 @@ async def common_checks(
             )
 
         async def _user_max_budget_check() -> None:
-            # 4.1 personal budget, on personal keys always and on team keys only
-            # when general_settings.apply_user_budget_to_team_keys is enabled
+            # 4.1 personal budget
             if user_object is None or user_object.max_budget is None:
                 return
             is_team_key: Final = team_object is not None and team_object.team_id is not None
