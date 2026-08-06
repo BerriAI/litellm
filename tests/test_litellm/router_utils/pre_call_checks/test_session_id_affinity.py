@@ -1,6 +1,8 @@
 import asyncio
+import gc
 import os
 import sys
+import weakref
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -424,6 +426,26 @@ def test_complexity_router_plugins_do_not_enable_deployment_affinity():
     router = _complexity_router(plugins=[NoOpPlugin()])
     assert dict(router._get_complexity_router_session_affinity_group_ttls()) == {}
     assert not any(isinstance(callback, DeploymentAffinityCheck) for callback in router.optional_callbacks or [])
+
+
+def test_complexity_router_affinity_provider_does_not_keep_router_alive():
+    router = _complexity_router()
+    affinity_callback = next(
+        callback for callback in router.optional_callbacks or [] if isinstance(callback, DeploymentAffinityCheck)
+    )
+    router.optional_callbacks = []
+    router.discard()
+    router_ref = weakref.ref(router)
+
+    try:
+        del router
+        gc.collect()
+
+        assert router_ref() is None
+        assert affinity_callback.session_affinity_group_ttls is not None
+        assert affinity_callback.session_affinity_group_ttls() == {}
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_all_lists(affinity_callback)
 
 
 @pytest.mark.asyncio

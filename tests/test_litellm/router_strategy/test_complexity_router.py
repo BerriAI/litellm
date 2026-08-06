@@ -21,6 +21,7 @@ from litellm import Router
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.router import _iter_complexity_router_session_affinity_groups
 from litellm.router_strategy.complexity_router.complexity_router import (
     _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
     _CLASSIFICATION_WITH_CONVERSATION,
@@ -78,6 +79,29 @@ def complexity_router(mock_router_instance, basic_config):
         litellm_router_instance=mock_router_instance,
         complexity_router_config=basic_config,
     )
+
+
+def test_router_complexity_session_affinity_provider_registers_callback():
+    parent_router = Router(model_list=[])
+    complexity_router = ComplexityRouter(
+        model_name="test-complexity-router",
+        litellm_router_instance=parent_router,
+        complexity_router_config={
+            "tiers": {"SIMPLE": "target-group"},
+            "session_affinity": True,
+            "session_affinity_ttl_seconds": 17,
+        },
+    )
+    parent_router.complexity_routers["test-complexity-router"] = [
+        TaggedPreRoutingStrategy(tags=(), strategy=complexity_router)
+    ]
+
+    assert tuple(_iter_complexity_router_session_affinity_groups(complexity_router)) == (("target-group", 17),)
+    assert dict(parent_router._get_complexity_router_session_affinity_group_ttls()) == {"target-group": 17}
+
+    parent_router._ensure_deployment_affinity_check()
+
+    assert parent_router.optional_callbacks
 
 
 class TestDimensionScore:
@@ -4306,7 +4330,6 @@ class TestRoutingDecisionContents:
         # The score is still recorded, but the cause is what says it did not decide.
         assert decision["score"] < decision["tier_boundaries"]["complex_reasoning"]
 
-
     @pytest.mark.asyncio
     async def test_an_unrenamed_router_writes_no_tier_label(self, complexity_router):
         """Renaming is opt-in, so a deployment that never renamed must gain no new key.
@@ -5761,7 +5784,9 @@ class TestCustomClassifierSystemPrompt:
 
     @pytest.mark.asyncio
     async def test_custom_prompt_is_sent_verbatim_as_the_system_role(self, mock_router_instance, llm_classifier_config):
-        custom = "Classify the data sensitivity: SIMPLE=public, MEDIUM=internal, COMPLEX=confidential, REASONING=regulated."
+        custom = (
+            "Classify the data sensitivity: SIMPLE=public, MEDIUM=internal, COMPLEX=confidential, REASONING=regulated."
+        )
         router = ComplexityRouter(
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,

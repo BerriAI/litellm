@@ -7661,14 +7661,20 @@ class Router:
         if self.optional_callbacks is None:
             self.optional_callbacks = []
 
+        router_ref: Final = weakref.ref(self)
+
+        def session_affinity_group_ttls_provider() -> Mapping[str, int]:
+            router: Final = router_ref()
+            if router is None:
+                return MappingProxyType({})
+            return router._get_complexity_router_session_affinity_group_ttls()
+
         existing_affinity_callback: DeploymentAffinityCheck | None = next(
             (callback for callback in self.optional_callbacks if isinstance(callback, DeploymentAffinityCheck)),
             None,
         )
         if existing_affinity_callback is not None:
-            existing_affinity_callback.session_affinity_group_ttls = (
-                self._get_complexity_router_session_affinity_group_ttls
-            )
+            existing_affinity_callback.session_affinity_group_ttls = session_affinity_group_ttls_provider
             return
 
         affinity_callback: Final = DeploymentAffinityCheck(
@@ -7678,7 +7684,7 @@ class Router:
             enable_responses_api_affinity=False,
             enable_session_id_affinity=False,
             model_group_affinity_config=self.model_group_affinity_config,
-            session_affinity_group_ttls=self._get_complexity_router_session_affinity_group_ttls,
+            session_affinity_group_ttls=session_affinity_group_ttls_provider,
         )
         self.optional_callbacks.append(affinity_callback)
         litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
