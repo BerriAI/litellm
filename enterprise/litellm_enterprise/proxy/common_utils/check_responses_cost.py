@@ -52,7 +52,7 @@ class CheckResponsesCost:
         live in the config; the row then never leaves ``queued``.
         """
         model_id: Optional[str] = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
-        if model_id is None:
+        if model_id is None or self.llm_router.get_deployment(model_id=model_id) is None:
             return await litellm.aget_responses(response_id=response_id, litellm_metadata=litellm_metadata)
         router_response = await self.llm_router.aget_responses(
             response_id=response_id, litellm_metadata=litellm_metadata
