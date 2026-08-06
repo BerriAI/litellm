@@ -1,8 +1,7 @@
 import React from "react";
-import { Typography, Collapse } from "antd";
+import { Collapse } from "antd";
 import type { MCPEvent } from "@/components/mcp_tools/types";
 
-const { Text } = Typography;
 const { Panel } = Collapse;
 
 interface MCPEventsDisplayProps {
