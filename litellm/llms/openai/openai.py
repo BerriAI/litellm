@@ -336,9 +336,16 @@ def _get_openai_exception_status_code(e: Exception) -> int:
     status_code = getattr(e, "status_code", None)
     if status_code is not None:
         return status_code
-    if isinstance(e, openai.OpenAIError):
-        # openai.OpenAIError with no status_code == raised before any HTTP
-        # exchange (e.g. missing api_key), which is an auth/config problem.
+    # Match the *bare* ``openai.OpenAIError`` base class exactly. The
+    # missing-credentials error is raised as the base class at client
+    # construction (before any HTTP request), so it has no ``status_code`` and
+    # should surface as a non-retryable 401 ``AuthenticationError``.
+    #
+    # Do NOT use ``isinstance`` here: ``openai.APIConnectionError`` and
+    # ``openai.APITimeoutError`` subclass ``OpenAIError`` and also carry no
+    # ``status_code``, but they are genuinely transient and must stay retryable
+    # (keep the 500 default).
+    if type(e) is openai.OpenAIError:
         return 401
     return 500
 

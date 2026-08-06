@@ -8,6 +8,7 @@ so a permanent credential/config error is retried instead of failing fast.
 It should map to 401 (AuthenticationError) instead.
 """
 
+import httpx
 import openai
 
 from litellm.llms.openai.openai import _get_openai_exception_status_code
@@ -19,6 +20,17 @@ class TestGetOpenAIExceptionStatusCode:
         err = openai.OpenAIError("Missing credentials. Please pass an `api_key`.")
         assert not hasattr(err, "status_code") or getattr(err, "status_code") is None
         assert _get_openai_exception_status_code(err) == 401
+
+    def test_transient_openai_subclasses_stay_retryable(self):
+        """APIConnectionError / APITimeoutError subclass OpenAIError and carry no
+        status_code, but they are genuinely transient and must stay retryable
+        (500), not be turned into a non-retryable 401. Only the bare
+        OpenAIError base class (missing credentials) maps to 401."""
+        conn_err = openai.APIConnectionError(request=httpx.Request("POST", "https://api.openai.com/v1"))
+        timeout_err = openai.APITimeoutError(request=httpx.Request("POST", "https://api.openai.com/v1"))
+        assert _get_openai_exception_status_code(conn_err) == 500
+        assert _get_openai_exception_status_code(timeout_err) == 500
+
 
     def test_existing_status_code_is_preserved(self):
         """An exception that already carries a status_code keeps it (real HTTP response)."""
