@@ -6361,6 +6361,7 @@ async def get_available_models_for_user(
         get_team_models,
         has_no_default_model_restriction,
         merge_team_access_group_models,
+        should_resolve_team_access_group_models,
     )
     from litellm.proxy.management_endpoints.team_endpoints import validate_membership
 
@@ -6415,7 +6416,8 @@ async def get_available_models_for_user(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
-        if not configured_key_models or SpecialModelNames.all_team_models.value in configured_key_models
+        if should_resolve_team_access_group_models(raw_team_models)
+        and (not configured_key_models or SpecialModelNames.all_team_models.value in configured_key_models)
         else ()
     )
     resolved_models: Final = merge_team_access_group_models(

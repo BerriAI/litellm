@@ -195,6 +195,15 @@ def has_no_default_model_restriction(
     )
 
 
+def should_resolve_team_access_group_models(team_models: Sequence[str]) -> bool:
+    unrestricted_team_models: Final = (
+        "*",
+        SpecialModelNames.all_proxy_models.value,
+        SpecialModelNames.all_team_models.value,
+    )
+    return bool(team_models) and not any(model in unrestricted_team_models for model in team_models)
+
+
 def merge_team_access_group_models(
     key_models: Sequence[str],
     team_models: Sequence[str],
