@@ -1820,6 +1820,91 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "sk-admin-secret" not in str(out)
 
 
+class TestForwardConfiguredParamsOnClientsideBaseOverrideOptOut:
+    """
+    Clearing the deployment's configured fields on a client-supplied endpoint
+    breaks deployments that cannot reach any upstream without them: Azure needs
+    ``api_version``, Bedrock needs ``aws_region_name``, Vertex needs
+    ``vertex_project`` / ``vertex_location``. Operators who accept the exposure
+    for their own trusted endpoints opt out with
+    ``litellm.forward_configured_params_on_clientside_base_override``.
+    """
+
+    AZURE_DEPLOYMENT = {
+        "model": "azure/gpt-4",
+        "api_key": "sk-admin-key",
+        "api_base": "https://admin.openai.azure.com",
+        "api_version": "2026-04-01",
+        "organization": "org-admin-corp",
+        "extra_body": {"user_tier": "gold"},
+    }
+    CLIENT_ENDPOINT = {"api_base": "https://my-own-azure.example"}
+
+    def test_default_is_off_so_configured_params_are_still_cleared(self):
+        import litellm
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        assert litellm.forward_configured_params_on_clientside_base_override is False
+        out = get_dynamic_litellm_params(
+            litellm_params=dict(self.AZURE_DEPLOYMENT),
+            request_kwargs=dict(self.CLIENT_ENDPOINT),
+        )
+        assert "api_version" not in out
+        assert "organization" not in out
+        assert "extra_body" not in out
+
+    def test_opt_out_keeps_configured_params_reaching_the_client_endpoint(self, monkeypatch):
+        import litellm
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        monkeypatch.setattr(litellm, "forward_configured_params_on_clientside_base_override", True)
+        out = get_dynamic_litellm_params(
+            litellm_params=dict(self.AZURE_DEPLOYMENT),
+            request_kwargs=dict(self.CLIENT_ENDPOINT),
+        )
+        assert out["api_version"] == "2026-04-01"
+        assert out["organization"] == "org-admin-corp"
+        assert out["extra_body"] == {"user_tier": "gold"}
+
+    def test_opt_out_still_lets_the_request_choose_the_endpoint_and_key(self, monkeypatch):
+        import litellm
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        monkeypatch.setattr(litellm, "forward_configured_params_on_clientside_base_override", True)
+        out = get_dynamic_litellm_params(
+            litellm_params=dict(self.AZURE_DEPLOYMENT),
+            request_kwargs={**self.CLIENT_ENDPOINT, "api_key": "sk-client-byok"},
+        )
+        assert out["api_base"] == "https://my-own-azure.example"
+        assert out["api_key"] == "sk-client-byok"
+        assert "sk-admin-key" not in str(out)
+
+    def test_opt_out_is_scoped_to_base_override_and_changes_nothing_otherwise(self, monkeypatch):
+        import litellm
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        request_kwargs = {"api_key": "sk-byok"}
+        without_opt_out = get_dynamic_litellm_params(
+            litellm_params=dict(self.AZURE_DEPLOYMENT),
+            request_kwargs=dict(request_kwargs),
+        )
+        monkeypatch.setattr(litellm, "forward_configured_params_on_clientside_base_override", True)
+        with_opt_out = get_dynamic_litellm_params(
+            litellm_params=dict(self.AZURE_DEPLOYMENT),
+            request_kwargs=dict(request_kwargs),
+        )
+        assert without_opt_out == with_opt_out
+        assert with_opt_out["api_base"] == "https://admin.openai.azure.com"
+
+
 _OPENAI_CHAT_RESPONSE = {
     "id": "chatcmpl-x",
     "object": "chat.completion",

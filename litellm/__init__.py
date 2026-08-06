@@ -315,6 +315,7 @@ ssl_certificate: Optional[str] = None
 user_url_validation: bool = True
 user_url_allowed_hosts: List[str] = []
 provider_url_destination_allowed_hosts: List[str] = []
+forward_configured_params_on_clientside_base_override: bool = False
 ssl_ecdh_curve: Optional[str] = None  # Set to 'X25519' to disable PQC and improve performance
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False

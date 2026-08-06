@@ -13,6 +13,8 @@ Ensures cooldowns are applied correctly.
 
 from typing import Final
 
+import litellm
+
 clientside_credential_keys: Final = ["api_key", "api_base", "base_url"]
 
 
@@ -81,11 +83,18 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
     - litellm_params: dict
 
     for generating a unique model_id.
+
+    ``litellm.forward_configured_params_on_clientside_base_override`` keeps the
+    deployment's configured provider fields on a client-overridden endpoint, for
+    deployments that cannot reach their upstream without them.
     """
     # update litellm_params with clientside credentials
     for key in clientside_credential_keys:
         if key in request_kwargs:
             litellm_params[key] = request_kwargs[key]
+
+    if litellm.forward_configured_params_on_clientside_base_override:
+        return litellm_params
 
     # If the caller redirected api_base/base_url to a client-controlled value,
     # don't forward the admin's organization / extra_body / region / token /
