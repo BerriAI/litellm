@@ -364,3 +364,79 @@ async def test_async_sse_wrapper_bills_full_stream_when_client_reads_all():
     assert len(client_chunks) == len(_STREAM_PREFIX) + len(_STREAM_TAIL)
     assert _output_tokens_from_logged_chunks(iterator.logged_chunks) == 64
     assert not any(c.startswith(b"event: error\n") for c in iterator.logged_chunks)
+
+
+class _ProviderStreamError(Exception):
+    """Stand-in for a provider-specific streaming failure carrying a status code."""
+
+    def __init__(self, message: str, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_reraises_upstream_error_to_connected_client():
+    """
+    Regression: an upstream failure (Bedrock read / decode / chunk-conversion)
+    before message_stop must propagate the ORIGINAL provider exception to a
+    still-connected client, so the proxy's failure handling keeps the
+    provider-specific status. The pump must not swallow it into a generic
+    api_error event + normal termination.
+    """
+
+    async def _failing_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 52, "output_tokens": 1}}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}}
+        raise _ProviderStreamError("bedrock stream blew up", status_code=529)
+
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("test_reraises_upstream_error"),
+        request_body={},
+    )
+
+    received = []
+    with pytest.raises(_ProviderStreamError) as excinfo:
+        async for chunk in iterator.async_sse_wrapper(_failing_stream()):
+            received.append(chunk)
+
+    # Original exception + status preserved, not masked by a synthetic api_error.
+    assert excinfo.value.status_code == 529
+    assert received  # the client still got the pre-error chunks
+    assert not any(c.startswith(b"event: error\n") for c in received)
+    # On the failure path we do NOT success-bill (failure handling owns logging).
+    assert iterator.logged_chunks == []
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_salvages_partial_spend_on_upstream_error_after_disconnect():
+    """
+    When the upstream errors AFTER the client has already disconnected there is
+    no live client to re-raise to and no failure hook will run, so the pump
+    salvages partial spend from what it collected instead of dropping the row.
+    """
+    tail_gated = asyncio.Event()
+
+    async def _gated_failing_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 52, "output_tokens": 1}}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}}
+        await tail_gated.wait()
+        raise _ProviderStreamError("late failure", status_code=500)
+
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("test_salvage_partial_on_late_error"),
+        request_body={},
+    )
+
+    gen = iterator.async_sse_wrapper(_gated_failing_stream())
+    received = [await gen.__anext__(), await gen.__anext__()]
+    await gen.aclose()  # client disconnects before the upstream error
+
+    tail_gated.set()  # let the upstream raise now, after disconnect
+    for _ in range(100):
+        if iterator.logged_chunks:
+            break
+        await asyncio.sleep(0.01)
+
+    assert len(received) == 2
+    # Partial spend was still recorded rather than the whole request being dropped.
+    assert iterator.logged_chunks == received
