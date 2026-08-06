@@ -1,4 +1,4 @@
-import { RobotOutlined, UserOutlined } from "@ant-design/icons";
+import { Bot, User } from "lucide-react";
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -59,9 +59,9 @@ function ChatMessageBubble({
             }}
           >
             {isUser ? (
-              <UserOutlined style={{ fontSize: "12px", color: "#2563eb" }} />
+              <User className="size-3 text-blue-600" aria-hidden="true" />
             ) : (
-              <RobotOutlined style={{ fontSize: "12px", color: "#4b5563" }} />
+              <Bot className="size-3 text-gray-600" aria-hidden="true" />
             )}
           </div>
           <strong className="text-sm capitalize">{message.role}</strong>

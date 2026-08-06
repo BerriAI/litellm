@@ -41,6 +41,8 @@ Migrate the Playground Chat tab and its rendered component tree from Ant Design,
 - [x] Migrate `MCPEventsDisplay.tsx` collapsibles (remove Ant Design Collapse and styled-jsx).
 - [x] Migrate `ResponseMetrics.tsx` tooltips and icons.
 - [x] Migrate `AdditionalModelSettings.tsx` checkbox, numeric inputs, range sliders, popover, tooltip, and typography.
+- [x] Migrate `ChatMessageBubble.tsx`, `ChatImageRenderer.tsx`, and `ResponsesImageRenderer.tsx` icons.
+- [x] Migrate the Playground page tabs from Tremor to shadcn tabs.
 
 ## Remaining Migration
 
@@ -48,9 +50,7 @@ Migrate the Playground Chat tab and its rendered component tree from Ant Design,
 - [ ] Migrate `ByokCredentialModal.tsx` to shadcn `Dialog`, inputs, and switch.
 - [ ] Migrate `RealtimePlayground.tsx` buttons, inputs, selects, typography, and icons.
 - [ ] Migrate remaining `ChatUI.tsx` Ant Design and Tremor buttons, inputs, dialogs, popovers, tool selectors, loading indicators, uploads, typography, cards, and icons.
-- [ ] Migrate `ChatMessageBubble.tsx`, `ChatImageRenderer.tsx`, and `ResponsesImageRenderer.tsx` icons.
 - [ ] Migrate `AgentBuilderView.tsx` if it remains in the Chat tab tree.
-- [ ] Migrate the Playground page tabs from Tremor to shadcn tabs.
 - [ ] Remove every `antd`, `@ant-design/icons`, and `@tremor/react` import from the Chat tab render tree.
 
 ## Behavior And Quality Gaps
