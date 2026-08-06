@@ -810,6 +810,71 @@ async def test_add_litellm_data_to_request_strips_callback_control_fields(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("timeout_field", ["timeout", "request_timeout", "stream_timeout"])
+async def test_add_litellm_data_to_request_marks_body_timeout_as_client_side(timeout_field):
+    """Router._get_timeout resolves the effective timeout from any of kwargs["timeout"],
+    kwargs["request_timeout"], or kwargs["stream_timeout"], all settable directly in the
+    request body. Without recognizing all three, a caller could force a 408 on every
+    deployment in a fallback chain without it being flagged as caller-controlled, cooling
+    down deployments other tenants rely on (see cooldown_handlers._trigger_cooldown_for_failed_deployment)."""
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "hi"}],
+            timeout_field: 0.001,
+        },
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["client_side_timeout"] is True
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_ignores_forged_client_side_timeout():
+    """The client_side_timeout marker itself must never be trusted verbatim from the
+    request body: a caller forging client_side_timeout=True without a real timeout
+    override could dodge cooldown protection on an actual deployment failure."""
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "hi"}],
+            "client_side_timeout": True,
+        },
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert not updated.get("client_side_timeout")
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_allows_client_mock_response_with_admin_opt_in():
     request_mock = MagicMock(spec=Request)
     request_mock.url.path = "/v1/chat/completions"
