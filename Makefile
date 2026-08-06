@@ -99,7 +99,10 @@ install-test-deps: install-proxy-dev
 	$(UV_RUN) prisma generate --schema litellm/proxy/schema.prisma
 
 install-helm-unittest:
-	helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4 || echo "ignore error if plugin exists"
+	@helm plugin list | grep -qE '^unittest[[:space:]]+0\.8\.2([[:space:]]|$$)' || { \
+		helm plugin uninstall unittest >/dev/null 2>&1 || true; \
+		helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.8.2; \
+	}
 
 # Install git hooks that enforce Conventional Commits and Conventional Branches.
 # Opt-in: not chained into install-dev.

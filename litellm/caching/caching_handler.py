@@ -242,7 +242,7 @@ class LLMCachingHandler:
                         or litellm.cache.get_cache_key(**self.request_kwargs)
                     )
                     if hasattr(cached_result, "_hidden_params"):
-                        cached_result._hidden_params["cache_key"] = cache_key  # type: ignore
+                        cached_result._hidden_params["cache_key"] = cache_key
                     return CachingHandlerResponse(cached_result=cached_result)
                 elif (
                     call_type == CallTypes.aembedding.value
@@ -356,7 +356,7 @@ class LLMCachingHandler:
                         or litellm.cache.get_cache_key(**self.request_kwargs)
                     )
                     if hasattr(cached_result, "_hidden_params"):
-                        cached_result._hidden_params["cache_key"] = cache_key  # type: ignore
+                        cached_result._hidden_params["cache_key"] = cache_key
                     return CachingHandlerResponse(cached_result=cached_result)
         return CachingHandlerResponse(cached_result=cached_result)
 

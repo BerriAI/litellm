@@ -26,6 +26,7 @@ from litellm.utils import (
     TextCompletionStreamWrapper,
     _check_provider_match,
     _is_streaming_request,
+    get_api_key,
     get_llm_provider,
     get_optional_params_image_gen,
     get_prompt_cache_min_tokens,
@@ -5015,3 +5016,112 @@ async def test_builtin_string_callback_registers_when_subclass_already_active(
     )
 
     assert any(type(cb) is S3Logger for cb in litellm._async_success_callback)
+
+
+def test_reapply_runtime_registrations_replays_register_model_overrides(monkeypatch):
+    """
+    register_model is the documented way to override pricing for a model. A
+    price-data reload swaps litellm.model_cost for a freshly fetched catalog,
+    so without replaying those registrations the override is silently lost and
+    the model reverts to upstream pricing.
+    """
+    from litellm import utils as litellm_utils
+    from litellm.utils import (
+        _invalidate_model_cost_lowercase_map,
+        reapply_runtime_model_cost_registrations,
+    )
+
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+    # Only the recorded half is under test here; the live-router rebuild is covered
+    # in test_router_model_cost_isolation.py. Routers built by earlier tests in this
+    # process stay in the weak set until they are collected, so leaving the callback
+    # installed would make this depend on when that happens.
+    monkeypatch.setattr(litellm_utils._LiveDeploymentReplay, "callback", None)
+
+    saved_model_cost = litellm.model_cost
+    try:
+        litellm.register_model(
+            model_cost={
+                "openai/gpt-4o": {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.000123,
+                }
+            }
+        )
+
+        litellm.model_cost = {
+            "openai/gpt-4o": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.000999,
+                "max_input_tokens": 4242,
+            }
+        }
+        _invalidate_model_cost_lowercase_map()
+        reapply_runtime_model_cost_registrations()
+
+        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.000123
+        assert litellm.model_cost["openai/gpt-4o"]["max_input_tokens"] == 4242
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkeypatch):
+    """
+    Per-request custom pricing describes one call, so it must not be re-asserted
+    over every future catalog. Replaying it would let a one-off price outlive
+    the catalog generation it was applied to and silently beat fresh upstream
+    pricing forever, while a durable override registered alongside it survives.
+    """
+    from litellm import utils as litellm_utils
+    from litellm.utils import (
+        _invalidate_model_cost_lowercase_map,
+        reapply_runtime_model_cost_registrations,
+    )
+
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+
+    saved_model_cost = litellm.model_cost
+    try:
+        litellm.register_model(
+            model_cost={"openai/gpt-4o": {"litellm_provider": "openai", "input_cost_per_token": 0.000111}},
+            persist_across_reloads=True,
+        )
+        litellm.register_model(
+            model_cost={"openai/gpt-4o-mini": {"litellm_provider": "openai", "input_cost_per_token": 0.000222}},
+            persist_across_reloads=False,
+        )
+
+        litellm.model_cost = {
+            "openai/gpt-4o": {"litellm_provider": "openai", "input_cost_per_token": 0.000999},
+            "openai/gpt-4o-mini": {"litellm_provider": "openai", "input_cost_per_token": 0.000888},
+        }
+        _invalidate_model_cost_lowercase_map()
+        reapply_runtime_model_cost_registrations()
+
+        assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.000111
+        assert litellm.model_cost["openai/gpt-4o-mini"]["input_cost_per_token"] == 0.000888
+    finally:
+        litellm.model_cost = saved_model_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_ai21_api_key_is_resolved_from_the_documented_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ai21 branch resolved a misspelled env var, so the name every other ai21 code path
+    reads, and the only name documented, was ignored."""
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "ai21_key", None)
+    monkeypatch.delenv("AI211_API_KEY", raising=False)
+    monkeypatch.setenv("AI21_API_KEY", "sk-ai21-resolved-from-env")
+
+    assert get_api_key(llm_provider="ai21", dynamic_api_key=None) == "sk-ai21-resolved-from-env"

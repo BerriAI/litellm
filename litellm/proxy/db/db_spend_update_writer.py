@@ -54,7 +54,11 @@ from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
-from litellm.proxy.spend_tracking.savings import compute_savings_spend
+from litellm.proxy.spend_tracking.savings import (
+    compute_savings_spend,
+    extract_cache_creation_tokens,
+    extract_cache_read_tokens,
+)
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 
 if TYPE_CHECKING:
@@ -82,31 +86,6 @@ def _get_llm_router():
         return llm_router
     except Exception:  # noqa: BLE001  # no proxy in scope; savings degrade to zero
         return None
-
-
-def _extract_cache_read_tokens(usage_obj: dict) -> int:
-    """
-    Anthropic: top-level cache_read_input_tokens field.
-    OpenAI-compatible (moonshotai, openai, deepseek, etc.): prompt_tokens_details.cached_tokens.
-    """
-    explicit: Final = usage_obj.get("cache_read_input_tokens", 0) or 0
-    if explicit:
-        return int(explicit)
-    details: Final = usage_obj.get("prompt_tokens_details") or {}
-    return int(details.get("cached_tokens", 0) or 0)
-
-
-def _extract_cache_creation_tokens(usage_obj: dict) -> int:
-    """
-    Anthropic: top-level cache_creation_input_tokens field.
-    OpenAI-compatible (kimi-k2 etc.): prompt_tokens_details.cache_write_tokens
-    or prompt_tokens_details.cache_creation_tokens.
-    """
-    explicit: Final = usage_obj.get("cache_creation_input_tokens", 0) or 0
-    if explicit:
-        return int(explicit)
-    details: Final = usage_obj.get("prompt_tokens_details") or {}
-    return int(details.get("cache_write_tokens", 0) or details.get("cache_creation_tokens", 0) or 0)
 
 
 class DBSpendUpdateWriter:
@@ -204,6 +183,10 @@ class DBSpendUpdateWriter:
                     prisma_client=prisma_client,
                     kwargs=kwargs,
                 )
+                await self._enqueue_autorouter_turn_transaction(
+                    payload=payload,
+                    prisma_client=prisma_client,
+                )
             else:
                 verbose_proxy_logger.debug(
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
@@ -274,6 +257,47 @@ class DBSpendUpdateWriter:
                 prisma_client.tool_usage_transactions.append(transaction)
         except Exception as e:
             verbose_proxy_logger.debug("_enqueue_tool_usage_transaction error (non-blocking): %s", e)
+
+    async def _enqueue_autorouter_turn_transaction(
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: "PrismaClient | None",
+    ) -> None:
+        try:
+            if prisma_client is None:
+                return
+            metadata_raw: Final = payload.get("metadata")
+            if not metadata_raw:
+                return
+            metadata: Final = json.loads(metadata_raw)
+            if not isinstance(metadata, dict) or not metadata.get("routing_decision"):
+                return
+            from litellm.proxy.db.autorouter_session_rollup import (
+                build_autorouter_turn_transaction,
+            )
+
+            usage_object_raw: Final = metadata.get("usage_object")
+            savings_spend: Final = compute_savings_spend(
+                model=payload.get("model"),
+                custom_llm_provider=payload.get("custom_llm_provider"),
+                compression_saved_tokens=0,
+                routing_decision=metadata.get("routing_decision"),
+                usage_object=usage_object_raw if isinstance(usage_object_raw, dict) else None,
+                model_id=payload.get("model_id"),
+                llm_router=_get_llm_router,
+                cost_breakdown=metadata.get("cost_breakdown"),
+            )
+            transaction: Final = build_autorouter_turn_transaction(
+                payload=payload,
+                metadata=metadata,
+                saved_spend=savings_spend.autorouter,
+            )
+            if transaction is None:
+                return
+            async with prisma_client._autorouter_turn_transactions_lock:
+                prisma_client.autorouter_turn_transactions.append(transaction)
+        except Exception as e:  # noqa: BLE001  # a metrics enqueue must never fail the spend write
+            verbose_proxy_logger.debug("_enqueue_autorouter_turn_transaction error (non-blocking): %s", e)
 
     def _enqueue_tool_registry_upsert(
         self,
@@ -1230,7 +1254,7 @@ class DBSpendUpdateWriter:
         if team_member_list_transactions is not None and len(team_member_list_transactions.keys()) > 0:
             # Track which team memberships will be updated for cache invalidation
             team_memberships_to_invalidate: Final[list[tuple[str, str]]] = []
-            for key in team_member_list_transactions.keys():
+            for key in team_member_list_transactions:
                 # key is "team_id::<value>::user_id::<value>"
                 team_id = key.split("::")[1]
                 user_id = key.split("::")[3]
@@ -1688,7 +1712,7 @@ class DBSpendUpdateWriter:
 
         except Exception as e:
             if "transactions_to_process" in locals():
-                for key in transactions_to_process:  # type: ignore
+                for key in transactions_to_process:
                     daily_spend_transactions.pop(key, None)
             _raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
 
@@ -1860,6 +1884,12 @@ class DBSpendUpdateWriter:
             )
             return None
 
+        # TODO: remove the successful_requests/failed_requests counters below once the
+        # admin UI has fully migrated to LiteLLM_DailyGatewayRequests, which is now the
+        # source of truth for SGR. This path derives the counts from spend-log metadata
+        # rather than from what the gateway answered, so the two intentionally disagree
+        # (see litellm/proxy/middleware/billable_request_metrics_middleware.py). The
+        # spend, token and per-entity columns written here stay either way.
         request_status: Final = prisma_client.get_request_status(payload)
         verbose_proxy_logger.debug("Logged request status: %s", request_status)
         _metadata: Final[SpendLogsMetadata] = json.loads(payload["metadata"])
@@ -1881,13 +1911,12 @@ class DBSpendUpdateWriter:
             if call_type:
                 endpoint = ROUTE_ENDPOINT_MAPPING.get(call_type, None)
 
-            cache_read_input_tokens: Final = _extract_cache_read_tokens(usage_obj)
+            cache_read_input_tokens: Final = extract_cache_read_tokens(usage_obj)
             compression_saved_tokens: Final = extract_compression_saved_tokens(_metadata)
             savings_spend: Final = compute_savings_spend(
                 model=payload.get("model", None),
                 custom_llm_provider=payload.get("custom_llm_provider", None),
                 compression_saved_tokens=compression_saved_tokens,
-                cache_read_input_tokens=cache_read_input_tokens,
                 routing_decision=_metadata.get("routing_decision"),
                 model_id=payload.get("model_id"),
                 llm_router=_get_llm_router,
@@ -1910,7 +1939,7 @@ class DBSpendUpdateWriter:
                 successful_requests=1 if request_status == "success" else 0,
                 failed_requests=1 if request_status != "success" else 0,
                 cache_read_input_tokens=cache_read_input_tokens,
-                cache_creation_input_tokens=_extract_cache_creation_tokens(usage_obj),
+                cache_creation_input_tokens=extract_cache_creation_tokens(usage_obj),
                 compression_saved_tokens=compression_saved_tokens,
                 compression_savings_spend=savings_spend.compression,
                 prompt_caching_savings_spend=savings_spend.prompt_caching,

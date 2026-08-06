@@ -1,4 +1,5 @@
 from collections.abc import Callable, Mapping, Sequence
+from types import UnionType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, Union, get_args, get_origin
 
 import httpx
@@ -475,14 +476,12 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return 0
         if annotation is list or origin is list:
             return []
-        if origin is Union:
+        if origin is Union or origin is UnionType:
             # Prefer empty list when any option is a list
             if any((arg is list or VolcEngineResponsesAPIConfig._annotation_origin(arg) is list) for arg in args):
                 return []
             if type(None) in args:
                 return None
-        if origin is Union and type(None) in args:
-            return None
 
         # Fallback to None when no safer guess exists
         return None
@@ -514,7 +513,9 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Choose the best-matching Pydantic model class for a nested dict.
         """
         origin: Final = VolcEngineResponsesAPIConfig._annotation_origin(annotation)
-        union_args: Final = VolcEngineResponsesAPIConfig._annotation_args(annotation) if origin is Union else ()
+        union_args: Final = (
+            VolcEngineResponsesAPIConfig._annotation_args(annotation) if origin is Union or origin is UnionType else ()
+        )
         candidates = tuple(candidate for candidate in (annotation, *union_args) if hasattr(candidate, "model_fields"))
 
         if not candidates:

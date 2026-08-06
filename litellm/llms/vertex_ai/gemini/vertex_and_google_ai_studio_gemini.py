@@ -8,11 +8,9 @@ from copy import deepcopy
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
 
-import httpx  # type: ignore
+import httpx
 
 import litellm
-import litellm.litellm_core_utils
-import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -594,9 +592,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         for tool in value:
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
             if "function" in tool:  # tools list
-                _openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
-                    **tool["function"]
-                )
+                _openai_function_object = ChatCompletionToolParamFunctionChunk(**tool["function"])
 
                 if (
                     "parameters" in _openai_function_object
@@ -608,7 +604,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 openai_function_object = _openai_function_object
 
             elif "name" in tool:  # functions list
-                openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)  # type: ignore
+                openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)
 
             if "type" in tool and tool["type"] == "computer_use":
                 computer_use_config = {k: v for k, v in tool.items() if k != "type"}
@@ -1121,7 +1117,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     optional_params["stop_sequences"] = value
             elif param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
-            elif param == "response_format" and isinstance(value, dict):  # type: ignore
+            elif param == "response_format" and isinstance(value, dict):
                 self.apply_response_schema_transformation(value=value, optional_params=optional_params, model=model)
             elif param == "frequency_penalty":
                 if self._supports_penalty_parameters(model):
@@ -1140,7 +1136,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "tool_choice" and (isinstance(value, str) or isinstance(value, dict)):
                 _tool_choice_value = self.map_tool_choice_values(
                     model=model,
-                    tool_choice=value,  # type: ignore
+                    tool_choice=value,
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
@@ -1592,9 +1588,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         _tool_response_chunk["id"] = gemini_call_id
                     # Embed thought signature in ID for OpenAI client compatibility
                     if thought_signature:
-                        _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
-                            "thought_signature": thought_signature
-                        }
+                        _tool_response_chunk["provider_specific_fields"] = {"thought_signature": thought_signature}
                         _tool_response_chunk["id"] = _encode_tool_call_id_with_signature(
                             _tool_response_chunk["id"] or "", thought_signature
                         )
@@ -1647,7 +1641,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         choice: Final = litellm.Choices(
             finish_reason="content_filter",
             index=0,
-            message=chat_completion_message,  # type: ignore
+            message=chat_completion_message,
             logprobs=None,
             enhancements=None,
         )
@@ -2010,8 +2004,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         from litellm.types.utils import Delta, StreamingChoices
 
-        annotations: Final = chat_completion_message.get("annotations")  # type: ignore
-        provider_specific_fields: Final = chat_completion_message.get("provider_specific_fields")  # type: ignore
+        annotations: Final = chat_completion_message.get("annotations")
+        provider_specific_fields: Final = chat_completion_message.get("provider_specific_fields")
         # create a streaming choice object
         choice: Final = StreamingChoices(
             finish_reason=VertexGeminiConfig._check_finish_reason(
@@ -2024,7 +2018,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 tool_calls=tools,
                 images=image_response,
                 function_call=functions,
-                annotations=annotations,  # type: ignore
+                annotations=annotations,
                 provider_specific_fields=provider_specific_fields,
             ),
             logprobs=chat_completion_logprobs,
@@ -2052,9 +2046,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         if "groundingMetadata" in candidate:
             if isinstance(candidate["groundingMetadata"], list):
-                grounding_metadata.extend(candidate["groundingMetadata"])  # type: ignore
+                grounding_metadata.extend(candidate["groundingMetadata"])
             else:
-                grounding_metadata.append(candidate["groundingMetadata"])  # type: ignore
+                grounding_metadata.append(candidate["groundingMetadata"])
 
         if "safetyRatings" in candidate:
             safety_ratings.append(candidate["safetyRatings"])
@@ -2098,18 +2092,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         safety_ratings: list[dict],
         citation_metadata: list[dict],
     ) -> None:
-        setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
+        setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
         if grounding_metadata:
             model_response._hidden_params["vertex_ai_grounding_metadata"] = grounding_metadata
-        setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
+        setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)
         if url_context_metadata:
             model_response._hidden_params["vertex_ai_url_context_metadata"] = url_context_metadata
-        setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore
-        setattr(model_response, "vertex_ai_safety_results", safety_ratings)  # type: ignore
+        setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)
+        setattr(model_response, "vertex_ai_safety_results", safety_ratings)
         if safety_ratings:
             model_response._hidden_params["vertex_ai_safety_ratings"] = safety_ratings
             model_response._hidden_params["vertex_ai_safety_results"] = safety_ratings
-        setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)  # type: ignore
+        setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
         if citation_metadata:
             model_response._hidden_params["vertex_ai_citation_metadata"] = citation_metadata
 
@@ -2285,7 +2279,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         content_text=content,
                     )
                     if annotations:
-                        chat_completion_message["annotations"] = annotations  # type: ignore
+                        chat_completion_message["annotations"] = annotations
                 (
                     functions,
                     tools,
@@ -2308,7 +2302,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 chat_completion_message["function_call"] = functions
 
             if thinking_blocks is not None:
-                chat_completion_message["thinking_blocks"] = thinking_blocks  # type: ignore
+                chat_completion_message["thinking_blocks"] = thinking_blocks
 
                 # Convert thinking_blocks to reasoning_content for streaming
                 # This ensures reasoning_content is available in streaming responses
@@ -2345,18 +2339,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     chat_completion_logprobs=chat_completion_logprobs,
                     image_response=image_response,
                 )
-                model_response.choices.append(choice)  # type: ignore[arg-type]
+                model_response.choices.append(choice)
             elif isinstance(model_response, ModelResponse):
                 choice = litellm.Choices(
                     finish_reason=VertexGeminiConfig._check_finish_reason(
                         chat_completion_message, candidate.get("finishReason")
                     ),
                     index=candidate.get("index", idx),
-                    message=chat_completion_message,  # type: ignore
+                    message=chat_completion_message,
                     logprobs=chat_completion_logprobs,
                     enhancements=None,
                 )
-                model_response.choices.append(choice)  # type: ignore[arg-type]
+                model_response.choices.append(choice)
 
         return (
             grounding_metadata,
@@ -2390,7 +2384,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = GenerateContentResponseBody(**raw_response.json())  # type: ignore
+            completion_response: Final = GenerateContentResponseBody(**raw_response.json())
         except Exception as e:
             raise VertexAIError(
                 message=f"Error converting to valid response block={e}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues",
@@ -2418,7 +2412,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Transforms a Google GenAI generate content response to an OpenAI model response.
         """
         if isinstance(completion_response, dict):
-            completion_response = GenerateContentResponseBody(**completion_response)  # type: ignore
+            completion_response = GenerateContentResponseBody(**completion_response)
 
         ## GET MODEL ##
         model_response.model = model
@@ -2433,7 +2427,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         _candidates: Final = completion_response.get("candidates")
         if _candidates and len(_candidates) > 0:
             content_policy_violations: Final = VertexGeminiConfig().get_flagged_finish_reasons()
-            if "finishReason" in _candidates[0] and _candidates[0]["finishReason"] in content_policy_violations.keys():
+            if "finishReason" in _candidates[0] and _candidates[0]["finishReason"] in content_policy_violations:
                 return self._handle_content_policy_violation(
                     model_response=model_response,
                     completion_response=completion_response,
@@ -2719,7 +2713,7 @@ class VertexLLM(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=auth_header,
-        )  # type: ignore
+        )
 
         ## LOGGING
         logging_obj.pre_call(
@@ -2815,7 +2809,7 @@ class VertexLLM(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=auth_header,
-        )  # type: ignore
+        )
 
         _async_client_params: Final = {}
         if timeout:
@@ -2823,7 +2817,7 @@ class VertexLLM(VertexBase):
         if client is None or not isinstance(client, AsyncHTTPHandler):
             client = get_async_httpx_client(params=_async_client_params, llm_provider=litellm.LlmProviders.VERTEX_AI)
         else:
-            client = client  # type: ignore
+            client = client
         ## LOGGING
         logging_obj.pre_call(
             input=messages,
@@ -2841,7 +2835,7 @@ class VertexLLM(VertexBase):
                 headers=headers,
                 json=cast(dict, request_body),
                 logging_obj=logging_obj,
-            )  # type: ignore
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
@@ -2894,7 +2888,7 @@ class VertexLLM(VertexBase):
         client: AsyncHTTPHandler | HTTPHandler | None = None,
         api_base: str | None = None,
     ) -> ModelResponse | CustomStreamWrapper:
-        stream: Final[bool | None] = optional_params.pop("stream", None)  # type: ignore
+        stream: Final[bool | None] = optional_params.pop("stream", None)
 
         transform_request_params: Final = {
             "gemini_api_key": gemini_api_key,
@@ -2927,7 +2921,7 @@ class VertexLLM(VertexBase):
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     timeout=timeout,
-                    client=client,  # type: ignore
+                    client=client,
                     data=transform_request_params,
                     vertex_project=vertex_project,
                     vertex_location=vertex_location,
@@ -2940,7 +2934,7 @@ class VertexLLM(VertexBase):
             return self.async_completion(
                 model=model,
                 messages=messages,
-                data=transform_request_params,  # type: ignore
+                data=transform_request_params,
                 api_base=api_base,
                 model_response=model_response,
                 print_verbose=print_verbose,
@@ -2951,7 +2945,7 @@ class VertexLLM(VertexBase):
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 timeout=timeout,
-                client=client,  # type: ignore
+                client=client,
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
                 vertex_credentials=vertex_credentials,
@@ -3046,7 +3040,7 @@ class VertexLLM(VertexBase):
             client = client
 
         try:
-            response: Final = client.post(url=url, headers=headers, json=data, logging_obj=logging_obj)  # type: ignore
+            response: Final = client.post(url=url, headers=headers, json=data, logging_obj=logging_obj)
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
@@ -3070,7 +3064,7 @@ class VertexLLM(VertexBase):
             optional_params=optional_params,
             litellm_params=litellm_params,
             api_key="",
-            request_data=data,  # type: ignore
+            request_data=data,
             messages=messages,
             encoding=encoding,
         )
@@ -3244,7 +3238,7 @@ class ModelResponseIterator:
 
             from litellm.types.utils import ModelResponseStream
 
-            processed_chunk: Final = GenerateContentResponseBody(**chunk)  # type: ignore
+            processed_chunk: Final = GenerateContentResponseBody(**chunk)
             response_id: Final = processed_chunk.get("responseId")
             model_response = ModelResponseStream(choices=[], id=response_id)
 
@@ -3272,7 +3266,7 @@ class ModelResponseIterator:
 
             usage: Final = self._apply_stream_usage_metadata(processed_chunk, model_response, grounding_metadata)
 
-            setattr(model_response, "usage", usage)  # type: ignore
+            setattr(model_response, "usage", usage)
 
             model_response._hidden_params["is_finished"] = False
             return model_response
