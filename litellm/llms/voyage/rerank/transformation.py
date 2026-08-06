@@ -127,7 +127,7 @@ class VoyageRerankConfig(BaseRerankConfig):
 
         return RerankResponse(
             id=_json_response.get("id", f"voyage-rerank-{model}"),
-            results=transformed_results,  # type: ignore
+            results=transformed_results,
             meta=rerank_meta,
         )
 

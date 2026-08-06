@@ -21,7 +21,12 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    CommonProxyErrors,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+    user_api_key_has_admin_view,
+)
 from litellm.proxy.a2a.agent_card import (
     SUPPORTED_A2A_PROTOCOL_VERSIONS,
     merge_agent_card,
@@ -392,9 +397,7 @@ async def create_agent(
         created_by: Final = user_api_key_dict.user_id or "unknown"
 
         # check for naming conflicts
-        existing_agent: Final = AGENT_REGISTRY.get_agent_by_name(
-            agent_name=request.get("agent_name")  # type: ignore
-        )
+        existing_agent: Final = AGENT_REGISTRY.get_agent_by_name(agent_name=request.get("agent_name"))
         if existing_agent is not None:
             raise HTTPException(
                 status_code=400,
@@ -419,7 +422,7 @@ async def create_agent(
                 http_request=http_request,
                 agent_name=request.get("agent_name"),
             )
-            agent_to_create = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
+            agent_to_create = {**request, "agent_card_params": merged_card}
 
         result: Final = await AGENT_REGISTRY.add_agent_to_db(
             agent=agent_to_create,
@@ -470,11 +473,7 @@ async def get_agent_by_id(
     """
     await check_feature_access_for_user(user_api_key_dict, "agents")
 
-    is_admin = (
-        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-    )
-    if not is_admin:
+    if not user_api_key_has_admin_view(user_api_key_dict):
         from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
             AgentRequestHandler,
         )
@@ -505,7 +504,7 @@ async def get_agent_by_id(
                         agent_dict["object_permission"] = agent_row.object_permission.model_dump()
                     except Exception:
                         agent_dict["object_permission"] = agent_row.object_permission.dict()
-                agent = AgentResponse(**agent_dict)  # type: ignore
+                agent = AgentResponse(**agent_dict)
         else:
             # Agent found in memory — refresh spend from DB
             db_row: Final = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
@@ -609,7 +608,7 @@ async def update_agent(
                 http_request=http_request,
                 agent_name=request.get("agent_name"),
             )
-            agent_to_update = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
+            agent_to_update = {**request, "agent_card_params": merged_card}
 
         result: Final = await AGENT_REGISTRY.update_agent_in_db(
             agent_id=agent_id,
@@ -619,7 +618,7 @@ async def update_agent(
         )
 
         # deregister in memory
-        AGENT_REGISTRY.deregister_agent(agent_name=existing_agent.get("agent_name"))  # type: ignore
+        AGENT_REGISTRY.deregister_agent(agent_name=existing_agent.get("agent_name"))
         # register in memory
         AGENT_REGISTRY.register_agent(agent_config=result)
 
@@ -712,7 +711,7 @@ async def patch_agent(
                 http_request=http_request,
                 agent_name=request.get("agent_name"),
             )
-            patch_payload = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
+            patch_payload = {**request, "agent_card_params": merged_card}
 
         result: Final = await AGENT_REGISTRY.patch_agent_in_db(
             agent_id=agent_id,
@@ -722,7 +721,7 @@ async def patch_agent(
         )
 
         # deregister in memory
-        AGENT_REGISTRY.deregister_agent(agent_name=existing_agent.get("agent_name"))  # type: ignore
+        AGENT_REGISTRY.deregister_agent(agent_name=existing_agent.get("agent_name"))
         # register in memory
         AGENT_REGISTRY.register_agent(agent_config=result)
 
@@ -783,7 +782,7 @@ async def delete_agent(
 
         await AGENT_REGISTRY.delete_agent_from_db(agent_id=agent_id, prisma_client=prisma_client)
 
-        AGENT_REGISTRY.deregister_agent(agent_name=existing_agent.get("agent_name"))  # type: ignore
+        AGENT_REGISTRY.deregister_agent(agent_name=existing_agent.get("agent_name"))
 
         return {"message": f"Agent {agent_id} deleted successfully"}
     except HTTPException:
@@ -856,7 +855,7 @@ async def make_agent_public(
             # check if agent exists in DB
             agent = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
             if agent is not None:
-                agent = AgentResponse(**agent.model_dump())  # type: ignore
+                agent = AgentResponse(**agent.model_dump())
 
             if agent is None:
                 raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
@@ -971,7 +970,7 @@ async def make_agents_public(
                 # check if agent exists in DB
                 agent = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
                 if agent is not None:
-                    agent = AgentResponse(**agent.model_dump())  # type: ignore
+                    agent = AgentResponse(**agent.model_dump())
 
                 if agent is None:
                     raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")

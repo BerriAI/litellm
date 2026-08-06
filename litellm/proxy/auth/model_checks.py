@@ -394,9 +394,7 @@ def _get_wildcard_models(
                     for router_model in model_list:
                         wildcard_models = get_known_models_from_wildcard(
                             wildcard_model=model,
-                            litellm_params=LiteLLM_Params(
-                                **router_model["litellm_params"]  # type: ignore
-                            ),
+                            litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
                         )
                         all_wildcard_models.extend(wildcard_models)
                 else:

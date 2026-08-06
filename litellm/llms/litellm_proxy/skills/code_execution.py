@@ -151,8 +151,8 @@ class CodeExecutionHandler:
                 **kwargs,
             )
 
-            assistant_message = response.choices[0].message  # type: ignore
-            stop_reason = response.choices[0].finish_reason  # type: ignore
+            assistant_message = response.choices[0].message
+            stop_reason = response.choices[0].finish_reason
 
             # Build assistant message for conversation history
             assistant_msg_dict: dict[str, Any] = {

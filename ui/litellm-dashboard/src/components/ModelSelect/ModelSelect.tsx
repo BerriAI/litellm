@@ -2,7 +2,7 @@ import { ProxyModel, useAllProxyModels } from "@/app/(dashboard)/hooks/models/us
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
-import { Select, Skeleton, Tooltip, type SelectProps } from "antd";
+import { Select, Skeleton, Tooltip } from "antd";
 import { Organization, Team } from "../networking";
 import { splitWildcardModels } from "./modelUtils";
 
@@ -93,8 +93,7 @@ const filterModels = (
 
 export const ModelSelect = (props: ModelSelectProps) => {
   const { teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
-  const { includeUserModels, showAllTeamModelsOption, showAllProxyModelsOverride, includeSpecialOptions } =
-    options || {};
+  const { showAllProxyModelsOverride, includeSpecialOptions } = options || {};
   const { data: allProxyModels, isLoading: isLoadingAllProxyModels } = useAllProxyModels();
   const { data: team, isLoading: isLoadingTeam } = useTeam(teamID);
   const { data: organization, isLoading: isLoadingOrganization } = useOrganization(organizationID);
@@ -112,10 +111,6 @@ export const ModelSelect = (props: ModelSelectProps) => {
   if (isLoading) {
     return <Skeleton.Input active block />;
   }
-
-  const optionRender: NonNullable<SelectProps["optionRender"]> = (option) => {
-    return <span>{option.label}</span>;
-  };
 
   const handleChange = (values: string[]) => {
     const specialValues = values.filter(isSpecialOption);

@@ -1109,7 +1109,7 @@ def _map_vertex_exception(
             response=httpx.Response(
                 status_code=500,
                 content=str(original_exception),
-                request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),
             ),
             litellm_debug_info=extra_information,
         )
@@ -1270,7 +1270,7 @@ def _map_vertex_exception(
                 response=httpx.Response(
                     status_code=500,
                     content=str(original_exception),
-                    request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),
                 ),
             )
         if original_exception.status_code == 502:
@@ -1872,15 +1872,13 @@ def _map_azure_exception(
         body_dict: Final = getattr(original_exception, "body", None) or {}
         if isinstance(body_dict, dict):
             if isinstance(body_dict.get("error"), dict):
-                azure_error_code = body_dict["error"].get("code")  # type: ignore[index]
+                azure_error_code = body_dict["error"].get("code")
                 # Also check inner_error for
                 # ResponsibleAIPolicyViolation which indicates a
                 # content policy violation even when the top-level
                 # code is generic (e.g. "invalid_request_error").
                 if azure_error_code != "content_policy_violation":
-                    _inner: Final = body_dict["error"].get("inner_error") or body_dict[  # type: ignore[index]
-                        "error"
-                    ].get("innererror")  # type: ignore[index]
+                    _inner: Final = body_dict["error"].get("inner_error") or body_dict["error"].get("innererror")
                     if isinstance(_inner, dict) and _inner.get("code") == "ResponsibleAIPolicyViolation":
                         azure_error_code = "content_policy_violation"
             else:
@@ -2156,7 +2154,7 @@ def _map_openrouter_exception(
         )
 
 
-def exception_type(  # type: ignore
+def exception_type(
     model,
     original_exception,
     custom_llm_provider,

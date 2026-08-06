@@ -4,7 +4,7 @@ Wrapper around router cache. Meant to handle model cooldown logic
 
 import functools
 import time
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from typing_extensions import TypedDict
 
@@ -16,7 +16,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -120,7 +120,7 @@ class CooldownCache:
         # Process the results
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
-                cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
+                cooldown_cache_value = CooldownCacheValue(**result)
                 active_cooldowns.append((model_id, cooldown_cache_value))
 
         return active_cooldowns
@@ -137,7 +137,7 @@ class CooldownCache:
         # Process the results
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
-                cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
+                cooldown_cache_value = CooldownCacheValue(**result)
                 active_cooldowns.append((model_id, cooldown_cache_value))
 
         return active_cooldowns
@@ -155,7 +155,7 @@ class CooldownCache:
         # Process the results
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
-                cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
+                cooldown_cache_value = CooldownCacheValue(**result)
                 if min_cooldown_time is None or cooldown_cache_value["cooldown_time"] < min_cooldown_time:
                     min_cooldown_time = cooldown_cache_value["cooldown_time"]
 

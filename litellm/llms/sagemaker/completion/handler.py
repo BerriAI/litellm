@@ -203,7 +203,7 @@ class SagemakerLLM(BaseAWSLLM):
                     prepared_request.headers.update({"X-Amzn-SageMaker-Inference-Component": model_id})
                 completion_stream: Final = self.make_sync_call(
                     api_base=prepared_request.url,
-                    headers=prepared_request.headers,  # type: ignore
+                    headers=prepared_request.headers,
                     data=cast(str, prepared_request.body),  # cast-ok: signed body is a JSON str, mirrors async path
                     logging_obj=logging_obj,
                 )
@@ -285,7 +285,7 @@ class SagemakerLLM(BaseAWSLLM):
             try:
                 sync_response: Final = sync_handler.post(
                     url=prepared_request.url,
-                    headers=prepared_request.headers,  # type: ignore
+                    headers=prepared_request.headers,
                     data=prepared_request.body,
                     timeout=timeout,
                 )
@@ -433,7 +433,7 @@ class SagemakerLLM(BaseAWSLLM):
 
         completion_stream: Final = await self.make_async_call(
             api_base=prepared_request.url,
-            headers=prepared_request.headers,  # type: ignore
+            headers=prepared_request.headers,
             data=cast(str, prepared_request.body),
             logging_obj=logging_obj,
         )
@@ -512,7 +512,7 @@ class SagemakerLLM(BaseAWSLLM):
             try:
                 response: Final = await async_handler.post(
                     url=prepared_request.url,
-                    headers=prepared_request.headers,  # type: ignore
+                    headers=prepared_request.headers,
                     data=prepared_request.body,
                     timeout=timeout,
                 )
@@ -601,7 +601,7 @@ class SagemakerLLM(BaseAWSLLM):
             ContentType="application/json",
             Body=f"{data!r}",  # Use !r for safe representation
             CustomAttributes="accept_eula=true",
-        )"""  # type: ignore
+        )"""
         logging_obj.pre_call(
             input=input,
             api_key="",

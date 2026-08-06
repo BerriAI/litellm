@@ -52,7 +52,6 @@ import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
 import NotificationsManager from "../molecules/notifications_manager";
-import { fetchMCPAccessGroups } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
@@ -161,29 +160,6 @@ export interface TeamInfoProps {
   premiumUser?: boolean;
 }
 
-const getOrganizationModels = (organization: Organization | null, userModels: string[]) => {
-  let tempModelsToPick = [];
-
-  if (organization) {
-    // Check if organization has "all-proxy-models" in its models array
-    if (organization.models.includes("all-proxy-models")) {
-      // Treat as all-proxy-models (use userModels)
-      tempModelsToPick = userModels;
-    } else if (organization.models.length > 0) {
-      // Organization has specific models
-      tempModelsToPick = organization.models;
-    } else {
-      // Empty array [] is treated as all-proxy-models
-      tempModelsToPick = userModels;
-    }
-  } else {
-    // No organization, show all available models
-    tempModelsToPick = userModels;
-  }
-
-  return unfurlWildcardModelsInList(tempModelsToPick, userModels);
-};
-
 const TeamInfoView: React.FC<TeamInfoProps> = ({
   teamId,
   onClose,
@@ -203,8 +179,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
-  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
@@ -292,23 +266,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
     fetchOrganization();
   }, [accessToken, teamData?.team_info?.organization_id]);
-
-  // Compute modelsToPick based on organization and userModels
-  const modelsToPick = useMemo(() => {
-    return getOrganizationModels(organization, userModels);
-  }, [organization, userModels]);
-
-  const fetchMcpAccessGroups = async () => {
-    if (!accessToken) return;
-    if (mcpAccessGroupsLoaded) return;
-    try {
-      const groups = await fetchMCPAccessGroups(accessToken);
-      setMcpAccessGroups(groups);
-      setMcpAccessGroupsLoaded(true);
-    } catch (error) {
-      console.error("Failed to fetch MCP access groups:", error);
-    }
-  };
 
   useEffect(() => {
     const fetchPolicies = async () => {
@@ -653,7 +610,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
-      const response = await teamUpdateCall(accessToken, updateData);
+      await teamUpdateCall(accessToken, updateData);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
 
       NotificationsManager.success("Team settings updated successfully");

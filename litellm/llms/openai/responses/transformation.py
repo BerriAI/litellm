@@ -165,10 +165,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         self,
         model: str,  # allows overrides to selectively run this
         input: str | ResponseInputParam,
-        tools: List[ALL_RESPONSES_API_TOOL_PARAMS] | None = None,
-    ) -> Tuple[
+        tools: list[ALL_RESPONSES_API_TOOL_PARAMS] | None = None,
+    ) -> tuple[
         str | ResponseInputParam,
-        List[ALL_RESPONSES_API_TOOL_PARAMS] | None,
+        list[ALL_RESPONSES_API_TOOL_PARAMS] | None,
     ]:
         """Sibling of `remove_cache_control_flag_from_messages_and_tools` on
         the chat path. Strips Anthropic-only `cache_control` markers from
@@ -219,7 +219,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     validated_input.append(filtered_item)
                 else:
                     validated_input.append(item)
-            return validated_input  # type: ignore
+            return validated_input
         # Input is expected to be either str or List, no single BaseModel expected
         return input
 
@@ -447,7 +447,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the delete response API request into a URL and data
 
@@ -482,7 +482,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the get response API request into a URL and data
 
@@ -525,10 +525,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         headers: dict,
         after: str | None = None,
         before: str | None = None,
-        include: List[str] | None = None,
+        include: list[str] | None = None,
         limit: int = 20,
         order: Literal["asc", "desc"] = "desc",
-    ) -> Tuple[str, dict]:
+    ) -> tuple[str, dict]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = f"{api_base}/{encoded_response_id}/input_items"
         params: Final[dict[str, Any]] = {}
@@ -563,7 +563,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the cancel response API request into a URL and data
 
@@ -607,7 +607,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the compact response API request into a URL and data
 

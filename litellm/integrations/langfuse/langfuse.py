@@ -128,8 +128,8 @@ class LangFuseLogger:
             self.langfuse_client = create_mock_langfuse_client()
             self.is_mock_mode = True
         else:
-            http_client: Final = _get_httpx_client()
-            self.langfuse_client = http_client.client
+            self._http_handler: Final = _get_httpx_client()
+            self.langfuse_client = self._http_handler.client
             self.is_mock_mode = False
 
         parameters: Final = {
@@ -433,14 +433,14 @@ class LangFuseLogger:
         input,
         response_obj,
     ):
-        from langfuse.model import CreateGeneration, CreateTrace  # type: ignore
+        from langfuse.model import CreateGeneration, CreateTrace
 
         verbose_logger.warning(
             "Please upgrade langfuse to v2.0.0 or higher: https://github.com/langfuse/langfuse-python/releases/tag/v2.0.1"
         )
 
-        trace: Final = self.Langfuse.trace(  # type: ignore
-            CreateTrace(  # type: ignore
+        trace: Final = self.Langfuse.trace(
+            CreateTrace(
                 name=metadata.get("generation_name", "litellm-completion"),
                 input=input,
                 output=output,
@@ -959,8 +959,8 @@ class LangFuseLogger:
                     "guardrail_mode": guardrail_entry.get("guardrail_mode", None),
                     "guardrail_masked_entity_count": guardrail_entry.get("masked_entity_count", None),
                 },
-                start_time=guardrail_entry.get("start_time", None),  # type: ignore
-                end_time=guardrail_entry.get("end_time", None),  # type: ignore
+                start_time=guardrail_entry.get("start_time", None),
+                end_time=guardrail_entry.get("end_time", None),
             )
 
             verbose_logger.debug("Logged guardrail information as span: %s", span)
@@ -1006,7 +1006,7 @@ def _add_prompt_to_generation_params(
                 if "labels" in prompt_text_params and "tags" in prompt_text_params:
                     _data["labels"] = user_prompt.get("labels", []) or []
                     _data["tags"] = user_prompt.get("tags", []) or []
-                _prompt_obj = Prompt_Text(**_data)  # type: ignore
+                _prompt_obj = Prompt_Text(**_data)
                 generation_params["prompt"] = TextPromptClient(prompt=_prompt_obj)
 
             elif isinstance(user_prompt["prompt"], list):
@@ -1021,7 +1021,7 @@ def _add_prompt_to_generation_params(
                     _data["labels"] = user_prompt.get("labels", []) or []
                     _data["tags"] = user_prompt.get("tags", []) or []
 
-                _prompt_obj = Prompt_Chat(**_data)  # type: ignore
+                _prompt_obj = Prompt_Chat(**_data)
 
                 generation_params["prompt"] = ChatPromptClient(prompt=_prompt_obj)
             else:

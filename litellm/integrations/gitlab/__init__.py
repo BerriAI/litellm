@@ -28,7 +28,7 @@ def set_global_gitlab_config(config: dict) -> None:
     """
     import litellm
 
-    litellm.global_gitlab_config = config  # type: ignore
+    litellm.global_gitlab_config = config
 
 
 def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec") -> "CustomPromptManagement":

@@ -81,7 +81,7 @@ class AzureAudioTranscription(AzureChatCompletion):
 
         response: Final = azure_client.audio.transcriptions.create(
             **data,
-            timeout=timeout,  # type: ignore
+            timeout=timeout,
         )
 
         if isinstance(response, BaseModel):
@@ -102,7 +102,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             model_response_object=model_response,
             hidden_params=hidden_params,
             response_type="audio_transcription",
-        )  # type: ignore
+        )
         return final_response
 
     async def async_audio_transcriptions(
@@ -151,7 +151,7 @@ class AzureAudioTranscription(AzureChatCompletion):
 
             raw_response: Final = await async_azure_client.audio.transcriptions.with_raw_response.create(
                 **data, timeout=timeout
-            )  # type: ignore
+            )
 
             headers: Final = dict(raw_response.headers)
             response = raw_response.parse()

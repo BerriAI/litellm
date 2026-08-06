@@ -296,17 +296,13 @@ class CheckBatchCost:
         underlying provider model (e.g. ``gpt-5.5``), which no key is allowed to call.
         """
         from litellm.proxy.openai_files_endpoints.common_utils import (
-            convert_b64_uid_to_unified_uid,
-            get_models_from_unified_file_id,
+            resolve_managed_output_file_model_name,
         )
 
-        input_file_id = cls._get_input_file_id(job)
-        target_model_names = (
-            get_models_from_unified_file_id(convert_b64_uid_to_unified_uid(input_file_id)) if input_file_id else []
+        return resolve_managed_output_file_model_name(
+            unified_input_file_id=cls._get_input_file_id(job),
+            fallback_model_name=deployment_info.model_name or None,
         )
-        if target_model_names:
-            return ",".join(target_model_names)
-        return deployment_info.model_name or None
 
     @staticmethod
     def _get_input_file_id(job: "LiteLLM_ManagedObjectTable") -> Optional[str]:

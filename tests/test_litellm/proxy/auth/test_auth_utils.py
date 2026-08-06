@@ -3010,3 +3010,80 @@ class TestGetKeyTagRateLimits:
     def test_returns_none_when_unset(self):
         key = UserAPIKeyAuth(api_key="sk-123")
         assert get_key_tag_rpm_limit(key) is None
+
+
+class TestIsRequestBodySafeChecksBracketNotationMetadata:
+    """Bracket notation is how multipart callers express nested metadata; it is
+    validated the same way the dict form is."""
+
+    @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+    def test_bracket_notation_banned_param_is_rejected(self, metadata_key):
+        with pytest.raises(ValueError, match="langfuse_host"):
+            is_request_body_safe(
+                request_body={
+                    "purpose": "assistants",
+                    f"{metadata_key}[langfuse_host]": "https://example.invalid",
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_bracket_notation_api_base_is_rejected(self):
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body={"litellm_metadata[api_base]": "https://example.invalid"},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_bracket_notation_allowed_under_proxy_wide_opt_in(self):
+        assert (
+            is_request_body_safe(
+                request_body={"litellm_metadata[langfuse_host]": "https://byok.example"},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_benign_bracket_notation_metadata_is_allowed(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "purpose": "assistants",
+                    "litellm_metadata[spend_logs_metadata][owner]": "john",
+                    "litellm_metadata[tags]": "production",
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_bracket_notation_matches_json_encoding_for_deeper_nesting(self):
+        """A value nested below the first level is treated the same either way:
+        the check descends one level into metadata, for both encodings."""
+        deep_bracket = {
+            "litellm_metadata[spend_logs_metadata][langfuse_host]": "https://example.invalid"
+        }
+        deep_json = {
+            "litellm_metadata": {"spend_logs_metadata": {"langfuse_host": "https://example.invalid"}}
+        }
+        kwargs = dict(general_settings={}, llm_router=None, model="gpt-4")
+        assert is_request_body_safe(request_body=deep_bracket, **kwargs) is True
+        assert is_request_body_safe(request_body=deep_json, **kwargs) is True
+
+    def test_body_without_bracket_keys_is_unaffected(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )

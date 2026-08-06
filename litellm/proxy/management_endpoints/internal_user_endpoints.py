@@ -536,7 +536,7 @@ async def new_user(
             user_api_key_dict=user_api_key_dict,
         )
 
-        data_json = data.json()  # type: ignore
+        data_json = data.json()
         data_json = _update_internal_new_user_params(data_json, data)
         # Persist the requested grants as their own row and link it, mirroring key/team creation.
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
@@ -584,7 +584,7 @@ async def new_user(
         special_keys: Final = ["token", "token_id"]
         response_dict: Final = {}
         for key, value in response.items():
-            if key in NewUserResponse.model_fields.keys() and key not in special_keys:
+            if key in NewUserResponse.model_fields and key not in special_keys:
                 response_dict[key] = value
 
         response_dict["key"] = response.get("token", "")
@@ -714,11 +714,10 @@ def _enforce_user_info_access(user_id: str | None, user_api_key_dict: UserAPIKey
     """
     if user_id is None:
         return
-    # Only true proxy admin bypasses ownership. PROXY_ADMIN_VIEW_ONLY is
-    # subject to the same `user_id == valid_token.user_id` rule that
-    # `RouteChecks.non_proxy_admin_allowed_routes_check` applies upstream
-    # for the `/user/info` route.
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+    # Admin-view roles (PROXY_ADMIN and PROXY_ADMIN_VIEW_ONLY) bypass
+    # ownership, mirroring the `/user/info` carve-out that
+    # `RouteChecks.non_proxy_admin_allowed_routes_check` applies upstream.
+    if _user_has_admin_view(user_api_key_dict):
         return
     if user_id == user_api_key_dict.user_id:
         return
@@ -862,7 +861,7 @@ async def user_info(
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        if user_id is None and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        if user_id is None and _user_has_admin_view(user_api_key_dict):
             return await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
         elif user_id is None:
             user_id = user_api_key_dict.user_id
@@ -1816,7 +1815,7 @@ async def bulk_user_update(
             for user in all_users_in_db:
                 user_update_request = data.user_updates.model_copy()
                 user_update_request.user_id = user.user_id
-                users_to_update.append(user_update_request)  # type: ignore
+                users_to_update.append(user_update_request)
 
         if successful_updates > 0:
             return BulkUpdateUserResponse(
