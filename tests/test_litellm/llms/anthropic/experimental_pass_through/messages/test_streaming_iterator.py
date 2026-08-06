@@ -247,12 +247,6 @@ def test_incomplete_stream_error_sse_event_is_valid_anthropic_error():
     assert event.endswith("\n\n")
 
 
-# The full stream a provider (Bedrock invoke) generates: a short prefix the
-# client reads before disconnecting, then the tail (including the terminal
-# ``message_delta`` carrying the real output_tokens) that arrives only after
-# the client is gone. output_tokens=64 is the authoritative billed count; a
-# naive "log whatever the client drained" implementation would instead see the
-# ``message_start`` placeholder (output_tokens=1) and undercount ~64x.
 _STREAM_PREFIX = (
     {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 52, "output_tokens": 1}}},
     {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
@@ -299,7 +293,6 @@ async def test_async_sse_wrapper_bills_full_stream_after_client_disconnect():
     async def _gated_stream():
         for event in _STREAM_PREFIX:
             yield event
-        # Block until the test releases the tail (after the client disconnects).
         await tail_gated.wait()
         for event in _STREAM_TAIL:
             yield event
@@ -312,31 +305,25 @@ async def test_async_sse_wrapper_bills_full_stream_after_client_disconnect():
 
     gen = iterator.async_sse_wrapper(_gated_stream())
 
-    # Client reads the prefix, then disconnects (closes the generator).
     client_chunks = []
     async for chunk in gen:
         client_chunks.append(chunk)
         if len(client_chunks) == len(_STREAM_PREFIX):
             break
-    await gen.aclose()  # client disconnect tears down the client-facing generator
+    await gen.aclose()
 
-    # Now let the provider finish. The detached pump must still be alive.
     tail_gated.set()
     await asyncio.wait_for(upstream_fully_drained.wait(), timeout=5)
-    # Give the pump's finally (billing) a turn to run.
     for _ in range(100):
         if iterator.logged_chunks:
             break
         await asyncio.sleep(0.01)
 
-    # The client only ever saw the prefix.
     assert len(client_chunks) == len(_STREAM_PREFIX)
 
-    # Billing saw the WHOLE stream, including the terminal usage event.
     assert iterator.logged_chunks, "pump never billed after client disconnect"
     assert _output_tokens_from_logged_chunks(iterator.logged_chunks) == 64
     assert any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
-    # No synthetic incomplete-stream error, because the real message_stop arrived.
     assert not any(c.startswith(b"event: error\n") for c in iterator.logged_chunks)
 
 
@@ -400,11 +387,9 @@ async def test_async_sse_wrapper_reraises_upstream_error_to_connected_client():
         async for chunk in iterator.async_sse_wrapper(_failing_stream()):
             received.append(chunk)
 
-    # Original exception + status preserved, not masked by a synthetic api_error.
     assert excinfo.value.status_code == 529
-    assert received  # the client still got the pre-error chunks
+    assert received
     assert not any(c.startswith(b"event: error\n") for c in received)
-    # On the failure path we do NOT success-bill (failure handling owns logging).
     assert iterator.logged_chunks == []
 
 
@@ -439,7 +424,6 @@ async def test_async_sse_wrapper_salvages_partial_spend_on_upstream_error_after_
         await asyncio.sleep(0.01)
 
     assert len(received) == 2
-    # Partial spend was still recorded rather than the whole request being dropped.
     assert iterator.logged_chunks == received
 
 
@@ -466,12 +450,9 @@ async def test_async_sse_wrapper_applies_backpressure_to_slow_client(monkeypatch
     iterator = _make_iterator("test_backpressure_slow_client")
     gen = iterator.async_sse_wrapper(_fast_stream())
     try:
-        await gen.__anext__()  # read exactly one chunk, then stall
-        # Let the pump run as far as the bounded queue permits.
+        await gen.__anext__()
         for _ in range(500):
             await asyncio.sleep(0)
-        # Bounded by queue maxsize + the one in-flight put + the one delivered
-        # chunk; nowhere near the full 200-chunk stream.
         assert produced <= 2 + 3, f"pump ran ahead unthrottled: produced {produced} of {total}"
         assert produced < total
     finally:
@@ -493,7 +474,6 @@ async def test_async_sse_wrapper_bills_partial_when_detached_drain_cap_reached(m
     monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 1)
     monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 4)
 
-    # Occupy the only detached-drain slot with a placeholder task.
     async def _hold_slot():
         await asyncio.sleep(3600)
 
@@ -505,7 +485,6 @@ async def test_async_sse_wrapper_bills_partial_when_detached_drain_cap_reached(m
         nonlocal tail_reached
         yield {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5, "output_tokens": 1}}}
         yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "x"}}
-        # These arrive only after the client has disconnected.
         for i in range(100):
             yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"more{i}"}}
         tail_reached = True
@@ -524,15 +503,73 @@ async def test_async_sse_wrapper_bills_partial_when_detached_drain_cap_reached(m
                 break
             await asyncio.sleep(0)
 
-        # Billed a small bounded partial (the prefix plus at most a queue's
-        # worth the pump ran ahead before disconnect) without draining the
-        # 100-chunk tail. The exact count depends on how far the bounded queue
-        # let the pump run ahead, so assert the bound, not an exact number.
         assert iterator.logged_chunks, "capped pump never billed"
         assert len(iterator.logged_chunks) <= 2 + streaming_iterator_module.ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE
         assert len(iterator.logged_chunks) < 100
         assert not any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
         assert tail_reached is False, "pump kept draining past the cap instead of stopping"
+    finally:
+        holder.cancel()
+        streaming_iterator_module._DETACHED_STREAM_DRAINS.discard(holder)
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_aborts_upstream_when_detached_drain_cap_reached(monkeypatch):
+    """
+    Regression: when the cap is full and a disconnected pump bails, it must call
+    aclose on the upstream stream so the provider stops generating and billing,
+    not continue running the stream while we record only the partial prefix.
+    """
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 1)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 4)
+
+    async def _hold_slot():
+        await asyncio.sleep(3600)
+
+    holder = asyncio.ensure_future(_hold_slot())
+    streaming_iterator_module._DETACHED_STREAM_DRAINS.add(holder)
+
+    class _AbortableStream:
+        def __init__(self):
+            self.aclose_called = False
+            self._remaining = iter(
+                (
+                    {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5, "output_tokens": 1}}},
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "x"}},
+                )
+                + tuple(
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"t{i}"}}
+                    for i in range(50)
+                )
+            )
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._remaining)
+            except StopIteration:
+                raise StopAsyncIteration
+
+        async def aclose(self):
+            self.aclose_called = True
+
+    stream = _AbortableStream()
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("abort_upstream_at_cap"), request_body={})
+    try:
+        gen = iterator.async_sse_wrapper(stream)
+        await gen.__anext__()
+        await gen.__anext__()
+        await gen.aclose()
+
+        for _ in range(200):
+            if iterator.logged_chunks:
+                break
+            await asyncio.sleep(0)
+
+        assert iterator.logged_chunks, "capped pump never billed"
+        assert stream.aclose_called, "upstream aclose was not called when the detached-drain cap was reached"
     finally:
         holder.cancel()
         streaming_iterator_module._DETACHED_STREAM_DRAINS.discard(holder)
@@ -565,5 +602,4 @@ async def test_async_sse_wrapper_drains_detached_when_cap_available(monkeypatch)
         await asyncio.sleep(0.01)
 
     assert any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
-    # Slot released once the drain finished.
     assert len(streaming_iterator_module._DETACHED_STREAM_DRAINS) == 0
