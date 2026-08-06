@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Any, Final
 
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
@@ -130,12 +130,6 @@ def openai_messages_without_tool(
     return tuple(m for m in messages if _message_role(m) != "tool")
 
 
-def openai_messages_only_tool(
-    messages: Sequence[AllMessageValues],
-) -> tuple[AllMessageValues, ...]:
-    return tuple(m for m in messages if _message_role(m) == "tool")
-
-
 def effective_scan_only_tool_results_for_guardrail(guardrail_to_apply: Any) -> bool:
     return getattr(guardrail_to_apply, "scan_only_tool_results", None) is True
 
@@ -154,13 +148,53 @@ def role_out_of_guardrail_scope(
     return scan_only_tool_results and role != "tool"
 
 
-def filtered_structured_messages(
+def scoped_structured_message_indices(
     messages: Sequence[AllMessageValues],
     *,
     scan_only_tool_results: bool,
     skip_system: bool,
     skip_tool: bool,
-) -> tuple[AllMessageValues, ...]:
-    scoped: Final = openai_messages_only_tool(messages) if scan_only_tool_results else tuple(messages)
-    without_system: Final = openai_messages_without_system(scoped) if skip_system else scoped
-    return openai_messages_without_tool(without_system) if skip_tool else without_system
+) -> tuple[int, ...]:
+    return tuple(
+        index
+        for index, message in enumerate(messages)
+        if not role_out_of_guardrail_scope(
+            _message_role(message),
+            skip_system_message=skip_system,
+            skip_tool_message=skip_tool,
+            scan_only_tool_results=scan_only_tool_results,
+        )
+    )
+
+
+def merge_guardrailed_scoped_messages(
+    full_messages: Sequence[AllMessageValues],
+    scoped_indices: Sequence[int],
+    guardrailed_scoped: Sequence[AllMessageValues],
+) -> list[AllMessageValues]:
+    """Substitute guardrail-returned messages back into the full conversation.
+
+    Guardrails only ever see the scoped subset of messages, so a replacement
+    list they hand back describes that subset, not the whole request. Writing
+    it over ``data["messages"]`` wholesale would silently drop every
+    out-of-scope message (system prompt, prior turns). Instead, swap each
+    returned message into the position its scoped original came from; extra
+    returned messages land after the last scoped position, and scoped
+    originals without a counterpart are treated as removed by the guardrail.
+    When nothing was filtered out this degenerates to the returned list
+    itself, preserving wholesale-replacement behavior for unscoped guardrails.
+    """
+    replacements: Final = dict(zip(scoped_indices, guardrailed_scoped))
+    removed: Final = frozenset(scoped_indices[len(guardrailed_scoped) :])
+    appended: Final = tuple(guardrailed_scoped[len(scoped_indices) :])
+    last_scoped_index: Final = scoped_indices[-1] if scoped_indices else None
+
+    def _merged() -> Iterator[AllMessageValues]:
+        for index, message in enumerate(full_messages):
+            if index in removed:
+                continue
+            yield replacements.get(index, message)
+            if index == last_scoped_index:
+                yield from appended
+
+    return list(_merged())

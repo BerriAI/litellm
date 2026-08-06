@@ -29,7 +29,8 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
-    filtered_structured_messages,
+    merge_guardrailed_scoped_messages,
+    scoped_structured_message_indices,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -330,17 +331,17 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         chat_completion_compatible_request: Final = self._translate_to_openai(data)
 
-        structured_messages: Final = list(
-            filtered_structured_messages(
-                cast(
-                    list[AllMessageValues],
-                    chat_completion_compatible_request.get("messages", []),
-                ),
-                scan_only_tool_results=scan_only_tool_results,
-                skip_system=skip_system,
-                skip_tool=skip_tool,
-            )
+        full_structured_messages: Final = cast(
+            list[AllMessageValues],
+            chat_completion_compatible_request.get("messages", []),
         )
+        scoped_message_indices: Final = scoped_structured_message_indices(
+            full_structured_messages,
+            scan_only_tool_results=scan_only_tool_results,
+            skip_system=skip_system,
+            skip_tool=skip_tool,
+        )
+        structured_messages: Final = [full_structured_messages[index] for index in scoped_message_indices]
 
         tools_to_check: Final[list[ChatCompletionToolParam]] = (
             [] if scan_only_tool_results else chat_completion_compatible_request.get("tools", [])
@@ -402,7 +403,14 @@ class AnthropicMessagesHandler(BaseTranslation):
                 guardrailed_structured_messages is not None
                 and guardrailed_structured_messages is not original_structured_messages
             ):
-                self._write_back_structured_messages(data, guardrailed_structured_messages)
+                self._write_back_structured_messages(
+                    data,
+                    merge_guardrailed_scoped_messages(
+                        full_messages=full_structured_messages,
+                        scoped_indices=scoped_message_indices,
+                        guardrailed_scoped=guardrailed_structured_messages,
+                    ),
+                )
             else:
                 # Step 3: Map guardrail responses back to original message structure
                 await self._apply_guardrail_responses_to_input(
