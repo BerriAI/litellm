@@ -4,6 +4,7 @@ import unittest
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
 
+import httpx
 import pytest
 
 import litellm
