@@ -627,7 +627,9 @@ def cmd_check(head: Mapping[str, int], base_ref: str) -> None:
         print(
             f"FAIL: basedpyright produced no errors, but {BUDGET_PATH.name} allows "
             f"up to ~{expected}. The type checker almost certainly crashed or emitted "
-            f"nothing; refusing to certify a vacuous run."
+            f"nothing; refusing to certify a vacuous run. This usually means this "
+            f"branch is missing type checker fixes from its base branch: pull the "
+            f"latest {DEFAULT_BASE.removeprefix('origin/')} and merge or rebase onto it."
         )
         raise SystemExit(1)
     if not over_ceiling(head, budget):

@@ -200,6 +200,16 @@ def test_genuine_zero_and_empty_budget_are_not_vacuous():
     )
 
 
+def test_vacuous_run_failure_tells_the_user_to_pull_latest_staging(capsys):
+    import pytest
+
+    with pytest.raises(SystemExit):
+        gate.cmd_check({}, gate.DEFAULT_BASE)
+    out = capsys.readouterr().out
+    assert "refusing to certify a vacuous run" in out
+    assert "pull the latest litellm_internal_staging and merge or rebase onto it" in out
+
+
 def test_update_ratchets_a_limit_down_by_what_the_branch_fixed():
     # A rule that dropped from 40 (branch point) to 30 (current) fixed 10, so its
     # limit of 100 falls to 90 -- the granted headroom (60) is preserved, not the
