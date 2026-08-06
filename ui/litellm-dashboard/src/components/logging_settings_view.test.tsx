@@ -38,3 +38,25 @@ describe("LoggingSettingsView logos", () => {
     expect(screen.getByText("C")).toBeInTheDocument();
   });
 });
+
+describe("LoggingSettingsView scoped exporters", () => {
+  it("says nothing about exporters when the caller has not resolved them", () => {
+    render(<LoggingSettingsView loggingConfigs={[]} disabledCallbacks={[]} />);
+
+    expect(screen.queryByText("No logging exporters assigned")).not.toBeInTheDocument();
+    expect(screen.queryByText("Logging Exporters")).not.toBeInTheDocument();
+  });
+
+  it("reports none only when the caller resolved an empty list", () => {
+    render(<LoggingSettingsView loggingConfigs={[]} disabledCallbacks={[]} scopedExporters={[]} />);
+
+    expect(screen.getByText("No logging exporters assigned")).toBeInTheDocument();
+  });
+
+  it("lists the exporters the caller resolved", () => {
+    render(<LoggingSettingsView loggingConfigs={[]} disabledCallbacks={[]} scopedExporters={["langfuse-eu"]} />);
+
+    expect(screen.getByText("langfuse-eu")).toBeInTheDocument();
+    expect(screen.queryByText("No logging exporters assigned")).not.toBeInTheDocument();
+  });
+});
