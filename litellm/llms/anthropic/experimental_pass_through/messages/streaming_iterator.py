@@ -18,6 +18,13 @@ from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ: Final = PassThroughEndpointLogging()
 
+# asyncio holds only a weak reference to a bare create_task() result, so a
+# fire-and-forget task can be garbage-collected mid-run. The upstream pump
+# below must outlive the client-facing generator (which is closed on client
+# disconnect), so root every pump task in a module-level set per the stdlib
+# guidance and drop it again from the done callback.
+_UPSTREAM_PUMP_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: stdlib strong-ref set for pump tasks
+
 INCOMPLETE_STREAM_ERROR_MESSAGE: Final = (
     "Provider stream ended before emitting a message_stop event; "
     "the response is incomplete and any partial content (e.g. tool_use input JSON) may be truncated."
@@ -192,21 +199,70 @@ class BaseAnthropicMessagesStreamingIterator:
         Generic async SSE wrapper that converts streaming chunks to SSE format
         and handles logging.
 
+        The upstream read runs in a detached background task (``_pump_upstream``)
+        so that a client disconnect tears down only this client-facing generator,
+        never the upstream drain + billing. The provider (e.g. Bedrock) keeps
+        generating and billing the full response regardless of the client, so
+        draining it to completion is what lets spend tracking see the real
+        terminal ``message_delta`` / ``message_stop`` usage instead of a
+        truncated placeholder count. Chunks reach the client through a queue;
+        once the client goes away the pump only buffers for billing so the queue
+        can't grow unbounded.
+
         This method provides the common logic for both Anthropic and Bedrock implementations.
         """
-        collected_chunks: Final = []
-        saw_terminal_event = False
+        from litellm._logging import verbose_proxy_logger
 
-        async for chunk in completion_stream:
-            if self.completion_start_time is None:
-                self.completion_start_time = datetime.now()
-            saw_terminal_event = saw_terminal_event or _is_terminal_stream_chunk(chunk)
-            encoded_chunk = self._convert_chunk_to_sse_format(chunk)
-            collected_chunks.append(encoded_chunk)
-            yield encoded_chunk
+        queue: Final[asyncio.Queue[bytes | None]] = asyncio.Queue()
+        client_detached: Final = asyncio.Event()
 
-        if not saw_terminal_event:
-            yield _incomplete_stream_error_sse_event()
+        async def _pump_upstream() -> None:
+            collected_chunks: Final[list[bytes]] = []
+            saw_terminal_event = False  # rebind-ok: accumulates across the upstream loop
+            try:
+                async for chunk in completion_stream:
+                    if self.completion_start_time is None:
+                        self.completion_start_time = datetime.now()
+                    saw_terminal_event = saw_terminal_event or _is_terminal_stream_chunk(chunk)
+                    encoded_chunk = self._convert_chunk_to_sse_format(chunk)
+                    collected_chunks.append(encoded_chunk)
+                    if not client_detached.is_set():
+                        queue.put_nowait(encoded_chunk)
+            except Exception as exc:  # noqa: BLE001  # must still flush partial usage in finally, not crash the pump
+                verbose_proxy_logger.warning(
+                    "async_sse_wrapper upstream pump stopped after %d chunks: %s(%s)",
+                    len(collected_chunks),
+                    type(exc).__name__,
+                    exc,
+                )
+            finally:
+                if not client_detached.is_set():
+                    if not saw_terminal_event:
+                        queue.put_nowait(_incomplete_stream_error_sse_event())
+                    queue.put_nowait(None)
+                try:
+                    await self._handle_streaming_logging(collected_chunks)
+                except Exception as exc:  # noqa: BLE001  # billing is best-effort; never crash the pump
+                    verbose_proxy_logger.warning(
+                        "async_sse_wrapper billing failed after %d chunks: %s(%s)",
+                        len(collected_chunks),
+                        type(exc).__name__,
+                        exc,
+                    )
 
-        # Handle logging after all chunks are processed
-        await self._handle_streaming_logging(collected_chunks)
+        pump_task: Final = asyncio.create_task(_pump_upstream())
+        _UPSTREAM_PUMP_TASKS.add(pump_task)
+        pump_task.add_done_callback(_UPSTREAM_PUMP_TASKS.discard)
+
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield item
+        finally:
+            # Client-facing generator is being torn down (normal end or a
+            # disconnect GeneratorExit). Signal the pump to stop enqueueing so
+            # the queue can't grow unbounded, but let it keep draining upstream
+            # to its terminal usage event for accurate billing.
+            client_detached.set()
