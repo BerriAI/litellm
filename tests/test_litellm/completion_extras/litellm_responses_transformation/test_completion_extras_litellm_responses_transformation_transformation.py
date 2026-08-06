@@ -3415,7 +3415,10 @@ def test_output_item_done_with_stream_map_keeps_empty_delta():
         ({"type": "function", "function": {"name": "get_weather"}}, {"type": "function", "name": "get_weather"}),
     ],
 )
-async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(tool_choice, expected_wire_tool_choice):
+async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
+    tool_choice: str | dict[str, object],
+    expected_wire_tool_choice: str | dict[str, str],
+) -> None:
     """Object-wrapped tool_choice must never reach /v1/responses.
 
     Clients (Cursor, Claude Code via /v1/messages) send ``{"type": "auto"}``.
