@@ -1,4 +1,6 @@
 import json
+
+import logging
 import re
 import time
 from typing import (
@@ -903,6 +905,26 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         for tool in tools:
             if "input_schema" in tool:  # assume in anthropic format
                 anthropic_tools.append(tool)
+            elif "function" not in tool:
+                tool_name = tool.get("name", tool.get("type", "unknown"))
+                if tool.get("type") == "function":
+                    # OpenAI-format tool with missing 'function' key - likely a
+                    # malformed definition (e.g. typo'd key name).  Warn at
+                    # ERROR level so it's visible even when verbose logging
+                    # is disabled.
+                    logging.error(
+                        "_map_tools: skipping tool with type='function' but "
+                        "no 'function' key -- this looks like a malformed "
+                        "OpenAI tool definition (name=%s)",
+                        tool_name,
+                    )
+                else:
+                    litellm.verbose_logger.warning(
+                        "_map_tools: skipping tool without input_schema or "
+                        "function key (type=%s)",
+                        tool_name,
+                    )
+                continue
             else:  # assume openai tool call
                 new_tool, mcp_server_tool = self._map_tool_helper(tool)
 
