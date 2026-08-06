@@ -6,6 +6,8 @@ Use this by passing "nvidia_nim/ranking/<model>" to force the /v1/ranking endpoi
 Reference: https://build.nvidia.com/nvidia/llama-3_2-nv-rerankqa-1b-v2/deploy
 """
 
+from typing import Final
+
 from litellm.llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
 
 
@@ -66,7 +68,7 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         """
         Transform request, using clean model name without 'ranking/' prefix.
         """
-        clean_model = self._get_clean_model_name(model)
+        clean_model: Final = self._get_clean_model_name(model)
         return super().transform_rerank_request(
             model=clean_model,
             optional_rerank_params=optional_rerank_params,

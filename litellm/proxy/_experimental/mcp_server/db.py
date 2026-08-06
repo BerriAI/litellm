@@ -4,12 +4,7 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    TypedDict,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -54,7 +49,7 @@ if TYPE_CHECKING:
 
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
-_AUTH_FLOW_SCOPED_FIELDS: "frozenset[str]" = frozenset(
+_AUTH_FLOW_SCOPED_FIELDS: Final["frozenset[str]"] = frozenset(
     {
         "issuer",
         "authorization_url",
@@ -83,7 +78,7 @@ def _blank_to_none(value: str | None) -> str | None:
 # the current code has never written — a cleared column can then never be
 # silently resurrected by a stale blob copy. These keys are stored plaintext
 # (endpoints/identifiers, not secrets), so values lift as-is.
-_TOKEN_EXCHANGE_COLUMN_FIELDS: "frozenset[str]" = frozenset(
+_TOKEN_EXCHANGE_COLUMN_FIELDS: Final["frozenset[str]"] = frozenset(
     {
         "token_exchange_endpoint",
         "audience",
@@ -96,10 +91,10 @@ _TOKEN_EXCHANGE_COLUMN_FIELDS: "frozenset[str]" = frozenset(
 # OAuth app (client_id/client_secret) plus the same authorize relay, and neither mints anything the
 # gateway keeps. So a switch WITHIN this class must preserve the stored app, unlike a cross-class
 # switch (e.g. an oauth2 row whose client may be DCR-minted and is not reusable elsewhere).
-_CLIENT_FORWARDED_AUTH_TYPES: "frozenset[str]" = frozenset({"true_passthrough", "oauth_delegate"})
+_CLIENT_FORWARDED_AUTH_TYPES: Final["frozenset[str]"] = frozenset({"true_passthrough", "oauth_delegate"})
 
 # Minted token material that must never survive a client rotation on a persisted row.
-_MINTED_TOKEN_CREDENTIAL_FIELDS: "frozenset[str]" = frozenset({"access_token", "refresh_token", "expires_in"})
+_MINTED_TOKEN_CREDENTIAL_FIELDS: Final["frozenset[str]"] = frozenset({"access_token", "refresh_token", "expires_in"})
 
 
 class _OAuthCredentialAccessToken(TypedDict):
@@ -254,7 +249,7 @@ def _reencrypt_global_env_var_values(
             return None
     else:
         entries = env_vars
-    rebuilt = [dict(v) for v in entries]
+    rebuilt: Final = [dict(v) for v in entries]
     rotated = False
     for entry in rebuilt:
         if not _is_global_env_var_scope(entry.get("scope")):
@@ -336,7 +331,7 @@ def _prepare_mcp_server_data(
             data_dict["alias"] = getattr(data, "alias", None)
 
     # Handle credentials serialization
-    credentials = data_dict.get("credentials")
+    credentials: Final = data_dict.get("credentials")
     if credentials is not None:
         # Lift legacy blob-shaped token-exchange settings into their dedicated
         # columns (an explicit top-level value wins, including an explicit
@@ -359,9 +354,9 @@ def _prepare_mcp_server_data(
     # column so the exclude_unset filter is respected: a partial update that
     # omits env_vars never overwrites the stored value. Global values are
     # encrypted at rest before serialization.
-    env_vars: Sequence[Mapping[str, str]] | None = data_dict.get("env_vars")
+    env_vars: Final[Sequence[Mapping[str, str]] | None] = data_dict.get("env_vars")
     if env_vars is not None:
-        serialized_env_vars = [dict(v) for v in env_vars]
+        serialized_env_vars: Final = [dict(v) for v in env_vars]
         _encrypt_global_env_var_values(serialized_env_vars)
         data_dict["env_vars"] = safe_dumps(serialized_env_vars)
 
@@ -387,44 +382,44 @@ def _prepare_mcp_server_data(
 
 
 def encrypt_credentials(credentials: MCPCredentials, encryption_key: str | None) -> MCPCredentials:
-    auth_value = credentials.get("auth_value")
+    auth_value: Final = credentials.get("auth_value")
     if auth_value is not None:
         credentials["auth_value"] = encrypt_value_helper(
             value=auth_value,
             new_encryption_key=encryption_key,
         )
-    client_id = credentials.get("client_id")
+    client_id: Final = credentials.get("client_id")
     if client_id is not None:
         credentials["client_id"] = encrypt_value_helper(
             value=client_id,
             new_encryption_key=encryption_key,
         )
-    client_secret = credentials.get("client_secret")
+    client_secret: Final = credentials.get("client_secret")
     if client_secret is not None:
         credentials["client_secret"] = encrypt_value_helper(
             value=client_secret,
             new_encryption_key=encryption_key,
         )
-    client_private_key = credentials.get("client_private_key")
+    client_private_key: Final = credentials.get("client_private_key")
     if client_private_key is not None:
         credentials["client_private_key"] = encrypt_value_helper(
             value=client_private_key,
             new_encryption_key=encryption_key,
         )
     # AWS SigV4 credential fields
-    aws_access_key_id = credentials.get("aws_access_key_id")
+    aws_access_key_id: Final = credentials.get("aws_access_key_id")
     if aws_access_key_id is not None:
         credentials["aws_access_key_id"] = encrypt_value_helper(
             value=aws_access_key_id,
             new_encryption_key=encryption_key,
         )
-    aws_secret_access_key = credentials.get("aws_secret_access_key")
+    aws_secret_access_key: Final = credentials.get("aws_secret_access_key")
     if aws_secret_access_key is not None:
         credentials["aws_secret_access_key"] = encrypt_value_helper(
             value=aws_secret_access_key,
             new_encryption_key=encryption_key,
         )
-    aws_session_token = credentials.get("aws_session_token")
+    aws_session_token: Final = credentials.get("aws_session_token")
     if aws_session_token is not None:
         credentials["aws_session_token"] = encrypt_value_helper(
             value=aws_session_token,
@@ -435,7 +430,7 @@ def encrypt_credentials(credentials: MCPCredentials, encryption_key: str | None)
 
 
 def _credentials_blob_to_mutable_dict(blob: str | Mapping[str, object]) -> dict[str, object]:
-    parsed_blob: dict[str, object] = json.loads(blob) if isinstance(blob, str) else dict(blob)
+    parsed_blob: Final[dict[str, object]] = json.loads(blob) if isinstance(blob, str) else dict(blob)
     return parsed_blob
 
 
@@ -463,7 +458,7 @@ async def _db_update_mcp_server_row(
     server_id: str,
     data: "prisma_db_types.LiteLLM_MCPServerTableUpdateInput",
 ) -> "prisma_db_models.LiteLLM_MCPServerTable":
-    row: prisma_db_models.LiteLLM_MCPServerTable = await MCPServerRepository(prisma_client).table.update(
+    row: Final[prisma_db_models.LiteLLM_MCPServerTable] = await MCPServerRepository(prisma_client).table.update(
         where={"server_id": server_id},
         data=data,
     )
@@ -473,7 +468,7 @@ async def _db_update_mcp_server_row(
 def _user_credential_actions(
     prisma_client: PrismaClient,
 ) -> "LiteLLM_MCPUserCredentialsActions[prisma_db_models.LiteLLM_MCPUserCredentials]":
-    table: LiteLLM_MCPUserCredentialsActions[prisma_db_models.LiteLLM_MCPUserCredentials] = (
+    table: Final[LiteLLM_MCPUserCredentialsActions[prisma_db_models.LiteLLM_MCPUserCredentials]] = (
         MCPUserCredentialsRepository(prisma_client).table
     )
     return table
@@ -482,7 +477,7 @@ def _user_credential_actions(
 def _user_env_var_actions(
     prisma_client: PrismaClient,
 ) -> "LiteLLM_MCPUserEnvVarsActions[prisma_db_models.LiteLLM_MCPUserEnvVars]":
-    table: LiteLLM_MCPUserEnvVarsActions[prisma_db_models.LiteLLM_MCPUserEnvVars] = (
+    table: Final[LiteLLM_MCPUserEnvVarsActions[prisma_db_models.LiteLLM_MCPUserEnvVars]] = (
         prisma_client.db.litellm_mcpuserenvvars
     )
     return table
@@ -530,7 +525,7 @@ def decrypt_credentials(
     credentials: MCPCredentials,
 ) -> MCPCredentials:
     """Decrypt all secret fields in an MCPCredentials dict using the global salt key."""
-    secret_fields = [
+    secret_fields: Final = [
         "auth_value",
         "client_id",
         "client_secret",
@@ -540,9 +535,9 @@ def decrypt_credentials(
         "aws_session_token",
     ]
     for field in secret_fields:
-        value = credentials.get(field)  # type: ignore[literal-required]
+        value = credentials.get(field)
         if value is not None and isinstance(value, str):
-            credentials[field] = decrypt_value_helper(  # type: ignore[literal-required]
+            credentials[field] = decrypt_value_helper(
                 value=value,
                 key=field,
                 exception_type="debug",
@@ -560,17 +555,17 @@ async def get_all_mcp_servers(
     Pass approval_status=None to return all servers regardless of approval state.
     """
     try:
-        where: prisma_db_types.LiteLLM_MCPServerTableWhereInput = {}
+        where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {}
         if approval_status is not None:
             where["approval_status"] = approval_status
-        mcp_servers = await _db_find_mcp_server_rows(prisma_client, where if where else {})
+        mcp_servers: Final = await _db_find_mcp_server_rows(prisma_client, where if where else {})
 
-        tables = [LiteLLM_MCPServerTable.model_validate(mcp_server.model_dump()) for mcp_server in mcp_servers]
+        tables: Final = [LiteLLM_MCPServerTable.model_validate(mcp_server.model_dump()) for mcp_server in mcp_servers]
         for table in tables:
             decrypt_global_env_var_values(table.env_vars)
         return tables
     except Exception as e:
-        verbose_proxy_logger.debug(f"litellm.proxy._experimental.mcp_server.db.py::get_all_mcp_servers - {e!s}")
+        verbose_proxy_logger.debug("litellm.proxy._experimental.mcp_server.db.py::get_all_mcp_servers - %s", e)
         return []
 
 
@@ -578,10 +573,10 @@ async def get_mcp_server(prisma_client: PrismaClient, server_id: str) -> LiteLLM
     """
     Returns the matching mcp server from the db iff exists
     """
-    mcp_server = await _db_find_mcp_server_row(prisma_client, server_id)
+    mcp_server: Final = await _db_find_mcp_server_row(prisma_client, server_id)
     if mcp_server is None:
         return None
-    table = LiteLLM_MCPServerTable.model_validate(mcp_server.model_dump())
+    table: Final = LiteLLM_MCPServerTable.model_validate(mcp_server.model_dump())
     decrypt_global_env_var_values(table.env_vars)
     return table
 
@@ -590,14 +585,14 @@ async def get_mcp_servers(prisma_client: PrismaClient, server_ids: Iterable[str]
     """
     Returns the matching mcp servers from the db with the server_ids
     """
-    _mcp_servers: list[prisma_db_models.LiteLLM_MCPServerTable] = await MCPServerRepository(
+    _mcp_servers: Final[list[prisma_db_models.LiteLLM_MCPServerTable]] = await MCPServerRepository(
         prisma_client
     ).table.find_many(
         where={
             "server_id": {"in": server_ids},
         }
     )
-    final_mcp_servers: list[LiteLLM_MCPServerTable] = []
+    final_mcp_servers: Final[list[LiteLLM_MCPServerTable]] = []
     for _mcp_server in _mcp_servers:
         table = LiteLLM_MCPServerTable.model_validate(_mcp_server.model_dump())
         decrypt_global_env_var_values(table.env_vars)
@@ -656,17 +651,17 @@ async def get_all_mcp_servers_for_user(
     Following Least-Privilege Principle - the requestor should only be able to see the mcp servers that they have access to.
     """
 
-    mcp_server_ids: set[str] = set()
+    mcp_server_ids: Final[set[str]] = set()
     mcp_servers = []
 
     # Get the mcp servers for the key
     if user.api_key:
-        token_mcp_servers = await get_mcp_servers_by_verificationtoken(prisma_client, user.api_key)
+        token_mcp_servers: Final = await get_mcp_servers_by_verificationtoken(prisma_client, user.api_key)
         mcp_server_ids.update(token_mcp_servers)
 
         # check for special team membership
         if SpecialMCPServerName.all_team_servers in mcp_server_ids and user.team_id is not None:
-            team_mcp_servers = await get_mcp_servers_by_team(prisma_client, user.team_id)
+            team_mcp_servers: Final = await get_mcp_servers_by_team(prisma_client, user.team_id)
             mcp_server_ids.update(team_mcp_servers)
 
     if len(mcp_server_ids) > 0:
@@ -681,7 +676,7 @@ async def get_objectpermissions_for_mcp_server(
     """
     Get all the object permissions records and the associated team and verficiationtoken records that have access to the mcp server
     """
-    object_permission_records: list[LiteLLM_ObjectPermissionTable] = await ObjectPermissionRepository(
+    object_permission_records: Final[list[LiteLLM_ObjectPermissionTable]] = await ObjectPermissionRepository(
         prisma_client
     ).table.find_many(
         where={
@@ -702,7 +697,7 @@ async def get_virtualkeys_for_mcp_server(
     """
     Get all the virtual keys that have access to the mcp server
     """
-    virtual_keys: list[prisma_db_models.LiteLLM_VerificationToken] | None = await VerificationTokenRepository(
+    virtual_keys: Final[list[prisma_db_models.LiteLLM_VerificationToken] | None] = await VerificationTokenRepository(
         prisma_client
     ).table.find_many(
         where={
@@ -750,7 +745,7 @@ async def delete_mcp_server(
 
     Returns the deleted mcp server record if it exists, otherwise None
     """
-    deleted_server = await MCPServerRepository(prisma_client).table.delete(
+    deleted_server: Final = await MCPServerRepository(prisma_client).table.delete(
         where={
             "server_id": server_id,
         },
@@ -805,14 +800,14 @@ async def create_mcp_server(
         data.server_id = str(uuid.uuid4())
 
     # Use helper to prepare data with proper JSON serialization
-    data_dict = _prepare_mcp_server_data(data)
+    data_dict: Final = _prepare_mcp_server_data(data)
 
     # Add audit fields
     data_dict["created_by"] = touched_by
     data_dict["updated_by"] = touched_by
 
-    new_mcp_server: LiteLLM_MCPServerTable = await MCPServerRepository(prisma_client).table.create(
-        data=data_dict  # type: ignore
+    new_mcp_server: Final[LiteLLM_MCPServerTable] = await MCPServerRepository(prisma_client).table.create(
+        data=data_dict
     )
 
     _decrypt_env_vars_on_returned_row(new_mcp_server)
@@ -834,29 +829,29 @@ async def update_mcp_server(
     # exclude_unset=True makes this a true partial update: fields the caller did
     # not provide are not written, so they keep their existing DB value instead
     # of being reset to a schema default (transport=sse, allow_all_keys=False...).
-    data_dict = _prepare_mcp_server_data(data, exclude_unset=True, fields_set=fields_set)
+    data_dict: Final = _prepare_mcp_server_data(data, exclude_unset=True, fields_set=fields_set)
 
     # Pre-fetch existing record once if we need it for auth_type, url, or credential logic
     existing = None
-    has_credentials = "credentials" in data_dict and data_dict["credentials"] is not None
+    has_credentials: Final = "credentials" in data_dict and data_dict["credentials"] is not None
     # An explicit token-exchange column write (set or clear) also migrates the
     # legacy blob copies below, so the existing row is needed for those updates.
-    explicit_te_write = bool(_TOKEN_EXCHANGE_COLUMN_FIELDS & data_dict.keys())
-    url_provided = "url" in data_dict and data_dict["url"] is not None
-    issuer_provided = "issuer" in data_dict
+    explicit_te_write: Final = bool(_TOKEN_EXCHANGE_COLUMN_FIELDS & data_dict.keys())
+    url_provided: Final = "url" in data_dict and data_dict["url"] is not None
+    issuer_provided: Final = "issuer" in data_dict
     if data.auth_type or has_credentials or explicit_te_write or url_provided or issuer_provided:
         existing = await _db_find_mcp_server_row(prisma_client, data.server_id)
 
-    auth_type_changed = bool(
+    auth_type_changed: Final = bool(
         data.auth_type
         and existing
         and _credential_auth_class(existing.auth_type) != _credential_auth_class(data.auth_type)
     )
     # A url change re-points the server at a potentially different upstream, so any discovered or
     # trust-on-first-use OAuth endpoints/issuer belong to the old upstream and must re-discover.
-    url_changed = bool(url_provided and existing and existing.url != data_dict["url"])
-    old_issuer = _blank_to_none(getattr(existing, "issuer", None)) if existing else None
-    issuer_changed = bool(
+    url_changed: Final = bool(url_provided and existing and existing.url != data_dict["url"])
+    old_issuer: Final = _blank_to_none(getattr(existing, "issuer", None)) if existing else None
+    issuer_changed: Final = bool(
         issuer_provided and old_issuer is not None and _blank_to_none(data_dict.get("issuer")) != old_issuer
     )
 
@@ -905,10 +900,10 @@ async def update_mcp_server(
             # the same declared app and so must merge, not replace.
             if not auth_type_changed:
                 existing_creds = _credentials_blob_to_mutable_dict(existing.credentials)
-                new_creds = _credentials_blob_to_mutable_dict(data_dict["credentials"])
+                new_creds: Final = _credentials_blob_to_mutable_dict(data_dict["credentials"])
                 # New values override existing; existing keys not in update are preserved. A client
                 # rotation additionally drops the previous app's stale minted token keys.
-                merged = _drop_stale_minted_on_client_rotation({**existing_creds, **new_creds}, new_creds)
+                merged: Final = _drop_stale_minted_on_client_rotation({**existing_creds, **new_creds}, new_creds)
                 # Migrate-on-write for legacy rows: token-exchange settings the
                 # old blob shape carried move to their dedicated columns (unless
                 # the caller set the column this update, or the row already has
@@ -935,9 +930,9 @@ async def update_mcp_server(
 
         data_dict["credentials"] = Json(None)
 
-    updated_mcp_server: LiteLLM_MCPServerTable = await MCPServerRepository(prisma_client).table.update(
+    updated_mcp_server: Final[LiteLLM_MCPServerTable] = await MCPServerRepository(prisma_client).table.update(
         where={"server_id": data.server_id},
-        data=data_dict,  # type: ignore
+        data=data_dict,
     )
 
     _decrypt_env_vars_on_returned_row(updated_mcp_server)
@@ -950,7 +945,7 @@ async def get_mcp_server_oauth_client_credentials(prisma_client: PrismaClient, s
     LiteLLM_MCPServerTable row, so their dynamically registered client lives here keyed
     by server_id. The returned value is the raw credentials blob for
     ``_get_persisted_dcr_credentials`` to parse."""
-    row: prisma_db_models.LiteLLM_MCPServerOAuthClient | None = await MCPServerOAuthClientRepository(
+    row: Final[prisma_db_models.LiteLLM_MCPServerOAuthClient | None] = await MCPServerOAuthClientRepository(
         prisma_client
     ).table.find_unique(where={"server_id": server_id})
     if row is None:
@@ -968,8 +963,8 @@ async def upsert_mcp_server_oauth_client_credentials(
     same way regardless of which store a server's client came from."""
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-    encrypted = encrypt_credentials(credentials=MCPCredentials(**credentials), encryption_key=_get_salt_key())
-    blob = safe_dumps(encrypted)
+    encrypted: Final = encrypt_credentials(credentials=MCPCredentials(**credentials), encryption_key=_get_salt_key())
+    blob: Final = safe_dumps(encrypted)
     await MCPServerOAuthClientRepository(prisma_client).table.upsert(
         where={"server_id": server_id},
         data={
@@ -990,16 +985,16 @@ def _reencrypt_mcp_credentials_blob(
         return None
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps  # noqa: PLC0415  # avoids circular import
 
-    creds_dict = _credentials_blob_to_mutable_dict(credentials)
-    decrypted = decrypt_credentials(credentials=cast(MCPCredentials, creds_dict))
-    encrypted = encrypt_credentials(credentials=decrypted, encryption_key=new_master_key)
+    creds_dict: Final = _credentials_blob_to_mutable_dict(credentials)
+    decrypted: Final = decrypt_credentials(credentials=cast(MCPCredentials, creds_dict))
+    encrypted: Final = encrypt_credentials(credentials=decrypted, encryption_key=new_master_key)
     return safe_dumps(encrypted)
 
 
 async def rotate_mcp_server_credentials_master_key(prisma_client: PrismaClient, touched_by: str, new_master_key: str):
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps  # noqa: PLC0415  # avoids circular import
 
-    mcp_servers = await _db_find_mcp_server_rows(prisma_client)
+    mcp_servers: Final = await _db_find_mcp_server_rows(prisma_client)
 
     updated = 0
     for mcp_server in mcp_servers:
@@ -1023,7 +1018,7 @@ async def rotate_mcp_server_credentials_master_key(prisma_client: PrismaClient, 
         )
         updated += 1
 
-    oauth_clients: list[prisma_db_models.LiteLLM_MCPServerOAuthClient] = await MCPServerOAuthClientRepository(
+    oauth_clients: Final[list[prisma_db_models.LiteLLM_MCPServerOAuthClient]] = await MCPServerOAuthClientRepository(
         prisma_client
     ).table.find_many()
     oauth_updated = 0
@@ -1052,7 +1047,7 @@ def _decode_user_credential(stored: str) -> str | None:
     the credential without encryption.  Returns ``None`` when neither path
     yields a valid string.
     """
-    decrypted = decrypt_value_helper(
+    decrypted: Final = decrypt_value_helper(
         value=stored,
         key="mcp_user_credential",
         exception_type="debug",
@@ -1073,7 +1068,7 @@ def _decode_oauth_payload(stored: str) -> OAuthCredentialPayload | None:
     a JSON object with ``"type": "oauth2"``.  Plain BYOK credentials (which
     share the same column) decode to a non-JSON string and return ``None``.
     """
-    decoded = _decode_user_credential(stored)
+    decoded: Final = _decode_user_credential(stored)
     if decoded is None:
         return None
     parsed: OAuthCredentialPayload | None
@@ -1094,7 +1089,7 @@ async def rotate_mcp_user_credentials_master_key(prisma_client: PrismaClient, ne
     under the new master key.  Rows that are unreadable under both paths
     are logged and skipped so one corrupt row does not abort the rotation.
     """
-    rows = await _db_find_user_credential_rows(prisma_client)
+    rows: Final = await _db_find_user_credential_rows(prisma_client)
     rotated = 0
     skipped = 0
     for row in rows:
@@ -1134,7 +1129,7 @@ async def rotate_mcp_user_env_vars_master_key(prisma_client: PrismaClient, new_m
     skipped so one corrupt row does not abort the rotation nor overwrite values
     that may still be recoverable.
     """
-    rows = await _db_find_user_env_var_rows(prisma_client)
+    rows: Final = await _db_find_user_env_var_rows(prisma_client)
     rotated = 0
     skipped = 0
     for row in rows:
@@ -1178,7 +1173,7 @@ async def store_user_credential(
 ) -> None:
     """Store a user credential for a BYOK MCP server."""
 
-    encoded = encrypt_value_helper(credential)
+    encoded: Final = encrypt_value_helper(credential)
     await _db_upsert_user_credential_row(prisma_client, user_id, server_id, encoded)
 
 
@@ -1189,7 +1184,7 @@ async def get_user_credential(
 ) -> str | None:
     """Return credential for a user+server pair, or None."""
 
-    row = await _db_find_user_credential_row(prisma_client, user_id, server_id)
+    row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id)
     if row is None:
         return None
     return _decode_user_credential(row.credential_b64)
@@ -1201,7 +1196,7 @@ async def has_user_credential(
     server_id: str,
 ) -> bool:
     """Return True if the user has a stored credential for this server."""
-    row = await _db_find_user_credential_row(prisma_client, user_id, server_id)
+    row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id)
     return row is not None
 
 
@@ -1240,7 +1235,7 @@ async def store_user_oauth_credential(
     if expires_in is not None:
         expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
 
-    payload: OAuthCredentialPayload = {
+    payload: Final[OAuthCredentialPayload] = {
         "type": "oauth2",
         "access_token": access_token,
         "connected_at": datetime.now(timezone.utc).isoformat(),
@@ -1256,7 +1251,7 @@ async def store_user_oauth_credential(
     # Skip the guard when the caller knows the row is already an OAuth2 credential
     # (e.g. during token refresh), saving an extra DB round-trip.
     if not skip_byok_guard:
-        existing = await _db_find_user_credential_row(prisma_client, user_id, server_id)
+        existing: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id)
         if existing is not None and _decode_oauth_payload(existing.credential_b64) is None:
             # Existing row is either a BYOK secret or an OAuth2 row that no
             # longer decrypts (e.g. after a salt-key rotation).  In either
@@ -1268,7 +1263,7 @@ async def store_user_oauth_credential(
                 f"Refusing to overwrite."
             )
 
-    encoded = encrypt_value_helper(json.dumps(payload))
+    encoded: Final = encrypt_value_helper(json.dumps(payload))
     await _db_upsert_user_credential_row(prisma_client, user_id, server_id, encoded)
 
 
@@ -1281,7 +1276,7 @@ def is_oauth_credential_expired(cred: OAuthCredentialPayload, buffer_seconds: in
     buffer is also treated as expired, so callers can refresh proactively instead of
     handing back a token that may lapse mid-request.
     """
-    expires_at = cred.get("expires_at")
+    expires_at: Final = cred.get("expires_at")
     if not expires_at:
         return False
     try:
@@ -1300,7 +1295,7 @@ async def get_user_oauth_credential(
 ) -> OAuthCredentialPayload | None:
     """Return the decoded OAuth2 payload dict for a user+server pair, or None."""
 
-    row = await _db_find_user_credential_row(prisma_client, user_id, server_id)
+    row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id)
     if row is None:
         return None
     return _decode_oauth_payload(row.credential_b64)
@@ -1312,8 +1307,8 @@ async def list_user_oauth_credentials(
 ) -> list[OAuthCredentialPayload]:
     """Return all OAuth2 credential payloads for a user, tagged with server_id."""
 
-    rows = await _db_find_user_credential_rows(prisma_client, {"user_id": user_id})
-    results: list[OAuthCredentialPayload] = []
+    rows: Final = await _db_find_user_credential_rows(prisma_client, {"user_id": user_id})
+    results: Final[list[OAuthCredentialPayload]] = []
     for row in rows:
         payload = _decode_oauth_payload(row.credential_b64)
         if payload is None:
@@ -1326,7 +1321,7 @@ async def list_user_oauth_credentials(
 def _decrypted_credential_field(creds: dict[str, object], field: str) -> object:
     """Return one credential field decrypted with the global salt key; non-string and legacy
     plaintext values come back unchanged (decrypt_value_helper returns the original on failure)."""
-    value = creds.get(field)
+    value: Final = creds.get(field)
     if not isinstance(value, str):
         return value
     return decrypt_value_helper(
@@ -1349,7 +1344,7 @@ def mcp_oauth_token_identity(server: object) -> tuple[object, ...]:
     client_id/client_secret are compared decrypted: stored values are NaCl-encrypted with a fresh
     nonce on every write, so comparing ciphertext would flag every routine save as an identity
     change and purge tokens that are still valid."""
-    creds = getattr(server, "credentials", None)
+    creds: Final = getattr(server, "credentials", None)
     if isinstance(creds, str):
         try:
             parsed: dict[str, object] | None = json.loads(creds)
@@ -1357,7 +1352,7 @@ def mcp_oauth_token_identity(server: object) -> tuple[object, ...]:
             parsed = None
     else:
         parsed = creds
-    creds_dict: dict[str, object] = parsed if isinstance(parsed, dict) else {}
+    creds_dict: Final[dict[str, object]] = parsed if isinstance(parsed, dict) else {}
     return (
         getattr(server, "url", None),
         getattr(server, "spec_path", None),
@@ -1395,11 +1390,11 @@ async def purge_user_oauth_credentials_for_server(
 
     invalidate_token_cache is injectable for tests; it defaults to the manager's shared
     invalidate_user_oauth_token_cache, the single invalidation point for per-user tokens."""
-    rows = await _db_find_user_credential_rows(prisma_client, {"server_id": server_id})
-    oauth_rows = [row for row in rows if _decode_oauth_payload(row.credential_b64) is not None]
+    rows: Final = await _db_find_user_credential_rows(prisma_client, {"server_id": server_id})
+    oauth_rows: Final = [row for row in rows if _decode_oauth_payload(row.credential_b64) is not None]
     if not oauth_rows:
         return 0
-    deleted_count = await _user_credential_actions(prisma_client).delete_many(
+    deleted_count: Final = await _user_credential_actions(prisma_client).delete_many(
         where={"server_id": server_id, "user_id": {"in": [row.user_id for row in oauth_rows]}}
     )
     if invalidate_token_cache is None:
@@ -1438,11 +1433,11 @@ async def refresh_user_oauth_token(
     warning and returns ``None`` — the caller is responsible for clearing the
     stale credential and triggering re-authentication.
     """
-    refresh_token: str | None = cred.get("refresh_token")
-    token_url: str | None = getattr(server, "token_url", None)
-    server_id: str = getattr(server, "server_id", "")
-    client_id: str | None = getattr(server, "client_id", None)
-    client_secret: str | None = getattr(server, "client_secret", None)
+    refresh_token: Final[str | None] = cred.get("refresh_token")
+    token_url: Final[str | None] = getattr(server, "token_url", None)
+    server_id: Final[str] = getattr(server, "server_id", "")
+    client_id: Final[str | None] = getattr(server, "client_id", None)
+    client_secret: Final[str | None] = getattr(server, "client_secret", None)
 
     if not refresh_token:
         verbose_proxy_logger.debug(
@@ -1459,25 +1454,25 @@ async def refresh_user_oauth_token(
         return None
 
     try:
-        token_request = build_upstream_oauth2_token_request(
+        token_request: Final = build_upstream_oauth2_token_request(
             server,
             auth_method=getattr(server, "token_endpoint_auth_method", None),
             client_id=client_id,
             client_secret=client_secret,
         )
-        token_data: dict[str, str] = {
+        token_data: Final[dict[str, str]] = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
             **token_request.body,
         }
-        async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-        response = await async_client.post(
+        async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+        response: Final = await async_client.post(
             token_url,
             headers={"Accept": "application/json", **token_request.headers},
             data=token_data,
         )
         response.raise_for_status()
-        body: _OAuthTokenRefreshResponse = response.json()
+        body: Final[_OAuthTokenRefreshResponse] = response.json()
     except Exception as exc:
         verbose_proxy_logger.warning(
             "refresh_user_oauth_token: refresh request failed for user=%s server=%s: %s",
@@ -1487,7 +1482,7 @@ async def refresh_user_oauth_token(
         )
         return None
 
-    access_token: str | None = body.get("access_token")
+    access_token: Final[str | None] = body.get("access_token")
     if not access_token:
         verbose_proxy_logger.warning(
             "refresh_user_oauth_token: token response missing access_token for user=%s server=%s",
@@ -1497,16 +1492,16 @@ async def refresh_user_oauth_token(
         return None
 
     expires_in: int | None = None
-    raw_expires = body.get("expires_in")
+    raw_expires: Final = body.get("expires_in")
     try:
         expires_in = int(raw_expires) if raw_expires is not None else None
     except (TypeError, ValueError):
         pass
 
     # Rotate refresh token when the provider returns a new one
-    new_refresh_token: str | None = body.get("refresh_token") or refresh_token
+    new_refresh_token: Final[str | None] = body.get("refresh_token") or refresh_token
 
-    raw_scope = body.get("scope")
+    raw_scope: Final = body.get("scope")
     scopes: list[str] | None = (raw_scope.split() if isinstance(raw_scope, str) and raw_scope else None) or cred.get(
         "scopes"
     )
@@ -1559,7 +1554,7 @@ async def resolve_valid_user_oauth_token(
         from litellm.proxy.utils import get_prisma_client_or_throw
 
         prisma_client = get_prisma_client_or_throw("Database not connected. Cannot refresh OAuth token.")
-    refreshed = await refresh_user_oauth_token(
+    refreshed: Final = await refresh_user_oauth_token(
         prisma_client=prisma_client,
         user_id=user_id,
         server=server,
@@ -1584,7 +1579,7 @@ async def resolve_user_oauth_access_token(
     usable token; any error is swallowed to ``None`` so a transient failure reads as "not
     authorized" rather than raising.
     """
-    server_id: str | None = getattr(server, "server_id", None)
+    server_id: Final[str | None] = getattr(server, "server_id", None)
     if not user_id or not server_id:
         return None
     try:
@@ -1594,7 +1589,7 @@ async def resolve_user_oauth_access_token(
         )
 
         if prefetched_creds is None:
-            cached_token = await mcp_per_user_token_cache.get(user_id, server_id)
+            cached_token: Final = await mcp_per_user_token_cache.get(user_id, server_id)
             if cached_token is not None:
                 return cached_token
 
@@ -1624,9 +1619,9 @@ async def resolve_user_oauth_access_token(
             await mcp_per_user_token_cache.delete(user_id, server_id)
             return None
 
-        access_token: str = cred["access_token"]
+        access_token: Final[str] = cred["access_token"]
         if prefetched_creds is None:
-            ttl = _compute_per_user_token_ttl(server, _remaining_token_seconds(cred.get("expires_at")))
+            ttl: Final = _compute_per_user_token_ttl(server, _remaining_token_seconds(cred.get("expires_at")))
             await mcp_per_user_token_cache.set(user_id, server_id, access_token, ttl)
         return access_token
     except Exception as e:
@@ -1649,7 +1644,7 @@ def _remaining_token_seconds(expires_at: str | None) -> int | None:
         return None
     if exp_dt.tzinfo is None:
         exp_dt = exp_dt.replace(tzinfo=timezone.utc)
-    remaining = int((exp_dt - datetime.now(timezone.utc)).total_seconds())
+    remaining: Final = int((exp_dt - datetime.now(timezone.utc)).total_seconds())
     return remaining if remaining > 0 else None
 
 
@@ -1661,7 +1656,7 @@ async def get_active_submitted_mcp_server_ids_for_user(
     if not user_id:
         return []
 
-    rows = await _db_find_mcp_server_rows(
+    rows: Final = await _db_find_mcp_server_rows(
         prisma_client,
         {
             "submitted_by": user_id,
@@ -1677,8 +1672,8 @@ async def approve_mcp_server(
     touched_by: str,
 ) -> LiteLLM_MCPServerTable:
     """Set approval_status=active and record reviewed_at."""
-    now = datetime.now(timezone.utc)
-    updated = await _db_update_mcp_server_row(
+    now: Final = datetime.now(timezone.utc)
+    updated: Final = await _db_update_mcp_server_row(
         prisma_client,
         server_id,
         {
@@ -1687,7 +1682,7 @@ async def approve_mcp_server(
             "updated_by": touched_by,
         },
     )
-    table = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
+    table: Final = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
     decrypt_global_env_var_values(table.env_vars)
     return table
 
@@ -1699,16 +1694,16 @@ async def reject_mcp_server(
     review_notes: str | None = None,
 ) -> LiteLLM_MCPServerTable:
     """Set approval_status=rejected, record reviewed_at and review_notes."""
-    now = datetime.now(timezone.utc)
-    data: prisma_db_types.LiteLLM_MCPServerTableUpdateInput = {
+    now: Final = datetime.now(timezone.utc)
+    data: Final[prisma_db_types.LiteLLM_MCPServerTableUpdateInput] = {
         "approval_status": MCPApprovalStatus.rejected,
         "reviewed_at": now,
         "updated_by": touched_by,
     }
     if review_notes is not None:
         data["review_notes"] = review_notes
-    updated = await _db_update_mcp_server_row(prisma_client, server_id, data)
-    table = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
+    updated: Final = await _db_update_mcp_server_row(prisma_client, server_id, data)
+    table: Final = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
     decrypt_global_env_var_values(table.env_vars)
     return table
 
@@ -1726,13 +1721,13 @@ async def get_mcp_submissions(
         order={"submitted_at": "desc"},
         take=500,  # safety cap; paginate if needed in a future iteration
     )
-    items = [LiteLLM_MCPServerTable.model_validate(r.model_dump()) for r in rows]
+    items: Final = [LiteLLM_MCPServerTable.model_validate(r.model_dump()) for r in rows]
     for item in items:
         decrypt_global_env_var_values(item.env_vars)
 
-    pending = sum(1 for i in items if i.approval_status == MCPApprovalStatus.pending_review)
-    active = sum(1 for i in items if i.approval_status == MCPApprovalStatus.active)
-    rejected = sum(1 for i in items if i.approval_status == MCPApprovalStatus.rejected)
+    pending: Final = sum(1 for i in items if i.approval_status == MCPApprovalStatus.pending_review)
+    active: Final = sum(1 for i in items if i.approval_status == MCPApprovalStatus.active)
+    rejected: Final = sum(1 for i in items if i.approval_status == MCPApprovalStatus.rejected)
 
     return MCPSubmissionsSummary(
         total=len(items),
@@ -1748,7 +1743,7 @@ async def get_mcp_submissions(
 
 def _decode_user_env_vars(stored: str) -> dict[str, str]:
     """Decrypt a ``values_b64`` blob and parse it as a flat ``{name: value}`` dict."""
-    decrypted = decrypt_value_helper(
+    decrypted: Final = decrypt_value_helper(
         value=stored,
         key="mcp_user_env_vars",
         exception_type="debug",
@@ -1778,7 +1773,7 @@ async def get_user_env_vars(
     server_id: str,
 ) -> dict[str, str]:
     """Return the calling user's env var dict for ``server_id`` (empty if none)."""
-    row = await _user_env_var_actions(prisma_client).find_unique(
+    row: Final = await _user_env_var_actions(prisma_client).find_unique(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
     if row is None:
@@ -1795,10 +1790,10 @@ async def get_user_env_vars_bulk(
 
     Servers with no stored row are simply absent from the result.
     """
-    ids = list(server_ids)
+    ids: Final = list(server_ids)
     if not ids:
         return {}
-    rows = await _db_find_user_env_var_rows(prisma_client, {"user_id": user_id, "server_id": {"in": ids}})
+    rows: Final = await _db_find_user_env_var_rows(prisma_client, {"user_id": user_id, "server_id": {"in": ids}})
     return {row.server_id: _decode_user_env_vars(row.values_b64) for row in rows}
 
 
@@ -1817,20 +1812,20 @@ async def merge_user_env_vars(
     same user can't drop one update. Names outside ``allowed_names`` are pruned,
     so an admin retiring a user-scoped variable also clears its stored value.
     """
-    allowed = set(allowed_names)
-    lock_key = int.from_bytes(
+    allowed: Final = set(allowed_names)
+    lock_key: Final = int.from_bytes(
         hashlib.blake2b(f"{user_id}:{server_id}".encode(), digest_size=8).digest(),
         "big",
         signed=True,
     )
     async with prisma_client.db.tx() as tx:
         await tx.execute_raw("SELECT pg_advisory_xact_lock($1::bigint)", lock_key)
-        row: prisma_db_models.LiteLLM_MCPUserEnvVars | None = await tx.litellm_mcpuserenvvars.find_unique(
+        row: Final[prisma_db_models.LiteLLM_MCPUserEnvVars | None] = await tx.litellm_mcpuserenvvars.find_unique(
             where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
         )
-        existing = _decode_user_env_vars(row.values_b64) if row is not None else {}
-        merged = {k: v for k, v in {**existing, **updates}.items() if k in allowed}
-        encoded = encrypt_value_helper(json.dumps(merged))
+        existing: Final = _decode_user_env_vars(row.values_b64) if row is not None else {}
+        merged: Final = {k: v for k, v in {**existing, **updates}.items() if k in allowed}
+        encoded: Final = encrypt_value_helper(json.dumps(merged))
         await tx.litellm_mcpuserenvvars.upsert(
             where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
             data={

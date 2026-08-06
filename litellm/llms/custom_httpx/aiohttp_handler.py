@@ -1,8 +1,8 @@
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import aiohttp
-import httpx  # type: ignore
+import httpx
 from aiohttp import ClientSession, FormData
 
 import litellm
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-DEFAULT_TIMEOUT = 600
+DEFAULT_TIMEOUT: Final = 600
 
 
 class BaseLLMAIOHTTPHandler:
@@ -69,7 +69,7 @@ class BaseLLMAIOHTTPHandler:
             return self.connector
         elif self.transport and hasattr(self.transport, "client"):
             # Extract connector from transport if available
-            client = self.transport.client
+            client: Final = self.transport.client
             if callable(client):
                 # If client is a factory, we can't extract connector directly
                 return None
@@ -79,7 +79,7 @@ class BaseLLMAIOHTTPHandler:
 
     def _create_client_session_with_transport(self) -> ClientSession:
         """Create a new client session using transport or connector configuration."""
-        connector = self._get_connector()
+        connector: Final = self._get_connector()
 
         if self.transport and hasattr(self.transport, "_get_valid_client_session"):
             # Use transport's session creation if available
@@ -163,7 +163,7 @@ class BaseLLMAIOHTTPHandler:
         stream: bool = False,
     ) -> aiohttp.ClientResponse:
         """Common implementation across stream + non-stream calls. Meant to ensure consistent error-handling."""
-        max_retry_on_unprocessable_entity_error = provider_config.max_retry_on_unprocessable_entity_error
+        max_retry_on_unprocessable_entity_error: Final = provider_config.max_retry_on_unprocessable_entity_error
 
         response: aiohttp.ClientResponse | None = None
         async_client_session = self._get_async_client_session(dynamic_client_session=async_client_session)
@@ -208,7 +208,7 @@ class BaseLLMAIOHTTPHandler:
         content: Any = None,
         params: dict | None = None,
     ) -> httpx.Response:
-        max_retry_on_unprocessable_entity_error = provider_config.max_retry_on_unprocessable_entity_error
+        max_retry_on_unprocessable_entity_error: Final = provider_config.max_retry_on_unprocessable_entity_error
 
         response: httpx.Response | None = None
 
@@ -265,7 +265,7 @@ class BaseLLMAIOHTTPHandler:
         api_key: str | None = None,
         client: ClientSession | None = None,
     ):
-        _response = await self._make_common_async_call(
+        _response: Final = await self._make_common_async_call(
             async_client_session=client,
             provider_config=provider_config,
             api_base=api_base,
@@ -275,9 +275,9 @@ class BaseLLMAIOHTTPHandler:
             litellm_params=litellm_params,
             stream=False,
         )
-        _transformed_response = await provider_config.transform_response(  # type: ignore
+        _transformed_response: Final = await provider_config.transform_response(
             model=model,
-            raw_response=_response,  # type: ignore
+            raw_response=_response,
             model_response=model_response,
             logging_obj=logging_obj,
             api_key=api_key,
@@ -308,7 +308,7 @@ class BaseLLMAIOHTTPHandler:
         headers: dict | None = {},
         client: HTTPHandler | AsyncHTTPHandler | ClientSession | None = None,
     ):
-        provider_config = ProviderConfigManager.get_provider_chat_config(
+        provider_config: Final = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
         )
         if provider_config is None:
@@ -333,7 +333,7 @@ class BaseLLMAIOHTTPHandler:
             stream=stream,
         )
 
-        data = provider_config.transform_request(
+        data: Final = provider_config.transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -377,7 +377,7 @@ class BaseLLMAIOHTTPHandler:
             completion_stream, headers = self.make_sync_call(
                 provider_config=provider_config,
                 api_base=api_base,
-                headers=headers,  # type: ignore
+                headers=headers,
                 data=data,
                 model=model,
                 messages=messages,
@@ -399,7 +399,7 @@ class BaseLLMAIOHTTPHandler:
         else:
             sync_httpx_client = client
 
-        response = self._make_common_sync_call(
+        response: Final = self._make_common_sync_call(
             sync_httpx_client=sync_httpx_client,
             provider_config=provider_config,
             api_base=api_base,
@@ -443,7 +443,7 @@ class BaseLLMAIOHTTPHandler:
         if fake_stream is True:
             stream = False
 
-        response = self._make_common_sync_call(
+        response: Final = self._make_common_sync_call(
             sync_httpx_client=sync_httpx_client,
             provider_config=provider_config,
             api_base=api_base,
@@ -499,7 +499,7 @@ class BaseLLMAIOHTTPHandler:
             for key, value in data["data"].items():
                 form_data.add_field(key, value)
 
-        _response = await self._make_common_async_call(
+        _response: Final = await self._make_common_async_call(
             async_client_session=client,
             provider_config=provider_config,
             api_base=api_base,
@@ -557,7 +557,7 @@ class BaseLLMAIOHTTPHandler:
         if model is None:
             raise ValueError("model is required for non-openai image variations")
 
-        provider_config = ProviderConfigManager.get_provider_image_variation_config(
+        provider_config: Final = ProviderConfigManager.get_provider_image_variation_config(
             model=model,  # openai defaults to dall-e-2
             provider=LlmProviders(custom_llm_provider),
         )
@@ -584,7 +584,7 @@ class BaseLLMAIOHTTPHandler:
             api_base=api_base,
         )
 
-        data = provider_config.transform_request_image_variation(
+        data: Final = provider_config.transform_request_image_variation(
             model=model,
             image=image,
             optional_params=optional_params,
@@ -616,14 +616,14 @@ class BaseLLMAIOHTTPHandler:
                 litellm_params=litellm_params,
                 image=image,
                 provider_config=provider_config,
-            )  # type: ignore
+            )
 
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client()
         else:
             sync_httpx_client = client
 
-        response = self._make_common_sync_call(
+        response: Final = self._make_common_sync_call(
             sync_httpx_client=sync_httpx_client,
             provider_config=provider_config,
             api_base=api_base,
@@ -662,10 +662,10 @@ class BaseLLMAIOHTTPHandler:
         )
 
     def _handle_error(self, e: Exception, provider_config: BaseConfig):
-        status_code = getattr(e, "status_code", 500)
+        status_code: Final = getattr(e, "status_code", 500)
         error_headers = getattr(e, "headers", None)
         error_text = getattr(e, "text", str(e))
-        error_response = getattr(e, "response", None)
+        error_response: Final = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         if error_response and hasattr(error_response, "text"):

@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Final, Literal
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
@@ -27,7 +27,7 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
         if "agents/" in model:
             return "agents"
         # Detect model router by prefix (model_router/<name>) or by name containing "model-router"/"model_router"
-        model_lower = model.lower()
+        model_lower: Final = model.lower()
         if (
             "model_router/" in model_lower
             or "model-router/" in model_lower
@@ -132,7 +132,7 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
         Returns:
             The appropriate config instance
         """
-        azure_ai_route = AzureFoundryModelInfo.get_azure_ai_route(model)
+        azure_ai_route: Final = AzureFoundryModelInfo.get_azure_ai_route(model)
 
         if azure_ai_route == "model_router":
             from litellm.llms.azure_ai.azure_model_router.transformation import (

@@ -11,9 +11,10 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Final
 
-SNAPSHOT_FILE = Path(__file__).parent / "_lazy_openapi_snapshot.json"
-HTTP_METHOD_SUFFIXES = {
+SNAPSHOT_FILE: Final = Path(__file__).parent / "_lazy_openapi_snapshot.json"
+HTTP_METHOD_SUFFIXES: Final = {
     "delete",
     "get",
     "head",
@@ -96,8 +97,8 @@ def generate_snapshot() -> dict[str, dict]:
         except Exception as exc:
             sys.stderr.write(f"warning: skip {feat.name}: {exc}\n")
 
-    fragments: dict[str, dict] = {}
-    used_operation_ids: set[str] = set()
+    fragments: Final[dict[str, dict]] = {}
+    used_operation_ids: Final[set[str]] = set()
     for feat in LAZY_FEATURES:
         feat_routes = [r for r in app.routes if any(getattr(r, "path", "").startswith(p) for p in feat.path_prefixes)]
         if not feat_routes:
@@ -126,6 +127,6 @@ def generate_snapshot() -> dict[str, dict]:
 
 
 if __name__ == "__main__":
-    fragments = generate_snapshot()
+    fragments: Final = generate_snapshot()
     SNAPSHOT_FILE.write_text(json.dumps(fragments, indent=2, sort_keys=True) + "\n")
     sys.stdout.write(f"wrote {len(fragments)} feature fragments to {SNAPSHOT_FILE}\n")

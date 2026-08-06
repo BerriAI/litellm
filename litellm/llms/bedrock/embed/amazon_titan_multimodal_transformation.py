@@ -6,6 +6,8 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-mm.html
 """
 
+from typing import Final
+
 from litellm.types.llms.bedrock import (
     AmazonTitanMultimodalEmbeddingConfig,
     AmazonTitanMultimodalEmbeddingRequest,
@@ -39,15 +41,15 @@ class AmazonTitanMultimodalEmbeddingG1Config:
 
     def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanMultimodalEmbeddingRequest:
         ## check if b64 encoded str or not ##
-        is_encoded = is_base64_encoded(input)
+        is_encoded: Final = is_base64_encoded(input)
         if is_encoded:  # check if string is b64 encoded image or not
-            b64_str = get_base64_str(input)
+            b64_str: Final = get_base64_str(input)
             transformed_request = AmazonTitanMultimodalEmbeddingRequest(inputImage=b64_str)
         else:
             transformed_request = AmazonTitanMultimodalEmbeddingRequest(inputText=input)
 
         for k, v in inference_params.items():
-            transformed_request[k] = v  # type: ignore
+            transformed_request[k] = v
         return transformed_request
 
     def _transform_response(
@@ -57,9 +59,9 @@ class AmazonTitanMultimodalEmbeddingG1Config:
         batch_data: list[dict] | None = None,
     ) -> EmbeddingResponse:
         total_prompt_tokens = 0
-        transformed_responses: list[Embedding] = []
+        transformed_responses: Final[list[Embedding]] = []
         for index, response in enumerate(response_list):
-            _parsed_response = AmazonTitanMultimodalEmbeddingResponse(**response)  # type: ignore
+            _parsed_response = AmazonTitanMultimodalEmbeddingResponse(**response)
             transformed_responses.append(
                 Embedding(
                     embedding=_parsed_response["embedding"],
@@ -82,7 +84,7 @@ class AmazonTitanMultimodalEmbeddingG1Config:
                 image_count=image_count,
             )
 
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=total_prompt_tokens,
             completion_tokens=0,
             total_tokens=total_prompt_tokens,
