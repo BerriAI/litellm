@@ -274,21 +274,50 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  const normalizeListResponse = <T,>(payload: unknown): T[] => {
+    if (Array.isArray(payload)) {
+      return payload as T[];
+    }
+    if (payload && typeof payload === "object") {
+      const record = payload as Record<string, unknown>;
+      if (Array.isArray(record.data)) {
+        return record.data as T[];
+      }
+      if (Array.isArray(record.servers)) {
+        return record.servers as T[];
+      }
+      if (Array.isArray(record.toolsets)) {
+        return record.toolsets as T[];
+      }
+    }
+    return [];
+  };
+
   // Fetch MCP servers and toolsets
-  const loadMCPServers = async () => {
-    const userApiKey = apiKeySource === "session" ? accessToken : apiKey;
-    if (!userApiKey) return;
+  const loadMCPServers = async (overrideKey?: string | null) => {
+    const userApiKey =
+      overrideKey !== undefined ? overrideKey : apiKeySource === "session" ? accessToken : apiKey.trim();
+    if (!userApiKey) {
+      setMCPServers([]);
+      setMCPToolsets([]);
+      return;
+    }
 
     setIsLoadingMCPServers(true);
     try {
-      const [servers, toolsets] = await Promise.all([
+      const [serversPayload, toolsetsPayload] = await Promise.all([
         fetchMCPServers(userApiKey),
         fetchMCPToolsets(userApiKey).catch(() => []),
       ]);
-      setMCPServers(Array.isArray(servers) ? servers : servers.data || []);
-      setMCPToolsets(Array.isArray(toolsets) ? toolsets : []);
+      const servers = normalizeListResponse<MCPServer>(serversPayload);
+      const toolsets = normalizeListResponse<MCPToolset>(toolsetsPayload);
+      setMCPServers(servers);
+      setMCPToolsets(toolsets);
     } catch (error) {
       console.error("Error fetching MCP servers:", error);
+      setMCPServers([]);
+      setMCPToolsets([]);
+      NotificationsManager.error("Unable to load MCP servers for this key");
     } finally {
       setIsLoadingMCPServers(false);
     }
@@ -456,7 +485,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     if (!simplified) {
       void loadModels();
     }
-    void loadMCPServers();
+    void loadMCPServers(userApiKey);
 
     return () => {
       cancelled = true;
@@ -629,17 +658,24 @@ const ChatUI: React.FC<ChatUIProps> = ({
       });
     }
     for (const toolset of mcpToolsets) {
+      if (!toolset?.toolset_id) {
+        continue;
+      }
+      const toolCount = Array.isArray(toolset.tools) ? toolset.tools.length : 0;
       options.push({
         value: `toolset:${toolset.toolset_id}`,
-        label: toolset.toolset_name,
-        description: toolset.description || `Toolset (${toolset.tools.length} tools)`,
+        label: toolset.toolset_name || toolset.toolset_id,
+        description: toolset.description || `Toolset (${toolCount} tools)`,
       });
     }
     for (const server of mcpServers) {
+      if (!server?.server_id) {
+        continue;
+      }
       options.push({
         value: server.server_id,
         label: server.alias || server.server_name || server.server_id,
-        description: server.description,
+        description: server.description || undefined,
       });
     }
     return options;
@@ -858,7 +894,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
           const requestProxyBaseUrl =
             simplified && proxySettings
-              ? (proxySettings.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings.PROXY_BASE_URL ?? undefined)
+              ? proxySettings.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings.PROXY_BASE_URL ?? undefined
               : customProxyBaseUrl || undefined;
           await makeOpenAIChatCompletionRequest(
             apiChatHistory,
@@ -1509,23 +1545,45 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           : undefined
                       }
                       placeholder="Select MCP server"
-                      emptyText={isLoadingMCPServers ? "Loading..." : "No MCP servers"}
+                      emptyText={
+                        isLoadingMCPServers
+                          ? "Loading..."
+                          : mcpServerOptions.length === 0
+                            ? "No MCP servers configured"
+                            : "No matching MCP servers"
+                      }
                       disabled={!MCP_SUPPORTED_ENDPOINTS.has(endpointType as EndpointType) || isLoadingMCPServers}
                       onValueChange={(value) => handleMcpServersChange(value ? [value] : [])}
-                      options={mcpServerOptions}
+                      options={mcpServerOptions.map((option) => ({
+                        value: option.value,
+                        label: option.label,
+                        sublabel: option.description,
+                      }))}
                       className="mb-2"
                     />
                   ) : (
-                    <MultiSelect
-                      value={selectedMCPServers}
-                      onValueChange={handleMcpServersChange}
-                      placeholder="Select MCP servers"
-                      emptyText={isLoadingMCPServers ? "Loading..." : "No MCP servers"}
-                      disabled={!MCP_SUPPORTED_ENDPOINTS.has(endpointType as EndpointType)}
-                      loading={isLoadingMCPServers}
-                      options={mcpServerOptions}
-                      className="mb-2"
-                    />
+                    <div className="mb-2 space-y-1">
+                      <MultiSelect
+                        value={selectedMCPServers}
+                        onValueChange={handleMcpServersChange}
+                        placeholder="Select MCP servers"
+                        emptyText={
+                          isLoadingMCPServers
+                            ? "Loading..."
+                            : mcpServers.length === 0
+                              ? "No MCP servers configured"
+                              : "No matching MCP servers"
+                        }
+                        disabled={!MCP_SUPPORTED_ENDPOINTS.has(endpointType as EndpointType)}
+                        loading={isLoadingMCPServers}
+                        options={mcpServerOptions}
+                      />
+                      {!isLoadingMCPServers && mcpServers.length === 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          No MCP servers available for this key. Add servers on the MCP page.
+                        </p>
+                      )}
+                    </div>
                   )}
 
                   {endpointType === EndpointType.MCP &&

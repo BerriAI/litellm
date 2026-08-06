@@ -19,7 +19,14 @@ vi.mock("@/components/networking", () => ({
   getGuardrailsList: vi.fn().mockResolvedValue({ data: [] }),
   getPoliciesList: vi.fn().mockResolvedValue({ data: [] }),
   modelHubCall: vi.fn().mockResolvedValue({ data: [] }),
-  fetchMCPServers: vi.fn().mockResolvedValue([]),
+  fetchMCPServers: vi.fn().mockResolvedValue([
+    {
+      server_id: "mcp-server-1",
+      server_name: "Demo MCP Server",
+      alias: "Demo MCP Server",
+      description: "A demo MCP server",
+    },
+  ]),
   fetchMCPToolsets: vi.fn().mockResolvedValue([]),
   listMCPTools: vi.fn().mockResolvedValue({ tools: [] }),
   callMCPTool: vi.fn(),
@@ -234,6 +241,11 @@ describe("ChatUI", () => {
 
     await waitFor(() => {
       expect(mcpInput()).not.toBeDisabled();
+    });
+
+    await userEvent.setup().click(mcpInput());
+    await waitFor(() => {
+      expect(screen.getByText("Demo MCP Server")).toBeInTheDocument();
     });
   });
 
@@ -458,7 +470,7 @@ describe("ChatUI", () => {
 
     expect(screen.getByText("MCP Servers")).toBeInTheDocument();
 
-    const mcpInput = screen.getByLabelText("Select MCP servers");
+    const mcpInput = await screen.findByLabelText("Select MCP servers");
     expect(mcpInput).toBeInTheDocument();
     expect(mcpInput).not.toBeDisabled();
 
@@ -466,6 +478,7 @@ describe("ChatUI", () => {
 
     await waitFor(() => {
       expect(screen.getByText("All MCP Servers")).toBeInTheDocument();
+      expect(screen.getByText("Demo MCP Server")).toBeInTheDocument();
     });
   });
 });
