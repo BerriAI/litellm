@@ -857,7 +857,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
           const requestProxyBaseUrl =
             simplified && proxySettings
-              ? proxySettings.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings.PROXY_BASE_URL ?? undefined
+              ? (proxySettings.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings.PROXY_BASE_URL ?? undefined)
               : customProxyBaseUrl || undefined;
           await makeOpenAIChatCompletionRequest(
             apiChatHistory,
@@ -1205,7 +1205,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     }}
                   >
                     <SelectTrigger className="w-full" size="sm" aria-label="Virtual Key Source">
-                      <SelectValue />
+                      <SelectValue>{apiKeySource === "custom" ? "Virtual Key" : "Current UI Session"}</SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="session">Current UI Session</SelectItem>
@@ -1331,7 +1331,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         }}
                       >
                         <SelectTrigger className="w-full" size="sm" aria-label="Voice">
-                          <SelectValue />
+                          <SelectValue>
+                            {OPEN_AI_VOICE_SELECT_OPTIONS.find((voice) => voice.value === selectedVoice)?.label ??
+                              selectedVoice}
+                          </SelectValue>
                         </SelectTrigger>
                         <SelectContent>
                           {OPEN_AI_VOICE_SELECT_OPTIONS.map((voice) => (
