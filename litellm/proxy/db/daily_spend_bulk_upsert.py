@@ -46,7 +46,15 @@ DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingP
 # The unique constraint's columns after the entity id, in constraint order. A NULL can
 # never match itself in a unique index, so every one of these is normalized to '': the
 # conflict target has to be NULL-free or the row is re-inserted on every single flush.
-_KEY_COLUMNS: Final = ("date", "api_key", "model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint")
+_KEY_COLUMNS: Final = (
+    "date",
+    "api_key",
+    "model",
+    "model_group",
+    "custom_llm_provider",
+    "mcp_namespaced_tool_name",
+    "endpoint",
+)
 
 _COUNTER_COLUMNS: Final = (
     "prompt_tokens",
@@ -129,7 +137,6 @@ def _row_params(
     return (
         str(uuid.uuid4()),
         *key,
-        None if transaction.get("model_group") is None else _as_text(transaction.get("model_group")),
         *(_as_int(transaction.get(column)) for column in _COUNTER_COLUMNS),
         *(_as_float(transaction.get(column)) for column in _SPEND_COLUMNS),
         *((None if request_id is None else _as_text(request_id),) if table.carries_request_id else ()),
@@ -141,7 +148,6 @@ def _insert_columns(table: DailySpendTable) -> tuple[str, ...]:
         "id",
         table.entity_id_column,
         *_KEY_COLUMNS,
-        "model_group",
         *_COUNTER_COLUMNS,
         *_SPEND_COLUMNS,
         *(("request_id",) if table.carries_request_id else ()),

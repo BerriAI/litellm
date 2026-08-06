@@ -308,6 +308,7 @@ async def test_update_daily_spend_with_null_entity_id():
     assert _row_values(statement, "date") == ["2024-01-01"]
     assert _row_values(statement, "api_key") == ["test-api-key"]
     assert _row_values(statement, "model") == ["gpt-4"]
+    assert _row_values(statement, "model_group") == [""]
     assert _row_values(statement, "custom_llm_provider") == ["openai"]
     assert _row_values(statement, "mcp_namespaced_tool_name") == [""]
     assert _row_values(statement, "endpoint") == [""]
