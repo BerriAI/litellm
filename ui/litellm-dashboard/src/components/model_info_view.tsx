@@ -18,7 +18,12 @@ import {
   Button as TremorButton,
 } from "@tremor/react";
 import { Button, Form, Input, Modal, Select, Tooltip } from "antd";
-import { ROUTING_STRATEGY_OPTIONS, routingStrategyLabel } from "./add_model/routing_strategy_options";
+import {
+  formItemValidateJSONObject,
+  hasRoutingStrategyArgs,
+  ROUTING_STRATEGY_OPTIONS,
+  routingStrategyLabel,
+} from "./add_model/routing_strategy_options";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -819,7 +824,7 @@ export default function ModelInfoView({
                     tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
                     health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
                     routing_strategy: localModelData.model_info?.routing_strategy || "",
-                    routing_strategy_args: localModelData.model_info?.routing_strategy_args
+                    routing_strategy_args: hasRoutingStrategyArgs(localModelData.model_info?.routing_strategy_args)
                       ? JSON.stringify(localModelData.model_info.routing_strategy_args)
                       : "",
                     litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
@@ -1115,13 +1120,13 @@ export default function ModelInfoView({
                           <Form.Item
                             name="routing_strategy_args"
                             className="mb-0"
-                            rules={[{ validator: formItemValidateJSON }]}
+                            rules={[{ validator: formItemValidateJSONObject }]}
                           >
                             <Input placeholder='{"ttl": 3600}' />
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded-sm">
-                            {localModelData.model_info?.routing_strategy_args
+                            {hasRoutingStrategyArgs(localModelData.model_info?.routing_strategy_args)
                               ? JSON.stringify(localModelData.model_info.routing_strategy_args)
                               : "Not Set"}
                           </div>

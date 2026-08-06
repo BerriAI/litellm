@@ -6,7 +6,7 @@ import TextArea from "antd/es/input/TextArea";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Team } from "../key_team_helpers/key_list";
 import CacheControlSettings from "./cache_control_settings";
-import { ROUTING_STRATEGY_OPTIONS } from "./routing_strategy_options";
+import { formItemValidateJSONObject, ROUTING_STRATEGY_OPTIONS } from "./routing_strategy_options";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import { Tag } from "../tag_management/types";
 import { formItemValidateJSON } from "../../utils/textUtils";
@@ -197,7 +197,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               label="Routing Strategy Args"
               name="routing_strategy_args"
               className="mb-4"
-              rules={[{ validator: formItemValidateJSON }]}
+              rules={[{ validator: formItemValidateJSONObject }]}
               help="Optional JSON args for the selected strategy, e.g. latency window TTL."
             >
               <TextArea rows={2} placeholder='{"ttl": 3600}' />
