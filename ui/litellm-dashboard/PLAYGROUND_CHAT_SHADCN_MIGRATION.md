@@ -43,15 +43,17 @@ Migrate the Playground Chat tab and its rendered component tree from Ant Design,
 - [x] Migrate `AdditionalModelSettings.tsx` checkbox, numeric inputs, range sliders, popover, tooltip, and typography.
 - [x] Migrate `ChatMessageBubble.tsx`, `ChatImageRenderer.tsx`, and `ResponsesImageRenderer.tsx` icons.
 - [x] Migrate the Playground page tabs from Tremor to shadcn tabs.
+- [x] Migrate remaining `ChatUI.tsx` Ant Design and Tremor buttons, inputs, dialogs, popovers, tool selectors, loading indicators, uploads, typography, cards, and icons.
+- [x] Migrate MCP server multi/single selects in `ChatUI.tsx` to `MultiSelect` / `SearchSelect`.
+- [x] Update `ChatUI.test.tsx` off Ant Design selectors onto combobox/search-select queries.
 
 ## Remaining Migration
 
 - [ ] Migrate `MCPToolArgumentsForm.tsx` form controls.
 - [ ] Migrate `ByokCredentialModal.tsx` to shadcn `Dialog`, inputs, and switch.
 - [ ] Migrate `RealtimePlayground.tsx` buttons, inputs, selects, typography, and icons.
-- [ ] Migrate remaining `ChatUI.tsx` Ant Design and Tremor buttons, inputs, dialogs, popovers, tool selectors, loading indicators, uploads, typography, cards, and icons.
 - [ ] Migrate `AgentBuilderView.tsx` if it remains in the Chat tab tree.
-- [ ] Remove every `antd`, `@ant-design/icons`, and `@tremor/react` import from the Chat tab render tree.
+- [ ] Remove every `antd`, `@ant-design/icons`, and `@tremor/react` import from the Chat tab render tree (RealtimePlayground, AgentBuilderView, MCP form/modal, and Compare tab are still on legacy UI).
 
 ## Behavior And Quality Gaps
 
@@ -87,4 +89,6 @@ Migrate the Playground Chat tab and its rendered component tree from Ant Design,
   - `CodeInterpreterOutput.test.tsx`
   - `AdditionalModelSettings.test.tsx`
   - `ReasoningContent.test.tsx`
-- Remaining Ant Design / Tremor usage is concentrated in `ChatUI.tsx`, `RealtimePlayground.tsx`, image renderers, `ChatMessageBubble.tsx`, and `AgentBuilderView.tsx`.
+  - `ChatUI.test.tsx` (12 tests)
+- `ChatUI.tsx` has no remaining `antd`, `@ant-design/icons`, or `@tremor/react` imports.
+- Remaining Ant Design usage under the Playground Chat tree is mainly `RealtimePlayground.tsx`, `AgentBuilderView.tsx`, `MCPToolArgumentsForm.tsx`, and `ByokCredentialModal.tsx`.
