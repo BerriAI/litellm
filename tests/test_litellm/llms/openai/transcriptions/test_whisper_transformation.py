@@ -48,6 +48,56 @@ class TestWhisperTransformRequestResponseFormat:
         assert data["response_format"] == "verbose_json"
 
 
+class TestWhisperTransformTimestampGranularities:
+    """
+    OpenAI's multipart form API expects array params as repeated bracketed
+    fields (``timestamp_granularities[]``). If the list is sent under the bare
+    ``timestamp_granularities`` key, OpenAI keeps only the last value, so a
+    combined ``["segment", "word"]`` request silently returns one granularity.
+    """
+
+    def _transform(self, optional_params: dict) -> dict:
+        config = OpenAIWhisperAudioTranscriptionConfig()
+        audio_file = io.BytesIO(b"fake audio")
+        audio_file.name = "test.wav"
+        result = config.transform_audio_transcription_request(
+            model="whisper-1",
+            audio_file=audio_file,
+            optional_params=optional_params,
+            litellm_params={},
+        )
+        return result.data
+
+    def test_multi_value_list_uses_bracketed_key(self):
+        """A multi-value list is sent under the bracketed key so both are honored."""
+        data = self._transform(
+            {
+                "response_format": "verbose_json",
+                "timestamp_granularities": ["segment", "word"],
+            }
+        )
+        assert data["timestamp_granularities[]"] == ["segment", "word"]
+        # The bare key must not be present, otherwise OpenAI drops all but the last.
+        assert "timestamp_granularities" not in data
+
+    def test_single_value_list_uses_bracketed_key(self):
+        """A single-value list is also sent under the bracketed key for consistency."""
+        data = self._transform(
+            {
+                "response_format": "verbose_json",
+                "timestamp_granularities": ["word"],
+            }
+        )
+        assert data["timestamp_granularities[]"] == ["word"]
+        assert "timestamp_granularities" not in data
+
+    def test_absent_granularities_not_added(self):
+        """When timestamp_granularities is not provided, no bracketed key is added."""
+        data = self._transform({"response_format": "verbose_json"})
+        assert "timestamp_granularities[]" not in data
+        assert "timestamp_granularities" not in data
+
+
 class TestWhisperTransformResponse:
     def _make_response(self, *, text: str, content_type: str, is_json: bool):
         mock = MagicMock()
