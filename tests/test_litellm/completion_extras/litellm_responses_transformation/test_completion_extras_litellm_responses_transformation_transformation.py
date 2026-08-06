@@ -1,8 +1,9 @@
 import json
 import os
 import sys
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, patch
 
+import httpx
 import pytest
 
 sys.path.insert(
