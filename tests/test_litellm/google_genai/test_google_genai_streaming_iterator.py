@@ -1,5 +1,6 @@
 import json
-from unittest.mock import MagicMock
+import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -126,3 +127,51 @@ async def test_async_streaming_iterator_forwards_sse_comment_events():
 
     chunk = await iterator.__anext__()
     assert chunk == b": keepalive\n\n"
+
+
+def test_streaming_iterator_import_does_not_pull_in_proxy():
+    """SDK streaming must not import litellm.proxy at module scope.
+
+    A plain `pip install litellm` has no proxy extras (fastapi, backoff), so a
+    module-level proxy import here crashes google_genai streaming (issue #36043).
+    """
+    import importlib
+
+    import litellm.google_genai.streaming_iterator as mod
+
+    src = importlib.util.find_spec(mod.__name__).origin
+    with open(src) as f:
+        top_level = "".join(
+            line for line in f if not line.startswith((" ", "\t"))
+        )
+    assert "litellm.proxy" not in top_level
+
+
+@pytest.mark.asyncio
+async def test_async_stream_completes_when_proxy_logging_unavailable():
+    """End-of-stream cost logging must degrade, not kill the stream (issue #36043)."""
+    mock_response = MagicMock()
+
+    async def _aiter_lines():
+        yield 'data: {"text":"hi"}'
+        yield ""
+
+    mock_response.aiter_lines = _aiter_lines
+
+    iterator = AsyncGoogleGenAIGenerateContentStreamingIterator(
+        response=mock_response,
+        model="gemini-test",
+        logging_obj=MagicMock(spec=LiteLLMLoggingObj),
+        generate_content_provider_config=MagicMock(),
+        litellm_metadata={},
+        custom_llm_provider="gemini",
+    )
+
+    blocked = {
+        "litellm.proxy.pass_through_endpoints.streaming_handler": None,
+        "litellm.proxy.pass_through_endpoints.success_handler": None,
+    }
+    with patch.dict(sys.modules, blocked):
+        chunks = [chunk async for chunk in iterator]
+
+    assert chunks == [b'data: {"text":"hi"}\n\n']
