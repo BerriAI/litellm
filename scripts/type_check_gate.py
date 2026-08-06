@@ -63,7 +63,7 @@ import sys
 import tempfile
 import zipfile
 from collections import Counter
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Final, NamedTuple
 
@@ -73,6 +73,7 @@ PYRIGHT_CONFIG = REPO_ROOT / "pyrightconfig.json"
 UV_LOCK = REPO_ROOT / "uv.lock"
 DEFAULT_BASE = "origin/litellm_internal_staging"
 CACHE_FILE_PREFIX = "basedpyright-base-"
+CACHE_KEEP_ENTRIES = 8
 ARTIFACT_NAME_PREFIX = "basedpyright-counts-"
 GH_TIMEOUT_SECONDS = 10
 
@@ -367,16 +368,30 @@ def counts_payload(base_point: str, counts: Mapping[str, int]) -> str:
     )
 
 
+def entry_recency(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def evicted_beyond_cap(entries: Sequence[Path], keep: int) -> tuple[Path, ...]:
+    newest_first: Final = sorted(entries, key=entry_recency, reverse=True)
+    return tuple(newest_first[keep:])
+
+
 def store_counts(
     directory: Path, path: Path, base_point: str, counts: Mapping[str, int]
 ) -> None:
     directory.mkdir(parents=True, exist_ok=True)
-    for stale in directory.glob(f"{CACHE_FILE_PREFIX}*.json"):
-        if stale != path:
-            stale.unlink(missing_ok=True)
     scratch = scratch_path(path)
     scratch.write_text(counts_payload(base_point, counts))
     scratch.replace(path)
+    siblings: Final = tuple(
+        entry for entry in directory.glob(f"{CACHE_FILE_PREFIX}*.json") if entry != path
+    )
+    for stale in evicted_beyond_cap(siblings, CACHE_KEEP_ENTRIES - 1):
+        stale.unlink(missing_ok=True)
 
 
 def parse_origin_slug(url: str) -> str | None:
