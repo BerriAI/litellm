@@ -14,7 +14,7 @@ def _coerce_interval(ping_interval_seconds: float | str | None) -> float | None:
         return None
     try:
         interval: Final = float(ping_interval_seconds)
-    except ValueError:
+    except (TypeError, ValueError):
         return None
     if not math.isfinite(interval) or interval <= 0:
         return None
