@@ -4,6 +4,7 @@ import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { VectorStoreSearchResponse } from "../chat_ui/types";
 import { getProxyBaseUrl } from "@/components/networking";
 import { MCPServer, MCPToolset, type MCPEvent } from "@/components/mcp_tools/types";
+import { buildMcpToolBlocks } from "./mcp_tool_blocks";
 
 const completionAsSingleChunk = (completion: ChatCompletion): ChatCompletionChunk =>
   ({
@@ -81,48 +82,12 @@ export async function makeOpenAIChatCompletionRequest(
     } = {};
     let mcpListToolsProcessed = false;
 
-    // Build tools array
-    const tools: any[] = [];
-
-    // Add MCP servers if selected
-    if (selectedMCPServers && selectedMCPServers.length > 0) {
-      if (selectedMCPServers.includes("__all__")) {
-        // All MCP Servers selected
-        tools.push({
-          type: "mcp",
-          server_label: "litellm",
-          server_url: "litellm_proxy/mcp",
-          require_approval: "never",
-        });
-      } else {
-        // Individual servers/toolsets selected - create one entry per item
-        selectedMCPServers.forEach((serverId) => {
-          if (serverId.startsWith("toolset:")) {
-            const toolsetId = serverId.slice("toolset:".length);
-            const toolset = mcpToolsets?.find((t) => t.toolset_id === toolsetId);
-            const toolsetName = toolset?.toolset_name || toolsetId;
-            tools.push({
-              type: "mcp",
-              server_label: toolsetName,
-              server_url: `litellm_proxy/mcp/${encodeURIComponent(toolsetName)}`,
-              require_approval: "never",
-            });
-          } else {
-            const server = mcpServers?.find((s) => s.server_id === serverId);
-            const serverName = server?.alias || server?.server_name || serverId;
-            const allowedTools = mcpServerToolRestrictions?.[serverId] || [];
-
-            tools.push({
-              type: "mcp",
-              server_label: "litellm",
-              server_url: `litellm_proxy/mcp/${serverName}`,
-              require_approval: "never",
-              ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
-            });
-          }
-        });
-      }
-    }
+    const tools = buildMcpToolBlocks({
+      selectedMCPServers,
+      mcpServers,
+      mcpToolsets,
+      mcpServerToolRestrictions,
+    });
 
     const requestBody = {
       model: selectedModel,
