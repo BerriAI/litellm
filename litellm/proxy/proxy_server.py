@@ -1111,6 +1111,7 @@ async def proxy_startup_event(app: FastAPI):
                 prisma_client=prisma_client,
             )
         )
+    ProxyStartupEvent._warn_budget_without_db(prisma_client=prisma_client)
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     if prisma_client is not None:
@@ -7808,6 +7809,19 @@ def giveup(e):
 
 
 class ProxyStartupEvent:
+    @staticmethod
+    def _warn_budget_without_db(prisma_client: PrismaClient | None) -> None:
+        if prisma_client is not None or not litellm.max_budget or litellm.max_budget <= 0:
+            return
+
+        verbose_proxy_logger.warning(
+            "A proxy-wide budget (litellm.max_budget=%s) is configured but no database is connected, "
+            "so the budget will NOT be enforced and requests will never be blocked. Set DATABASE_URL or "
+            "general_settings.database_url and restart. Redis and fail_closed_budget_enforcement do not "
+            "cover the proxy-wide budget because there is no global spend counter; Redis alone is not a substitute.",
+            litellm.max_budget,
+        )
+
     @classmethod
     def _initialize_startup_logging(
         cls,

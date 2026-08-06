@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
 from typing import List, Optional, Union
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -29,8 +30,10 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
+import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import (
+    ProxyStartupEvent,
     _initialize_shared_aiohttp_session,
     _resolve_pydantic_type,
     _resolve_typed_dict_type,
@@ -728,3 +731,33 @@ def test_otel_global_provider_published_after_callback_init():
         "preset logger will not exist yet and a second generic logger will own "
         "the global provider, orphaning gen-ai spans"
     )
+
+
+def test_startup_warns_for_global_budget_without_database(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_budget_without_db(prisma_client=None)
+
+    assert "litellm.max_budget=100.0" in caplog.text
+    assert "will NOT be enforced" in caplog.text
+    assert "requests will never be blocked" in caplog.text
+
+
+def test_startup_does_not_warn_for_global_budget_with_database(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_budget_without_db(prisma_client=MagicMock())
+
+    assert "litellm.max_budget" not in caplog.text
+
+
+@pytest.mark.parametrize("max_budget", [0, None])
+def test_startup_does_not_warn_without_global_budget(monkeypatch, caplog, max_budget):
+    monkeypatch.setattr(litellm, "max_budget", max_budget)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_budget_without_db(prisma_client=None)
+
+    assert "litellm.max_budget" not in caplog.text
