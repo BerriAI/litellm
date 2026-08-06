@@ -3,7 +3,7 @@
     "limit": 29204
   },
   "reportArgumentType": {
-    "limit": 2635
+    "limit": 2634
   },
   "reportAssignmentType": {
     "limit": 329
@@ -24,7 +24,7 @@
     "limit": 19
   },
   "reportExplicitAny": {
-    "limit": 9227
+    "limit": 9226
   },
   "reportFunctionMemberAccess": {
     "limit": 7
@@ -105,7 +105,7 @@
     "limit": 113
   },
   "reportUnknownMemberType": {
-    "limit": 40340
+    "limit": 40339
   },
   "reportUnknownParameterType": {
     "limit": 20293
@@ -117,13 +117,13 @@
     "limit": 122
   },
   "reportUnnecessaryComparison": {
-    "limit": 703
+    "limit": 702
   },
   "reportUnnecessaryContains": {
     "limit": 5
   },
   "reportUnnecessaryIsInstance": {
-    "limit": 865
+    "limit": 864
   },
   "reportUntypedBaseClass": {
     "limit": 72

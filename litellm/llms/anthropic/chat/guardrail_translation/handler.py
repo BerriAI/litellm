@@ -574,22 +574,6 @@ class AnthropicMessagesHandler(BaseTranslation):
         data: Final = source.get("data")
         return (data,) if data else ()
 
-    def _extract_input_tools(
-        self,
-        tools: list[dict[str, Any]],
-        tools_to_check: list[ChatCompletionToolParam],
-    ) -> None:
-        """
-        Extract tools from a message.
-        """
-        ## CHECK FOR TOOLS
-        if tools is not None and isinstance(tools, list):
-            # TRANSFORM ANTHROPIC TOOLS TO OPENAI TOOLS
-            openai_tools: Final = self.adapter.translate_anthropic_tools_to_openai(
-                tools=cast(list[AllAnthropicToolsValues], tools)
-            )
-            tools_to_check.extend(openai_tools)
-
     async def _apply_guardrail_responses_to_input(
         self,
         messages: list[dict[str, Any]],
