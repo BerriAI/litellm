@@ -1186,6 +1186,7 @@ async def test_track_cost_callback_enriches_user_id_for_mcp_style_metadata():
         ("pass_through_endpoint", True),
         ("llm_passthrough_route", True),
         ("allm_passthrough_route", True),
+        ("aretrieve_batch", True),
         ("acompletion", False),
         ("call_mcp_tool", False),
         (None, False),
@@ -1194,7 +1195,14 @@ async def test_track_cost_callback_enriches_user_id_for_mcp_style_metadata():
 def test_should_track_cost_callback_pass_through_without_owner(call_type, expected):
     """Regression for LIT-3782: unauthenticated pass-through requests (auth=false)
     carry no key/user/team/end-user, yet must still be tracked so they land in
-    LiteLLM_SpendLogs. Other call types with no owner stay untracked."""
+    LiteLLM_SpendLogs. Other call types with no owner stay untracked.
+
+    aretrieve_batch is included for the same reason: CheckBatchCost's synthetic
+    logging_obj for a completed managed batch only ever carries
+    user_api_key_user_id/user_api_key_team_id from LiteLLM_ManagedObjectTable,
+    both of which are None for a batch created with the master key or a
+    team-less key (the table never stores the raw key hash). Before this fix,
+    such a batch's cost silently never reached LiteLLM_SpendLogs."""
     assert (
         _should_track_cost_callback(
             user_api_key=None,
@@ -1211,6 +1219,7 @@ def test_should_track_cost_callback_pass_through_without_owner(call_type, expect
     "call_type, expect_spend_log",
     [
         ("pass_through_endpoint", True),
+        ("aretrieve_batch", True),
         ("acompletion", False),
         (None, False),
     ],
@@ -1223,7 +1232,11 @@ async def test_track_cost_callback_logs_unauthenticated_pass_through_request(
     cost callback with no key/user/team/end-user. Before the fix the spend-log
     write was skipped and the request never appeared in request/usage logs. It
     must now be written for pass-through call types while other unauthenticated
-    calls remain skipped."""
+    calls remain skipped.
+
+    aretrieve_batch is included because CheckBatchCost's completed-batch cost
+    event reaches this same callback with no attributable key/user/team when
+    the batch was created with the master key or a team-less key."""
     logger = _ProxyDBLogger()
 
     kwargs = {

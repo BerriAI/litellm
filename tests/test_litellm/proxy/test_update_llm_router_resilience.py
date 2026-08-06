@@ -115,8 +115,10 @@ class TestDeleteDeploymentResilience:
     """Test _delete_deployment handles get_config failures gracefully."""
 
     @pytest.mark.asyncio
-    async def test_returns_zero_when_get_config_times_out(self):
-        """Should return 0 (no deletions) when get_config fails, not raise."""
+    async def test_returns_none_when_get_config_times_out(self):
+        """Should return None (no reconcile ran, desired set unknown) when get_config
+        fails, not raise. A caller judging its own reload must not read that as "the db
+        wants nothing" and blame the reload for every model it serves."""
         proxy_config = ProxyConfig()
 
         db_models = [_make_db_model("gpt-5.1", "db-id-1")]
@@ -136,8 +138,8 @@ class TestDeleteDeploymentResilience:
         ):
             result = await proxy_config._delete_deployment(db_models=db_models)
 
-            # Should safely return 0 instead of raising
-            assert result == 0
+            # Should safely return None instead of raising
+            assert result is None
             # Should NOT have deleted any deployments
             mock_router.delete_deployment.assert_not_called()
 
@@ -175,5 +177,8 @@ class TestDeleteDeploymentResilience:
             result = await proxy_config._delete_deployment(db_models=db_models)
 
             # "stale-id" should have been deleted (not in db_models or config)
-            assert result == 1
             mock_router.delete_deployment.assert_called_once_with(id="stale-id")
+            assert result == frozenset({"db-id-1", "config-id-1"}), (
+                "the returned set must be what the db + config still want, so a caller can "
+                f"tell that eviction apart from a deployment that went missing; got {result}"
+            )

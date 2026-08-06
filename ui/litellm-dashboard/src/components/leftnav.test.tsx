@@ -1,5 +1,5 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
 
@@ -19,6 +19,7 @@ const { mockUseAuthorized, mockUseOrganizations } = vi.hoisted(() => {
     userId: "test-user-id",
     accessToken: "test-access-token",
     userRole: "admin",
+    isViewOnly: false,
     token: "test-token",
     userEmail: "test@example.com",
     premiumUser: false,
@@ -73,12 +74,28 @@ vi.mock("@/app/(dashboard)/hooks/useLogout", () => ({
 const collectNavKeys = (): string[] =>
   menuGroups.flatMap((group) => group.items.flatMap((item) => [item.key, ...(item.children ?? []).map((c) => c.key)]));
 
+// Every place a page id appears in the nav, as "GROUP" for a top-level item or
+// "GROUP > parentKey" for a child.
+const placementsOf = (page: string): string[] =>
+  menuGroups.flatMap((group) => [
+    ...group.items.filter((item) => item.page === page).map(() => group.groupLabel),
+    ...group.items.flatMap((item) =>
+      (item.children ?? []).filter((child) => child.page === page).map(() => `${group.groupLabel} > ${item.key}`),
+    ),
+  ]);
+
 describe("Sidebar (leftnav)", () => {
   const defaultProps = {
     setPage: vi.fn(),
     defaultSelectedKey: "api-keys",
     collapsed: false,
   };
+
+  it("should link the logo to the UI home route rather than the proxy origin", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByRole("link", { name: /litellm home/i })).toHaveAttribute("href", "/ui");
+  });
 
   it("renders all top-level (non-nested) tabs for admin", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
@@ -123,6 +140,13 @@ describe("Sidebar (leftnav)", () => {
       expect(screen.getByText("Search Tools")).toBeInTheDocument();
     });
   });
+  it("keeps Router Settings as a single Settings child", () => {
+    // Router Settings is admin-only, so getAvailablePages() filters it out entirely and the
+    // page_utils duplicate-key guard cannot see it. Walk menuGroups directly, otherwise a
+    // stray duplicate placement ships silently.
+    expect(placementsOf("router-settings")).toEqual(["SETTINGS > settings"]);
+  });
+
   it("has no duplicate keys among all menu items and their children", () => {
     // React keys must be unique across the whole nav config, otherwise the
     // active-item highlight and group expansion collide.
@@ -133,12 +157,15 @@ describe("Sidebar (leftnav)", () => {
 
   describe("Admin Viewer parity", () => {
     // Admin Viewer follows a "read parity with Proxy Admin, no writes, no
-    // cost-incurring actions" rule. Playground stays hidden (incurs LLM
-    // cost); Models + Endpoints and Agents must be visible read-only.
+    // cost-incurring actions" rule. The session hook presents the viewer as
+    // an admin (`userRole: "admin"`) with `isViewOnly: true`; Playground
+    // stays hidden (incurs LLM cost) via the isViewOnly flag, while every
+    // admin page (Models + Endpoints, Agents, Logs, ...) is visible read-only.
     const adminViewerAuth = {
       userId: "admin-viewer-user-id",
       accessToken: "test-access-token",
-      userRole: "admin_viewer",
+      userRole: "admin",
+      isViewOnly: true,
       token: "test-token",
       userEmail: "viewer@example.com",
       premiumUser: false,
@@ -175,6 +202,47 @@ describe("Sidebar (leftnav)", () => {
       mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
       expect(screen.getByText("Logs")).toBeInTheDocument();
+    });
+  });
+
+  describe("capability-gated Tools children", () => {
+    const internalAuth = {
+      userId: "internal-user-id",
+      accessToken: "test-access-token",
+      userRole: "internal",
+      token: "test-token",
+      userEmail: "internal@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    };
+
+    afterEach(() => {
+      mockUseAuthorized.mockReset();
+    });
+
+    it("should hide Tool Policies from internal users while keeping other Tools children", async () => {
+      mockUseAuthorized.mockReturnValue(internalAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Tools"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Search Tools")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Tool Policies")).not.toBeInTheDocument();
+    });
+
+    it("should show Tool Policies to admins", async () => {
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Tools"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Tool Policies")).toBeInTheDocument();
+      });
     });
   });
 
@@ -237,6 +305,24 @@ describe("Sidebar (leftnav)", () => {
     expect(link!.querySelector("svg")).not.toBeNull();
     expect(label).toHaveClass("group-data-[collapsed=true]/sidebar:hidden");
   });
+
+  it("shows Cost Optimization with a Beta badge and no feature-flag gate", () => {
+    const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI={false} />);
+
+    const costOptimization = container.querySelector('a[href*="cost-optimization"]');
+    expect(costOptimization).not.toBeNull();
+    expect(costOptimization!.textContent).toContain("Cost Optimization");
+    expect(costOptimization!.textContent).toContain("Beta");
+
+    expect(container.querySelector('a[href*="projects"]')).toBeNull();
+  });
+
+  it("keeps a readable collapsed-rail tooltip for items whose label carries a badge", () => {
+    const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI collapsed />);
+
+    expect(container.querySelector('a[href*="cost-optimization"]')).toHaveAttribute("title", "Cost Optimization");
+    expect(container.querySelector('a[href*="projects"]')).toHaveAttribute("title", "Projects");
+  });
 });
 
 describe("getBreadcrumb", () => {
@@ -247,6 +333,10 @@ describe("getBreadcrumb", () => {
 
   it("resolves a nested child page to its parent section", () => {
     expect(getBreadcrumb("search-tools")).toEqual({ section: "AI Gateway", title: "Search Tools" });
+  });
+
+  it("resolves router-settings under the Settings section", () => {
+    expect(getBreadcrumb("router-settings")).toEqual({ section: "Settings", title: "Router Settings" });
   });
 
   it("falls back to a prettified title with no section for unknown pages", () => {

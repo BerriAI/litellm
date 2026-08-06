@@ -196,32 +196,28 @@ vi.mock("lucide-react", async () => {
 });
 
 // Heavy children -> async factories & local React
-vi.mock("../organisms/RegenerateKeyModal", async () => {
-  const React = await import("react");
+vi.mock("../organisms/RegenerateKeyModal", () => {
   function RegenerateKeyModal() {
     return null;
   }
   (RegenerateKeyModal as any).displayName = "RegenerateKeyModal";
   return { RegenerateKeyModal };
 });
-vi.mock("../object_permissions_view", async () => {
-  const React = await import("react");
+vi.mock("../object_permissions_view", () => {
   function ObjectPermissionsView() {
     return null;
   }
   (ObjectPermissionsView as any).displayName = "ObjectPermissionsView";
   return { __esModule: true, default: ObjectPermissionsView };
 });
-vi.mock("../logging_settings_view", async () => {
-  const React = await import("react");
+vi.mock("../logging_settings_view", () => {
   function LoggingSettingsView() {
     return null;
   }
   (LoggingSettingsView as any).displayName = "LoggingSettingsView";
   return { __esModule: true, default: LoggingSettingsView };
 });
-vi.mock("../common_components/AutoRotationView", async () => {
-  const React = await import("react");
+vi.mock("../common_components/AutoRotationView", () => {
   function AutoRotationView() {
     return null;
   }
@@ -262,6 +258,13 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
 // Mock useResetKeySpend hook (requires QueryClientProvider which is not available in this test)
 vi.mock("@/app/(dashboard)/hooks/keys/useResetKeySpend", () => ({
   useResetKeySpend: vi.fn().mockReturnValue({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/keys/useSetKeyBlockedState", () => ({
+  useSetKeyBlockedState: vi.fn().mockReturnValue({
     mutate: vi.fn(),
     isPending: false,
   }),
@@ -443,6 +446,66 @@ describe("KeyInfoView handleKeyUpdate guardrails guard", () => {
     expect(sentPayload.prompts).toEqual(["fast"]);
     expect(sentPayload.metadata?.guardrails).toEqual(["gr-1"]);
     expect(sentPayload.key).toBe("tok_123");
+  });
+});
+
+describe("KeyInfoView handleKeyUpdate mcp_toolsets", () => {
+  it("should forward the toolsets the edit form supplies into object_permission", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      max_budget: 40000,
+      mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: ["ts-1"] },
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.object_permission.mcp_toolsets).toEqual(["ts-1"]);
+    expect(sentPayload.max_budget).toBe(40000);
+  });
+});
+
+describe("KeyInfoView handleKeyUpdate budget_duration", () => {
+  it("should send a canonical budget_duration through unchanged", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      budget_duration: "30d",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.budget_duration).toBe("30d");
+  });
+
+  it("should heal a legacy word-form budget_duration to canonical", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      budget_duration: "monthly",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.budget_duration).toBe("30d");
   });
 });
 
