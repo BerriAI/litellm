@@ -463,7 +463,7 @@ class DeploymentAffinityCheck(CustomLogger):
             self._get_session_id_from_request_kwargs(request_kwargs=kwargs) if enable_session_id else None
         )
 
-        if (enable_user_key and user_key is None) and (enable_session_id and session_id is None):
+        if not ((enable_user_key and user_key is not None) or (enable_session_id and session_id is not None)):
             return None
 
         model_info = kwargs.get("model_info")

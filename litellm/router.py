@@ -21,7 +21,7 @@ import traceback
 import weakref
 from collections import defaultdict
 from collections.abc import AsyncGenerator, Callable, Generator, Iterator, Mapping, Sequence
-from functools import lru_cache, reduce
+from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, Union, cast
 
@@ -267,20 +267,6 @@ def _iter_complexity_router_session_affinity_groups(
 
     if config.default_model is not None:
         yield config.default_model, config.session_affinity_ttl_seconds
-
-
-def _merge_minimum_session_affinity_ttl(
-    group_ttls: Mapping[str, int],
-    group_ttl: tuple[str, int],
-) -> Mapping[str, int]:
-    model_group, ttl = group_ttl
-    existing_ttl: Final[int | None] = group_ttls.get(model_group)
-    return MappingProxyType(
-        {
-            **group_ttls,
-            model_group: ttl if existing_ttl is None else min(existing_ttl, ttl),
-        }
-    )
 
 
 def _cost_value_as_float(value: str | float | None) -> float | None:
@@ -7651,15 +7637,18 @@ class Router:
         return classify_strategy_router_model(litellm_params.model) == "complexity"
 
     def _get_complexity_router_session_affinity_group_ttls(self) -> Mapping[str, int]:
-        return reduce(
-            _merge_minimum_session_affinity_ttl,
-            (
-                group_ttl
-                for strategies in self.complexity_routers.values()
-                for tagged_strategy in strategies
-                for group_ttl in _iter_complexity_router_session_affinity_groups(tagged_strategy.strategy)
-            ),
-            MappingProxyType({}),
+        entries: Final = tuple(
+            group_ttl
+            for strategies in self.complexity_routers.values()
+            for tagged_strategy in strategies
+            for group_ttl in _iter_complexity_router_session_affinity_groups(tagged_strategy.strategy)
+        )
+        groups: Final = frozenset(model_group for model_group, _ in entries)
+        return MappingProxyType(
+            {
+                model_group: min(ttl for candidate_group, ttl in entries if candidate_group == model_group)
+                for model_group in groups
+            }
         )
 
     def _ensure_deployment_affinity_check(self) -> None:

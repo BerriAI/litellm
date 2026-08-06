@@ -348,6 +348,29 @@ async def test_complexity_router_session_affinity_uses_router_configured_ttl():
 
 
 @pytest.mark.asyncio
+async def test_session_affinity_without_session_id_does_not_write_cache():
+    router = _complexity_router()
+    callback = next(
+        callback for callback in router.optional_callbacks or [] if isinstance(callback, DeploymentAffinityCheck)
+    )
+    cache = AsyncMock()
+    callback.cache = cache
+
+    await callback.async_pre_call_deployment_hook(
+        kwargs={
+            "model_info": {"id": "deployment-1"},
+            "metadata": {
+                "deployment_model_name": "target-group",
+                "user_api_key_hash": "key-1",
+            },
+        },
+        call_type=None,
+    )
+
+    cache.async_set_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_complexity_router_session_affinity_expires_and_reselects():
     router = _complexity_router(session_affinity_ttl_seconds=1)
 
