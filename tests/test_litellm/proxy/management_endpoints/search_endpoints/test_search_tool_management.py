@@ -24,6 +24,7 @@ import litellm.proxy.proxy_server as ps
 
 # Now we can safely import app
 from litellm.proxy.proxy_server import app
+from litellm.types.search import SearchToolInfoResponse
 
 client = TestClient(app)
 
@@ -818,9 +819,7 @@ async def test_list_search_tools_admin_with_restricted_key_still_sees_all():
     assert names == {"db-tool-1", "db-tool-2", "db-tool-3"}
 
 
-def _search_tool_responses(*names):
-    from litellm.types.search import SearchToolInfoResponse
-
+def _search_tool_responses(*names: str) -> list[SearchToolInfoResponse]:
     return [
         SearchToolInfoResponse(
             search_tool_id=f"id-{name}",
@@ -835,17 +834,8 @@ def _search_tool_responses(*names):
     ]
 
 
-def _recording_team_lookup(team_object=None, raises=None):
-    """A `TeamObjectLookup` double that records the team ids it was asked to resolve."""
-    asked_for = []
-
-    async def _lookup(team_id, user_api_key_dict):
-        asked_for.append(team_id)
-        if raises is not None:
-            raise raises
-        return team_object
-
-    return _lookup, asked_for
+def _team_ids_looked_up(lookup: AsyncMock) -> list[str]:
+    return [awaited.args[0] for awaited in lookup.await_args_list]
 
 
 @pytest.mark.asyncio
@@ -906,7 +896,7 @@ async def test_filter_visible_search_tools_dashboard_session_still_honors_key_al
             search_tools=["db-tool-3"],
         ),
     )
-    lookup, asked_for = _recording_team_lookup()
+    lookup = AsyncMock()
 
     visible = await _filter_visible_search_tools(
         _search_tool_responses("db-tool-1", "db-tool-2", "db-tool-3"),
@@ -915,7 +905,7 @@ async def test_filter_visible_search_tools_dashboard_session_still_honors_key_al
     )
 
     assert [t["search_tool_name"] for t in visible] == ["db-tool-3"]
-    assert asked_for == []
+    lookup.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -930,8 +920,8 @@ async def test_filter_visible_search_tools_still_applies_a_real_team_allowlist()
         user_id="internal_user",
         team_id="team-1",
     )
-    lookup, asked_for = _recording_team_lookup(
-        team_object=LiteLLM_TeamTable(
+    lookup = AsyncMock(
+        return_value=LiteLLM_TeamTable(
             team_id="team-1",
             object_permission=LiteLLM_ObjectPermissionTable(
                 object_permission_id="op-team",
@@ -947,7 +937,7 @@ async def test_filter_visible_search_tools_still_applies_a_real_team_allowlist()
     )
 
     assert [t["search_tool_name"] for t in visible] == ["db-tool-2"]
-    assert asked_for == ["team-1"]
+    assert _team_ids_looked_up(lookup) == ["team-1"]
 
 
 @pytest.mark.asyncio
@@ -965,9 +955,7 @@ async def test_filter_visible_search_tools_propagates_a_real_team_lookup_failure
         user_id="internal_user",
         team_id="deleted-team",
     )
-    lookup, asked_for = _recording_team_lookup(
-        raises=HTTPException(status_code=404, detail={"error": "Team doesn't exist in db."})
-    )
+    lookup = AsyncMock(side_effect=HTTPException(status_code=404, detail={"error": "Team doesn't exist in db."}))
 
     with pytest.raises(HTTPException) as exc_info:
         await _filter_visible_search_tools(
@@ -977,7 +965,7 @@ async def test_filter_visible_search_tools_propagates_a_real_team_lookup_failure
         )
 
     assert exc_info.value.status_code == 404
-    assert asked_for == ["deleted-team"]
+    assert _team_ids_looked_up(lookup) == ["deleted-team"]
 
 
 @pytest.mark.asyncio
