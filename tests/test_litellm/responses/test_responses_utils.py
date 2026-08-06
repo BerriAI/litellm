@@ -149,9 +149,9 @@ class TestResponsesAPIRequestUtils:
             model_id=None,
             container_id="cntr_upstream_abc",
         )
-        assert "None" not in base64.b64decode(
-            encoded.replace("cntr_", "").encode("utf-8")
-        ).decode("utf-8")
+        assert "None" not in ResponsesAPIRequestUtils._decode_id_payload(
+            encoded.replace("cntr_", "")
+        )
         decoded = ResponsesAPIRequestUtils._decode_container_id(encoded)
         assert decoded.get("custom_llm_provider") == "azure"
         assert decoded.get("model_id") is None
@@ -169,6 +169,116 @@ class TestResponsesAPIRequestUtils:
         assert decoded.get("model_id") is None
         assert decoded.get("custom_llm_provider") == "azure"
         assert decoded.get("response_id") == "cntr_x"
+
+    def test_response_id_is_object_storage_safe_no_padding(self):
+        """New resp_ ids must not contain '=' padding or non-URL-safe chars (#31055).
+
+        MinIO rejects object names containing '=' padding, which silently drops
+        Langfuse traces whose observation ids are derived from these managed
+        response ids. The encoded id must be a valid path component.
+        """
+        encoded = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="gpt-4o",
+            response_id="resp_abc123",
+        )
+        assert "=" not in encoded
+        assert "+" not in encoded
+        assert "/" not in encoded
+        assert encoded.startswith("resp_")
+        # Round-trips cleanly through the new decoder
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(encoded)
+        assert decoded.get("custom_llm_provider") == "openai"
+        assert decoded.get("model_id") == "gpt-4o"
+        assert decoded.get("response_id") == "resp_abc123"
+
+    def test_decode_legacy_padded_response_id(self):
+        """Legacy resp_ ids (standard base64 with '=' padding) must still decode."""
+        inner = "litellm:custom_llm_provider:openai;model_id:gpt-4o;response_id:resp_abc123"
+        legacy_id = "resp_" + base64.b64encode(inner.encode("utf-8")).decode("utf-8")
+        # legacy ids carry '=' padding
+        assert "=" in legacy_id
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(legacy_id)
+        assert decoded.get("custom_llm_provider") == "openai"
+        assert decoded.get("model_id") == "gpt-4o"
+        assert decoded.get("response_id") == "resp_abc123"
+
+    def test_decode_previous_response_id_legacy_and_new(self):
+        """decode_previous_response_id_to_original_previous_response_id works for
+        both legacy padded standard-base64 ids and new url-safe ids (#31055)."""
+        original_response_id = "resp_abc123"
+        # New (url-safe, no padding)
+        new_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="gpt-4o",
+            response_id=original_response_id,
+        )
+        assert "=" not in new_id
+        assert (
+            ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
+                new_id
+            )
+            == original_response_id
+        )
+        # Legacy (standard base64 with padding)
+        inner = f"litellm:custom_llm_provider:openai;model_id:gpt-4o;response_id:{original_response_id}"
+        legacy_id = "resp_" + base64.b64encode(inner.encode("utf-8")).decode("utf-8")
+        assert "=" in legacy_id
+        assert (
+            ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
+                legacy_id
+            )
+            == original_response_id
+        )
+
+    def test_container_id_is_object_storage_safe_no_padding(self):
+        """New cntr_ ids must not contain '=' padding (#31055)."""
+        encoded = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="gpt-4o",
+            container_id="cntr_upstream_abc",
+        )
+        assert "=" not in encoded
+        assert "+" not in encoded
+        assert "/" not in encoded
+        assert encoded.startswith("cntr_")
+        decoded = ResponsesAPIRequestUtils._decode_container_id(encoded)
+        assert decoded.get("response_id") == "cntr_upstream_abc"
+
+    def test_encrypted_item_id_is_object_storage_safe_no_padding(self):
+        """New encitem_ ids must not contain '=' padding (#31055)."""
+        encoded = ResponsesAPIRequestUtils._build_encrypted_item_id(
+            "gpt-4o", "item_abc"
+        )
+        assert "=" not in encoded
+        assert "+" not in encoded
+        assert "/" not in encoded
+        decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(encoded)
+        assert decoded is not None
+        assert decoded["model_id"] == "gpt-4o"
+        assert decoded["item_id"] == "item_abc"
+
+    def test_decode_legacy_padded_encrypted_item_id(self):
+        """Legacy encitem_ ids (standard base64 with '=' padding) must still decode."""
+        inner = "litellm:model_id:gpt-4o;item_id:item_abc"
+        legacy_id = "encitem_" + base64.b64encode(inner.encode("utf-8")).decode("utf-8")
+        assert "=" in legacy_id
+        decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(legacy_id)
+        assert decoded is not None
+        assert decoded["model_id"] == "gpt-4o"
+        assert decoded["item_id"] == "item_abc"
+
+    def test_wrap_unwrap_encrypted_content_no_padding(self):
+        """litellm_enc: wrappers must not contain '=' padding and must round-trip."""
+        wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+            "secret-content", "gpt-4o"
+        )
+        assert "=" not in wrapped.split(";")[0]
+        model_id, content = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(
+            wrapped
+        )
+        assert model_id == "gpt-4o"
+        assert content == "secret-content"
 
 
 class TestResponseAPILoggingUtils:
