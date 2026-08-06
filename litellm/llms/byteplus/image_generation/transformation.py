@@ -54,12 +54,7 @@ class BytePlusImageGenerationConfig(BaseImageGenerationConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        api_key = (
-            api_key
-            or litellm.api_key
-            or get_secret_str("BYTEPLUS_API_KEY")
-            or get_secret_str("ARK_API_KEY")
-        )
+        api_key = api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")
         if not api_key:
             raise ValueError("BytePlus API key is required. Set BYTEPLUS_API_KEY or ARK_API_KEY or pass api_key.")
         return get_byteplus_headers(api_key=api_key, extra_headers=headers)
@@ -108,8 +103,17 @@ class BytePlusImageGenerationConfig(BaseImageGenerationConfig):
             "prompt": prompt,
         }
 
-        # Transfer optional params supported by BytePlus
-        for key in ["n", "response_format", "size", "user", "quality", "output_format", "watermark", "optimize_prompt_options", "image"]:
+        for key in [
+            "n",
+            "response_format",
+            "size",
+            "user",
+            "quality",
+            "output_format",
+            "watermark",
+            "optimize_prompt_options",
+            "image",
+        ]:
             if key in optional_params:
                 body[key] = optional_params[key]
 

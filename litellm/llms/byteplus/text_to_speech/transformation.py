@@ -1,6 +1,6 @@
 import base64
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx import Headers
@@ -18,15 +18,39 @@ from ..common_utils import BytePlusError
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
+_BYTEPLUS_TTS_AUTH_HEADERS: Final = frozenset(
+    {
+        "x-api-resource-id",
+        "x-api-key",
+        "x-api-app-id",
+        "x-api-access-key",
+        "x-api-app-key",
+    }
+)
+
+_FORMAT_CONTENT_TYPES: Final[dict[str, str]] = {
+    "mp3": "audio/mpeg",
+    "ogg": "audio/ogg",
+    "wav": "audio/wav",
+    "pcm": "audio/pcm",
+    "aac": "audio/aac",
+    "opus": "audio/opus",
+}
+
+
+def _infer_audio_content_type(audio_bytes: bytes, requested_format: str) -> str:
+    if audio_bytes[:4] == b"OggS":
+        return "audio/ogg"
+    if audio_bytes[:4] == b"RIFF":
+        return "audio/wav"
+    if audio_bytes[:3] == b"ID3" or (
+        len(audio_bytes) >= 2 and audio_bytes[0] == 0xFF and audio_bytes[1] in (0xFB, 0xF3, 0xF2)
+    ):
+        return "audio/mpeg"
+    return _FORMAT_CONTENT_TYPES.get(requested_format.lower(), "audio/mpeg")
+
 
 class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
-    """
-    Configuration for BytePlus Text-to-Speech (HTTP Unidirectional Streaming).
-
-    Reference:
-    URL: https://voice.ap-southeast-1.bytepluses.com/api/v3/tts/unidirectional
-    """
-
     DEFAULT_TTS_BASE_URL = "https://voice.ap-southeast-1.bytepluses.com/api/v3/tts/unidirectional"
     DEFAULT_APP_KEY = "aGjiRDfUWi"
     DEFAULT_SAMPLE_RATE = 24000
@@ -79,12 +103,7 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        api_key = (
-            api_key
-            or litellm.api_key
-            or get_secret_str("BYTEPLUS_API_KEY")
-            or get_secret_str("ARK_API_KEY")
-        )
+        api_key = api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")
         app_id = get_secret_str("BYTEPLUS_TTS_APP_ID")
         access_key = get_secret_str("BYTEPLUS_TTS_ACCESS_KEY")
         app_key = get_secret_str("BYTEPLUS_TTS_APP_KEY") or self.DEFAULT_APP_KEY
@@ -93,15 +112,14 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
         if resource_id.startswith("byteplus/"):
             resource_id = resource_id.replace("byteplus/", "", 1)
 
-        req_headers = {
+        req_headers: dict[str, str] = {
             "X-Api-Resource-Id": resource_id,
             "Content-Type": "application/json",
             "Connection": "keep-alive",
         }
 
         if api_key:
-            clean_api_key = api_key.strip()
-            req_headers["x-api-key"] = clean_api_key
+            req_headers["x-api-key"] = api_key.strip()
         elif app_id and access_key:
             req_headers["X-Api-App-Id"] = app_id.strip()
             req_headers["X-Api-Access-Key"] = access_key.strip()
@@ -159,6 +177,7 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
 
         audio_format = params.get("response_format") or extra_body.get("format") or self.DEFAULT_FORMAT
         sample_rate = extra_body.get("sample_rate") or self.DEFAULT_SAMPLE_RATE
+        speed = params.get("speed")
 
         additions_dict: dict[str, Any] = {
             "disable_markdown_filter": True,
@@ -182,15 +201,19 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
 
         user_id = extra_body.get("uid") or litellm_params.get("user") or "litellm-user"
 
+        audio_params: dict[str, Any] = {
+            "format": audio_format,
+            "sample_rate": sample_rate,
+        }
+        if speed is not None:
+            audio_params["speed_ratio"] = float(speed)
+
         payload = {
             "user": {"uid": str(user_id)},
             "req_params": {
                 "text": input,
                 "speaker": speaker,
-                "audio_params": {
-                    "format": audio_format,
-                    "sample_rate": sample_rate,
-                },
+                "audio_params": audio_params,
                 "additions": json.dumps(additions_dict),
             },
         }
@@ -206,10 +229,6 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
     ) -> HttpxBinaryResponseContent:
-        """
-        Processes BytePlus unidirectional streaming response.
-        Extracts base64-encoded audio chunks from JSON lines and concatenates them into binary audio content.
-        """
         if raw_response.status_code != 200:
             raise BytePlusError(
                 status_code=raw_response.status_code,
@@ -218,7 +237,6 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
             )
 
         audio_bytes = bytearray()
-        chunk_count = 0
 
         lines = raw_response.text.strip().split("\n")
         for line in lines:
@@ -236,11 +254,9 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
                 try:
                     chunk_audio = base64.b64decode(data["data"])
                     audio_bytes.extend(chunk_audio)
-                    chunk_count += 1
                 except Exception:
                     pass
             elif code == 20000000:
-                # Stream completed successfully
                 break
             elif code > 0:
                 msg = data.get("message") or f"BytePlus TTS error code {code}"
@@ -257,10 +273,12 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
                 headers=raw_response.headers,
             )
 
+        audio_bytes_final: Final = bytes(audio_bytes)
+        content_type = _infer_audio_content_type(audio_bytes_final, self.DEFAULT_FORMAT)
         mock_http_response = httpx.Response(
             status_code=200,
-            content=bytes(audio_bytes),
-            headers={"content-type": "audio/mpeg"},
+            content=audio_bytes_final,
+            headers={"content-type": content_type},
         )
         return HttpxBinaryResponseContent(mock_http_response)
 
@@ -280,6 +298,11 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
         api_key: str | None,
         **kwargs: Any,
     ) -> Any:
+        safe_extra_headers: Final[dict[str, Any] | None] = (
+            {k: v for k, v in extra_headers.items() if k.lower() not in _BYTEPLUS_TTS_AUTH_HEADERS}
+            if extra_headers
+            else None
+        )
         litellm_params_dict.update(
             {
                 "api_key": api_key,
@@ -296,7 +319,7 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
             litellm_params=litellm_params_dict,
             logging_obj=logging_obj,
             timeout=timeout,
-            extra_headers=extra_headers,
+            extra_headers=safe_extra_headers,
             client=None,
             _is_async=aspeech,
         )

@@ -66,9 +66,7 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
         base_url = base_url.rstrip("/")
 
         is_multimodal = (
-            "vision" in model.lower()
-            or "multimodal" in model.lower()
-            or optional_params.get("is_multimodal", False)
+            "vision" in model.lower() or "multimodal" in model.lower() or optional_params.get("is_multimodal", False)
         )
 
         endpoint = "/embeddings/multimodal" if is_multimodal else "/embeddings"
@@ -100,9 +98,7 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
         headers: dict,
     ) -> dict:
         is_multimodal = (
-            "vision" in model.lower()
-            or "multimodal" in model.lower()
-            or optional_params.get("is_multimodal", False)
+            "vision" in model.lower() or "multimodal" in model.lower() or optional_params.get("is_multimodal", False)
         )
 
         raw_input = input if isinstance(input, list) else [input]
@@ -184,12 +180,7 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        api_key = (
-            api_key
-            or litellm.api_key
-            or get_secret_str("BYTEPLUS_API_KEY")
-            or get_secret_str("ARK_API_KEY")
-        )
+        api_key = api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")
         if not api_key:
             raise ValueError("BytePlus API key is required. Set BYTEPLUS_API_KEY or ARK_API_KEY or pass api_key.")
         return get_byteplus_headers(api_key=api_key, extra_headers=headers)

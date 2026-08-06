@@ -8264,6 +8264,8 @@ class ProviderConfigManager:
             return litellm.LiteLLMProxyResponsesAPIConfig()
         elif litellm.LlmProviders.VOLCENGINE == provider:
             return litellm.VolcEngineResponsesAPIConfig()
+        elif litellm.LlmProviders.BYTEPLUS == provider:
+            return litellm.BytePlusResponsesAPIConfig()
         elif litellm.LlmProviders.MANUS == provider:
             return litellm.ManusResponsesAPIConfig()
         elif litellm.LlmProviders.PERPLEXITY == provider:
@@ -8686,6 +8688,12 @@ class ProviderConfigManager:
             )
 
             return get_modelscope_image_generation_config(model)
+        elif LlmProviders.BYTEPLUS == provider:
+            from litellm.llms.byteplus.image_generation import (
+                get_byteplus_image_generation_config,
+            )
+
+            return get_byteplus_image_generation_config(model)
         return None
 
     @staticmethod
@@ -8999,6 +9007,12 @@ class ProviderConfigManager:
             )
 
             return AWSPollyTextToSpeechConfig()
+        elif litellm.LlmProviders.BYTEPLUS == provider:
+            from litellm.llms.byteplus.text_to_speech.transformation import (
+                BytePlusTextToSpeechConfig,
+            )
+
+            return BytePlusTextToSpeechConfig()
         return None
 
     @staticmethod

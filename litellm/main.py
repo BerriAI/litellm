@@ -8249,45 +8249,20 @@ def speech(
             client=client,
             _is_async=aspeech or False,
         )
-    elif custom_llm_provider == "aws_polly":
-        from litellm.llms.aws_polly.text_to_speech.transformation import (
-            AWSPollyTextToSpeechConfig,
-        )
-
-        # AWS Polly Text-to-Speech
-        if text_to_speech_provider_config is None:
-            text_to_speech_provider_config = AWSPollyTextToSpeechConfig()
-
-        # Cast to specific AWS Polly config type to access dispatch method
-        aws_polly_config: Final = cast(AWSPollyTextToSpeechConfig, text_to_speech_provider_config)
-
-        response = aws_polly_config.dispatch_text_to_speech(
-            model=model,
-            input=input,
-            voice=voice,
-            optional_params=optional_params,
-            litellm_params_dict=litellm_params_dict,
-            logging_obj=logging_obj,
-            timeout=timeout,
-            extra_headers=extra_headers,
-            base_llm_http_handler=base_llm_http_handler,
-            aspeech=aspeech or False,
-            api_base=api_base,
-            api_key=api_key,
-            **kwargs,
-        )
-    elif custom_llm_provider == "byteplus":
-        from litellm.llms.byteplus.text_to_speech.transformation import (
-            BytePlusTextToSpeechConfig,
+    elif custom_llm_provider == "aws_polly" or custom_llm_provider == "byteplus":
+        from litellm.llms.base_llm.text_to_speech.transformation import (
+            BaseTextToSpeechConfig,
         )
 
         if text_to_speech_provider_config is None:
-            text_to_speech_provider_config = BytePlusTextToSpeechConfig()
+            raise litellm.BadRequestError(
+                message=f"{custom_llm_provider} Text-to-Speech configuration not found",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
 
-        byteplus_config = cast(
-            BytePlusTextToSpeechConfig, text_to_speech_provider_config
-        )
-        response = byteplus_config.dispatch_text_to_speech(
+        dispatch_config: Final = cast(BaseTextToSpeechConfig, text_to_speech_provider_config)
+        response = dispatch_config.dispatch_text_to_speech(
             model=model,
             input=input,
             voice=voice,
