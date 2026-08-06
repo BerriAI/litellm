@@ -11,21 +11,20 @@ LIT001  Mutable collection in a type annotation, anywhere it appears: function
         collection lets whoever holds it grow or rewrite it after the fact; annotate
         a read-only view instead (Mapping/Sequence/AbstractSet/tuple[X, ...]/
         frozenset[X], or a frozen dataclass / NamedTuple / ReadOnly TypedDict) and
-        build it functionally (comprehension / map / MappingProxyType({...}), not
-        append-in-a-loop).
+        build it functionally (comprehension / map, not append-in-a-loop).
         Suppress with `# mutable-ok: <reason>` on the offending line.
 LIT002  Mutable-collection *construction*: a list/dict/set literal or comprehension, or
         a call to a mutable constructor (list/dict/set/deque/defaultdict/Counter/...).
         Catches the unannotated seed-then-mutate pattern LIT001 cannot see (`acc = []`).
         Build the value in one shot and freeze it: a `tuple`/`frozenset` wrapping a
-        generator (`tuple(f(x) for x in xs)`), a tuple literal, `MappingProxyType({...})`
-        for a dict-shaped value, or a frozen dataclass / NamedTuple / ReadOnly TypedDict.
-        Generator expressions and `tuple`/`frozenset`
-        calls are not construction and pass. Annotation-internal lists (`Callable[[int],
-        str]`) are exempt, as is a value passed directly to a freezing wrapper
-        (`tuple(...)`, `frozenset(...)`, `MappingProxyType(...)`): it is frozen before
-        it can escape, though anything mutable nested inside it still counts.
-        Suppress with `# mutable-ok: <reason>`.
+        generator (`tuple(f(x) for x in xs)`), a tuple literal, a frozen dataclass /
+        NamedTuple / ReadOnly TypedDict, or (if it really must be dynamic) a
+        MappingProxyType wrapping a dict literal or comprehension. Generator expressions
+        and freezing-wrapper calls (`tuple(...)`, `frozenset(...)`,
+        `MappingProxyType(...)`) are not construction and pass, as does the value passed
+        directly to a wrapper: it is frozen before it can escape, though anything
+        mutable nested inside it still counts. Annotation-internal lists
+        (`Callable[[int], str]`) are exempt. Suppress with `# mutable-ok: <reason>`.
 LIT003  noqa suppression without rule codes or without a reason.
         Required shape: `# noqa: TID251  # <reason>`
 LIT004  pyright/mypy ignore without bracketed codes or without a reason.
@@ -281,8 +280,7 @@ def _mutable_ann(path: Path, line: int, name: str, where: str) -> Violation:
         f"mutable `{name}` in {where}: a mutable collection can be grown or rewritten "
         f"by whoever holds it. Annotate a read-only view -- Mapping[...], Sequence[...], "
         f"AbstractSet[...], tuple[X, ...], frozenset[X], or a frozen dataclass / "
-        f"NamedTuple / ReadOnly TypedDict -- and build it functionally "
-        f"(comprehension / map / `MappingProxyType({{...}})`), not by "
+        f"NamedTuple / ReadOnly TypedDict -- and build it functionally, not by "
         f"append-in-a-loop (suppress: `# mutable-ok: <reason>`)",
     )
 
@@ -491,9 +489,9 @@ def iter_construction_violations(path: Path, tree: ast.AST, comments: Comments) 
             path, node.lineno, "LIT002",
             f"mutable {kind}: this builds a collection that can be grown or rewritten. "
             f"Build it in one shot and freeze it -- a tuple/frozenset wrapping a generator "
-            f"(`tuple(f(x) for x in xs)`), a tuple literal, `MappingProxyType({{...}})` for a "
-            f"dict-shaped value, or a frozen dataclass / NamedTuple / ReadOnly TypedDict "
-            f"(suppress: `# mutable-ok: <reason>`)",
+            f"(`tuple(f(x) for x in xs)`), a tuple literal, a frozen dataclass / NamedTuple "
+            f"/ ReadOnly TypedDict, or (if it really must be dynamic) a MappingProxyType "
+            f"wrapping a dict literal or comprehension (suppress: `# mutable-ok: <reason>`)",
         )
  
  
