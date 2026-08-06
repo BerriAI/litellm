@@ -3976,6 +3976,72 @@ def test_get_deployment_credentials_with_provider_includes_bucket_name():
     assert credentials["custom_llm_provider"] == "vertex_ai"
 
 
+def test_get_deployment_credentials_with_provider_includes_bedrock_batch_fields():
+    """
+    Regression (#25104): s3_region_name, s3_encryption_key_id, and
+    aws_batch_role_arn must survive the CredentialLiteLLMParams filter.
+    Previously they were dropped, so Bedrock batch file uploads failed with
+    "S3 bucket_name is required" style errors even when configured in
+    litellm_params.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_region_name": "us-east-1",
+                    "s3_bucket_name": "my-batch-bucket",
+                    "s3_region_name": "us-west-2",
+                    "s3_encryption_key_id": "my-kms-key",
+                    "aws_batch_role_arn": "arn:aws:iam::123456789012:role/bedrock-batch",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="bedrock-batch-model"
+    )
+
+    assert credentials is not None
+    assert credentials["s3_bucket_name"] == "my-batch-bucket"
+    assert credentials["s3_region_name"] == "us-west-2"
+    assert credentials["s3_encryption_key_id"] == "my-kms-key"
+    assert credentials["aws_batch_role_arn"] == "arn:aws:iam::123456789012:role/bedrock-batch"
+    assert credentials["custom_llm_provider"] == "bedrock"
+    assert "model" not in credentials
+
+
+def test_get_deployment_credentials_with_provider_include_model():
+    """
+    Regression (#25104): with include_model=True the deployment's
+    litellm_params.model is returned under "model" so batch/file operations can
+    resolve provider configs (litellm.acreate_batch needs a model kwarg to load
+    BedrockBatchesConfig and set the Bedrock modelId). Off by default so
+    router-bound callers keep the router alias in "model".
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_region_name": "us-east-1",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="bedrock-batch-model", include_model=True
+    )
+
+    assert credentials is not None
+    assert credentials["model"] == "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    assert credentials["custom_llm_provider"] == "bedrock"
+
+
 def test_get_deployment_credentials_with_provider_resolves_credential_name():
     """
     Test that get_deployment_credentials_with_provider correctly resolves

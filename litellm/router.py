@@ -8712,7 +8712,7 @@ class Router:
         )
 
     def get_deployment_credentials_with_provider(
-        self, model_id: str, team_id: str | None = None
+        self, model_id: str, team_id: str | None = None, include_model: bool = False
     ) -> dict[str, Any] | None:
         """
         Get API credentials and provider info from a model name in model_list.
@@ -8729,6 +8729,13 @@ class Router:
                 wildcard lookups never resolve a deployment owned by a
                 different team, so shared model names can't leak another
                 team's credentials.
+            include_model: When True, the deployment's `litellm_params.model`
+                is returned under the "model" key. Batch and file operations
+                need it so `litellm.acreate_batch` / `aretrieve_batch` can
+                resolve provider configs (e.g. Bedrock) and set the provider
+                model id. Off by default because callers that merge these
+                credentials into router-bound request data (e.g. vector store
+                files) must keep the router alias in "model".
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
@@ -8796,6 +8803,9 @@ class Router:
             credentials.update(credential_values)
             # Remove the credential name since we've resolved it
             credentials.pop("litellm_credential_name", None)
+
+        if include_model:
+            credentials["model"] = deployment.litellm_params.model
 
         # Add custom_llm_provider
         if deployment.litellm_params.custom_llm_provider:
