@@ -209,37 +209,24 @@ class BaseAnthropicMessagesStreamingIterator:
         once the client goes away the pump only buffers for billing so the queue
         can't grow unbounded.
 
+        An upstream failure (Bedrock read / decode / chunk-conversion error)
+        that happens while the client is still connected is forwarded through
+        the queue and re-raised here, so the original provider exception (and
+        its status) reaches the proxy's failure handling unchanged rather than
+        being masked by a generic incomplete-stream event.
+
         This method provides the common logic for both Anthropic and Bedrock implementations.
         """
         from litellm._logging import verbose_proxy_logger
 
-        queue: Final[asyncio.Queue[bytes | None]] = asyncio.Queue()
+        queue: Final[asyncio.Queue[bytes | None | BaseException]] = asyncio.Queue()
         client_detached: Final = asyncio.Event()
 
         async def _pump_upstream() -> None:
             collected_chunks: Final[list[bytes]] = []
             saw_terminal_event = False  # rebind-ok: accumulates across the upstream loop
-            try:
-                async for chunk in completion_stream:
-                    if self.completion_start_time is None:
-                        self.completion_start_time = datetime.now()
-                    saw_terminal_event = saw_terminal_event or _is_terminal_stream_chunk(chunk)
-                    encoded_chunk = self._convert_chunk_to_sse_format(chunk)
-                    collected_chunks.append(encoded_chunk)
-                    if not client_detached.is_set():
-                        queue.put_nowait(encoded_chunk)
-            except Exception as exc:  # noqa: BLE001  # must still flush partial usage in finally, not crash the pump
-                verbose_proxy_logger.warning(
-                    "async_sse_wrapper upstream pump stopped after %d chunks: %s(%s)",
-                    len(collected_chunks),
-                    type(exc).__name__,
-                    exc,
-                )
-            finally:
-                if not client_detached.is_set():
-                    if not saw_terminal_event:
-                        queue.put_nowait(_incomplete_stream_error_sse_event())
-                    queue.put_nowait(None)
+
+            async def _bill() -> None:
                 try:
                     await self._handle_streaming_logging(collected_chunks)
                 except Exception as exc:  # noqa: BLE001  # billing is best-effort; never crash the pump
@@ -250,6 +237,42 @@ class BaseAnthropicMessagesStreamingIterator:
                         exc,
                     )
 
+            try:
+                async for chunk in completion_stream:
+                    if self.completion_start_time is None:
+                        self.completion_start_time = datetime.now()
+                    saw_terminal_event = saw_terminal_event or _is_terminal_stream_chunk(chunk)
+                    encoded_chunk = self._convert_chunk_to_sse_format(chunk)
+                    collected_chunks.append(encoded_chunk)
+                    if not client_detached.is_set():
+                        queue.put_nowait(encoded_chunk)
+            except Exception as exc:  # noqa: BLE001  # forward the provider error to a live client, else salvage spend
+                if not client_detached.is_set():
+                    # Preserve the provider-specific failure: hand the original
+                    # exception to the client-facing generator so it re-raises
+                    # and the proxy's failure handling (status code,
+                    # post_call_failure_hook) runs. The failure path owns
+                    # logging here, so don't also success-bill.
+                    queue.put_nowait(exc)
+                    return
+                # Client already disconnected: nothing to propagate to and no
+                # failure hook will run, so salvage the partial spend instead
+                # of dropping the request entirely.
+                verbose_proxy_logger.warning(
+                    "async_sse_wrapper upstream pump failed after client disconnect (%d chunks): %s(%s)",
+                    len(collected_chunks),
+                    type(exc).__name__,
+                    exc,
+                )
+                await _bill()
+                return
+
+            if not client_detached.is_set():
+                if not saw_terminal_event:
+                    queue.put_nowait(_incomplete_stream_error_sse_event())
+                queue.put_nowait(None)
+            await _bill()
+
         pump_task: Final = asyncio.create_task(_pump_upstream())
         _UPSTREAM_PUMP_TASKS.add(pump_task)
         pump_task.add_done_callback(_UPSTREAM_PUMP_TASKS.discard)
@@ -259,10 +282,13 @@ class BaseAnthropicMessagesStreamingIterator:
                 item = await queue.get()
                 if item is None:
                     break
+                if isinstance(item, BaseException):
+                    raise item
                 yield item
         finally:
-            # Client-facing generator is being torn down (normal end or a
-            # disconnect GeneratorExit). Signal the pump to stop enqueueing so
-            # the queue can't grow unbounded, but let it keep draining upstream
-            # to its terminal usage event for accurate billing.
+            # Client-facing generator is being torn down (normal end, a
+            # re-raised upstream error, or a disconnect GeneratorExit). Signal
+            # the pump to stop enqueueing so the queue can't grow unbounded, but
+            # let it keep draining upstream to its terminal usage event for
+            # accurate billing.
             client_detached.set()
