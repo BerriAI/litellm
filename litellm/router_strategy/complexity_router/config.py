@@ -589,7 +589,7 @@ class ComplexityRouterConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _warn_unknown_tier_params(self) -> "ComplexityRouterConfig":
+    def _validate_tier_params(self) -> "ComplexityRouterConfig":
         known: Final = frozenset(OPENAI_CHAT_COMPLETION_PARAMS) | frozenset(all_litellm_params)
         for tier, target in self.tiers.items():
             if isinstance(target, TierTarget):
