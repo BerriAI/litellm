@@ -1,12 +1,16 @@
 """MiniMax v1 video generation transformations."""
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+import base64
+from os import PathLike
+from typing import TYPE_CHECKING
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 from httpx._types import RequestFiles
 
 import litellm
+from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -28,7 +32,7 @@ if TYPE_CHECKING:
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
-    LiteLLMLoggingObj = Any
+    LiteLLMLoggingObj = object
 
 
 class MinimaxVideoConfig(BaseVideoConfig):
@@ -56,14 +60,14 @@ class MinimaxVideoConfig(BaseVideoConfig):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
-        mapped_params: Dict[str, Any] = {}
+    ) -> dict:
+        mapped_params: dict = {}
 
         for key, value in video_create_optional_params.items():
             if value is None or key in {"model", "prompt", "extra_headers", "user"}:
                 continue
             if key == "input_reference":
-                mapped_params["first_frame_image"] = value
+                mapped_params["first_frame_image"] = self._prepare_first_frame_image(value)
             elif key == "seconds":
                 mapped_params["duration"] = self._coerce_duration(value)
             elif key == "size":
@@ -81,8 +85,8 @@ class MinimaxVideoConfig(BaseVideoConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[GenericLiteLLMParams] = None,
+        api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> dict:
         if litellm_params and litellm_params.api_key:
             api_key = api_key or litellm_params.api_key
@@ -104,13 +108,13 @@ class MinimaxVideoConfig(BaseVideoConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """Return the regional MiniMax v1 root used by all video operations."""
         base_url = api_base or get_secret_str("MINIMAX_API_BASE") or "https://api.minimax.io/v1"
         base_url = base_url.rstrip("/")
-        for suffix in ("/video_generation", "/query/video_generation", "/files/retrieve"):
+        for suffix in ("/query/video_generation", "/video_generation", "/files/retrieve"):
             if base_url.endswith(suffix):
                 base_url = base_url[: -len(suffix)]
                 break
@@ -123,11 +127,11 @@ class MinimaxVideoConfig(BaseVideoConfig):
         model: str,
         prompt: str,
         api_base: str,
-        video_create_optional_request_params: Dict,
+        video_create_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, RequestFiles, str]:
-        request_data: Dict[str, Any] = {"model": model, "prompt": prompt}
+    ) -> tuple[dict, RequestFiles, str]:
+        request_data: dict = {"model": model, "prompt": prompt}
         request_data.update(video_create_optional_request_params)
         request_data.pop("extra_headers", None)
         request_data.pop("extra_body", None)
@@ -139,8 +143,8 @@ class MinimaxVideoConfig(BaseVideoConfig):
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
-        request_data: Optional[Dict] = None,
+        custom_llm_provider: str | None = None,
+        request_data: dict | None = None,
     ) -> VideoObject:
         response_data = self._parse_json_response(raw_response)
         self._raise_for_provider_error(raw_response, response_data)
@@ -148,7 +152,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         if task_id is None:
             raise ValueError("MiniMax did not return a task_id for video generation")
 
-        video_data: Dict[str, Any] = {
+        video_data: dict = {
             "id": str(task_id),
             "object": "video",
             "status": self._map_status(response_data.get("status", "queueing")),
@@ -166,8 +170,8 @@ class MinimaxVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        variant: Optional[str] = None,
-    ) -> Tuple[str, Dict]:
+        variant: str | None = None,
+    ) -> tuple[str, dict]:
         task_id = quote(extract_original_video_id(video_id), safe="")
         return f"{api_base.rstrip('/')}/query/video_generation?task_id={task_id}", {}
 
@@ -198,7 +202,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         if not download_url:
             raise ValueError("MiniMax did not return a video download URL")
 
-        video_response = client.get(download_url)
+        video_response = safe_get(client, download_url)
         self._raise_for_status(video_response)
         return video_response.content
 
@@ -229,7 +233,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         if not download_url:
             raise ValueError("MiniMax did not return a video download URL")
 
-        video_response = await client.get(download_url)
+        video_response = await async_safe_get(client, download_url)
         self._raise_for_status(video_response)
         return video_response.content
 
@@ -239,7 +243,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         task_id = quote(extract_original_video_id(video_id), safe="")
         return f"{api_base.rstrip('/')}/query/video_generation?task_id={task_id}", {}
 
@@ -247,7 +251,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
     ) -> VideoObject:
         response_data = self._parse_json_response(raw_response)
         self._raise_for_provider_error(raw_response, response_data)
@@ -255,7 +259,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         if task_id is None:
             raise ValueError("MiniMax did not return a task_id for video status")
         model = response_data.get("model")
-        video_data: Dict[str, Any] = {
+        video_data: dict = {
             "id": str(task_id),
             "object": "video",
             "status": self._map_status(response_data.get("status", "processing")),
@@ -282,15 +286,15 @@ class MinimaxVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        extra_body: dict | None = None,
+    ) -> tuple[str, dict]:
         raise NotImplementedError("Video remix is not supported by the MiniMax v1 API")
 
     def transform_video_remix_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
     ) -> VideoObject:
         raise NotImplementedError("Video remix is not supported by the MiniMax v1 API")
 
@@ -299,19 +303,19 @@ class MinimaxVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        after: Optional[str] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        after: str | None = None,
+        limit: int | None = None,
+        order: str | None = None,
+        extra_query: dict | None = None,
+    ) -> tuple[str, dict]:
         raise NotImplementedError("Video listing is not supported by the MiniMax v1 API")
 
     def transform_video_list_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
-    ) -> Dict[str, str]:
+        custom_llm_provider: str | None = None,
+    ) -> dict[str, str]:
         raise NotImplementedError("Video listing is not supported by the MiniMax v1 API")
 
     def transform_video_delete_request(
@@ -320,7 +324,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         raise NotImplementedError("Video deletion is not supported by the MiniMax v1 API")
 
     def transform_video_delete_response(
@@ -330,20 +334,18 @@ class MinimaxVideoConfig(BaseVideoConfig):
     ) -> VideoObject:
         raise NotImplementedError("Video deletion is not supported by the MiniMax v1 API")
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return BaseLLMException(status_code=status_code, message=error_message, headers=headers)
 
     @staticmethod
-    def _coerce_duration(value: Any) -> Any:
+    def _coerce_duration(value: object) -> object:
         try:
             return int(float(value))
         except (TypeError, ValueError):
             return value
 
     @staticmethod
-    def _map_status(status: Any) -> str:
+    def _map_status(status: object) -> str:
         normalized = str(status or "").strip().lower().replace(" ", "_")
         if normalized in {"success", "succeeded", "completed", "complete"}:
             return "completed"
@@ -354,7 +356,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         return "in_progress"
 
     @staticmethod
-    def _add_request_metadata(video_data: Dict[str, Any], request_data: Optional[Dict]) -> None:
+    def _add_request_metadata(video_data: dict, request_data: dict | None) -> None:
         if not request_data:
             return
         if request_data.get("duration") is not None:
@@ -363,7 +365,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
             video_data["size"] = str(request_data["resolution"])
 
     @staticmethod
-    def _usage_from_video(video_obj: VideoObject) -> Dict[str, Any]:
+    def _usage_from_video(video_obj: VideoObject) -> dict:
         if video_obj.seconds is None:
             return {}
         try:
@@ -372,18 +374,18 @@ class MinimaxVideoConfig(BaseVideoConfig):
             return {}
 
     @staticmethod
-    def _wrap_video_id(video_obj: VideoObject, provider: Optional[str], model: Optional[str]) -> None:
+    def _wrap_video_id(video_obj: VideoObject, provider: str | None, model: str | None) -> None:
         if provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, provider, model)
 
-    @staticmethod
-    def _parse_json_response(raw_response: httpx.Response) -> Dict[str, Any]:
+    def _parse_json_response(self, raw_response: httpx.Response) -> dict:
+        self._raise_for_status(raw_response)
         try:
             return raw_response.json()
         except Exception as exc:
             raise ValueError(f"MiniMax returned an invalid JSON response: {exc}") from exc
 
-    def _raise_for_provider_error(self, raw_response: httpx.Response, response_data: Dict[str, Any]) -> None:
+    def _raise_for_provider_error(self, raw_response: httpx.Response, response_data: dict) -> None:
         self._raise_for_status(raw_response)
         base_resp = response_data.get("base_resp") or {}
         status_code = base_resp.get("status_code")
@@ -396,8 +398,8 @@ class MinimaxVideoConfig(BaseVideoConfig):
             raise self.get_error_class(raw_response.text, raw_response.status_code, raw_response.headers)
 
     @staticmethod
-    def _request_headers(raw_response: httpx.Response) -> Dict[str, str]:
-        request = getattr(raw_response, "request", None)
+    def _request_headers(raw_response: httpx.Response) -> dict[str, str]:
+        request = getattr(raw_response, "_request", None)
         request_headers = getattr(request, "headers", None)
         if isinstance(request_headers, (dict, httpx.Headers)):
             authorization = request_headers.get("Authorization")
@@ -407,8 +409,8 @@ class MinimaxVideoConfig(BaseVideoConfig):
 
     @staticmethod
     def _api_base_from_response(raw_response: httpx.Response) -> str:
-        request = getattr(raw_response, "request", None)
-        request_url = getattr(request, "url", None) or getattr(raw_response, "url", None)
+        request = getattr(raw_response, "_request", None)
+        request_url = getattr(request, "url", None)
         if request_url is None:
             return "https://api.minimax.io/v1"
         parsed = urlsplit(str(request_url))
@@ -423,7 +425,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         return content_type.startswith("video/") or content_type == "application/octet-stream"
 
     @staticmethod
-    def _get_download_url(response_data: Dict[str, Any]) -> Optional[str]:
+    def _get_download_url(response_data: dict) -> str | None:
         file_data = response_data.get("file")
         if isinstance(file_data, dict):
             for key in ("download_url", "url"):
@@ -433,3 +435,38 @@ class MinimaxVideoConfig(BaseVideoConfig):
             if response_data.get(key):
                 return str(response_data[key])
         return None
+
+    @staticmethod
+    def _prepare_first_frame_image(image: object) -> object:
+        if isinstance(image, str):
+            return image
+
+        content = image
+        content_type = None
+        if isinstance(image, tuple):
+            if len(image) < 2:
+                raise ValueError("MiniMax input_reference tuple must include file content")
+            content = image[1]
+            if len(image) >= 3 and isinstance(image[2], str):
+                content_type = image[2]
+
+        if isinstance(content, PathLike):
+            with open(content, "rb") as image_file:
+                image_bytes = image_file.read()
+        elif isinstance(content, bytes):
+            image_bytes = content
+        elif hasattr(content, "read"):
+            current_position = content.tell() if hasattr(content, "tell") else None
+            if hasattr(content, "seek"):
+                content.seek(0)
+            image_bytes = content.read()
+            if current_position is not None and hasattr(content, "seek"):
+                content.seek(current_position)
+        else:
+            raise TypeError("MiniMax input_reference must be a URL, path, bytes, or file object")
+
+        if not isinstance(image_bytes, bytes):
+            raise TypeError("MiniMax input_reference file content must be bytes")
+        content_type = content_type or ImageEditRequestUtils.get_image_content_type(image_bytes)
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        return f"data:{content_type};base64,{encoded}"
