@@ -372,6 +372,34 @@ class TestEnsureFreshLogin:
 
         assert ctx.obj["api_key"] == "sk-explicit"
 
+    def test_credential_inside_the_freshness_buffer_is_refreshed_not_re_logged_in(self, monkeypatch):
+        """`is_cli_token_fresh` and `needs_refresh` must agree on when a native credential is due.
+
+        A token expiring in four minutes is already "not fresh"; if the refresh path applied a
+        tighter buffer it would decline, dropping the user into a browser login they don't need."""
+        monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: True)
+        soon_expiring = {
+            "key": "sk-a",
+            "base_url": "http://proxy-a:4000",
+            "auth_type": "native_oidc",
+            "expires_at": time.time() + 240,
+            "refresh_token": "refresh-1",
+        }
+        monkeypatch.setattr(up_module, "load_token", lambda: soon_expiring)
+        monkeypatch.setattr(
+            auth_module,
+            "refresh_native_credential",
+            lambda token_data: {**token_data, "key": "sk-new", "expires_at": time.time() + 3600},
+        )
+        login_calls = []
+        monkeypatch.setattr(up_module, "login", lambda ctx: login_calls.append(ctx))
+        ctx = _make_ctx("http://proxy-a:4000", api_key="sk-a")
+
+        _ensure_fresh_login(ctx)
+
+        assert login_calls == []
+        assert ctx.obj["api_key"] == "sk-new"
+
 
 class TestUpCommand:
     def setup_method(self):

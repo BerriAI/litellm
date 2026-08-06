@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Final
 
 
+CLI_TOKEN_FRESHNESS_BUFFER_HOURS: Final = 0.1
+
+
 def get_cli_token_file_path() -> str:
     """Get the path to the CLI token file"""
     home_dir: Final = Path.home()
@@ -71,7 +74,7 @@ def get_litellm_gateway_api_key(
     return token_data["key"]
 
 
-def is_cli_token_fresh(token_data: dict, buffer_hours: float = 0.1) -> bool:
+def is_cli_token_fresh(token_data: dict, buffer_hours: float = CLI_TOKEN_FRESHNESS_BUFFER_HOURS) -> bool:
     """Check whether a cached CLI token (as stored in token.json) is still
     within its expiration window. Used by `lite auth print-token` to fail
     fast, without a network round trip.

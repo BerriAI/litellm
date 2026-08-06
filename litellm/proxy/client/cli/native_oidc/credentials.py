@@ -18,6 +18,7 @@ from typing import Final, Protocol
 import requests
 
 from litellm.litellm_core_utils.cli_token_utils import (
+    CLI_TOKEN_FRESHNESS_BUFFER_HOURS,
     get_cli_token_file_path,
     load_cli_token,
 )
@@ -37,8 +38,10 @@ AUTH_TYPE_NATIVE_OIDC: Final = "native_oidc"
 TOKEN_SCHEMA_VERSION: Final = 2
 
 # Refresh this far ahead of the recorded expiry, absorbing clock skew and the
-# round trip to the provider.
-REFRESH_BUFFER_SECONDS: Final = 120
+# round trip to the provider. Kept equal to the freshness buffer callers judge the
+# same credential by: any gap would leave a token stale but refused for refresh,
+# forcing a needless browser login.
+REFRESH_BUFFER_SECONDS: Final = int(CLI_TOKEN_FRESHNESS_BUFFER_HOURS * 3600)
 
 LOCK_ACQUIRE_TIMEOUT_SECONDS: Final = 30.0
 LOCK_POLL_INTERVAL_SECONDS: Final = 0.1
