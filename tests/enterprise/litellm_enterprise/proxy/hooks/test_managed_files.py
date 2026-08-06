@@ -1869,15 +1869,12 @@ async def test_list_batches_registers_and_returns_unified_output_file_ids():
 
     input_file_row = MagicMock()
     input_file_row.unified_file_id = unified_input_file_id
+    input_file_row.flat_model_file_ids = [raw_input_file_id]
 
-    def find_managed_file(where):
-        if where["flat_model_file_ids"]["has"] == raw_input_file_id:
-            return input_file_row
-        return None
-
-    prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(
-        side_effect=find_managed_file
+    prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(
+        return_value=[input_file_row]
     )
+    prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
@@ -1891,6 +1888,13 @@ async def test_list_batches_registers_and_returns_unified_output_file_ids():
     listed = result["data"][0]
     assert listed.id == unified_batch_uid
     assert listed.input_file_id == unified_input_file_id
+
+    bulk_lookup = prisma_client.db.litellm_managedfiletable.find_many.await_args
+    assert set(bulk_lookup.kwargs["where"]["flat_model_file_ids"]["hasSome"]) == {
+        raw_input_file_id,
+        raw_output_file_id,
+        raw_error_file_id,
+    }
 
     decoded_output = _decode_unified_id(listed.output_file_id)
     assert decoded_output.startswith("litellm_proxy")
@@ -1914,33 +1918,43 @@ async def test_list_batches_registers_and_returns_unified_output_file_ids():
 @pytest.mark.asyncio
 async def test_list_batches_resolves_existing_managed_rows_without_minting():
     """When the raw provider file IDs already have managed file rows, listing must
-    swap in the existing unified IDs and must not upsert duplicate rows."""
+    swap in the existing unified IDs via one bulk lookup for the whole page, with
+    no per-row queries and no duplicate upserts."""
     from litellm.proxy._types import UserAPIKeyAuth
 
-    unified_batch_uid = _create_unified_batch_id("model-123", "batch-456")
-    raw_output_file_id = "file-list-out-existing"
-    existing_unified_output_id = base64.urlsafe_b64encode(
-        f"litellm_proxy:application/json;unified_id,u-9;llm_output_file_id,{raw_output_file_id}".encode()
+    unified_input_file_id = base64.urlsafe_b64encode(
+        b"litellm_proxy:application/octet-stream;unified_id,in-9;target_model_names,gpt-5-batch"
     ).decode()
+    raw_output_file_ids = ["file-list-out-existing-1", "file-list-out-existing-2"]
+    existing_unified_output_ids = [
+        base64.urlsafe_b64encode(
+            f"litellm_proxy:application/json;unified_id,u-{i};llm_output_file_id,{raw_id}".encode()
+        ).decode()
+        for i, raw_id in enumerate(raw_output_file_ids)
+    ]
 
-    record = _terminal_batch_record(
-        unified_batch_uid, "file-list-in-9", raw_output_file_id, ""
-    )
+    records = [
+        _terminal_batch_record(
+            _create_unified_batch_id("model-123", f"batch-{i}"),
+            unified_input_file_id,
+            raw_id,
+            "",
+        )
+        for i, raw_id in enumerate(raw_output_file_ids)
+    ]
 
     prisma_client = AsyncMock()
-    prisma_client.db.litellm_managedobjecttable.find_many.return_value = [record]
+    prisma_client.db.litellm_managedobjecttable.find_many.return_value = records
 
-    existing_row = MagicMock()
-    existing_row.unified_file_id = existing_unified_output_id
+    existing_rows = [
+        MagicMock(unified_file_id=unified_id, flat_model_file_ids=[raw_id])
+        for raw_id, unified_id in zip(raw_output_file_ids, existing_unified_output_ids)
+    ]
 
-    def find_managed_file(where):
-        if where["flat_model_file_ids"]["has"] == raw_output_file_id:
-            return existing_row
-        return None
-
-    prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(
-        side_effect=find_managed_file
+    prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(
+        return_value=existing_rows
     )
+    prisma_client.db.litellm_managedfiletable.find_first = AsyncMock()
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
@@ -1951,8 +1965,36 @@ async def test_list_batches_resolves_existing_managed_rows_without_minting():
         limit=10,
     )
 
-    assert result["data"][0].output_file_id == existing_unified_output_id
+    assert [b.output_file_id for b in result["data"]] == existing_unified_output_ids
+    prisma_client.db.litellm_managedfiletable.find_many.assert_awaited_once()
+    prisma_client.db.litellm_managedfiletable.find_first.assert_not_awaited()
     prisma_client.db.litellm_managedfiletable.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_list_batches_caps_page_size_at_100():
+    """The list page size must be capped at 100 rows (matching OpenAI's limit)
+    even when the caller asks for more, so one request cannot fan out into an
+    unbounded scan."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.find_many.return_value = []
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+
+    result = await proxy_managed_files.list_user_batches(
+        user_api_key_dict=UserAPIKeyAuth(user_id="owner-user"),
+        limit=100000,
+    )
+
+    assert (
+        prisma_client.db.litellm_managedobjecttable.find_many.await_args.kwargs["take"]
+        == 101
+    )
+    assert result["data"] == []
 
 
 @pytest.mark.asyncio
