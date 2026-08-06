@@ -95,6 +95,38 @@ def print_verbose(print_statement):
         pass
 
 
+class _StreamInactivityGuard:
+    """Async-iterator wrapper that raises litellm.Timeout when the upstream
+    provider sends no chunk within ``timeout`` seconds (inter-chunk inactivity).
+    """
+
+    def __init__(self, inner, timeout, model, custom_llm_provider):
+        self._inner = inner.__aiter__() if hasattr(inner, "__aiter__") else inner
+        self._timeout = timeout
+        self._model = model
+        self._custom_llm_provider = custom_llm_provider
+        self._started = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        # First chunk carries connect + time-to-first-token, already bounded by
+        # the request timeout, so only the gaps between later chunks are guarded.
+        if not self._started:
+            chunk = await self._inner.__anext__()
+            self._started = True
+            return chunk
+        try:
+            return await asyncio.wait_for(self._inner.__anext__(), self._timeout)
+        except (asyncio.TimeoutError, TimeoutError) as e:
+            raise litellm.Timeout(
+                message=f"Stream inactivity timeout: no chunk received within {self._timeout}s",
+                model=self._model or "",
+                llm_provider=self._custom_llm_provider or "",
+            ) from e
+
+
 class CustomStreamWrapper:
     def __init__(
         self,
@@ -114,6 +146,7 @@ class CustomStreamWrapper:
         self.sent_first_chunk = False
         self.sent_last_chunk = False
         self._stream_created_time: float = time.time()
+        self._inactivity_source: Optional[Any] = None
 
         litellm_params: GenericLiteLLMParams = GenericLiteLLMParams(
             **self.logging_obj.model_call_details.get("litellm_params", {})
@@ -180,6 +213,28 @@ class CustomStreamWrapper:
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: Optional[int] = None
         self._last_returned_hidden_params: Optional[dict] = None
+
+    def _async_inactivity_source(self, completion_stream: Any) -> Any:
+        """Return *completion_stream* wrapped so a mid-stream provider stall
+        raises litellm.Timeout, or the raw stream when the guard is disabled.
+
+        Catches the case where a provider keeps the socket warm (keepalive/SSE
+        comment bytes) but emits no chunks, which httpx's read timeout cannot
+        see. Opt-in via LITELLM_STREAM_INACTIVITY_TIMEOUT_SECONDS; cached so the
+        first-chunk exemption persists across __anext__ calls.
+        """
+        from litellm.constants import LITELLM_STREAM_INACTIVITY_TIMEOUT_SECONDS
+
+        if LITELLM_STREAM_INACTIVITY_TIMEOUT_SECONDS is None:
+            return completion_stream
+        if self._inactivity_source is None:
+            self._inactivity_source = _StreamInactivityGuard(
+                completion_stream,
+                LITELLM_STREAM_INACTIVITY_TIMEOUT_SECONDS,
+                self.model,
+                self.custom_llm_provider,
+            )
+        return self._inactivity_source
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -2031,7 +2086,7 @@ class CustomStreamWrapper:
                 await self.fetch_stream()
 
             if is_async_iterable(self.completion_stream):
-                async for chunk in self.completion_stream:  # type: ignore[union-attr]
+                async for chunk in self._async_inactivity_source(self.completion_stream):  # type: ignore[union-attr]
                     if chunk == "None" or chunk is None:
                         continue  # skip None chunks
 
