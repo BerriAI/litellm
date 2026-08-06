@@ -159,6 +159,48 @@ def test_invalid_args_fall_back_without_failing_traffic(caplog):
     assert len(warnings) == 1
 
 
+def test_config_and_args_warnings_fire_independently(caplog):
+    router = _build_router(
+        [
+            _deployment(
+                "quality",
+                "openai/gpt-4o",
+                "d1",
+                {"routing_strategy": "latency-based-routing", "routing_strategy_args": {"ttl": "bogus"}},
+            ),
+            _deployment("quality", "openai/gpt-4o-mini", "d2", {"routing_strategy": "cost-based-routing"}),
+        ]
+    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        strategy, _ = router._get_routing_context("quality")
+        router._get_routing_context("quality")
+    assert strategy == "simple-shuffle"
+    conflict_warnings = [r for r in caplog.records if "conflicting values" in r.getMessage()]
+    args_warnings = [r for r in caplog.records if "cannot initialize strategy" in r.getMessage()]
+    assert len(conflict_warnings) == 1
+    assert len(args_warnings) == 1
+
+
+def test_changed_bad_args_warn_again():
+    router = _build_router(
+        [
+            _deployment(
+                "quality",
+                "openai/gpt-4o",
+                "d1",
+                {"routing_strategy": "latency-based-routing", "routing_strategy_args": {"ttl": "bogus"}},
+            )
+        ]
+    )
+    router._get_routing_context("quality")
+    assert len(router._warned_model_group_strategy_keys) == 1
+
+    for idx in router.model_name_to_deployment_indices["quality"]:
+        router.model_list[idx]["model_info"]["routing_strategy_args"] = {"ttl": "still-bogus"}
+    router._get_routing_context("quality")
+    assert len(router._warned_model_group_strategy_keys) == 2
+
+
 def test_simple_shuffle_with_args_keeps_shuffle_semantics(caplog):
     router = _build_router(
         [

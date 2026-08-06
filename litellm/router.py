@@ -715,7 +715,7 @@ class Router:
         self._init_routing_groups(self._routing_groups_input)
         self._override_selectors: dict[str, Any] = {}
         self._override_selectors_lock = threading.Lock()
-        self._warned_model_group_strategy_models: set[str] = set()  # mutable-ok: warn-once misconfig registry
+        self._warned_model_group_strategy_keys: set[tuple[str, str, str]] = set()  # mutable-ok: warn-once registry
         self.access_groups = None
         ## USAGE TRACKING ##
         if isinstance(litellm._async_success_callback, list):
@@ -1129,25 +1129,45 @@ class Router:
 
     _EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 
+    def _warn_model_group_strategy_once(self, model: str, kind: str, fingerprint: str, message: str) -> None:
+        """
+        Reports a model-group strategy misconfiguration once per
+        (model, problem kind, offending config). Distinct problem kinds warn
+        independently, and a changed config re-warns.
+        """
+        warn_key: Final = (model, kind, fingerprint)
+        if warn_key in self._warned_model_group_strategy_keys:
+            return
+        self._warned_model_group_strategy_keys.add(warn_key)
+        verbose_router_logger.warning("%s", message)
+
+    def _deployment_strategy_entry(self, idx: int) -> tuple[str | None, Mapping[str, object]] | None:
+        """
+        The (normalized strategy, args) a deployment declares via
+        `model_info.routing_strategy`, or None when unset. An empty string
+        counts as unset, so a PATCH (which cannot delete a model_info key) can
+        still clear the field.
+        """
+        info: Final = self.model_list[idx].get("model_info") or self._EMPTY_MAPPING
+        raw: Final = info.get("routing_strategy")
+        if not raw:
+            return None
+        normalized: Final = self._normalize_strategy(raw) if isinstance(raw, (str, RoutingStrategy)) else None
+        return normalized, info.get("routing_strategy_args") or self._EMPTY_MAPPING
+
     def _get_model_group_strategy_config(self, model: str) -> tuple[str, Mapping[str, object]] | None:
         """
         Reads `model_info.routing_strategy` (+ `routing_strategy_args`) off the
         deployments of `model`. When deployments of the same model_name disagree,
         the first deployment in model_list order wins; invalid or conflicting
-        values are reported once per model_name so a bad stored value can never
-        take down that model's traffic. An empty string counts as unset, so a
-        PATCH (which cannot delete a model_info key) can still clear the field.
+        values are reported once per offending config so a bad stored value can
+        never take down that model's traffic.
         """
         indices: Final = self.model_name_to_deployment_indices.get(model)
         if not indices:
             return None
         configured: Final = tuple(
-            (
-                self._normalize_strategy(raw) if isinstance(raw, (str, RoutingStrategy)) else None,
-                info.get("routing_strategy_args") or self._EMPTY_MAPPING,
-            )
-            for idx in indices
-            if (raw := (info := self.model_list[idx].get("model_info") or self._EMPTY_MAPPING).get("routing_strategy"))
+            entry for idx in indices if (entry := self._deployment_strategy_entry(idx)) is not None
         )
         if not configured:
             return None
@@ -1158,14 +1178,15 @@ class Router:
         )
         has_invalid: Final = len(valid) < len(configured)
         has_conflict: Final = len(frozenset(strategy for strategy, _ in valid)) > 1
-        if (has_invalid or has_conflict) and model not in self._warned_model_group_strategy_models:
-            self._warned_model_group_strategy_models.add(model)
-            verbose_router_logger.warning(
-                "model_info.routing_strategy for model_group '%s' has %s; using '%s'. Supported strategies: %s.",
+        if has_invalid or has_conflict:
+            self._warn_model_group_strategy_once(
                 model,
-                "an unsupported value" if has_invalid else "conflicting values across deployments",
-                valid[0][0] if valid else self._normalize_strategy(self.routing_strategy),
-                sorted(self._OVERRIDABLE_ROUTING_STRATEGIES),
+                "config",
+                ",".join(str(strategy) for strategy, _ in configured),
+                f"model_info.routing_strategy for model_group '{model}' has "
+                f"{'an unsupported value' if has_invalid else 'conflicting values across deployments'}; using "
+                f"'{valid[0][0] if valid else self._normalize_strategy(self.routing_strategy)}'. "
+                f"Supported strategies: {sorted(self._OVERRIDABLE_ROUTING_STRATEGIES)}.",
             )
         return valid[0] if valid else None
 
@@ -1207,14 +1228,13 @@ class Router:
             if selector_key not in self._override_selectors:
                 built: Final = self._build_model_group_selector(strategy, args)
                 if built is None:
-                    if model not in self._warned_model_group_strategy_models:
-                        self._warned_model_group_strategy_models.add(model)
-                        verbose_router_logger.warning(
-                            "model_info.routing_strategy_args for model_group '%s' cannot initialize strategy "
-                            "'%s'; falling back to the routing-group / top-level strategy.",
-                            model,
-                            strategy,
-                        )
+                    self._warn_model_group_strategy_once(
+                        model,
+                        "args",
+                        selector_key,
+                        f"model_info.routing_strategy_args for model_group '{model}' cannot initialize strategy "
+                        f"'{strategy}'; falling back to the routing-group / top-level strategy.",
+                    )
                     return None
                 live_keys: Final = self._live_model_group_selector_keys()
                 stale: Final = tuple(k for k in self._override_selectors if "|" in k and k not in live_keys)

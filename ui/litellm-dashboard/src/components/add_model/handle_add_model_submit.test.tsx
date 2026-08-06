@@ -66,6 +66,7 @@ describe("prepareModelAddRequest", () => {
       ],
       model_name: "bedrock/claude-opus",
       routing_strategy: "cost-based-routing",
+      routing_strategy_args: '{"ttl": 3600}',
     };
 
     const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
@@ -73,7 +74,9 @@ describe("prepareModelAddRequest", () => {
     expect(deployments).toHaveLength(1);
     const [deployment] = deployments!;
     expect(deployment.modelInfoObj.routing_strategy).toBe("cost-based-routing");
+    expect(deployment.modelInfoObj.routing_strategy_args).toEqual({ ttl: 3600 });
     expect(deployment.litellmParamsObj.routing_strategy).toBeUndefined();
+    expect(deployment.litellmParamsObj.routing_strategy_args).toBeUndefined();
   });
 
   it("ignores litellm_credential_name inside LiteLLM Params JSON", async () => {

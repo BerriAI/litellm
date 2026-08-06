@@ -193,6 +193,16 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               <Select allowClear placeholder="Inherit router default" options={[...ROUTING_STRATEGY_OPTIONS]} />
             </Form.Item>
 
+            <Form.Item
+              label="Routing Strategy Args"
+              name="routing_strategy_args"
+              className="mb-4"
+              rules={[{ validator: formItemValidateJSON }]}
+              help="Optional JSON args for the selected strategy, e.g. latency window TTL."
+            >
+              <TextArea rows={2} placeholder='{"ttl": 3600}' />
+            </Form.Item>
+
             <Form.Item label="Tags" name="tags" className="mb-4">
               <Select
                 mode="tags"

@@ -435,6 +435,16 @@ export default function ModelInfoView({
             routing_strategy: formRoutingStrategy,
           };
         }
+        if (values.routing_strategy_args !== undefined) {
+          const parsedArgs = values.routing_strategy_args ? JSON.parse(values.routing_strategy_args) : {};
+          const storedArgs = modelData.model_info?.routing_strategy_args ?? {};
+          if (JSON.stringify(parsedArgs) !== JSON.stringify(storedArgs)) {
+            updatedModelInfo = {
+              ...updatedModelInfo,
+              routing_strategy_args: parsedArgs,
+            };
+          }
+        }
       } catch (e) {
         NotificationsManager.fromBackend("Invalid JSON in Model Info");
         return;
@@ -809,6 +819,9 @@ export default function ModelInfoView({
                     tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
                     health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
                     routing_strategy: localModelData.model_info?.routing_strategy || "",
+                    routing_strategy_args: localModelData.model_info?.routing_strategy_args
+                      ? JSON.stringify(localModelData.model_info.routing_strategy_args)
+                      : "",
                     litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
                     litellm_extra_params: JSON.stringify(
                       Object.fromEntries(
@@ -1092,6 +1105,25 @@ export default function ModelInfoView({
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {routingStrategyLabel(localModelData.model_info?.routing_strategy)}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">Routing Strategy Args</Text>
+                        {isEditing ? (
+                          <Form.Item
+                            name="routing_strategy_args"
+                            className="mb-0"
+                            rules={[{ validator: formItemValidateJSON }]}
+                          >
+                            <Input placeholder='{"ttl": 3600}' />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                            {localModelData.model_info?.routing_strategy_args
+                              ? JSON.stringify(localModelData.model_info.routing_strategy_args)
+                              : "Not Set"}
                           </div>
                         )}
                       </div>
