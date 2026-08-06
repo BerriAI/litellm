@@ -17,6 +17,23 @@
 
 set -eu
 
+if [ -z "${PRE_COMMIT_LINT_INNER:-}" ]; then
+    log_file=$(git rev-parse --path-format=absolute --git-path pre_commit_lint.log)
+    if : > "$log_file" 2>/dev/null; then
+        echo "pre-commit: logging full output to $log_file"
+        PRE_COMMIT_LINT_INNER=1 "$0" "$@" 2>&1 | tee "$log_file"
+        pipe_status=("${PIPESTATUS[@]}")
+        if [ "${pipe_status[1]}" -eq 0 ]; then
+            echo "pre-commit: full log: $log_file"
+        else
+            echo "pre-commit: WARNING - writing $log_file failed; the log may be incomplete" >&2
+        fi
+        exit "${pipe_status[0]}"
+    fi
+    echo "pre-commit: WARNING - cannot write $log_file; output will not be saved" >&2
+    PRE_COMMIT_LINT_INNER=1 exec "$0" "$@"
+fi
+
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
@@ -95,17 +112,37 @@ bootstrap_hint() {
     echo "  Fix: make bootstrap" >&2
 }
 
-if [ -n "$litellm_py_files" ]; then
+python_checks() {
+    local rc=0
     echo "pre-commit: linting Python (make lint)"
-    make lint || { echo "✗ Python lint failed. Fix the reds above, then re-run make pre-commit." >&2; status=1; }
+    make lint || { echo "✗ Python lint failed. Fix the reds above, then re-run make pre-commit." >&2; rc=1; }
     # `make lint` format-checks files in origin/base...HEAD, which at pre-commit time
     # predates the staged change, so format-check the staged litellm files directly to
     # cover a brand-new commit before it lands.
     if [ -n "$fmt_files" ]; then
         echo "pre-commit: ruff format --check (staged litellm files)"
         printf '%s\n' "$fmt_files" | xargs uv run --no-sync ruff format --check --exclude '/enterprise/' \
-            || { echo "✗ Unformatted staged files. Fix with: make format, then re-stage." >&2; status=1; }
+            || { echo "✗ Unformatted staged files. Fix with: make format, then re-stage." >&2; rc=1; }
     fi
+    return $rc
+}
+
+on_interrupt() {
+    trap - INT TERM
+    rm -f "${python_log:-}" "${dash_log:-}" "${gen_log:-}"
+    for job_pid in ${python_pid:-} ${dash_pid:-} ${gen_pid:-}; do
+        kill -- "-$job_pid" 2>/dev/null || true
+    done
+    exit 130
+}
+trap on_interrupt INT TERM
+
+if [ -n "$litellm_py_files" ]; then
+    python_log=$(mktemp)
+    set -m
+    python_checks > "$python_log" 2>&1 &
+    python_pid=$!
+    set +m
 fi
 
 if [ -n "$e2e_py_files" ] && [ -z "$litellm_py_files" ]; then
@@ -119,18 +156,26 @@ if [ -n "$e2e_py_files" ]; then
         || { echo "✗ Raw HTTP client import in tests/e2e. Route the call through tests/e2e/e2e_http.py, then re-run make pre-commit." >&2; status=1; }
 fi
 
-if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ]; then
+dashboard_checks() {
     echo "pre-commit: linting dashboard (prettier + eslint + lint budgets)"
     if [ ! -d ui/litellm-dashboard/node_modules ]; then
         echo "✗ ui/litellm-dashboard/node_modules is missing; dashboard lint cannot run." >&2
         bootstrap_hint
-        status=1
-    else
-        lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd ui/litellm-dashboard && npm run format)." >&2; status=1; }
+        return 1
     fi
+    lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd ui/litellm-dashboard && npm run format)." >&2; return 1; }
+}
+
+if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ]; then
+    dash_log=$(mktemp)
+    set -m
+    dashboard_checks > "$dash_log" 2>&1 &
+    dash_pid=$!
+    set +m
 fi
 
-if [ -n "$spec_files" ]; then
+genapi_checks() {
+    local status=0
     echo "pre-commit: checking dashboard API types are in sync (npm run gen:api)"
     # gen-api-types.mjs imports litellm.proxy.proxy_server, which needs the proxy deps
     # and an up-to-date Prisma client; check-ui-api-types.yml installs those and runs
@@ -149,13 +194,35 @@ if [ -n "$spec_files" ]; then
         status=1
     elif ( cd ui/litellm-dashboard && LITELLM_PYTHON="uv run --no-sync python" npm run gen:api ); then
         if ! git diff --quiet -- ui/litellm-dashboard/src/lib/http/schema.d.ts; then
-            echo "✗ Dashboard API types are stale; regenerated src/lib/http/schema.d.ts. Stage it and re-run make pre-commit." >&2
+            echo "✗ Dashboard API types are stale; regenerated src/lib/http/schema.d.ts. Stage it and commit; re-run make pre-commit only if other checks failed too." >&2
             status=1
         fi
     else
         echo "✗ Could not regenerate API types (npm run gen:api failed)." >&2
         status=1
     fi
+    return $status
+}
+
+if [ -n "$spec_files" ]; then
+    gen_log=$(mktemp)
+    set -m
+    genapi_checks > "$gen_log" 2>&1 &
+    gen_pid=$!
+    set +m
+fi
+
+if [ -n "${python_pid:-}" ]; then
+    wait "$python_pid" || status=1
+    cat "$python_log"; rm -f "$python_log"
+fi
+if [ -n "${dash_pid:-}" ]; then
+    wait "$dash_pid" || status=1
+    cat "$dash_log"; rm -f "$dash_log"
+fi
+if [ -n "${gen_pid:-}" ]; then
+    wait "$gen_pid" || status=1
+    cat "$gen_log"; rm -f "$gen_log"
 fi
 
 exit $status

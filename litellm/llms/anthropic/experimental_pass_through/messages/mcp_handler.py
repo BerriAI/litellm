@@ -7,7 +7,8 @@ tool through a ``tool_use`` content block, and results are fed back as
 ``tool_result`` blocks in a user message.
 """
 
-from typing import Any, AsyncIterator, Mapping, Sequence, Union
+from collections.abc import AsyncIterator, Mapping, Sequence
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.responses.mcp.request_context import MCPRequestContext
@@ -20,11 +21,11 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 
-MAX_MCP_TOOL_USE_ITERATIONS = 10
+MAX_MCP_TOOL_USE_ITERATIONS: Final = 10
 
 
 def _get_response_content(response: AnthropicMessagesResponse) -> Sequence[Mapping[str, Any]]:
-    content = response.get("content")
+    content: Final = response.get("content")
     if not isinstance(content, list):
         return ()
     return tuple(block for block in content if isinstance(block, dict))
@@ -35,8 +36,8 @@ def _extract_tool_use_blocks(response: AnthropicMessagesResponse) -> Sequence[Ma
     return tuple(block for block in _get_response_content(response) if block.get("type") == "tool_use")
 
 
-def _get_stop_reason(response: AnthropicMessagesResponse) -> Union[str, None]:
-    stop_reason = response.get("stop_reason")
+def _get_stop_reason(response: AnthropicMessagesResponse) -> str | None:
+    stop_reason: Final = response.get("stop_reason")
     return stop_reason if isinstance(stop_reason, str) else None
 
 
@@ -59,9 +60,9 @@ async def anthropic_messages_with_mcp(
     max_tokens: int,
     messages: Sequence[Mapping[str, Any]],
     model: str,
-    tools: Union[Sequence[Mapping[str, Any]], None] = None,
+    tools: Sequence[Mapping[str, Any]] | None = None,
     **kwargs: Any,  # kwargs-ok: forwarded verbatim to litellm.anthropic_messages, which owns the param contract
-) -> Union[AnthropicMessagesResponse, AsyncIterator[Any]]:
+) -> AnthropicMessagesResponse | AsyncIterator[Any]:
     """
     Expand litellm_proxy MCP references for `/v1/messages` and run the tool loop.
 
@@ -89,7 +90,7 @@ async def anthropic_messages_with_mcp(
             **kwargs,
         )
 
-    context = MCPRequestContext.resolve(kwargs=dict(kwargs), tools=tools)
+    context: Final = MCPRequestContext.resolve(kwargs=dict(kwargs), tools=tools)
 
     (
         deduplicated_mcp_tools,
@@ -103,17 +104,17 @@ async def anthropic_messages_with_mcp(
         request_tags=list(context.request_tags) if context.request_tags else None,
     )
 
-    anthropic_tools: Sequence[AnthropicMessagesTool] = tuple(
+    anthropic_tools: Final[Sequence[AnthropicMessagesTool]] = tuple(
         transform_mcp_tool_to_anthropic_tool(mcp_tool) for mcp_tool in deduplicated_mcp_tools
     )
-    all_tools = [*anthropic_tools, *(other_tools or ())]
+    all_tools: Final = [*anthropic_tools, *(other_tools or ())]
 
-    should_auto_execute = LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
+    should_auto_execute: Final = LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
         mcp_tools_with_litellm_proxy=mcp_references
     )
-    stream = bool(kwargs.pop("stream", False))
+    stream: Final = bool(kwargs.pop("stream", False))
 
-    base_call_args: Mapping[str, Any] = {
+    base_call_args: Final[Mapping[str, Any]] = {
         "max_tokens": max_tokens,
         "model": model,
         "tools": all_tools or None,
@@ -163,8 +164,9 @@ async def anthropic_messages_with_mcp(
         response = await litellm.anthropic_messages(messages=list(working_messages), stream=False, **base_call_args)
     else:
         verbose_logger.warning(
-            f"MCP tool loop hit its {MAX_MCP_TOOL_USE_ITERATIONS} iteration cap for model {model}; "
-            "returning the last response"
+            "MCP tool loop hit its %s iteration cap for model %s; returning the last response",
+            MAX_MCP_TOOL_USE_ITERATIONS,
+            model,
         )
 
     if stream:

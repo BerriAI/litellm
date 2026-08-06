@@ -4525,6 +4525,66 @@
           "title": "PluginListItem",
           "type": "object"
         },
+        "PluginResponse": {
+          "description": "Plugin information in API responses.",
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin description",
+              "title": "Description"
+            },
+            "enabled": {
+              "description": "Whether plugin is enabled",
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "id": {
+              "description": "Plugin unique ID",
+              "title": "Id",
+              "type": "string"
+            },
+            "name": {
+              "description": "Plugin name",
+              "title": "Name",
+              "type": "string"
+            },
+            "source": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Git source reference",
+              "title": "Source",
+              "type": "object"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin version",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "source",
+            "enabled"
+          ],
+          "title": "PluginResponse",
+          "type": "object"
+        },
         "RegisterPluginRequest": {
           "description": "Request body for registering a plugin in the marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket and referenced by their git source.",
           "properties": {
@@ -4643,14 +4703,163 @@
             }
           },
           "required": [
-            "name",
-            "source"
+            "source",
+            "name"
           ],
           "title": "RegisterPluginRequest",
           "type": "object"
         },
+        "RegisterPluginResponse": {
+          "description": "Response from plugin registration.",
+          "properties": {
+            "action": {
+              "description": "Action taken (created/updated)",
+              "title": "Action",
+              "type": "string"
+            },
+            "plugin": {
+              "$ref": "#/components/schemas/PluginResponse",
+              "description": "Plugin information"
+            },
+            "status": {
+              "description": "Operation status",
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "action",
+            "plugin"
+          ],
+          "title": "RegisterPluginResponse",
+          "type": "object"
+        },
+        "UpdatePluginRequest": {
+          "description": "Request body for replacing an existing plugin.\n\nThe plugin name is the resource identity and is supplied as the path\nparameter, so it cannot be changed here. This is a full replace: omitted\nfields reset to their defaults, so version is cleared rather than\ndefaulting to the create-time \"1.0.0\".",
+          "properties": {
+            "author": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PluginAuthor"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin author"
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin category",
+              "title": "Category"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin description",
+              "title": "Description"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Skill domain (e.g., 'Productivity')",
+              "title": "Domain"
+            },
+            "homepage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin homepage URL",
+              "title": "Homepage"
+            },
+            "keywords": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search keywords",
+              "title": "Keywords"
+            },
+            "namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Skill namespace within domain (e.g., 'workflows')",
+              "title": "Namespace"
+            },
+            "source": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Git source reference. Supported formats:\n- GitHub: {'source': 'github', 'repo': 'org/repo'}\n- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}",
+              "title": "Source",
+              "type": "object"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Semantic version; cleared if omitted",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "title": "UpdatePluginRequest",
+          "type": "object"
+        },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -4754,7 +4963,7 @@
           ]
         },
         "post": {
-          "description": "Register a plugin in the LiteLLM marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket. Claude Code will clone from the git source\nwhen users install.\n\nParameters:\n    - name: Plugin name (kebab-case)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Registration status and plugin information.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"name\": \"my-plugin\",\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"1.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "description": "Register a new plugin in the LiteLLM marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket. Claude Code will clone from the git source\nwhen users install.\n\nThis endpoint is create-only and never overwrites. If a plugin with\nthe same name already exists it returns 409 Conflict; use\nPUT /claude-code/plugins/{plugin_name} to update an existing plugin.\n\nParameters:\n    - name: Plugin name (kebab-case)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Registration status (action is always \"created\") and plugin information.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"name\": \"my-plugin\",\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"1.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
           "operationId": "register_plugin_claude_code_plugins_post",
           "requestBody": {
             "content": {
@@ -4770,7 +4979,9 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/RegisterPluginResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -4882,6 +5093,62 @@
             }
           ],
           "summary": "Get Plugin",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        },
+        "put": {
+          "description": "Update an existing plugin in the LiteLLM marketplace.\n\nThe plugin is identified by its name in the path, which is the resource\nidentity and cannot be changed here. This is a full replace, not a merge:\nthe manifest is rebuilt from the request body, so any optional field left\nout is reset to its default (e.g. an omitted version is cleared, not kept).\nSend the full desired state.\n\nReturns 404 if no plugin with the given name exists; use\nPOST /claude-code/plugins to create a new plugin.\n\nParameters:\n    - plugin_name: Name of the plugin to update (path parameter)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Update status (action is always \"updated\") and plugin information.\n\nExample:\n    ```bash\n    curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"2.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "operationId": "update_plugin_claude_code_plugins__plugin_name__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "plugin_name",
+              "required": true,
+              "schema": {
+                "title": "Plugin Name",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatePluginRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RegisterPluginResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Update Plugin",
           "tags": [
             "claude_code_marketplace"
           ]
@@ -20402,6 +20669,16 @@
               "description": "Who created the attachment.",
               "title": "Created By"
             },
+            "definition_location": {
+              "default": "db",
+              "description": "Where this attachment is defined: 'db' (database) or 'config' (config.yaml).",
+              "enum": [
+                "db",
+                "config"
+              ],
+              "title": "Definition Location",
+              "type": "string"
+            },
             "keys": {
               "description": "Key patterns.",
               "items": {
@@ -20657,6 +20934,16 @@
               ],
               "description": "Who created the policy.",
               "title": "Created By"
+            },
+            "definition_location": {
+              "default": "db",
+              "description": "Where this policy is defined: 'db' (database) or 'config' (config.yaml).",
+              "enum": [
+                "db",
+                "config"
+              ],
+              "title": "Definition Location",
+              "type": "string"
             },
             "description": {
               "anyOf": [
@@ -21129,12 +21416,45 @@
           "title": "PolicyVersionStatusUpdateRequest",
           "type": "object"
         },
+        "UsageChartPoint": {
+          "properties": {
+            "blocked": {
+              "title": "Blocked",
+              "type": "integer"
+            },
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "passed": {
+              "title": "Passed",
+              "type": "integer"
+            },
+            "score": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Score"
+            }
+          },
+          "required": [
+            "date",
+            "passed",
+            "blocked"
+          ],
+          "title": "UsageChartPoint",
+          "type": "object"
+        },
         "UsageOverviewResponse": {
           "properties": {
             "chart": {
               "items": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/UsageChartPoint"
               },
               "title": "Chart",
               "type": "array"
@@ -21243,6 +21563,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -21420,7 +21747,7 @@
       },
       "/policies/attachments/list": {
         "get": {
-          "description": "List all policy attachments from the database.\n\nExample Request:\n```bash\ncurl -X GET \"http://localhost:4000/policies/attachments/list\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\n```\n\nExample Response:\n```json\n{\n    \"attachments\": [\n        {\n            \"attachment_id\": \"123e4567-e89b-12d3-a456-426614174000\",\n            \"policy_name\": \"global-baseline\",\n            \"scope\": \"*\",\n            \"teams\": [],\n            \"keys\": [],\n            \"models\": [],\n            \"created_at\": \"2024-01-01T00:00:00Z\",\n            \"updated_at\": \"2024-01-01T00:00:00Z\"\n        }\n    ],\n    \"total_count\": 1\n}\n```",
+          "description": "List all policy attachments from the database and config.yaml.\n\nConfig-defined attachments are returned with definition_location \"config\" and a\nsynthetic attachment_id (\"config-<index>\").\n\nExample Request:\n```bash\ncurl -X GET \"http://localhost:4000/policies/attachments/list\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\n```\n\nExample Response:\n```json\n{\n    \"attachments\": [\n        {\n            \"attachment_id\": \"123e4567-e89b-12d3-a456-426614174000\",\n            \"policy_name\": \"global-baseline\",\n            \"scope\": \"*\",\n            \"teams\": [],\n            \"keys\": [],\n            \"models\": [],\n            \"created_at\": \"2024-01-01T00:00:00Z\",\n            \"updated_at\": \"2024-01-01T00:00:00Z\"\n        }\n    ],\n    \"total_count\": 1\n}\n```",
           "operationId": "list_policy_attachments_policies_attachments_list_get",
           "responses": {
             "200": {
@@ -21596,7 +21923,7 @@
       },
       "/policies/list": {
         "get": {
-          "description": "List all policies from the database. Optionally filter by version_status.\n\nQuery params:\n- version_status: Optional. One of \"draft\", \"published\", \"production\".\n  If omitted, all versions are returned.\n\nExample Request:\n```bash\ncurl -X GET \"http://localhost:4000/policies/list\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\ncurl -X GET \"http://localhost:4000/policies/list?version_status=production\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\n```\n\nExample Response:\n```json\n{\n    \"policies\": [\n        {\n            \"policy_id\": \"123e4567-e89b-12d3-a456-426614174000\",\n            \"policy_name\": \"global-baseline\",\n            \"version_number\": 1,\n            \"version_status\": \"production\",\n            \"inherit\": null,\n            \"description\": \"Base guardrails for all requests\",\n            \"guardrails_add\": [\"pii_masking\"],\n            \"guardrails_remove\": [],\n            \"condition\": null,\n            \"created_at\": \"2024-01-01T00:00:00Z\",\n            \"updated_at\": \"2024-01-01T00:00:00Z\"\n        }\n    ],\n    \"total_count\": 1\n}\n```",
+          "description": "List all policies from the database and config.yaml. Optionally filter by version_status.\n\nConfig-defined policies are returned with definition_location \"config\" and are treated\nas production versions. On a name conflict with a DB policy, only the DB policy is returned.\n\nQuery params:\n- version_status: Optional. One of \"draft\", \"published\", \"production\".\n  If omitted, all versions are returned.\n\nExample Request:\n```bash\ncurl -X GET \"http://localhost:4000/policies/list\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\ncurl -X GET \"http://localhost:4000/policies/list?version_status=production\" \\\n    -H \"Authorization: Bearer <your_api_key>\"\n```\n\nExample Response:\n```json\n{\n    \"policies\": [\n        {\n            \"policy_id\": \"123e4567-e89b-12d3-a456-426614174000\",\n            \"policy_name\": \"global-baseline\",\n            \"version_number\": 1,\n            \"version_status\": \"production\",\n            \"inherit\": null,\n            \"description\": \"Base guardrails for all requests\",\n            \"guardrails_add\": [\"pii_masking\"],\n            \"guardrails_remove\": [],\n            \"condition\": null,\n            \"created_at\": \"2024-01-01T00:00:00Z\",\n            \"updated_at\": \"2024-01-01T00:00:00Z\"\n        }\n    ],\n    \"total_count\": 1\n}\n```",
           "operationId": "list_policies_policies_list_get",
           "parameters": [
             {
