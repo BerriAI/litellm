@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -387,13 +388,43 @@ def test_store_prune_spares_a_concurrent_runs_in_flight_scratch(tmp_path):
     assert gate.load_cached_counts(mine) == {"reportAny": 1}
 
 
-def test_store_prunes_entries_for_other_branch_points(tmp_path):
+def test_store_keeps_a_concurrent_worktrees_entry_for_another_branch_point(tmp_path):
     old = gate.cache_path(tmp_path, "old", ("f",))
     gate.store_counts(tmp_path, old, "old", {"reportAny": 1})
     new = gate.cache_path(tmp_path, "new", ("f",))
     gate.store_counts(tmp_path, new, "new", {"reportAny": 2})
-    assert not old.exists()
+    assert gate.load_cached_counts(old) == {"reportAny": 1}
     assert gate.load_cached_counts(new) == {"reportAny": 2}
+
+
+def test_store_evicts_only_the_oldest_entries_beyond_the_cap(tmp_path):
+    aged = [
+        gate.cache_path(tmp_path, f"base{i}", ("f",))
+        for i in range(gate.CACHE_KEEP_ENTRIES)
+    ]
+    for age, path in enumerate(aged):
+        gate.store_counts(tmp_path, path, f"base{age}", {"reportAny": age})
+        os.utime(path, (age, age))
+    newest = gate.cache_path(tmp_path, "newest", ("f",))
+    gate.store_counts(tmp_path, newest, "newest", {"reportAny": 99})
+    assert not aged[0].exists()
+    assert all(path.exists() for path in aged[1:])
+    assert gate.load_cached_counts(newest) == {"reportAny": 99}
+
+
+def test_store_never_evicts_the_entry_it_just_wrote_even_on_mtime_ties(tmp_path):
+    others = [
+        gate.cache_path(tmp_path, f"base{i}", ("f",))
+        for i in range(gate.CACHE_KEEP_ENTRIES + 2)
+    ]
+    for path in others:
+        gate.store_counts(tmp_path, path, path.name, {"reportAny": 1})
+        os.utime(path, (9_999_999_999, 9_999_999_999))
+    mine = gate.cache_path(tmp_path, "mine", ("f",))
+    gate.store_counts(tmp_path, mine, "mine", {"reportAny": 2})
+    assert gate.load_cached_counts(mine) == {"reportAny": 2}
+    survivors = list(tmp_path.glob(f"{gate.CACHE_FILE_PREFIX}*.json"))
+    assert len(survivors) == gate.CACHE_KEEP_ENTRIES
 
 
 def _no_fetch(ref):
