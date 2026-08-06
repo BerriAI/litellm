@@ -228,6 +228,48 @@ class TestComplexityRouterInit:
         assert request_kwargs["temperature"] == 0.2
 
     @pytest.mark.asyncio
+    async def test_tier_params_reach_upstream_acompletion(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "temperature": 0.1,
+                        "complexity_router_config": {
+                            "tiers": {
+                                "SIMPLE": {"model": "cheap", "temperature": 0.2},
+                                "MEDIUM": "cheap",
+                                "COMPLEX": "cheap",
+                                "REASONING": "cheap",
+                            },
+                            "keyword_tier_rules": [{"keywords": ["force"], "tier": "SIMPLE"}],
+                            "session_affinity": False,
+                        },
+                    },
+                },
+                {"model_name": "cheap", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+            ]
+        )
+        response = litellm.ModelResponse(id="test-response", choices=[])
+        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=response) as mock_acompletion:
+            await router.acompletion(
+                model="smart-router",
+                messages=[{"role": "user", "content": "force this request"}],
+            )
+        assert mock_acompletion.await_args is not None
+        assert mock_acompletion.await_args.kwargs["temperature"] == 0.2
+
+        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=response) as mock_acompletion:
+            await router.acompletion(
+                model="smart-router",
+                messages=[{"role": "user", "content": "force this request"}],
+                temperature=0.3,
+            )
+        assert mock_acompletion.await_args is not None
+        assert mock_acompletion.await_args.kwargs["temperature"] == 0.3
+
+    @pytest.mark.asyncio
     async def test_adaptive_cross_tier_model_uses_model_pool_tier_params(self, mock_router_instance):
         router = ComplexityRouter(
             model_name="hybrid",

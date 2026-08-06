@@ -269,9 +269,10 @@ class TierTarget(BaseModel):
         return cast(dict[str, object], self.__pydantic_extra__ or {})  # cast-ok: pydantic owns extra params
 
 
-def _tier_pool(value: str | list[str] | TierTarget) -> list[str]:  # mutable-ok: routing pools use list semantics
+def tier_pool(value: str | list[str] | TierTarget) -> list[str]:  # mutable-ok: routing pools use list semantics
     if isinstance(value, TierTarget):
-        value = value.model
+        target_model: Final = value.model
+        return target_model if isinstance(target_model, list) else [target_model]
     return value if isinstance(value, list) else [value]
 
 
@@ -601,14 +602,14 @@ class ComplexityRouterConfig(BaseModel):
         normalized: Final[
             dict[str, str | list[str] | TierTarget]  # mutable-ok: pydantic config surface is mutable
         ] = {  # mutable-ok: pydantic requires normalized tier mappings
-            tier: target.model_copy(update={"model": _tier_pool(target)})
+            tier: target.model_copy(update={"model": tier_pool(target)})
             if isinstance(target, TierTarget)
-            else _tier_pool(target)
+            else tier_pool(target)
             for tier, target in self.tiers.items()
         }
-        if not any(_tier_pool(target) for target in normalized.values()):
+        if not any(tier_pool(target) for target in normalized.values()):
             raise ValueError("adaptive=True requires at least one non-empty tier pool")
-        empty: Final = [tier for tier, target in normalized.items() if not _tier_pool(target)]
+        empty: Final = [tier for tier, target in normalized.items() if not tier_pool(target)]
         if empty:
             raise ValueError(f"adaptive=True tier pools must be non-empty; empty tiers: {empty}")
         self.tiers = normalized

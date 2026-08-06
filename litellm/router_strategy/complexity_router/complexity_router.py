@@ -47,7 +47,7 @@ from .config import (
     ComplexityRouterConfig,
     ComplexityTier,
     TierTarget,
-    _tier_pool,
+    tier_pool,
 )
 
 if TYPE_CHECKING:
@@ -1157,7 +1157,12 @@ class ComplexityRouter(CustomLogger):
         model: str | list[str] | TierTarget, tier_key: str
     ) -> str:  # mutable-ok: legacy pool inputs remain lists
         if isinstance(model, TierTarget):
-            model = model.model
+            target_model: Final = model.model
+            if isinstance(target_model, str):
+                return target_model
+            if not target_model:
+                raise ValueError(f"Empty model pool for tier {tier_key}")
+            return random.choice(target_model)
         if isinstance(model, str):
             return model
         if not model:
@@ -1166,7 +1171,7 @@ class ComplexityRouter(CustomLogger):
 
     def _tier_pools(self) -> dict[str, list[str]]:  # mutable-ok: adaptive router consumes mutable pools
         return {  # mutable-ok: router consumers require mutable tier pool mappings
-            tier: _tier_pool(target) for tier, target in self.config.tiers.items()
+            tier: tier_pool(target) for tier, target in self.config.tiers.items()
         }
 
     def _tier_params(
@@ -1883,7 +1888,7 @@ class ComplexityRouter(CustomLogger):
             return PreRoutingHookResponse(
                 model=fallback_model,
                 messages=messages if has_original_messages else None,
-                params={},  # mutable-ok: response schema requires a dict
+                params=None,
                 routing_decision=self._build_routing_decision(
                     routed_model=fallback_model,
                     conversation_continuing=conversation_continuing,
