@@ -61,8 +61,32 @@ def _extract_fireworks_hidden_params(payload: dict) -> dict:
     return {**top_level, **per_choice}
 
 
-def _json_schema_response_format(schema: object) -> Mapping[str, object]:
-    return {"type": "json_schema", "json_schema": {"schema": schema}}  # mutable-ok: JSON request body
+def _json_schema_response_format(schema: object, name: str) -> Mapping[str, object]:
+    return {"type": "json_schema", "json_schema": {"name": name, "schema": schema}}  # mutable-ok: JSON request body
+
+
+_EFFORT_KWARG_KEYS: Final = frozenset({"enable_thinking", "thinking", "reasoning_budget", "low_effort"})
+
+
+def _bool_from_kwargs(kwargs: Mapping[str, object], keys: tuple[str, ...]) -> bool | None:
+    for key in keys:
+        value = kwargs.get(key)
+        if isinstance(value, bool):
+            return value
+    return None
+
+
+def _effort_from_chat_template_kwargs(kwargs: Mapping[str, object]) -> object:
+    enable_thinking: Final = _bool_from_kwargs(kwargs, ("enable_thinking", "thinking"))
+    if enable_thinking is False:
+        return "none"
+    budget: Final = kwargs.get("reasoning_budget")
+    if isinstance(budget, (int, float)) and not isinstance(budget, bool) and budget > 0:
+        return int(budget)
+    low_effort: Final = _bool_from_kwargs(kwargs, ("low_effort",))
+    if low_effort is True:
+        return "low"
+    return None
 
 
 _NIM_VLLM_STRIP_PARAMS: Final = frozenset(
@@ -357,29 +381,28 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 type(chat_template_kwargs).__name__,
             )
             return ()
-        other_keys: Final = tuple(sorted(k for k in chat_template_kwargs if k != "enable_thinking"))
+        other_keys: Final = tuple(sorted(k for k in chat_template_kwargs if k not in _EFFORT_KWARG_KEYS))
         if other_keys:
             verbose_logger.debug(
                 "fireworks_ai does not support chat_template_kwargs keys %s for model=%s; dropping them.",
                 other_keys,
                 model,
             )
-        if "enable_thinking" not in chat_template_kwargs:
-            return ()
         if "reasoning_effort" in optional_params or "thinking" in optional_params:
             verbose_logger.debug(
-                "fireworks_ai ignoring chat_template_kwargs.enable_thinking; explicit reasoning_effort/thinking takes precedence."
+                "fireworks_ai ignoring chat_template_kwargs; explicit reasoning_effort/thinking takes precedence."
             )
+            return ()
+        effort: Final = _effort_from_chat_template_kwargs(chat_template_kwargs)
+        if effort is None:
             return ()
         if not supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
             verbose_logger.debug(
-                "fireworks_ai model %r does not support reasoning; dropping chat_template_kwargs.enable_thinking.",
+                "fireworks_ai model %r does not support reasoning; dropping chat_template_kwargs effort keys.",
                 model,
             )
             return ()
-        if chat_template_kwargs["enable_thinking"]:
-            return ()
-        return (("reasoning_effort", "none"),)
+        return (("reasoning_effort", effort),)
 
     @staticmethod
     def _translate_guided_params(
@@ -396,7 +419,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             )
             return ()
         if extra_body.get("guided_json") is not None:
-            return (("response_format", _json_schema_response_format(extra_body["guided_json"])),)
+            return (("response_format", _json_schema_response_format(extra_body["guided_json"], "response")),)
         if extra_body.get("guided_grammar") is not None:
             grammar_response_format: Final = {  # mutable-ok: JSON request body
                 "type": "grammar",
@@ -407,7 +430,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             "type": "string",
             "enum": extra_body["guided_choice"],
         }
-        return (("response_format", _json_schema_response_format(choice_schema)),)
+        return (("response_format", _json_schema_response_format(choice_schema, "choice")),)
 
     def _transform_tools(self, tools: list[OpenAIChatCompletionToolParam]) -> list[OpenAIChatCompletionToolParam]:
         for tool in tools:

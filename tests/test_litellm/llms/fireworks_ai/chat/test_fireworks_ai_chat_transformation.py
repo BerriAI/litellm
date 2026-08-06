@@ -1338,6 +1338,66 @@ def test_map_extra_body_params_chat_template_kwargs_enable_thinking():
     assert enabled == {}
 
 
+def test_map_extra_body_params_chat_template_kwargs_thinking_alias():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"thinking": False}}},
+        _REASONING_MODEL,
+    )
+    assert result == {"reasoning_effort": "none"}
+
+
+def test_map_extra_body_params_chat_template_kwargs_enable_thinking_wins_over_thinking():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"enable_thinking": True, "thinking": False}}},
+        _REASONING_MODEL,
+    )
+    assert result == {}
+
+
+def test_map_extra_body_params_chat_template_kwargs_reasoning_budget():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"reasoning_budget": 512}}},
+        _REASONING_MODEL,
+    )
+    assert result == {"reasoning_effort": 512}
+
+
+def test_map_extra_body_params_chat_template_kwargs_budget_ignored_when_thinking_off():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"enable_thinking": False, "reasoning_budget": 512}}},
+        _REASONING_MODEL,
+    )
+    assert result == {"reasoning_effort": "none"}
+
+
+def test_map_extra_body_params_chat_template_kwargs_low_effort():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"low_effort": True}}},
+        _REASONING_MODEL,
+    )
+    assert result == {"reasoning_effort": "low"}
+
+    budget_wins = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"low_effort": True, "reasoning_budget": 256}}},
+        _REASONING_MODEL,
+    )
+    assert budget_wins == {"reasoning_effort": 256}
+
+
+def test_map_extra_body_params_chat_template_kwargs_effort_keys_dropped_for_non_reasoning_model():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"reasoning_budget": 512, "low_effort": True}}},
+        _NON_REASONING_MODEL,
+    )
+    assert result == {}
+
+
 def test_map_extra_body_params_chat_template_kwargs_native_reasoning_effort_wins():
     config = FireworksAIConfig()
     result = config.map_extra_body_params(
@@ -1388,7 +1448,10 @@ def test_map_extra_body_params_guided_json():
         {"extra_body": {"guided_json": schema}}, _REASONING_MODEL
     )
     assert result == {
-        "response_format": {"type": "json_schema", "json_schema": {"schema": schema}}
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "response", "schema": schema},
+        }
     }
 
 
@@ -1407,7 +1470,10 @@ def test_map_extra_body_params_guided_grammar_and_choice():
     assert choice == {
         "response_format": {
             "type": "json_schema",
-            "json_schema": {"schema": {"type": "string", "enum": ["yes", "no"]}},
+            "json_schema": {
+                "name": "choice",
+                "schema": {"type": "string", "enum": ["yes", "no"]},
+            },
         }
     }
 
@@ -1440,7 +1506,7 @@ def test_map_extra_body_params_multiple_guided_params_priority_order():
     assert result == {
         "response_format": {
             "type": "json_schema",
-            "json_schema": {"schema": {"type": "object"}},
+            "json_schema": {"name": "response", "schema": {"type": "object"}},
         }
     }
 
