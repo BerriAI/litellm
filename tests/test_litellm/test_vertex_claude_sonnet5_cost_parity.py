@@ -10,8 +10,6 @@ suffix ``-5`` as a Vertex publish version and rewrote bare ids to
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 import litellm

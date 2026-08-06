@@ -5219,7 +5219,9 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
             combined_model_name = f"{cost_map_prefix}/{split_model}"
         elif cost_map_prefix != custom_llm_provider and model.startswith(cost_map_prefix + "/"):
             split_model = model.split("/", 1)[1]
-            combined_model_name = model if model.startswith(cost_map_prefix + "/") else f"{cost_map_prefix}/{split_model}"
+            combined_model_name = (
+                model if model.startswith(cost_map_prefix + "/") else f"{cost_map_prefix}/{split_model}"
+            )
         else:
             split_model = model
             combined_model_name = f"{cost_map_prefix}/{model}"
