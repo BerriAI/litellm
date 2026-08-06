@@ -576,6 +576,68 @@ async def test_async_sse_wrapper_aborts_upstream_when_detached_drain_cap_reached
 
 
 @pytest.mark.asyncio
+async def test_abort_upstream_logs_warning_when_aclose_raises(caplog):
+    """_abort_upstream must swallow and log any exception from aclose()."""
+    import logging
+
+    class _ExplodingStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        async def aclose(self):
+            raise RuntimeError("aclose exploded")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await BaseAnthropicMessagesStreamingIterator._abort_upstream(_ExplodingStream())
+
+    assert any("abort" in r.message and "RuntimeError" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_enqueue_for_client_returns_false_when_already_detached():
+    """_enqueue_for_client must return False immediately (without touching the queue)
+    when client_detached is already set before the call."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        BaseAnthropicMessagesStreamingIterator,
+    )
+
+    queue: asyncio.Queue[bytes | None | BaseException] = asyncio.Queue(maxsize=1)
+    client_detached = asyncio.Event()
+    client_detached.set()
+
+    result = await BaseAnthropicMessagesStreamingIterator._enqueue_for_client(queue, client_detached, b"chunk")
+    assert result is False
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_for_client_returns_false_when_client_detaches_while_queue_full():
+    """_enqueue_for_client must return False (and cancel the put) when the queue
+    is full and client_detached fires before space becomes available."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        BaseAnthropicMessagesStreamingIterator,
+    )
+
+    queue: asyncio.Queue[bytes | None | BaseException] = asyncio.Queue(maxsize=1)
+    queue.put_nowait(b"already-full")
+
+    client_detached = asyncio.Event()
+
+    async def _set_detached_soon():
+        await asyncio.sleep(0.01)
+        client_detached.set()
+
+    asyncio.create_task(_set_detached_soon())
+    result = await BaseAnthropicMessagesStreamingIterator._enqueue_for_client(queue, client_detached, b"new-chunk")
+    assert result is False
+    assert queue.qsize() == 1
+    assert queue.get_nowait() == b"already-full"
+
+
+@pytest.mark.asyncio
 async def test_async_sse_wrapper_drains_detached_when_cap_available(monkeypatch):
     """Complement to the cap test: with a slot free, a disconnected pump drains
     the full upstream and bills the terminal usage, and releases its slot after."""
