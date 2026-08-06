@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -278,6 +279,11 @@ def test_fingerprints_carry_the_dependency_group_set():
     )
 
 
+def test_fingerprints_cover_the_prisma_schema():
+    schema_hash = hashlib.sha256(gate.PRISMA_SCHEMA.read_bytes()).hexdigest()
+    assert schema_hash in gate.environment_fingerprints()
+
+
 def test_env_commands_sync_the_canonical_groups_then_generate_prisma():
     sync, generate = gate.typecheck_env_commands(Path("/envdir"))
     assert sync[:3] == ("uv", "sync", "--frozen")
@@ -325,6 +331,22 @@ def test_ensure_env_fails_loudly_and_stops_at_the_first_failed_step(tmp_path):
     with pytest.raises(SystemExit):
         gate.ensure_typecheck_env(env_dir=tmp_path, run=failing)
     assert len(calls) == 1
+
+
+def test_ensure_env_announces_a_cold_provision(tmp_path, capsys):
+    def runner(cmd, env):
+        return 0
+
+    gate.ensure_typecheck_env(env_dir=tmp_path / "fresh", run=runner)
+    assert "provisioning" in capsys.readouterr().err
+
+
+def test_ensure_env_is_silent_when_the_env_already_exists(tmp_path, capsys):
+    def runner(cmd, env):
+        return 0
+
+    gate.ensure_typecheck_env(env_dir=tmp_path, run=runner)
+    assert capsys.readouterr().err == ""
 
 
 def test_cached_counts_round_trip(tmp_path):

@@ -34,8 +34,8 @@ skipped outright. When it is needed, it is a second basedpyright pass over a
 detached worktree at the merge-base, run under the same environment so import
 resolution matches, and its per-rule counts are cached under the repo's git
 common dir keyed by merge-base commit, ``pyrightconfig.json``, ``uv.lock``,
-and the dependency-group set, so re-runs against the same branch
-point pay for it once. A CI workflow publishes every staging commit's counts as
+the Prisma schema, and the dependency-group set, so re-runs against the same
+branch point pay for it once. A CI workflow publishes every staging commit's counts as
 an artifact (``--emit-counts-dir`` is its entry point), and on a disk-cache miss
 the gate first tries to download the merge-base's artifact through the ``gh``
 CLI; any fetch failure falls back silently to the local base pass, so the gate
@@ -83,6 +83,7 @@ GH_TIMEOUT_SECONDS = 10
 TYPECHECK_ENV_DIR = REPO_ROOT / ".venv-typecheck"
 TYPECHECK_DEP_GROUPS = ("proxy-dev", "e2e-dev")
 PRISMA_GENERATE_SCRIPT = REPO_ROOT / "scripts" / "prisma_generate_if_needed.py"
+PRISMA_SCHEMA = REPO_ROOT / "litellm" / "proxy" / "schema.prisma"
 
 # basedpyright's node process needs more than the ~4 GB default heap on this
 # repo; appended last so it wins node's last-flag-wins resolution over any
@@ -192,6 +193,11 @@ def ensure_typecheck_env(
     measurement pass. Unconditional on purpose: an up-to-date env makes both
     steps near-instant no-ops, and skipping them on a heuristic is how the
     measured environment and the fingerprinted one drift apart."""
+    if not env_dir.exists():
+        sys.stderr.write(
+            f"provisioning {env_dir.name} (first run installs packages and "
+            "generates the Prisma client; re-runs are near-instant no-ops)\n"
+        )
     env: Final = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(env_dir)}
     for cmd in typecheck_env_commands(env_dir):
         if run(cmd, env) != 0:
@@ -298,7 +304,7 @@ def environment_fingerprints(
     return (
         *(
             hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in (PYRIGHT_CONFIG, UV_LOCK)
+            for path in (PYRIGHT_CONFIG, UV_LOCK, PRISMA_SCHEMA)
             if path.exists()
         ),
         "groups:" + ",".join(dep_groups),
