@@ -308,7 +308,7 @@ async def test_attach_keys_to_agents_groups_by_agent_and_omits_secret():
 
     # Query is scoped to the agents being returned, not the whole key table.
     where = mock_prisma.db.litellm_verificationtoken.find_many.call_args.kwargs["where"]
-    assert where == {"agent_id": {"in": ["agent-1", "agent-2"]}}
+    assert where == {"agent_id": {"in": ("agent-1", "agent-2")}}
 
     # agent-1 gets both of its keys; agent-2 gets None.
     assert agent_without_keys.keys is None

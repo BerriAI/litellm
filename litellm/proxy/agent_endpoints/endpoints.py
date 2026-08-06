@@ -103,9 +103,9 @@ async def _attach_keys_to_agents(agents: Sequence[AgentResponse], prisma_client)
     fields are exposed (alias, masked key_name, hashed token)."""
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
-    agent_ids: Final = [
+    agent_ids: Final = tuple(
         alias_id for agent in agents for alias_id in global_agent_registry.ids_for_agent(agent.agent_id)
-    ]
+    )
     if not agent_ids:
         return
     key_rows: Final = await prisma_client.db.litellm_verificationtoken.find_many(
@@ -275,11 +275,11 @@ async def get_agents(
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is not None:
-            agent_ids: Final = [
+            agent_ids: Final = tuple(
                 alias_id
                 for agent in returned_agents
                 for alias_id in global_agent_registry.ids_for_agent(agent.agent_id)
-            ]
+            )
             if agent_ids:
                 db_agents: Final = await agents_table(prisma_client).find_many(
                     where={"agent_id": {"in": agent_ids}},

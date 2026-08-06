@@ -391,10 +391,10 @@ async def test_migrate_legacy_grant_ids_persists_stable_ids_into_grant_rows():
     table.update_many = AsyncMock(return_value=1)
 
     assert await registry.migrate_legacy_grant_ids(table=table) == 1
-    table.find_many.assert_awaited_once_with(where={"agents": {"has_some": [legacy_id]}})
+    table.find_many.assert_awaited_once_with(where={"agents": {"has_some": (legacy_id,)}})
     table.update_many.assert_awaited_once_with(
-        where={"object_permission_id": "op-1", "agents": {"equals": [legacy_id, "unrelated-id", agent.agent_id]}},
-        data={"agents": [agent.agent_id, "unrelated-id"]},
+        where={"object_permission_id": "op-1", "agents": {"equals": (legacy_id, "unrelated-id", agent.agent_id)}},
+        data={"agents": (agent.agent_id, "unrelated-id")},
     )
 
 

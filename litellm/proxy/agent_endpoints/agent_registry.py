@@ -232,15 +232,15 @@ class AgentRegistry:
         grant edited concurrently is left untouched; the runtime alias keeps covering
         it and the next boot retries the rewrite.
         """
-        legacy_ids: Final = [legacy for legacy, stable in self.config_agent_legacy_ids.items() if legacy != stable]
+        legacy_ids: Final = tuple(legacy for legacy, stable in self.config_agent_legacy_ids.items() if legacy != stable)
         if not legacy_ids:
             return 0
         rows: Final = await table.find_many(where={"agents": {"has_some": legacy_ids}})
         updates: Final = tuple(
             (
                 row.object_permission_id,
-                list(row.agents or []),
-                list(dict.fromkeys(self.stable_agent_id(agent_id) for agent_id in row.agents or [])),
+                tuple(row.agents or ()),
+                tuple(dict.fromkeys(self.stable_agent_id(agent_id) for agent_id in row.agents or ())),
             )
             for row in rows
         )
