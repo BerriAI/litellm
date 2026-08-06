@@ -36,6 +36,7 @@ _supported_callback_params = [
     "langfuse_secret",
     "langfuse_secret_key",
     "langfuse_host",
+    "langfuse_environment",
     "langfuse_prompt_version",
     "langsmith_api_key",
     "langsmith_project",
