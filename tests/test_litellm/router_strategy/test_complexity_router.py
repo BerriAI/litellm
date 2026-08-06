@@ -913,7 +913,10 @@ class TestSingletonMutation:
 
     def test_default_config_not_mutated(self, mock_router_instance):
         """Test that creating routers without config doesn't mutate defaults."""
-        from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
+        from litellm.router_strategy.complexity_router.config import (
+            DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+            ComplexityRouterConfig,
+        )
 
         # Get original default
         original_default = ComplexityRouterConfig().default_model
