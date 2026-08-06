@@ -560,25 +560,34 @@ def test_mcp_tool_call_names_its_rpc_system_and_upstream():
     assert span.attributes["server.port"] == 443
 
 
-def test_mcp_tool_call_omits_rpc_system_without_a_resolved_upstream():
-    """A tool call with no resolvable upstream drops the RPC system with the address.
+@pytest.mark.parametrize(
+    "resource",
+    [None, "mcp://weather.example.com", "ws://weather.example.com"],
+    ids=["no-resource", "scheme-with-no-default-port", "ws-scheme"],
+)
+def test_mcp_tool_call_omits_rpc_system_without_a_complete_upstream(resource):
+    """A tool call drops the RPC system unless the full destination resolved.
 
     ``mcp_server_resource`` is absent whenever the tool name resolves to no registered
-    server, and it is ``None`` for a transport with no host to log at all (stdio). It
-    also parses to no host today for an IPv6 origin, which the redactor rebuilds
-    without its brackets. Stamping ``rpc.system`` on its own in any of those cases is
-    what names the dependency ``:0``, so the pairing is enforced here rather than left
-    to the two extractors happening to agree.
+    server, and it is ``None`` for a transport with no host to log at all (stdio). A
+    host-bearing scheme outside the HTTP(S) default-port map resolves an address but no
+    port, and the ``url`` field is not scheme-validated, so that state is reachable from
+    config. Each case names the dependency ``:0`` or ``host:0`` if ``rpc.system`` ships
+    on its own, so the pairing is enforced here rather than left to the extractors
+    happening to agree.
     """
     logger, exporter = _logger()
     payload = _mcp_payload()
-    del payload["metadata"]["mcp_tool_call_metadata"]["mcp_server_resource"]
+    if resource is None:
+        del payload["metadata"]["mcp_tool_call_metadata"]["mcp_server_resource"]
+    else:
+        payload["metadata"]["mcp_tool_call_metadata"]["mcp_server_resource"] = resource
     asyncio.run(
         logger.async_log_success_event({"standard_logging_object": payload}, None, None, None)
     )
     (span,) = exporter.get_finished_spans()
     assert "rpc.system" not in span.attributes
-    assert "server.address" not in span.attributes
+    assert "server.port" not in span.attributes
     assert span.attributes["mcp.method.name"] == "tools/call"
 
 
