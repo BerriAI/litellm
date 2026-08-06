@@ -45,6 +45,17 @@ def convert_b64_uid_to_unified_uid(b64_uid: str) -> str:
         return b64_uid
 
 
+def resolve_managed_output_file_model_name(
+    unified_input_file_id: str | None, fallback_model_name: str | None
+) -> str | None:
+    if not unified_input_file_id:
+        return fallback_model_name
+    target_model_names: Final = get_models_from_unified_file_id(convert_b64_uid_to_unified_uid(unified_input_file_id))
+    if target_model_names:
+        return ",".join(target_model_names)
+    return fallback_model_name
+
+
 def get_models_from_unified_file_id(unified_file_id: str) -> list[str]:
     """
     Extract model names from unified file ID.
@@ -928,17 +939,13 @@ def _model_id_for_batch_response(
 
 def _model_name_for_batch_response(response: "LiteLLMBatch") -> str | None:
     hidden_params: Final = getattr(response, "_hidden_params", None) or {}
-    model_name: Final = hidden_params.get("model_name")
-    if model_name:
-        return model_name
     unified_file_id: Final = hidden_params.get("unified_file_id")
-    if not isinstance(unified_file_id, str):
-        return None
-    decoded_unified_file_id: Final = _is_base64_encoded_unified_file_id(unified_file_id) or unified_file_id
-    target_model_names: Final = get_models_from_unified_file_id(decoded_unified_file_id)
-    if target_model_names:
-        return ",".join(target_model_names)
-    return None
+    return resolve_managed_output_file_model_name(
+        unified_input_file_id=unified_file_id
+        if isinstance(unified_file_id, str)
+        else getattr(response, "input_file_id", None),
+        fallback_model_name=hidden_params.get("model_name"),
+    )
 
 
 def _batch_owner_auth_from_db_object(db_batch_object: "LiteLLM_ManagedObjectTable") -> "UserAPIKeyAuth | None":
