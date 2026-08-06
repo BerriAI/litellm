@@ -58,6 +58,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
+    from botocore.credentials import Credentials
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
@@ -884,7 +885,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         content: list[BedrockContentItem],
         base_request_data: dict,
-        credentials,
+        credentials: "Credentials",
         aws_region_name: str,
         api_key: str | None,
         request_data: dict | None,
@@ -1015,7 +1016,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         content: list[BedrockContentItem],
         base_request_data: dict,
-        credentials,
+        credentials: "Credentials",
         aws_region_name: str,
         api_key: str | None,
         request_data: dict | None,
@@ -1065,7 +1066,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         content: list[BedrockContentItem],
         base_request_data: dict,
-        credentials,
+        credentials: "Credentials",
         aws_region_name: str,
         api_key: str | None,
         request_data: dict | None,
@@ -1110,8 +1111,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         if httpx_response.status_code == 200:
             if self._check_bedrock_response_for_exception(httpx_response):
-                status_code, detail_message = self._parse_bedrock_guardrail_error_response(httpx_response)
-                raise HTTPException(status_code=status_code, detail=detail_message)
+                _, exception_detail = self._parse_bedrock_guardrail_error_response(httpx_response)
+                raise HTTPException(status_code=500, detail=exception_detail)
             _json_response = httpx_response.json()
             # check if the response was flagged
             verbose_proxy_logger.debug(
@@ -1486,13 +1487,19 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         splitting yield four fragments for one item, not two. Assuming a fixed pair
         here would emit two outputs for one message and shift every later message's
         masked text onto the wrong message."""
-        units: list[tuple[BedrockContentChunkResult, ...]] = []
-        index = 0
-        while index < len(chunk_results):
-            span = max(1, chunk_results[index].fragment_group_size)
-            units.append(tuple(chunk_results[index : index + span]))
-            index += span
-        return units
+
+        def advance(carried: tuple[int, bool], result: BedrockContentChunkResult) -> tuple[int, bool]:
+            remaining, _ = carried
+            if remaining == 0:
+                return max(1, result.fragment_group_size) - 1, True
+            return remaining - 1, False
+
+        starts: Final = tuple(
+            index
+            for index, (_, starts_unit) in enumerate(tuple(accumulate(chunk_results, advance, initial=(0, False)))[1:])
+            if starts_unit
+        )
+        return [tuple(chunk_results[start:end]) for start, end in zip(starts, starts[1:] + (len(chunk_results),))]
 
     @staticmethod
     def _merge_logical_unit_outputs(
