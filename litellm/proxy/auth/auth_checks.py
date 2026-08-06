@@ -4262,6 +4262,10 @@ async def _project_soft_budget_check(
             )
 
 
+def _project_cache_key(project_id: str) -> str:
+    return f"project_id:{project_id}"
+
+
 async def get_project_object(
     project_id: str,
     prisma_client: PrismaClient | None,
@@ -4279,7 +4283,7 @@ async def get_project_object(
         return None
 
     # Check cache first
-    cache_key: Final = f"project_id:{project_id}"
+    cache_key: Final = _project_cache_key(project_id)
     deserialized_project: Final = await user_api_key_cache.async_get_cache(
         key=cache_key,
         model_type=LiteLLM_ProjectTableCachedObj,
@@ -4308,6 +4312,19 @@ async def get_project_object(
     )
 
     return project_obj
+
+
+async def delete_cached_project_object(
+    project_id: str,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """
+    Every endpoint that mutates litellm_projecttable must call this: get_project_object
+    serves auth cache-first with no freshness check, so without invalidation a stale
+    project (e.g. a pre-update empty model allowlist) keeps being enforced until the
+    TTL expires (LIT-3803).
+    """
+    await user_api_key_cache.async_delete_cache(key=_project_cache_key(project_id))
 
 
 async def _organization_max_budget_check(
