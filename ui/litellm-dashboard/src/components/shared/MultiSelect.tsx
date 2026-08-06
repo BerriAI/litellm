@@ -53,19 +53,25 @@ export function MultiSelect({
   className,
 }: MultiSelectProps) {
   const [query, setQuery] = useState("");
-  const selectedOptions = value.map(
-    (selectedValue) =>
-      options.find((option) => option.value === selectedValue) ?? {
-        label: selectedValue,
-        value: selectedValue,
-      },
+  const safeOptions = options.filter(
+    (option): option is MultiSelectOption =>
+      option != null && typeof option.value === "string" && option.value.length > 0,
   );
+  const selectedOptions = value
+    .filter((selectedValue): selectedValue is string => typeof selectedValue === "string" && selectedValue.length > 0)
+    .map(
+      (selectedValue) =>
+        safeOptions.find((option) => option.value === selectedValue) ?? {
+          label: selectedValue,
+          value: selectedValue,
+        },
+    );
   const customOption = query.trim();
-  const customOptionExists = options.some((option) => option.value.toLowerCase() === customOption.toLowerCase());
+  const customOptionExists = safeOptions.some((option) => option.value.toLowerCase() === customOption.toLowerCase());
   const items =
     allowCustomValues && customOption && !customOptionExists
-      ? [...options, { label: `Create "${customOption}"`, value: customOption }]
-      : options;
+      ? [...safeOptions, { label: `Create "${customOption}"`, value: customOption }]
+      : safeOptions;
 
   return (
     <Combobox
