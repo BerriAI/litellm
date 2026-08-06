@@ -31561,6 +31561,26 @@ export interface components {
             review_notes?: string | null;
         };
         /**
+         * ReminderMarkerPair
+         * @description One open/close delimiter pair a harness wraps injected context in.
+         *
+         *     Normalizing here rather than at the scan is what makes matching case-insensitive: markers reach
+         *     the scan already lowered, so it lowercases only the haystack and never the needles. Stripping
+         *     keeps YAML indentation whitespace from becoming part of the delimiter.
+         */
+        ReminderMarkerPair: {
+            /**
+             * Close
+             * @description Closing delimiter, e.g. '</system-reminder>'
+             */
+            close: string;
+            /**
+             * Open
+             * @description Opening delimiter, e.g. '<system-reminder>'
+             */
+            open: string;
+        };
+        /**
          * RequestComplexityRouterConfig
          * @description The part of a complexity-router config a request can carry.
          *
@@ -31672,12 +31692,9 @@ export interface components {
             reasoning_keywords?: string[] | null;
             /**
              * Reminder Markers
-             * @description Override the (open, close) marker pair used to recognize and strip harness-injected reminder blocks before classification. Defaults to Claude Code's convention, ('<system-reminder>', '</system-reminder>'), when unset. Matching is case-insensitive.
+             * @description Override the delimiter pairs used to recognize and strip harness-injected reminder blocks before classification. A harness that wraps injected context differently per agent type (main, subagent, cron) lists every pair it emits. Replaces, rather than adds to, the built-in default of ('<system-reminder>', '</system-reminder>'), so a harness that also emits that pair lists it too. Matching is case-insensitive.
              */
-            reminder_markers?: [
-                string,
-                string
-            ] | null;
+            reminder_markers?: components["schemas"]["ReminderMarkerPair"][] | null;
             /**
              * Return Raw Model Name
              * @description Return the resolved raw model name in the response model field instead of the client-requested complexity-router alias
