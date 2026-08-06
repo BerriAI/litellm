@@ -471,3 +471,24 @@ class TestXAICostCalculator:
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+    def test_grok_4_5_cached_input_matches_published_pricing(self):
+        """Cached input rates for grok-4.5, per xAI's published pricing table.
+
+        https://docs.x.ai/developers/pricing lists grok-4.5 as
+        $2.00 input / $0.30 cached / $6.00 output for short context, and
+        $4.00 / $0.60 / $12.00 once a prompt reaches the 200k long-context
+        threshold. The cached figures had been recorded as $0.50 and $1.00,
+        which are 0.25x the input rate rather than the published numbers -- the
+        cited source at the time was the models page, which carries no cached
+        column at all.
+        """
+        for model in ("xai/grok-4.5", "xai/grok-4.5-latest"):
+            info = litellm.model_cost[model]
+            assert info["cache_read_input_token_cost"] == 3e-07
+            assert info["cache_read_input_token_cost_above_200k_tokens"] == 6e-07
+            # Uncached rates were already correct; asserted here so a future
+            # edit cannot fix one column by breaking another.
+            assert info["input_cost_per_token"] == 2e-06
+            assert info["output_cost_per_token"] == 6e-06
+            assert info["input_cost_per_token_above_200k_tokens"] == 4e-06
+            assert info["output_cost_per_token_above_200k_tokens"] == 1.2e-05
