@@ -598,3 +598,46 @@ def test_initialize_guardrail_wires_unreachable_fallback_generically(configured,
 
 def test_custom_guardrail_defaults_to_fail_closed():
     assert CustomGuardrail(guardrail_name="g").unreachable_fallback == "fail_closed"
+
+
+def test_initialize_guardrail_stamps_all_callbacks_of_the_guardrail(monkeypatch):
+    """
+    Initializers may register more callbacks than they return (presidio registers a
+    separate output-parsing callback), and every one of them must carry the configured
+    fallback or the extra callbacks silently stay fail_closed.
+    """
+    import litellm
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    def _initializer(litellm_params, guardrail):
+        primary = CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+        secondary = CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.post_call,
+            default_on=True,
+        )
+        litellm.callbacks.extend([primary, secondary])
+        return primary
+
+    registry_module.guardrail_initializer_registry["multi_callback_test"] = _initializer
+    try:
+        InMemoryGuardrailHandler().initialize_guardrail(
+            guardrail={
+                "guardrail_name": "cf-multi-callback",
+                "litellm_params": {
+                    "guardrail": "multi_callback_test",
+                    "mode": "pre_call",
+                    "unreachable_fallback": "fail_open",
+                },
+            },
+        )
+
+        assert [cb.unreachable_fallback for cb in litellm.callbacks] == ["fail_open", "fail_open"]
+    finally:
+        registry_module.guardrail_initializer_registry.pop("multi_callback_test", None)

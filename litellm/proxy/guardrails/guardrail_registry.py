@@ -387,6 +387,29 @@ class GuardrailRegistry:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
 
+def _apply_unreachable_fallback(
+    guardrail_name: str,
+    primary_callback: CustomGuardrail,
+    unreachable_fallback: str | None,
+) -> None:
+    """
+    Stamp the configured fail_open / fail_closed policy on every callback that belongs to
+    this guardrail, so the orchestration layer can enforce it without each guardrail
+    implementing it.
+
+    An initializer may register more callbacks than it returns (presidio registers a
+    separate output-parsing callback, for example), so the whole callback list is swept by
+    guardrail name instead of only stamping the returned instance.
+    """
+    resolved: Final[Literal["fail_closed", "fail_open"]] = (
+        "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
+    )
+    primary_callback.unreachable_fallback = resolved
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomGuardrail) and callback.guardrail_name == guardrail_name:
+            callback.unreachable_fallback = resolved
+
+
 class InMemoryGuardrailHandler:
     """
     Class that handles initializing guardrails and adding them to the CallbackManager
@@ -497,8 +520,10 @@ class InMemoryGuardrailHandler:
                 "skip_tool_message_in_guardrail",
                 getattr(litellm_params, "skip_tool_message_in_guardrail", None),
             )
-            custom_guardrail_callback.unreachable_fallback = (
-                "fail_open" if getattr(litellm_params, "unreachable_fallback", None) == "fail_open" else "fail_closed"
+            _apply_unreachable_fallback(
+                guardrail_name=guardrail["guardrail_name"],
+                primary_callback=custom_guardrail_callback,
+                unreachable_fallback=getattr(litellm_params, "unreachable_fallback", None),
             )
             configured_run_in_parallel: Final = getattr(litellm_params, "run_in_parallel", None)
             if configured_run_in_parallel is not None:
