@@ -1013,7 +1013,7 @@ async def proxy_startup_event(app: FastAPI):
 
         asyncio.create_task(_run_pw_migration())
 
-        async def _run_agent_grant_id_migration():
+        async def _run_agent_grant_id_migration() -> None:
             from litellm.proxy.agent_endpoints.agent_registry import (
                 global_agent_registry,
                 object_permission_table,
@@ -1035,7 +1035,7 @@ async def proxy_startup_event(app: FastAPI):
                         attempt + 1,
                         result.missed,
                     )
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001  # startup task must survive any DB error and retry
                     verbose_proxy_logger.warning(
                         "Legacy agent grant id migration attempt %s/3 failed: %s", attempt + 1, e
                     )
