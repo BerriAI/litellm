@@ -1,6 +1,3 @@
-# pyright: reportUnusedVariable=false
-# pyright: reportIncompatibleMethodOverride=false
-# pyright: reportGeneralTypeIssues=false
 from typing import Final
 
 import httpx
