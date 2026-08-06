@@ -25,15 +25,10 @@ const dedupeAndSort = (models: ModelGroup[]): ModelGroup[] => {
   return unique;
 };
 
-/**
- * Loads models available to the given key.
- *
- * Prefers OpenAI-compatible `/v1/models` (scoped to the key's access) and enriches
- * entries with `mode` from `/model_group/info` when that endpoint is available.
- * Falls back to `/model_group/info` alone if `/v1/models` is empty or fails.
- */
 export const fetchAvailableModels = async (accessToken: string): Promise<ModelGroup[]> => {
   const modeByName = new Map<string, string | undefined>();
+  let groupInfoError: unknown;
+  let listModelsError: unknown;
 
   try {
     const groupInfo = await apiClient.get<{ data?: ModelGroupInfoItem[] }>("/model_group/info", {
@@ -46,6 +41,7 @@ export const fetchAvailableModels = async (accessToken: string): Promise<ModelGr
       }
     }
   } catch (error) {
+    groupInfoError = error;
     console.error("Error fetching model group info:", error);
   }
 
@@ -70,6 +66,7 @@ export const fetchAvailableModels = async (accessToken: string): Promise<ModelGr
       return dedupeAndSort(fromList);
     }
   } catch (error) {
+    listModelsError = error;
     console.error("Error fetching /v1/models:", error);
   }
 
@@ -80,6 +77,12 @@ export const fetchAvailableModels = async (accessToken: string): Promise<ModelGr
         mode,
       })),
     );
+  }
+
+  if (groupInfoError && listModelsError) {
+    throw listModelsError instanceof Error
+      ? listModelsError
+      : new Error("Failed to load models from /v1/models and /model_group/info");
   }
 
   return [];

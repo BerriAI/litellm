@@ -74,4 +74,12 @@ describe("fetchAvailableModels", () => {
     const models = await fetchAvailableModels("sk-virtual-key");
     expect(models).toEqual([{ model_group: "only-from-key", mode: undefined }]);
   });
+
+  it("throws when both model endpoints fail", async () => {
+    mockGet.mockImplementation(async () => {
+      throw new Error("network down");
+    });
+
+    await expect(fetchAvailableModels("sk-virtual-key")).rejects.toThrow("network down");
+  });
 });
