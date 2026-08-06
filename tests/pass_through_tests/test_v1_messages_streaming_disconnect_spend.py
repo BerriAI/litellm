@@ -96,14 +96,11 @@ async def test_v1_messages_streaming_disconnect_has_spend_log():
 
         chunks_read = 0
 
-        # ---- send the streaming request and disconnect early ----
         async with session.post(
             f"{BASE_URL}/v1/messages", json=payload, headers=headers
         ) as resp:
             assert resp.status == 200, f"/v1/messages failed: {await resp.text()}"
 
-            # Read a handful of SSE chunks, then break out (closes the
-            # connection, which is the "interruption").
             async for raw_line in resp.content:
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line:
@@ -111,7 +108,6 @@ async def test_v1_messages_streaming_disconnect_has_spend_log():
                 chunks_read += 1
                 print(f"  chunk #{chunks_read}: {line[:120]}")
                 if chunks_read >= 5:
-                    # We have received enough data — disconnect now.
                     break
 
         assert chunks_read >= 3, (
@@ -123,7 +119,6 @@ async def test_v1_messages_streaming_disconnect_has_spend_log():
             f"Waiting for spend pipeline to flush …"
         )
 
-        # ---- wait & poll for the spend-log entry ----
         spend_data = None
         max_retries = 4
         for attempt in range(1, max_retries + 1):
@@ -135,7 +130,6 @@ async def test_v1_messages_streaming_disconnect_has_spend_log():
                 break
             print("  … not found yet")
 
-        # ---- assertions ----
         assert spend_data is not None and len(spend_data) > 0, (
             f"No spend-log entry found for spend_id={spend_id} "
             f"after streaming disconnect.  "
@@ -148,12 +142,6 @@ async def test_v1_messages_streaming_disconnect_has_spend_log():
             f"\nSpend-log entry:\n{json.dumps(log_entry, indent=2, default=str)}"
         )
 
-        # A row alone is not enough: the earlier drop-in-finally attempt logged a
-        # row whose completion tokens reflected only the handful of chunks the
-        # client drained before disconnecting (~1-15), not the full response
-        # Bedrock generated and billed. The prompt is written to produce a long
-        # completion, so the recorded completion tokens must reflect the full
-        # upstream stream, well above what 5 SSE chunks could carry.
         prompt_tokens = log_entry.get("prompt_tokens", 0)
         completion_tokens = log_entry.get("completion_tokens", 0)
         assert prompt_tokens > 0, (
