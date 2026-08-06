@@ -422,6 +422,7 @@ def _adjust_dates_for_timezone(
     start_date: str,
     end_date: str,
     timezone_offset_minutes: int | None,
+    include_current_utc_day: bool = False,
     utc_now: datetime | None = None,
 ) -> tuple[str, str]:
     """
@@ -449,10 +450,14 @@ def _adjust_dates_for_timezone(
     cannot over-count, because the only part of that bucket outside the caller's range
     is the future, and the future is empty. ``timezone_offset_minutes`` follows the
     JS ``Date.getTimezoneOffset`` convention: UTC minus local, positive west of UTC.
+
+    The extension is strictly opt-in via ``include_current_utc_day`` so a consumer
+    whose axis or reconciliation expects the range to stop at the requested end date
+    keeps today's byte-for-byte behaviour; the cost optimization dashboard opts in.
     """
-    now: Final = utc_now if utc_now is not None else datetime.now(timezone.utc)
-    if timezone_offset_minutes is None:
+    if not include_current_utc_day or timezone_offset_minutes is None:
         return start_date, end_date
+    now: Final = utc_now if utc_now is not None else datetime.now(timezone.utc)
     caller_local_today: Final = (now - timedelta(minutes=timezone_offset_minutes)).date().isoformat()
     if end_date < caller_local_today:
         return start_date, end_date
@@ -469,10 +474,13 @@ def _build_where_conditions(
     api_key: str | list[str] | None,
     exclude_entity_ids: list[str] | None = None,
     timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
 ) -> dict[str, "_WhereValue"]:
     """Build prisma where clause for daily activity queries."""
     # Adjust dates for timezone if provided
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+        start_date, end_date, timezone_offset_minutes, include_current_utc_day
+    )
 
     where_conditions: Final[dict[str, _WhereValue]] = {
         "date": {
@@ -918,6 +926,7 @@ async def get_daily_activity(
     exclude_entity_ids: list[str] | None = None,
     metadata_metrics_func: Callable[[Sequence[DailySpendRecord]], SpendMetrics] | None = None,
     timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
     resolve_entity_metadata: Callable[[Sequence[DailySpendRecord]], Awaitable[dict[str, dict[str, object]]]]
     | None = None,
 ) -> SpendAnalyticsPaginatedResponse:
@@ -951,6 +960,7 @@ async def get_daily_activity(
             api_key=api_key,
             exclude_entity_ids=exclude_entity_ids,
             timezone_offset_minutes=timezone_offset_minutes,
+            include_current_utc_day=include_current_utc_day,
         )
 
         # Get total count for pagination
