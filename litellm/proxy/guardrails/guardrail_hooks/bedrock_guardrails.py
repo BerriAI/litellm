@@ -26,6 +26,9 @@ from litellm.caching import DualCache
 from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
+)
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -402,6 +405,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     grounding.append(block)
         return grounding
 
+    def supports_scan_only_tool_results(self) -> bool:
+        return self.experimental_use_latest_role_message_only is not True
+
     def _prepare_guardrail_messages_for_role(
         self,
         messages: list[AllMessageValues] | None,
@@ -523,6 +529,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         latest_user_index: Final = self._find_latest_message_index(structured_messages, target_role="user")
         if latest_user_index is None:
+            if effective_scan_only_tool_results_for_guardrail(self):
+                verbose_proxy_logger.warning(
+                    "Bedrock Guardrail: experimental_use_latest_role_message_only scans only the latest "
+                    "user message, so scan_only_tool_results leaves nothing to scan for this request"
+                )
             verbose_proxy_logger.debug("Bedrock Guardrail: no user-role message in request, skipping INPUT scan")
             return ApplyGuardrailMessageSelection(None, None, True, skip_scan=True)
 
