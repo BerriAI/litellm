@@ -2087,7 +2087,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               <p className="mb-1 text-sm font-medium text-gray-700">SDK Type</p>
               <ShadcnSelect value={selectedSdk} onValueChange={(value) => setSelectedSdk(value as "openai" | "azure")}>
                 <SelectTrigger className="w-[150px]" size="sm" aria-label="SDK Type">
-                  <SelectValue />
+                  <SelectValue>{selectedSdk === "azure" ? "Azure SDK" : "OpenAI SDK"}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="openai">OpenAI SDK</SelectItem>
