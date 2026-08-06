@@ -748,9 +748,7 @@ def _count_content_list(
                 # Reuse the dimension-aware image_url counting by converting the
                 # source to a URL / data URI; a flat default would under-count
                 # large images since billed tokens scale with dimensions.
-                num_tokens += _count_anthropic_image_tokens(
-                    c.get("source"), use_default_image_token_count
-                )
+                num_tokens += _count_anthropic_image_tokens(c.get("source"), use_default_image_token_count)
             elif c["type"] in ("tool_use", "tool_result"):
                 num_tokens += _count_anthropic_content(
                     c,
