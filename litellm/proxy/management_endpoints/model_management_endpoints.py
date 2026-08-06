@@ -66,6 +66,21 @@ from litellm.utils import get_utc_datetime
 
 router = APIRouter()
 
+# model_info fields that are structural or privileged (id, team assignment,
+# audit metadata) and must go through their own dedicated flows -- never via
+# the generic `model_info_keys_to_delete` JSON-editor deletion path.
+PROTECTED_MODEL_INFO_KEYS = {
+    "id",
+    "db_model",
+    "team_id",
+    "team_public_model_name",
+    "blocked",
+    "created_at",
+    "created_by",
+    "updated_at",
+    "updated_by",
+}
+
 
 async def update_team(*args, **kwargs):
     """
@@ -142,6 +157,23 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
             if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.model_info, field) is None:
                 merged_deployment_dict["model_info"].pop(field, None)  # type: ignore
                 merged_deployment_dict.get("litellm_params", {}).pop(field, None)  # type: ignore
+
+    # Explicit key deletion for the admin UI's raw JSON editors. A key the user
+    # removes from the JSON textarea is simply absent from the patch, which the
+    # merges above can't distinguish from "field not touched" -- so the stale
+    # value survives. `*_keys_to_delete` lets the caller name removed keys
+    # explicitly. `model` is excluded because litellm_params always requires it,
+    # and `PROTECTED_MODEL_INFO_KEYS` are structural/privileged fields (id,
+    # team assignment, audit metadata) that must go through their own flows.
+    if updated_patch.litellm_params_keys_to_delete:
+        for key in updated_patch.litellm_params_keys_to_delete:
+            if key != "model":
+                merged_deployment_dict["litellm_params"].pop(key, None)
+
+    if updated_patch.model_info_keys_to_delete:
+        for key in updated_patch.model_info_keys_to_delete:
+            if key not in PROTECTED_MODEL_INFO_KEYS:
+                merged_deployment_dict.get("model_info", {}).pop(key, None)
 
     # convert to prisma compatible format
 

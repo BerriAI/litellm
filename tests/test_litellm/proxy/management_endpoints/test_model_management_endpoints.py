@@ -2940,6 +2940,147 @@ class TestUpdateDBModelClearPricing:
         assert info["cache_creation_input_token_cost"] == 0.000003
 
 
+class TestUpdateDBModelKeyDeletion:
+    """Regression test for #34005: removing a key from the raw JSON editors on the admin UI
+    (model json / litellm params) did nothing -- the merge in `update_db_model` treats an
+    absent key as "not touched", so the stale value survived every save.
+    `litellm_params_keys_to_delete` and `model_info_keys_to_delete` let the caller name
+    removed keys explicitly.
+    """
+
+    def test_litellm_params_keys_to_delete_removes_custom_key(self):
+        """Mirrors the issue's own repro: a JSON blob with custom keys (`abc`, `someKey`)
+        where only `someKey` is removed on save."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateLiteLLMParams
+
+        db_model = Deployment(
+            model_name="openai/gpt-4",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4", tpm=1000, someKey=True, abc=123),
+            model_info=ModelInfo(id="dep-del-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(tpm=1000, abc=123),
+                litellm_params_keys_to_delete=["someKey"],
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert "someKey" not in params
+        # Untouched keys survive the delete
+        assert params["tpm"] == 1000
+        assert params["abc"] == 123
+
+    def test_model_info_keys_to_delete_removes_custom_key(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        db_model = Deployment(
+            model_name="openai/gpt-4",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4"),
+            model_info=ModelInfo(id="dep-del-1", someExtra="drop-me", keep="stay"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-del-1"),
+                model_info_keys_to_delete=["someExtra"],
+            ),
+        )
+
+        info = json.loads(result["model_info"])
+        assert "someExtra" not in info
+        assert info["keep"] == "stay"
+
+    def test_keys_to_delete_cannot_remove_protected_model_info_fields(self):
+        """Security guard: team_id and other structural fields must survive even if a
+        caller lists them in `model_info_keys_to_delete`."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        db_model = Deployment(
+            model_name="openai/gpt-4",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4"),
+            model_info=ModelInfo(id="dep-del-2", team_id="team-keep-me"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-del-2"),
+                model_info_keys_to_delete=["team_id", "id"],
+            ),
+        )
+
+        info = json.loads(result["model_info"])
+        assert info.get("team_id") == "team-keep-me"
+        assert info.get("id") == "dep-del-2"
+
+    def test_keys_to_delete_cannot_remove_model_field(self):
+        """`model` is required by litellm_params; deletion must not be able to strip it
+        even if a caller lists it."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        db_model = Deployment(
+            model_name="openai/gpt-4",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4"),
+            model_info=ModelInfo(id="dep-del-3"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-del-3"),
+                litellm_params_keys_to_delete=["model"],
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params.get("model") == "openai/gpt-4"
+
+    def test_no_keys_to_delete_is_a_no_op(self):
+        """Existing callers that never set `*_keys_to_delete` (e.g. the credentials-rotation
+        modal, which sends a sparse litellm_params on purpose) must be completely
+        unaffected by this field's presence."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateLiteLLMParams
+
+        db_model = Deployment(
+            model_name="openai/gpt-4",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4", rpm=5, tpm=1000),
+            model_info=ModelInfo(id="dep-del-4"),
+        )
+
+        # Sparse patch: only rpm, same shape update_model_credentials_modal sends for
+        # api_key (a single field, everything else left untouched).
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(rpm=50),
+                model_info=ModelInfo(id="dep-del-4"),
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params["rpm"] == 50
+        assert params["tpm"] == 1000  # untouched field preserved by the merge
+
+
 class TestGetModelInfoWithIdBlocked:
     """`ProxyConfig.get_model_info_with_id` must propagate the DB-level `blocked`
     column into the in-memory `model_info` dict so the router filter can read it."""
