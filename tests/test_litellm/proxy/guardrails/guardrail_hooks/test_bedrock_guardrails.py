@@ -4616,12 +4616,13 @@ async def test_apply_guardrail_exception_inside_200_logs_failure_not_success():
     ):
         mock_post.return_value = exception_response
 
-        with pytest.raises(HTTPException):
+        with pytest.raises(HTTPException) as raised:
             await guardrail.make_bedrock_api_request(
                 source="INPUT",
                 messages=[{"role": "user", "content": "hello"}],
                 request_data={"model": "bedrock-nova-micro"},
             )
 
+    assert raised.value.status_code == 500
     mock_log.assert_called_once()
     assert mock_log.call_args.kwargs["guardrail_status"] == "guardrail_failed_to_respond"
