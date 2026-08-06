@@ -109,7 +109,7 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
                 else:
                     formatted_input.append(item)
         else:
-            formatted_input = raw_input  # pyright: ignore[reportAssignmentType]  # raw_input is checked list
+            formatted_input = list(raw_input)
 
         data: dict[str, Any] = {
             "model": model,
