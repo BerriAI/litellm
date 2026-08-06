@@ -13272,7 +13272,7 @@ async def login(request: Request):
 
     # Create redirect response with cookie
     redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-    redirect_response.set_cookie(key="token", value=jwt_token)
+    redirect_response.set_cookie(key="token", value=jwt_token, httponly=True, secure=True, samesite="lax",path="/")
     return redirect_response
 
 
@@ -13322,7 +13322,7 @@ async def login_v2(request: Request):
             content={"redirect_url": litellm_dashboard_ui, "token": jwt_token},
             status_code=status.HTTP_200_OK,
         )
-        json_response.set_cookie(key="token", value=jwt_token)
+        json_response.set_cookie(key="token", value=jwt_token, httponly=True, secure=True, samesite="lax", path="/")
         return json_response
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.login_v2(): Exception occurred - {}".format(str(e)))
@@ -13476,7 +13476,7 @@ async def login_v3_exchange(request: Request):
             },
             status_code=status.HTTP_200_OK,
         )
-        json_response.set_cookie(key="token", value=cached_data["token"])
+        json_response.set_cookie(key="token", value=cached_data["token"] , httponly=True, secure=True, samesite="lax", path="/")
         return json_response
     except ProxyException:
         raise

@@ -333,7 +333,6 @@ def create_ui_token_object(
 
     return ReturnedUITokenObject(
         user_id=login_result.user_id,
-        key=login_result.key,
         user_email=login_result.user_email,
         user_role=login_result.user_role,
         login_method=login_result.login_method,

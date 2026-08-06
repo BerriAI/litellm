@@ -380,7 +380,7 @@ const apiClient = createApiClient({
 
 registerBaseUrlGetter(getProxyBaseUrl);
 registerAuthHeaderNameGetter(getGlobalLitellmHeaderName);
-registerAuthTokenGetter(() => decodeToken(getCookie("token"))?.key ?? null);
+registerAuthTokenGetter(() => getCookie("token") ?? null);
 registerErrorHandler(handleError);
 
 export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {

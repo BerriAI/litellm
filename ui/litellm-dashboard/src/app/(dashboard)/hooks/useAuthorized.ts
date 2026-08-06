@@ -15,8 +15,8 @@ const useAuthorized = () => {
 
   const token = typeof document !== "undefined" ? getCookie("token") : null;
 
-  const decoded = useMemo(() => decodeToken(token), [token]);
-  const isTokenValid = useMemo(() => checkTokenValidity(token), [token]);
+  const decoded = useMemo(() => (token ? decodeToken(token) : null), [token]);
+  const isTokenValid = useMemo(() => (token ? checkTokenValidity(token) : false), [token]);
   const isLoading = isUIConfigLoading;
   const isAuthorized = isTokenValid && !uiConfig?.admin_ui_disabled;
 
