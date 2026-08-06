@@ -276,13 +276,20 @@ def refresh_native_credential(
             client_id=metadata.client_id,
         )
 
-        verify(base_url, token.access_token)
-
         credential: Final = build_native_credential(
             base_url=base_url,
             metadata=metadata,
             token=token,
             previous_refresh_token=stored_refresh_token,
         )
+        try:
+            verify(base_url, token.access_token)
+        except Exception:
+            # The provider may rotate refresh tokens, in which case the stored one is
+            # already spent and dropping the replacement would strand the credential
+            # until an interactive login. Keep it, but backdate the expiry so the
+            # unverified access token is never handed out: the next use refreshes again.
+            save_credential({**credential, "expires_at": time.time() - 1})
+            raise
         save_credential(credential)
         return credential

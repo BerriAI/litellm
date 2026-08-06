@@ -578,7 +578,12 @@ def test_refresh_keeps_the_generic_message_for_other_token_errors(stored, monkey
 def test_refresh_surfaces_a_rejected_new_token(stored, monkeypatch):
     install_token_endpoint(
         monkeypatch,
-        {"access_token": "new-access", "token_type": "Bearer", "expires_in": 3600},
+        {
+            "access_token": "new-access",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "refresh_token": "refresh-2",
+        },
     )
 
     def reject(base_url, token):
@@ -591,9 +596,49 @@ def test_refresh_surfaces_a_rejected_new_token(stored, monkeypatch):
             fetch_metadata=lambda base_url: make_metadata(),
             fetch_provider=lambda issuer: make_provider(),
         )
-    # An unverified token is never written.
-    assert load_cli_token()["key"] == "old-access"
-    assert load_cli_token()["key"] == "old-access"
+    persisted = load_cli_token()
+    # The provider may have rotated the refresh token, spending the stored one, so the
+    # replacement is kept rather than stranding the credential.
+    assert persisted["refresh_token"] == "refresh-2"
+    # An unverified access token is never handed out: it is stored expired, so the next
+    # use refreshes again instead of trusting it.
+    assert needs_refresh(persisted)
+
+
+def test_refresh_after_a_failed_verification_can_refresh_again(stored, monkeypatch):
+    install_token_endpoint(
+        monkeypatch,
+        {
+            "access_token": "new-access",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "refresh_token": "refresh-2",
+        },
+    )
+    with pytest.raises(NativeOIDCAuthRejected):
+        refresh_native_credential(
+            stored,
+            verify=lambda base_url, token: (_ for _ in ()).throw(NativeOIDCAuthRejected("nope")),
+            fetch_metadata=lambda base_url: make_metadata(),
+            fetch_provider=lambda issuer: make_provider(),
+        )
+
+    recorder = {}
+    install_token_endpoint(
+        monkeypatch,
+        {"access_token": "newer-access", "token_type": "Bearer", "expires_in": 3600},
+        recorder,
+    )
+    result = refresh_native_credential(
+        load_cli_token(),
+        verify=lambda base_url, token: None,
+        fetch_metadata=lambda base_url: make_metadata(),
+        fetch_provider=lambda issuer: make_provider(),
+    )
+
+    # The retry spends the rotated refresh token, not the one the provider already burned.
+    assert recorder["data"]["refresh_token"] == "refresh-2"
+    assert result["key"] == "newer-access"
 
 
 def test_refresh_releases_the_lock_on_failure(stored, monkeypatch):
