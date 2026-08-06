@@ -110,8 +110,8 @@ vi.mock("@/contexts/ThemeContext", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
-  useHealthReadinessDetails: (accessToken: string | null | undefined) => {
-    useHealthReadinessDetailsSpy(accessToken);
+  useHealthReadinessDetails: (accessToken: string | null | undefined, userRole: string | null | undefined) => {
+    useHealthReadinessDetailsSpy(accessToken, userRole);
     return mockUseHealthReadinessDetailsImpl();
   },
 }));
@@ -141,6 +141,7 @@ Object.defineProperty(window, "location", {
 describe("Navbar", () => {
   const defaultProps = {
     accessToken: "test-token",
+    userRole: "Admin",
     isPublicPage: false,
   };
 
@@ -222,12 +223,12 @@ describe("Navbar", () => {
     mockUseHealthReadinessDetailsImpl = () => ({ data: null });
   });
 
-  it("should forward accessToken to the readiness hook", () => {
+  it("should forward accessToken and userRole to the readiness hook", () => {
     useHealthReadinessDetailsSpy.mockClear();
 
     renderWithProviders(<Navbar {...defaultProps} accessToken="my-token" />);
 
-    expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith("my-token");
+    expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith("my-token", "Admin");
   });
 
   it("should forward a null accessToken to the readiness hook (disables the hook)", () => {
@@ -235,7 +236,15 @@ describe("Navbar", () => {
 
     renderWithProviders(<Navbar {...defaultProps} accessToken={null} />);
 
-    expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith(null);
+    expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith(null, "Admin");
+  });
+
+  it("should forward a non-admin role so the readiness hook can gate the admin-only call", () => {
+    useHealthReadinessDetailsSpy.mockClear();
+
+    renderWithProviders(<Navbar {...defaultProps} userRole="Internal User" />);
+
+    expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith("test-token", "Internal User");
   });
 
   it("should use custom logo from theme context", () => {

@@ -472,7 +472,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     <ThemeProvider accessToken={accessToken}>
       <div className={isEmbedded ? "w-full" : "min-h-screen bg-white"}>
         {/* Navigation - only show when not embedded */}
-        {!isEmbedded && <Navbar accessToken={accessToken || null} isPublicPage={true} />}
+        {!isEmbedded && <Navbar accessToken={accessToken || null} userRole={null} isPublicPage={true} />}
 
         <div className={isEmbedded ? "w-full p-6" : "w-full px-8 py-12"}>
           {/* Embedded Explainer - only shown when embedded in dashboard */}

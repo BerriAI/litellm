@@ -28,7 +28,7 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider accessToken={accessToken}>
       <div className="flex h-screen flex-col">
-        <Navbar accessToken={accessToken} isPublicPage={false} />
+        <Navbar accessToken={accessToken} userRole={userRole} isPublicPage={false} />
         <div className="min-h-0 flex-1">
           <ChatShellProvider
             accessToken={accessToken ?? ""}
