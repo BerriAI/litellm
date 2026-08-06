@@ -1897,6 +1897,17 @@ async def test_cancel__unified_batch_id_routes_to_router(cancel_harness):
 
 
 @pytest.mark.asyncio
+async def test_cancel__db_write_receives_caller_auth(cancel_harness):
+    """update_batch_in_database can only mint managed IDs for a cancelled batch's
+    output files when it has an auth context, so cancel must forward the caller's."""
+    caller = UserAPIKeyAuth(api_key="sk-test", user_id="user-cancel-1")
+    with patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+        await call_cancel(cancel_harness, "batch-unified-blob", user=caller)
+
+    assert cancel_harness.update_batch_in_db.call_args.kwargs["user_api_key_dict"] is caller
+
+
+@pytest.mark.asyncio
 async def test_cancel__unified_missing_model_id_400(cancel_harness):
     # unified id with no model_id segment -> get_model_id returns None -> 400.
     with patch.object(
