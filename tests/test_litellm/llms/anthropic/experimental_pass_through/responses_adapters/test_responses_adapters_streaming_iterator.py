@@ -98,3 +98,10 @@ class TestMessageStartEmittedExactlyOnce:
         events = [chunk async for chunk in wrapper]
         starts = [c for c in events if c.get("type") == "message_start"]
         assert len(starts) == 1
+
+    def test_process_event_emits_message_start_when_not_yet_sent(self):
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=None, model="m")
+        wrapper._process_event({"type": "response.created"})
+        assert [c["type"] for c in wrapper._chunk_queue] == ["message_start"]
+        wrapper._process_event({"type": "response.created"})
+        assert [c["type"] for c in wrapper._chunk_queue] == ["message_start"]
