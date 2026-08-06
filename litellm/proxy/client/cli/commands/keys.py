@@ -1,7 +1,7 @@
 import builtins
 import json
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import click
 import requests
@@ -53,8 +53,8 @@ def list(
     return_full_object: bool,
 ):
     """List all API keys"""
-    client = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
-    response = client.list(
+    client: Final = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    response: Final = client.list(
         page=page,
         size=size,
         user_id=user_id,
@@ -71,7 +71,7 @@ def list(
         rich.print_json(data=response)
     else:
         rich.print(f"Showing {len(response.get('keys', []))} keys out of {response.get('total_count', 0)}")
-        table = Table(title="API Keys")
+        table: Final = Table(title="API Keys")
         table.add_column("Key Hash", style="cyan")
         table.add_column("Alias", style="green")
         table.add_column("User ID", style="magenta")
@@ -116,15 +116,15 @@ def generate(
     config: str | None,
 ):
     """Generate a new API key"""
-    client = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    client: Final = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
     try:
-        models_list = [m.strip() for m in models.split(",")] if models else None
-        aliases_dict = json.loads(aliases) if aliases else None
-        config_dict = json.loads(config) if config else None
+        models_list: Final = [m.strip() for m in models.split(",")] if models else None
+        aliases_dict: Final = json.loads(aliases) if aliases else None
+        config_dict: Final = json.loads(config) if config else None
     except json.JSONDecodeError as e:
-        raise click.BadParameter(f"Invalid JSON: {e!s}")
+        raise click.BadParameter(f"Invalid JSON: {e}")
     try:
-        response = client.generate(
+        response: Final = client.generate(
             models=models_list,
             aliases=aliases_dict,
             spend=spend,
@@ -139,7 +139,7 @@ def generate(
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         try:
-            error_body = e.response.json()
+            error_body: Final = e.response.json()
             rich.print_json(data=error_body)
         except json.JSONDecodeError:
             click.echo(e.response.text, err=True)
@@ -152,16 +152,16 @@ def generate(
 @click.pass_context
 def delete(ctx: click.Context, keys: str | None, key_aliases: str | None):
     """Delete API keys by key or alias"""
-    client = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
-    keys_list = [k.strip() for k in keys.split(",")] if keys else None
-    aliases_list = [a.strip() for a in key_aliases.split(",")] if key_aliases else None
+    client: Final = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    keys_list: Final = [k.strip() for k in keys.split(",")] if keys else None
+    aliases_list: Final = [a.strip() for a in key_aliases.split(",")] if key_aliases else None
     try:
-        response = client.delete(keys=keys_list, key_aliases=aliases_list)
+        response: Final = client.delete(keys=keys_list, key_aliases=aliases_list)
         rich.print_json(data=response)
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         try:
-            error_body = e.response.json()
+            error_body: Final = e.response.json()
             rich.print_json(data=error_body)
         except json.JSONDecodeError:
             click.echo(e.response.text, err=True)
@@ -192,9 +192,9 @@ def _fetch_all_keys_with_pagination(
 ) -> builtins.list[dict[str, Any]]:
     """Fetch all keys from source instance using pagination."""
     click.echo(f"Fetching keys from source server: {source_base_url}")
-    source_keys = []
+    source_keys: Final = []
     page = 1
-    page_size = 100  # Use a larger page size to minimize API calls
+    page_size: Final = 100  # Use a larger page size to minimize API calls
 
     while True:
         source_response = source_client.list(return_full_object=True, page=page, size=page_size)
@@ -226,7 +226,7 @@ def _filter_keys_by_created_since(
     if not created_since_dt:
         return source_keys
 
-    filtered_keys = []
+    filtered_keys: Final = []
     for key in source_keys:
         key_created_at = key.get("created_at")
         if key_created_at:
@@ -251,7 +251,7 @@ def _filter_keys_by_created_since(
 def _display_dry_run_table(source_keys: builtins.list[dict[str, Any]]) -> None:
     """Display a table of keys that would be imported in dry-run mode."""
     click.echo("\n--- DRY RUN MODE ---")
-    table = Table(title="Keys that would be imported")
+    table: Final = Table(title="Keys that would be imported")
     table.add_column("Key Alias", style="green")
     table.add_column("User ID", style="magenta")
     table.add_column("Created", style="cyan")
@@ -273,7 +273,7 @@ def _display_dry_run_table(source_keys: builtins.list[dict[str, Any]]) -> None:
 
 def _prepare_key_import_data(key: dict[str, Any]) -> dict[str, Any]:
     """Prepare key data for import by extracting relevant fields."""
-    import_data = {}
+    import_data: Final = {}
 
     # Copy relevant fields if they exist
     for field in [
@@ -316,7 +316,7 @@ def _import_keys_to_destination(
         except Exception as e:
             failed_count += 1
             key_alias = key.get("key_alias", "N/A")
-            click.echo(f"Failed to import key {key_alias}: {e!s}", err=True)
+            click.echo(f"Failed to import key {key_alias}: {e}", err=True)
 
     return imported_count, failed_count
 
@@ -347,11 +347,11 @@ def import_keys(
 ):
     """Import API keys from another LiteLLM instance"""
     # Parse created_since filter if provided
-    created_since_dt = _parse_created_since_filter(created_since)
+    created_since_dt: Final = _parse_created_since_filter(created_since)
 
     # Create clients for both source and destination
-    source_client = KeysManagementClient(source_base_url, source_api_key)
-    dest_client = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    source_client: Final = KeysManagementClient(source_base_url, source_api_key)
+    dest_client: Final = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
 
     try:
         # Get all keys from source instance with pagination
@@ -383,11 +383,11 @@ def import_keys(
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         try:
-            error_body = e.response.json()
+            error_body: Final = e.response.json()
             rich.print_json(data=error_body)
         except json.JSONDecodeError:
             click.echo(e.response.text, err=True)
         raise click.Abort()
     except Exception as e:
-        click.echo(f"Error: {e!s}", err=True)
+        click.echo(f"Error: {e}", err=True)
         raise click.Abort()

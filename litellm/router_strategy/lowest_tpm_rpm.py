@@ -2,6 +2,7 @@
 #   identifies lowest tpm deployment
 import traceback
 from datetime import datetime
+from typing import Final
 
 from litellm import token_counter
 from litellm._logging import verbose_router_logger
@@ -35,7 +36,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
 
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
@@ -43,14 +44,14 @@ class LowestTPMLoggingHandler(CustomLogger):
                 elif isinstance(id, int):
                     id = str(id)
 
-                total_tokens = response_obj["usage"]["total_tokens"]
+                total_tokens: Final = response_obj["usage"]["total_tokens"]
 
                 # ------------
                 # Setup values
                 # ------------
-                current_minute = datetime.now().strftime("%H-%M")
-                tpm_key = f"{model_group}:tpm:{current_minute}"
-                rpm_key = f"{model_group}:rpm:{current_minute}"
+                current_minute: Final = datetime.now().strftime("%H-%M")
+                tpm_key: Final = f"{model_group}:tpm:{current_minute}"
+                rpm_key: Final = f"{model_group}:rpm:{current_minute}"
 
                 # ------------
                 # Update usage
@@ -73,7 +74,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_router_logger.error(
-                f"litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - {e!s}"
+                "litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - %s", e
             )
             verbose_router_logger.debug(traceback.format_exc())
 
@@ -87,9 +88,9 @@ class LowestTPMLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
 
-                model_info = kwargs["litellm_params"].get("model_info")
+                model_info: Final = kwargs["litellm_params"].get("model_info")
                 id = None
                 if model_info is not None and isinstance(model_info, dict):
                     id = model_info.get("id", None)
@@ -100,14 +101,14 @@ class LowestTPMLoggingHandler(CustomLogger):
 
                 if "usage" not in response_obj:
                     return
-                total_tokens = response_obj["usage"]["total_tokens"]
+                total_tokens: Final = response_obj["usage"]["total_tokens"]
 
                 # ------------
                 # Setup values
                 # ------------
-                current_minute = datetime.now().strftime("%H-%M")
-                tpm_key = f"{model_group}:tpm:{current_minute}"
-                rpm_key = f"{model_group}:rpm:{current_minute}"
+                current_minute: Final = datetime.now().strftime("%H-%M")
+                tpm_key: Final = f"{model_group}:tpm:{current_minute}"
+                rpm_key: Final = f"{model_group}:rpm:{current_minute}"
 
                 # ------------
                 # Update usage
@@ -135,7 +136,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_router_logger.exception(
-                f"litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - {e!s}"
+                "litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - %s", e
             )
             verbose_router_logger.debug(traceback.format_exc())
 
@@ -151,21 +152,23 @@ class LowestTPMLoggingHandler(CustomLogger):
         """
         # get list of potential deployments
         verbose_router_logger.debug(
-            f"get_available_deployments - Usage Based. model_group: {model_group}, healthy_deployments: {healthy_deployments}"
+            "get_available_deployments - Usage Based. model_group: %s, healthy_deployments: %s",
+            model_group,
+            healthy_deployments,
         )
-        current_minute = datetime.now().strftime("%H-%M")
-        tpm_key = f"{model_group}:tpm:{current_minute}"
-        rpm_key = f"{model_group}:rpm:{current_minute}"
+        current_minute: Final = datetime.now().strftime("%H-%M")
+        tpm_key: Final = f"{model_group}:tpm:{current_minute}"
+        rpm_key: Final = f"{model_group}:rpm:{current_minute}"
 
         tpm_dict = self.router_cache.get_cache(key=tpm_key)
-        rpm_dict = self.router_cache.get_cache(key=rpm_key)
+        rpm_dict: Final = self.router_cache.get_cache(key=rpm_key)
 
-        verbose_router_logger.debug(f"tpm_key={tpm_key}, tpm_dict: {tpm_dict}, rpm_dict: {rpm_dict}")
+        verbose_router_logger.debug("tpm_key=%s, tpm_dict: %s, rpm_dict: %s", tpm_key, tpm_dict, rpm_dict)
         try:
             input_tokens = token_counter(messages=messages, text=input)
         except Exception:
             input_tokens = 0
-        verbose_router_logger.debug(f"input_tokens={input_tokens}")
+        verbose_router_logger.debug("input_tokens=%s", input_tokens)
         # -----------------------
         # Find lowest used model
         # ----------------------
@@ -182,7 +185,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                 if d["model_info"]["id"] not in tpm_dict:
                     tpm_dict[d["model_info"]["id"]] = 0
 
-        all_deployments = tpm_dict
+        all_deployments: Final = tpm_dict
 
         deployment = None
         for item, item_tpm in all_deployments.items():

@@ -1,7 +1,7 @@
 import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from fastapi import HTTPException
 from starlette.datastructures import Headers
@@ -94,7 +94,7 @@ def _parse_mcp_server_names_from_path(path: str, mcp_servers_header: list[str] |
     header/path mismatch here is a sign of a confused or hostile caller —
     refuse the cold-start bypass rather than admit anonymously based on the
     path while the header advertises a stricter, non-passthrough target."""
-    servers = MCPRequestHandler._extract_target_server_names_from_path(path)
+    servers: Final = MCPRequestHandler._extract_target_server_names_from_path(path)
     if len(servers) != 1:
         verbose_logger.debug(
             "MCP cold-start: path %r resolved to %r; passthrough 401 bypass "
@@ -185,10 +185,10 @@ def _gateway_dcr_challenge_target(
         global_mcp_server_manager,
     )
 
-    targets = _parse_mcp_server_names_from_path(route, mcp_servers)
+    targets: Final = _parse_mcp_server_names_from_path(route, mcp_servers)
     if targets is None:
         return None
-    server = global_mcp_server_manager.get_mcp_server_by_name(targets[0], client_ip=client_ip)
+    server: Final = global_mcp_server_manager.get_mcp_server_by_name(targets[0], client_ip=client_ip)
     if server is None or not server.is_gateway_managed_oauth2:
         return None
     return targets[0]
@@ -236,13 +236,13 @@ def _gateway_dcr_challenge(
     present a bearer that failed admission (expired or revoked), telling
     spec-compliant clients to re-authorize rather than retry; a request with
     no credentials at all gets the bare challenge per RFC 6750 section 3.1."""
-    target = _gateway_dcr_challenge_target(route, mcp_servers, IPAddressUtils.get_mcp_client_ip(request))
-    resource_metadata_url = (
+    target: Final = _gateway_dcr_challenge_target(route, mcp_servers, IPAddressUtils.get_mcp_client_ip(request))
+    resource_metadata_url: Final = (
         get_passthrough_resource_metadata_url(request.scope, target)
         if target is not None
         else f"{get_request_base_url(request)}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp"
     )
-    error_attr = 'error="invalid_token", ' if invalid_token else ""
+    error_attr: Final = 'error="invalid_token", ' if invalid_token else ""
     return HTTPException(
         status_code=401,
         detail={
@@ -273,7 +273,7 @@ def _admission_failure_fallback(
     code when the caller DID present a bearer (an expired gateway session
     must re-authorize, not retry a dead token). Anything else re-raises the
     original admission error unchanged."""
-    mcp_servers_from_path = _parse_mcp_server_names_from_path(request_route, mcp_servers)
+    mcp_servers_from_path: Final = _parse_mcp_server_names_from_path(request_route, mcp_servers)
     if (
         mcp_servers_from_path is not None
         and not _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers)
@@ -366,12 +366,12 @@ class MCPRequestHandler:
         Raises:
             HTTPException: If headers are invalid or missing required headers
         """
-        headers = MCPRequestHandler._safe_get_headers_from_scope(scope)
+        headers: Final = MCPRequestHandler._safe_get_headers_from_scope(scope)
 
         # Check if there is an explicit LiteLLM API key (primary header)
-        has_explicit_litellm_key = headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY) is not None
+        has_explicit_litellm_key: Final = headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY) is not None
 
-        litellm_api_key = MCPRequestHandler.get_litellm_api_key_from_headers(headers) or ""
+        litellm_api_key: Final = MCPRequestHandler.get_litellm_api_key_from_headers(headers) or ""
 
         # Get the old mcp_auth_header for backward compatibility
         mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers)
@@ -383,31 +383,31 @@ class MCPRequestHandler:
         oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers)
 
         # Parse MCP servers from header
-        mcp_servers_header = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
-        verbose_logger.debug(f"Raw MCP servers header: {mcp_servers_header}")
+        mcp_servers_header: Final = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
+        verbose_logger.debug("Raw MCP servers header: %s", mcp_servers_header)
         mcp_servers = None
         if mcp_servers_header is not None:
             try:
                 mcp_servers = [s.strip() for s in mcp_servers_header.split(",") if s.strip()]
-                verbose_logger.debug(f"Parsed MCP servers: {mcp_servers}")
+                verbose_logger.debug("Parsed MCP servers: %s", mcp_servers)
             except Exception as e:
-                verbose_logger.debug(f"Error parsing mcp_servers header: {e}")
+                verbose_logger.debug("Error parsing mcp_servers header: %s", e)
                 mcp_servers = None
             if mcp_servers_header == "" or (mcp_servers is not None and len(mcp_servers) == 0):
                 mcp_servers = []
         # Create a proper Request object with mock body method to avoid ASGI receive channel issues
-        request = Request(scope=scope)
+        request: Final = Request(scope=scope)
 
         async def mock_body():
             return b"{}"
 
-        request.body = mock_body  # type: ignore
+        request.body = mock_body
         # Inline import — auth_utils participates in a proxy import cycle.
         from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
             get_request_route,
         )
 
-        request_route = get_request_route(request)
+        request_route: Final = get_request_route(request)
         # Only OAuth metadata routes registered under /.well-known/ are public.
         if request_route.startswith("/.well-known/"):
             validated_user_api_key_auth = UserAPIKeyAuth()
@@ -551,10 +551,10 @@ class MCPRequestHandler:
         ``x-mcp-{alias}-authorization``. A legitimate upstream/passthrough token is never gateway-shaped so
         it survives (including the real upstream token the bridge arm injects per-server); an admitted
         subject's top-level Authorization is dropped unconditionally as defense-in-depth."""
-        cred = MCPRequestHandler._is_gateway_admission_credential
+        cred: Final = MCPRequestHandler._is_gateway_admission_credential
 
         # 1. Top-level Authorization → oauth2_headers.
-        authz = oauth2_headers.get("Authorization") if oauth2_headers else None
+        authz: Final = oauth2_headers.get("Authorization") if oauth2_headers else None
         if admitted or cred(authz):
             oauth2_headers = None
 
@@ -570,7 +570,7 @@ class MCPRequestHandler:
 
         # 4. Per-server x-mcp-{alias}-authorization values (drop the value, then any now-empty server dict).
         if mcp_server_auth_headers:
-            stripped = {
+            stripped: Final = {
                 alias: {h: val for h, val in hdrs.items() if not cred(val)}
                 for alias, hdrs in mcp_server_auth_headers.items()
             }
@@ -606,7 +606,7 @@ class MCPRequestHandler:
         # with ``server.py::_get_mcp_servers_in_path``, which also accepts the
         # un-rewritten form (some entry points may skip the
         # ``dynamic_mcp_route`` rewrite).
-        segments = [s for s in path.split("/") if s]
+        segments: Final = [s for s in path.split("/") if s]
         if len(segments) >= 2 and segments[1] == "mcp" and segments[0] != "mcp":
             return [segments[0]]
 
@@ -614,16 +614,16 @@ class MCPRequestHandler:
         # ``custom_solutions/user_123``) and may be a comma-separated list.
         # Use the same parsing logic as ``_get_mcp_servers_in_path`` so the
         # parsed names match downstream routing.
-        mcp_path_match = re.match(r"^/mcp/([^?#]+)(?:\?.*)?(?:#.*)?$", path)
+        mcp_path_match: Final = re.match(r"^/mcp/([^?#]+)(?:\?.*)?(?:#.*)?$", path)
         if not mcp_path_match:
             return []
-        servers_and_path = mcp_path_match.group(1)
+        servers_and_path: Final = mcp_path_match.group(1)
         if not servers_and_path:
             return []
 
         if "," in servers_and_path:
             # Comma-separated servers, possibly followed by a trailing path.
-            path_match = re.search(r"/([^/,]+(?:/[^/,]+)*)$", servers_and_path)
+            path_match: Final = re.search(r"/([^/,]+(?:/[^/,]+)*)$", servers_and_path)
             if path_match:
                 servers_part = servers_and_path[: -(len(path_match.group(1)) + 1)]
             else:
@@ -631,7 +631,7 @@ class MCPRequestHandler:
             return [s.strip() for s in servers_part.split(",") if s.strip()]
 
         # Single-server case — server name may contain at most one slash.
-        single_server_match = re.match(r"^([^/]+(?:/[^/]+)?)(?:/.*)?$", servers_and_path)
+        single_server_match: Final = re.match(r"^([^/]+(?:/[^/]+)?)(?:/.*)?$", servers_and_path)
         if single_server_match:
             return [single_server_match.group(1)]
         return [servers_and_path]
@@ -662,7 +662,7 @@ class MCPRequestHandler:
         # (``extract_mcp_auth_context``) or an attacker could set
         # ``x-mcp-servers`` to a delegate-enabled server while the URL path
         # targets a non-delegate server, skipping LiteLLM auth for it.
-        target_names = MCPRequestHandler._resolve_target_server_names(path=path, mcp_servers_header=mcp_servers)
+        target_names: Final = MCPRequestHandler._resolve_target_server_names(path=path, mcp_servers_header=mcp_servers)
         if not target_names:
             return False
 
@@ -709,7 +709,7 @@ class MCPRequestHandler:
         )
         from litellm.types.mcp import MCPAuth
 
-        target_names = MCPRequestHandler._resolve_target_server_names(path=path, mcp_servers_header=mcp_servers)
+        target_names: Final = MCPRequestHandler._resolve_target_server_names(path=path, mcp_servers_header=mcp_servers)
         if not target_names:
             return False
 
@@ -735,10 +735,10 @@ class MCPRequestHandler:
             global_mcp_server_manager,
         )
 
-        target_names = MCPRequestHandler._resolve_target_server_names(path=path, mcp_servers_header=mcp_servers)
+        target_names: Final = MCPRequestHandler._resolve_target_server_names(path=path, mcp_servers_header=mcp_servers)
         if len(target_names) != 1:
             return None
-        server = global_mcp_server_manager.get_mcp_server_by_name(target_names[0], client_ip=client_ip)
+        server: Final = global_mcp_server_manager.get_mcp_server_by_name(target_names[0], client_ip=client_ip)
         if server is None or not server.is_oauth_delegate or not server.is_dcr_bridge:
             return None
         # Egress resolves the injected per-server token only by alias / server_name; a server with
@@ -784,17 +784,17 @@ class MCPRequestHandler:
 
         await MCPRequestHandler._run_pre_db_read_auth_checks(request=request, route=route)
 
-        keys = envelope_keys_from_master_key(master_key)
-        result = resolve_bridge_envelope(authorization_value, keys, datetime.now(timezone.utc), server.server_id)
+        keys: Final = envelope_keys_from_master_key(master_key)
+        result: Final = resolve_bridge_envelope(authorization_value, keys, datetime.now(timezone.utc), server.server_id)
         match result:
             case BridgeEnvelopeAdmitted():
-                header_key = server.alias or server.server_name
+                header_key: Final = server.alias or server.server_name
                 if header_key is None:
                     raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
-                admitted = await MCPRequestHandler._reload_admitted_principal(result.identity)
+                admitted: Final = await MCPRequestHandler._reload_admitted_principal(result.identity)
                 await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
-                injected = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
-                new_headers = {**(mcp_server_auth_headers or {}), **injected}
+                injected: Final = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
+                new_headers: Final = {**(mcp_server_auth_headers or {}), **injected}
                 return admitted, new_headers
             case BridgeEnvelopeInvalid() | NotBridgeEnvelope():
                 raise HTTPException(status_code=401, detail="Invalid or expired credential")
@@ -830,12 +830,12 @@ class MCPRequestHandler:
 
         await MCPRequestHandler._run_pre_db_read_auth_checks(request=request, route=route)
 
-        keys = session_keys_from_master_key(master_key)
-        result = resolve_session_bearer(authorization_value, keys, datetime.now(timezone.utc))
+        keys: Final = session_keys_from_master_key(master_key)
+        result: Final = resolve_session_bearer(authorization_value, keys, datetime.now(timezone.utc))
         match result:
             case SessionBearerAdmitted():
                 try:
-                    admitted = await MCPRequestHandler._reload_admitted_user(result.principal.user_id)
+                    admitted: Final = await MCPRequestHandler._reload_admitted_user(result.principal.user_id)
                     await MCPRequestHandler._enforce_admitted_live_policy(
                         admitted=admitted, request=request, route=route
                     )
@@ -916,7 +916,7 @@ class MCPRequestHandler:
         if prisma_client is None:
             raise HTTPException(status_code=500, detail="Server misconfigured: no database connection")
         try:
-            user_object = await get_user_object(
+            user_object: Final = await get_user_object(
                 user_id=user_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -941,7 +941,7 @@ class MCPRequestHandler:
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
         if isinstance(user_object.metadata, dict) and user_object.metadata.get("scim_active") is False:
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
-        admitted = UserAPIKeyAuth(
+        admitted: Final = UserAPIKeyAuth(
             user_id=user_object.user_id,
             user_role=user_object.user_role,
             org_id=user_object.organization_id,
@@ -981,8 +981,8 @@ class MCPRequestHandler:
         )
 
         try:
-            limits: dict[str, dict[str, int]] = {}
-            source_grants = await MCPRequestHandler.admitted_source_grants(auth)
+            limits: Final[dict[str, dict[str, int]]] = {}
+            source_grants: Final = await MCPRequestHandler.admitted_source_grants(auth)
             for source, granted_ids in source_grants:
                 if not source.team_id:
                     continue
@@ -1008,7 +1008,7 @@ class MCPRequestHandler:
                     limits[source.team_id] = applicable
             return limits or None
         except Exception as e:  # noqa: BLE001  # throttling metadata must never fail an allowed request
-            verbose_logger.warning(f"Failed to resolve per-team MCP rpm limits for admitted subject: {e!s}")
+            verbose_logger.warning("Failed to resolve per-team MCP rpm limits for admitted subject: %s", e)
             return None
 
     @staticmethod
@@ -1034,7 +1034,7 @@ class MCPRequestHandler:
         if prisma_client is None:
             raise HTTPException(status_code=500, detail="Server misconfigured: no database connection")
         try:
-            key_object = await get_key_object(
+            key_object: Final = await get_key_object(
                 hashed_token=key_hash,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -1091,7 +1091,7 @@ class MCPRequestHandler:
                 user_id_upsert=False,
             )
         except Exception as e:  # noqa: BLE001  # mirror the builder's fail-open user lookup; DB errors are of any type
-            verbose_logger.debug(f"bridge admission: user lookup failed, skipping SCIM gate: {e}")
+            verbose_logger.debug("bridge admission: user lookup failed, skipping SCIM gate: %s", e)
             user_object = None
         if user_object is None or not isinstance(user_object.metadata, dict):
             return
@@ -1147,7 +1147,7 @@ class MCPRequestHandler:
         the bridge token endpoint applies at mint time."""
         if key_object.blocked is True:
             return False
-        expires = key_object.expires
+        expires: Final = key_object.expires
         if expires is None:
             return True
         expiry = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
@@ -1168,7 +1168,7 @@ class MCPRequestHandler:
         (header/path TOCTOU). For non-``/mcp/...`` paths (where the path
         does not encode targets), fall back to the header.
         """
-        path_targets = MCPRequestHandler._extract_target_server_names_from_path(path)
+        path_targets: Final = MCPRequestHandler._extract_target_server_names_from_path(path)
         if path_targets:
             return path_targets
         # Path did not resolve to /mcp/... targets — trust the header
@@ -1190,12 +1190,12 @@ class MCPRequestHandler:
 
         DEPRECATED: This method is deprecated in favor of server-specific auth headers using the format x-mcp-{{server_alias}}-{{header_name}} instead.
         """
-        mcp_client_side_auth_header_name: str = MCPRequestHandler._get_mcp_client_side_auth_header_name()
-        auth_header = headers.get(mcp_client_side_auth_header_name)
+        mcp_client_side_auth_header_name: Final[str] = MCPRequestHandler._get_mcp_client_side_auth_header_name()
+        auth_header: Final = headers.get(mcp_client_side_auth_header_name)
         if auth_header:
             verbose_logger.warning(
-                f"The '{mcp_client_side_auth_header_name}' header is deprecated. "
-                f"Please use server-specific auth headers in the format 'x-mcp-{{server_alias}}-{{header_name}}' instead."
+                "The '%s' header is deprecated. Please use server-specific auth headers in the format 'x-mcp-{server_alias}-{header_name}' instead.",
+                mcp_client_side_auth_header_name,
             )
         return auth_header
 
@@ -1215,8 +1215,8 @@ class MCPRequestHandler:
         Returns:
             Dict[str, Dict[str, str]]: Mapping of server alias to header dict
         """
-        server_auth_headers: dict[str, dict[str, str]] = {}
-        prefix = "x-mcp-"
+        server_auth_headers: Final[dict[str, dict[str, str]]] = {}
+        prefix: Final = "x-mcp-"
 
         for header_name, header_value in headers.items():
             if header_name.lower().startswith(prefix):
@@ -1245,7 +1245,10 @@ class MCPRequestHandler:
 
                         server_auth_headers[server_alias][auth_header_name] = header_value
                         verbose_logger.debug(
-                            f"Found server auth header: {server_alias} -> {auth_header_name}: {header_value[:10]}..."
+                            "Found server auth header: %s -> %s: %s...",
+                            server_alias,
+                            auth_header_name,
+                            header_value[:10],
                         )
 
         return server_auth_headers
@@ -1255,7 +1258,7 @@ class MCPRequestHandler:
         """
         Get the oauth2 headers from the request headers.
         """
-        oauth2_headers = {}
+        oauth2_headers: Final = {}
         for header_name, header_value in headers.items():
             if header_name.lower().startswith("authorization"):
                 oauth2_headers["Authorization"] = header_value
@@ -1296,11 +1299,11 @@ class MCPRequestHandler:
             headers: Starlette Headers object that handles case insensitivity
         """
         # Headers object handles case insensitivity automatically
-        api_key = headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY)
+        api_key: Final = headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY)
         if api_key:
             return api_key
 
-        auth_header = headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_SECONDARY)
+        auth_header: Final = headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_SECONDARY)
         if auth_header:
             return auth_header
 
@@ -1323,15 +1326,15 @@ class MCPRequestHandler:
         ``Authorization`` headers is malformed for bearer auth anyway (RFC 9110: not
         a comma-combinable field), so fail closed with a 400.
         """
-        raw_headers = scope.get("headers", [])
+        raw_headers: Final = scope.get("headers", [])
         MCPRequestHandler._reject_duplicate_authorization(raw_headers)
         try:
             # ASGI headers are list of [name: bytes, value: bytes] pairs
             # Convert bytes to strings and create dict for Headers constructor
-            headers_dict = {name.decode("latin-1"): value.decode("latin-1") for name, value in raw_headers}
+            headers_dict: Final = {name.decode("latin-1"): value.decode("latin-1") for name, value in raw_headers}
             return Headers(headers_dict)
         except (UnicodeDecodeError, AttributeError, TypeError) as e:
-            verbose_logger.exception(f"Error getting headers from scope: {e}")
+            verbose_logger.exception("Error getting headers from scope: %s", e)
             # Return empty Headers object with empty dict
             return Headers({})
 
@@ -1409,9 +1412,9 @@ class MCPRequestHandler:
             #########################################################
             # Calculate key/team allowed servers using inheritance and intersection logic
             #########################################################
-            key_set = set(allowed_mcp_servers_for_key)
-            team_set = set(allowed_mcp_servers_for_team)
-            grants_set = set(key_access_group_grants)
+            key_set: Final = set(allowed_mcp_servers_for_key)
+            team_set: Final = set(allowed_mcp_servers_for_team)
+            grants_set: Final = set(key_access_group_grants)
 
             has_lower_level_mcp_restrictions = bool(key_set or team_set or grants_set)
 
@@ -1431,7 +1434,7 @@ class MCPRequestHandler:
                 # so require_key_mcp_access_defined can only ever zero a real key's inherited team grants.
                 # ``keyless_source`` marks one grant source of an admitted subject, which has no key
                 # to declare access on, so the flag must not zero its team grants.
-                require_key_access = (
+                require_key_access: Final = (
                     general_settings.get("require_key_mcp_access_defined", False) and not keyless_source
                 )
                 base = team_set if not require_key_access else set()
@@ -1447,7 +1450,7 @@ class MCPRequestHandler:
             # Check end_user permissions if end_user_id is set
             #########################################################
             if user_api_key_auth and user_api_key_auth.end_user_id:
-                allowed_mcp_servers_for_end_user = await MCPRequestHandler._get_allowed_mcp_servers_for_end_user(
+                allowed_mcp_servers_for_end_user: Final = await MCPRequestHandler._get_allowed_mcp_servers_for_end_user(
                     user_api_key_auth
                 )
 
@@ -1455,23 +1458,26 @@ class MCPRequestHandler:
                 if len(allowed_mcp_servers_for_end_user) > 0:
                     has_lower_level_mcp_restrictions = True
                     verbose_logger.debug(
-                        f"End user {user_api_key_auth.end_user_id} has explicit MCP permissions: {allowed_mcp_servers_for_end_user}"
+                        "End user %s has explicit MCP permissions: %s",
+                        user_api_key_auth.end_user_id,
+                        allowed_mcp_servers_for_end_user,
                     )
 
                     # Always apply intersection: key/team AND end_user
                     # This ensures end_user can only access servers that both they AND their key/team are authorized for
-                    filtered_servers = []
+                    filtered_servers: Final = []
                     for _mcp_server in allowed_mcp_servers:
                         if _mcp_server in allowed_mcp_servers_for_end_user:
                             filtered_servers.append(_mcp_server)
                     allowed_mcp_servers = filtered_servers
                     verbose_logger.debug(
-                        f"Applied end_user intersection filter. Final allowed servers: {allowed_mcp_servers}"
+                        "Applied end_user intersection filter. Final allowed servers: %s", allowed_mcp_servers
                     )
                 # If flag is enabled but end_user has no permissions, block all access
                 elif general_settings.get("require_end_user_mcp_access_defined", False):
                     verbose_logger.debug(
-                        f"require_end_user_mcp_access_defined=True and end_user {user_api_key_auth.end_user_id} has no MCP permissions - blocking MCP access"
+                        "require_end_user_mcp_access_defined=True and end_user %s has no MCP permissions - blocking MCP access",
+                        user_api_key_auth.end_user_id,
                     )
                     return []
 
@@ -1479,7 +1485,7 @@ class MCPRequestHandler:
             # Check agent permissions if agent_id is set on the key
             #########################################################
             if user_api_key_auth and user_api_key_auth.agent_id:
-                allowed_mcp_servers_for_agent = await MCPRequestHandler._get_allowed_mcp_servers_for_agent(
+                allowed_mcp_servers_for_agent: Final = await MCPRequestHandler._get_allowed_mcp_servers_for_agent(
                     user_api_key_auth
                 )
                 if len(allowed_mcp_servers_for_agent) > 0:
@@ -1487,7 +1493,7 @@ class MCPRequestHandler:
                     # Intersect: agent can only use servers allowed by BOTH key/team AND agent config
                     allowed_mcp_servers = [s for s in allowed_mcp_servers if s in allowed_mcp_servers_for_agent]
                     verbose_logger.debug(
-                        f"Applied agent intersection filter. Final allowed servers: {allowed_mcp_servers}"
+                        "Applied agent intersection filter. Final allowed servers: %s", allowed_mcp_servers
                     )
 
             #########################################################
@@ -1514,9 +1520,9 @@ class MCPRequestHandler:
             if isinstance(e, UnloadableEntitlementError):
                 # A ceiling we KNOW exists and cannot read. Denying is the only answer that does not
                 # widen this caller past what an operator configured, for both caller shapes.
-                verbose_logger.warning(f"Denying MCP access, entitlement unreadable: {e!s}")
+                verbose_logger.warning("Denying MCP access, entitlement unreadable: %s", e)
             else:
-                verbose_logger.warning(f"Failed to get allowed MCP servers: {e!s}")
+                verbose_logger.warning("Failed to get allowed MCP servers: %s", e)
             return []
 
     @staticmethod
@@ -1540,11 +1546,12 @@ class MCPRequestHandler:
         ``None``, so key auth cannot silently shed a ceiling an operator did configure."""
         if not (user_api_key_auth and user_api_key_auth.org_id):
             return allowed_mcp_servers
-        allowed_mcp_servers_for_org = await MCPRequestHandler._get_allowed_mcp_servers_for_org(user_api_key_auth)
+        allowed_mcp_servers_for_org: Final = await MCPRequestHandler._get_allowed_mcp_servers_for_org(user_api_key_auth)
         if allowed_mcp_servers_for_org is None:
             verbose_logger.warning(
-                f"MCP org ceiling unresolved for org_id={user_api_key_auth.org_id!r}; "
-                f"{'denying (keyless admitted subject)' if keyless_source else 'leaving uncapped (key auth)'}"
+                "MCP org ceiling unresolved for org_id=%r; %s",
+                user_api_key_auth.org_id,
+                "denying (keyless admitted subject)" if keyless_source else "leaving uncapped (key auth)",
             )
             return [] if keyless_source else allowed_mcp_servers
         if len(allowed_mcp_servers_for_org) == 0:
@@ -1556,7 +1563,7 @@ class MCPRequestHandler:
         else:
             # No lower-level restrictions → org list becomes the ceiling.
             capped = allowed_mcp_servers_for_org
-        verbose_logger.debug(f"Applied org ceiling filter. Final allowed servers: {capped}")
+        verbose_logger.debug("Applied org ceiling filter. Final allowed servers: %s", capped)
         return capped
 
     @staticmethod
@@ -1575,7 +1582,7 @@ class MCPRequestHandler:
         ``user_role`` (an admin role would grant every server at the server-manager wrapper). The
         admission marker cannot be set via the constructor (a before-validator pops it), so each source
         resolves as an ordinary caller and cannot re-enter the admitted path."""
-        scoped = UserAPIKeyAuth(
+        scoped: Final = UserAPIKeyAuth(
             user_id=auth.user_id,
             team_id=team_id,
             org_id=org_id,
@@ -1601,7 +1608,7 @@ class MCPRequestHandler:
         lists them; the roster is the source of truth for revocation."""
         from litellm.proxy.proxy_server import prisma_client
 
-        sources = [
+        sources: Final = [
             MCPRequestHandler._scoped_source_auth(auth, team_id=None, org_id=auth.org_id, carry_user_grants=True)
         ]
         if not auth.user_id or prisma_client is None:
@@ -1638,7 +1645,7 @@ class MCPRequestHandler:
         if prisma_client is None or not auth.user_id:
             return None
         try:
-            team_obj: LiteLLM_TeamTable | None = await get_team_object(
+            team_obj: Final[LiteLLM_TeamTable | None] = await get_team_object(
                 team_id=team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -1649,11 +1656,11 @@ class MCPRequestHandler:
             # Fault isolation is per SOURCE: an unresolvable team contributes nothing (fail closed for
             # it alone, access only narrows) while every other source stands. Raising would collapse the
             # whole union to deny-all over one momentarily-unreadable row.
-            verbose_logger.warning(f"MCP admitted-subject source team {team_id!r} unresolvable, skipping: {e!s}")
+            verbose_logger.warning("MCP admitted-subject source team %r unresolvable, skipping: %s", team_id, e)
             return None
         if team_obj is None:
             return None
-        member_user_ids = {getattr(m, "user_id", None) for m in (team_obj.members_with_roles or [])} - {None}
+        member_user_ids: Final = {getattr(m, "user_id", None) for m in (team_obj.members_with_roles or [])} - {None}
         if auth.user_id not in member_user_ids:
             return None
         # A team (or its owning org) over budget is not a live grantor, exactly as it is not for a key
@@ -1667,7 +1674,7 @@ class MCPRequestHandler:
             _team_max_budget_check,
         )
 
-        source_view = MCPRequestHandler._scoped_source_auth(
+        source_view: Final = MCPRequestHandler._scoped_source_auth(
             auth, team_id=team_id, org_id=team_obj.organization_id or auth.org_id, carry_user_grants=False
         )
         try:
@@ -1682,10 +1689,10 @@ class MCPRequestHandler:
                 proxy_logging_obj=proxy_logging_obj,
             )
         except BudgetExceededError as e:
-            verbose_logger.info(f"MCP admitted-subject source team {team_id!r} over budget, not a grantor: {e!s}")
+            verbose_logger.info("MCP admitted-subject source team %r over budget, not a grantor: %s", team_id, e)
             return None
         except Exception as e:  # noqa: BLE001  # per-source isolation: a budget-check fault narrows, never raises
-            verbose_logger.warning(f"MCP budget check failed for source team {team_id!r}, skipping source: {e!s}")
+            verbose_logger.warning("MCP budget check failed for source team %r, skipping source: %s", team_id, e)
             return None
         return team_obj
 
@@ -1706,7 +1713,7 @@ class MCPRequestHandler:
     async def _resolve_admitted_subject_servers(auth: UserAPIKeyAuth) -> list[str]:
         """Union of what each of the admitted subject's sources reaches, each answered by the
         canonical resolver so no rule is reimplemented for this caller shape."""
-        reachable: set[str] = set()
+        reachable: Final[set[str]] = set()
         for _source, granted in await MCPRequestHandler.admitted_source_grants(auth):
             reachable.update(granted)
         return list(reachable)
@@ -1727,18 +1734,18 @@ class MCPRequestHandler:
                 global_mcp_server_manager,
             )
 
-            server = global_mcp_server_manager._get_mcp_server_from_tool_name(tool_name)
+            server: Final = global_mcp_server_manager._get_mcp_server_from_tool_name(tool_name)
             if server is None:
                 return auth
-            source = await MCPRequestHandler.attributing_source_for_server(auth, server.server_id)
+            source: Final = await MCPRequestHandler.attributing_source_for_server(auth, server.server_id)
             if source is None or not source.team_id:
                 return auth
-            billed = auth.model_copy()
+            billed: Final = auth.model_copy()
             billed.team_id = source.team_id
             billed.org_id = source.org_id
             return billed
         except Exception as e:  # noqa: BLE001  # attribution must never fail an authorized call
-            verbose_logger.warning(f"MCP billing attribution failed for {tool_name!r}, billing the user: {e!s}")
+            verbose_logger.warning("MCP billing attribution failed for %r, billing the user: %s", tool_name, e)
             return auth
 
     @staticmethod
@@ -1756,7 +1763,7 @@ class MCPRequestHandler:
         team is always one that actually granted the server (restoring the team budget accrual and
         owning-org charge that a keyless, team_id-less subject otherwise skipped)."""
         source_grants = source_grants or await MCPRequestHandler.admitted_source_grants(auth)
-        granting = [(source, granted) for source, granted in source_grants if server_id in granted]
+        granting: Final = [(source, granted) for source, granted in source_grants if server_id in granted]
         if not granting:
             return None
         for source, _granted in granting:
@@ -1781,9 +1788,9 @@ class MCPRequestHandler:
         # user, though no grant source names it — without this the union returns [], listable but
         # uninvokable. Reachability is ALL it confers, NOT a ceiling waiver: the user's own
         # mcp_tool_permissions and org tool ceiling still bind, exactly as a key's do on an allow_all server.
-        reachable_via_open_channel = server_id in await global_mcp_server_manager.operator_open_server_ids(auth)
+        reachable_via_open_channel: Final = server_id in await global_mcp_server_manager.operator_open_server_ids(auth)
 
-        allowed: set[str] = set()
+        allowed: Final[set[str]] = set()
         for source, granted in await MCPRequestHandler.admitted_source_grants(auth):
             # The open channel is evaluated against the user's OWN source (team_id is None), so that
             # source's restrictions apply to it; a team's rules never ride an open-channel server.
@@ -1828,7 +1835,7 @@ class MCPRequestHandler:
         )
 
         verbose_logger.debug(
-            f"MCP team permission lookup: team_id={user_api_key_auth.team_id if user_api_key_auth else None}"
+            "MCP team permission lookup: team_id=%s", user_api_key_auth.team_id if user_api_key_auth else None
         )
         if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
             return None
@@ -1837,7 +1844,7 @@ class MCPRequestHandler:
             return None
 
         # Get the team object (which has object_permission already loaded)
-        team_obj: LiteLLM_TeamTable | None = await get_team_object(
+        team_obj: Final[LiteLLM_TeamTable | None] = await get_team_object(
             team_id=user_api_key_auth.team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -1879,8 +1886,8 @@ class MCPRequestHandler:
                 return await MCPRequestHandler._resolve_admitted_subject_tools(server_id, user_api_key_auth)
 
             # Get key and team object permissions (already loaded in main auth flow)
-            key_obj_perm = MCPRequestHandler._get_key_object_permission(user_api_key_auth)
-            team_obj_perm = await MCPRequestHandler._get_team_object_permission(user_api_key_auth)
+            key_obj_perm: Final = MCPRequestHandler._get_key_object_permission(user_api_key_auth)
+            team_obj_perm: Final = await MCPRequestHandler._get_team_object_permission(user_api_key_auth)
 
             # Extract tool permissions for this server. Dict keys may be
             # server_ids OR names/aliases; normalize to server_id-keyed form
@@ -1890,7 +1897,7 @@ class MCPRequestHandler:
                 global_mcp_server_manager,
             )
 
-            key_direct_tools = (
+            key_direct_tools: Final = (
                 global_mcp_server_manager.expand_tool_permissions(key_obj_perm.mcp_tool_permissions).get(server_id)
                 if key_obj_perm
                 else None
@@ -1899,8 +1906,8 @@ class MCPRequestHandler:
             # Tools granted through the key's toolsets restrict this server exactly
             # as direct tool permissions do; union with any direct grants so the
             # tool-level check sees the key's full effective tool scope
-            key_toolset_ids = (key_obj_perm.mcp_toolsets or []) if key_obj_perm else []
-            key_toolset_tools = (
+            key_toolset_ids: Final = (key_obj_perm.mcp_toolsets or []) if key_obj_perm else []
+            key_toolset_tools: Final = (
                 (await global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=key_toolset_ids)).get(
                     server_id
                 )
@@ -1908,12 +1915,12 @@ class MCPRequestHandler:
                 else None
             )
 
-            key_tools = (
+            key_tools: Final = (
                 list(set(key_direct_tools or []) | set(key_toolset_tools or []))
                 if key_direct_tools is not None or key_toolset_tools is not None
                 else None
             )
-            team_tools = (
+            team_tools: Final = (
                 global_mcp_server_manager.expand_tool_permissions(team_obj_perm.mcp_tool_permissions).get(server_id)
                 if team_obj_perm
                 else None
@@ -1944,11 +1951,11 @@ class MCPRequestHandler:
         except Exception as e:
             # An entitlement known to exist but unreadable denies for BOTH caller shapes, so [] rather
             # than the None (allow-all) key auth gets for an indeterminate fault.
-            unreadable_entitlement = isinstance(e, UnloadableEntitlementError)
+            unreadable_entitlement: Final = isinstance(e, UnloadableEntitlementError)
             if unreadable_entitlement:
-                verbose_logger.warning(f"Denying MCP tools, entitlement unreadable: {e!s}")
+                verbose_logger.warning("Denying MCP tools, entitlement unreadable: %s", e)
             else:
-                verbose_logger.warning(f"Failed to get allowed tools for server: {e!s}")
+                verbose_logger.warning("Failed to get allowed tools for server: %s", e)
             # Fail CLOSED for a keyless admitted subject: ANY error must deny the server's tools ([]),
             # not collapse to allow-all (None); key/JWT auth keeps its prior allow-all-on-error. Both
             # keyless_source AND the marker are needed: each source resolves through an UNMARKED auth, so
@@ -1976,8 +1983,8 @@ class MCPRequestHandler:
 
         if user_api_key_auth.agent_id:
             # Pre-fetch agent object_permission once to avoid a duplicate DB query.
-            agent_obj_perm = await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
-            agent_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+            agent_obj_perm: Final = await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+            agent_tools: Final = await MCPRequestHandler._get_agent_tool_permissions_for_server(
                 server_id=server_id,
                 user_api_key_auth=user_api_key_auth,
                 agent_object_permission=agent_obj_perm,
@@ -1991,18 +1998,19 @@ class MCPRequestHandler:
             # _get_org_object_permission uses user_api_key_cache, so this is not a fresh DB round-trip
             # when get_allowed_mcp_servers was already called.
             try:
-                org_obj_perm = await MCPRequestHandler._get_org_object_permission(user_api_key_auth)
+                org_obj_perm: Final = await MCPRequestHandler._get_org_object_permission(user_api_key_auth)
             except Exception as e:  # noqa: BLE001  # unresolvable org ceiling, decided per caller shape
                 # A ceiling the org NAMES but that cannot be read denies at every caller shape; only an
                 # INDETERMINATE fault (we cannot tell whether a ceiling exists) keeps key auth open.
                 if keyless_source or isinstance(e, UnloadableEntitlementError):
                     raise
                 verbose_logger.warning(
-                    f"MCP org tool ceiling unresolvable for org_id={user_api_key_auth.org_id!r}; "
-                    f"skipping org intersect, key/team/agent restrictions stand: {e!s}"
+                    "MCP org tool ceiling unresolvable for org_id=%r; skipping org intersect, key/team/agent restrictions stand: %s",
+                    user_api_key_auth.org_id,
+                    e,
                 )
                 return allowed_tools
-            org_tools = (
+            org_tools: Final = (
                 global_mcp_server_manager.expand_tool_permissions(org_obj_perm.mcp_tool_permissions).get(server_id)
                 if org_obj_perm and org_obj_perm.mcp_tool_permissions
                 else None
@@ -2043,7 +2051,7 @@ class MCPRequestHandler:
         Returns:
             True if allowed, False if blocked
         """
-        allowed_tools = await MCPRequestHandler.get_allowed_tools_for_server(
+        allowed_tools: Final = await MCPRequestHandler.get_allowed_tools_for_server(
             server_id=server_id,
             user_api_key_auth=user_api_key_auth,
         )
@@ -2091,7 +2099,7 @@ class MCPRequestHandler:
                 user_api_key_cache,
             )
 
-            raw_server_ids = await _get_mcp_server_ids_from_access_groups(
+            raw_server_ids: Final = await _get_mcp_server_ids_from_access_groups(
                 access_group_ids=user_api_key_auth.access_group_ids or [],
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -2102,7 +2110,7 @@ class MCPRequestHandler:
             # Permission entries may be server_ids OR names/aliases — expand to ids.
             return global_mcp_server_manager.expand_permission_list(raw_server_ids)
         except Exception as e:
-            verbose_logger.warning(f"Failed to get key access group MCP server grants: {e!s}")
+            verbose_logger.warning("Failed to get key access group MCP server grants: %s", e)
             return []
 
     @staticmethod
@@ -2152,35 +2160,35 @@ class MCPRequestHandler:
                 return [SpecialMCPServerNames.no_mcp_servers.value]
 
             # Permission entries may be server_ids OR names/aliases — expand to ids.
-            direct_mcp_servers = global_mcp_server_manager.expand_permission_list(
+            direct_mcp_servers: Final = global_mcp_server_manager.expand_permission_list(
                 key_object_permission.mcp_servers or []
             )
 
             # Get MCP servers from access groups
-            access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
                 key_object_permission.mcp_access_groups or []
             )
 
             # servers referenced in tool permissions should also be accessible
-            tool_perm_servers = list(
+            tool_perm_servers: Final = list(
                 global_mcp_server_manager.expand_tool_permissions(key_object_permission.mcp_tool_permissions).keys()
             )
 
             # servers referenced by the key's toolset grants are part of the key's
             # scope on every path (list, call, REST), subject to the same team/org
             # ceilings as any other key-level grant
-            toolset_ids = key_object_permission.mcp_toolsets or []
-            toolset_servers = (
+            toolset_ids: Final = key_object_permission.mcp_toolsets or []
+            toolset_servers: Final = (
                 list((await global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=toolset_ids)).keys())
                 if toolset_ids
                 else []
             )
 
             # Combine all lists
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers + toolset_servers
+            all_servers: Final = direct_mcp_servers + access_group_servers + tool_perm_servers + toolset_servers
             return list(set(all_servers))
         except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed MCP servers for key: {e!s}")
+            verbose_logger.warning("Failed to get allowed MCP servers for key: %s", e)
             return []
 
     @staticmethod
@@ -2194,7 +2202,7 @@ class MCPRequestHandler:
         and each of those sources pins a single ``team_id`` before reaching this point. Keeping the
         fan-out here as well would be a second multi-team path to drift from that one.
         """
-        team_ids = await MCPRequestHandler._team_ids_for_mcp_grant(user_api_key_auth)
+        team_ids: Final = await MCPRequestHandler._team_ids_for_mcp_grant(user_api_key_auth)
         if not team_ids:
             return []
         return await MCPRequestHandler._allowed_mcp_servers_for_single_team(team_ids[0], user_api_key_auth)
@@ -2229,7 +2237,7 @@ class MCPRequestHandler:
         if prisma_client is None:
             return []
         try:
-            user_object = await get_user_object(
+            user_object: Final = await get_user_object(
                 user_id=user_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -2238,7 +2246,7 @@ class MCPRequestHandler:
                 proxy_logging_obj=proxy_logging_obj,
             )
         except Exception as e:  # noqa: BLE001  # a team-resolution blip narrows access, never raises
-            verbose_logger.warning(f"Failed to resolve user teams for MCP grant: {e!s}")
+            verbose_logger.warning("Failed to resolve user teams for MCP grant: %s", e)
             return []
         if user_object is None or not user_object.teams:
             return []
@@ -2253,12 +2261,12 @@ class MCPRequestHandler:
             global_mcp_server_manager,
         )
 
-        object_permissions = team_obj.object_permission
+        object_permissions: Final = team_obj.object_permission
         if object_permissions is None:
             return set(team_access_group_servers)
         if SpecialMCPServerName.all_proxy_servers.value in (object_permissions.mcp_servers or []):
             return set(global_mcp_server_manager.get_registry().keys())
-        legacy_access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+        legacy_access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
             object_permissions.mcp_access_groups or []
         )
         return (
@@ -2298,8 +2306,8 @@ class MCPRequestHandler:
             if not team_id or team_id == UI_TEAM_ID or prisma_client is None:
                 return []
 
-            parent_otel_span = user_api_key_auth.parent_otel_span if user_api_key_auth is not None else None
-            team_obj: LiteLLM_TeamTable | None = await get_team_object(
+            parent_otel_span: Final = user_api_key_auth.parent_otel_span if user_api_key_auth is not None else None
+            team_obj: Final[LiteLLM_TeamTable | None] = await get_team_object(
                 team_id=team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -2313,17 +2321,17 @@ class MCPRequestHandler:
                 # pinned to a single team_id, but a keyless admitted identity (no team_id) unions
                 # across all of its teams and would otherwise inherit a blocked team's MCP grants.
                 return []
-            team_access_group_servers = await _get_mcp_server_ids_from_access_groups(
+            team_access_group_servers: Final = await _get_mcp_server_ids_from_access_groups(
                 access_group_ids=team_obj.access_group_ids or [],
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-            servers = await MCPRequestHandler._team_granted_servers(team_obj, team_access_group_servers)
+            servers: Final = await MCPRequestHandler._team_granted_servers(team_obj, team_access_group_servers)
             return list(servers)
         except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed MCP servers for team: {e!s}")
+            verbose_logger.warning("Failed to get allowed MCP servers for team: %s", e)
             return []
 
     @staticmethod
@@ -2342,11 +2350,11 @@ class MCPRequestHandler:
         from litellm.proxy.auth.auth_checks import get_object_permission
         from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
-        unloadable = UnloadableEntitlementError(
+        unloadable: Final = UnloadableEntitlementError(
             f"{principal} names object_permission_id {object_permission_id!r} which could not be loaded"
         )
         try:
-            object_permission = await get_object_permission(
+            object_permission: Final = await get_object_permission(
                 object_permission_id=object_permission_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -2392,7 +2400,7 @@ class MCPRequestHandler:
         # A team's organization_id can point at a deleted or not-yet-synced row; get_org_object raises
         # OrganizationNotFoundError for that. That is a determinate ABSENCE (no ceiling), handled below.
         try:
-            org_obj = await get_org_object(
+            org_obj: Final = await get_org_object(
                 org_id=user_api_key_auth.org_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -2403,7 +2411,7 @@ class MCPRequestHandler:
             # CONFIRMED absent: places no ceiling. Every OTHER exception propagates as an unresolvable
             # ceiling (denies for a keyless source, fail-open for a key); catching bare Exception here
             # would treat a DB outage as "no org" and silently drop a real ceiling for its duration.
-            verbose_logger.debug(f"MCP org ceiling: org {user_api_key_auth.org_id!r} does not exist: {e}")
+            verbose_logger.debug("MCP org ceiling: org %r does not exist: %s", user_api_key_auth.org_id, e)
             return None
 
         if org_obj is None or not org_obj.object_permission_id:
@@ -2434,7 +2442,7 @@ class MCPRequestHandler:
         level is there to prevent.
         """
         try:
-            object_permissions = await MCPRequestHandler._get_org_object_permission(user_api_key_auth)
+            object_permissions: Final = await MCPRequestHandler._get_org_object_permission(user_api_key_auth)
 
             if object_permissions is None:
                 return []
@@ -2446,15 +2454,15 @@ class MCPRequestHandler:
             # Expand names/aliases to canonical server IDs (consistent with key/team/end-user path)
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or [])
 
-            access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
                 object_permissions.mcp_access_groups or []
             )
 
-            tool_perm_servers = list(
+            tool_perm_servers: Final = list(
                 global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
             )
 
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            all_servers: Final = direct_mcp_servers + access_group_servers + tool_perm_servers
             return list(set(all_servers))
         except Exception as e:
             # None = ceiling UNRESOLVED, distinct from [] = org places no restriction. Collapsing them
@@ -2462,7 +2470,7 @@ class MCPRequestHandler:
             # A NAMED-but-unreadable ceiling is a stronger fact than "unresolved" and denies everywhere.
             if isinstance(e, UnloadableEntitlementError):
                 raise
-            verbose_logger.warning(f"Failed to get allowed MCP servers for org: {e!s}")
+            verbose_logger.warning("Failed to get allowed MCP servers for org: %s", e)
             return None
 
     @staticmethod
@@ -2481,7 +2489,7 @@ class MCPRequestHandler:
         from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
         try:
-            end_user_obj = await get_end_user_object(
+            end_user_obj: Final = await get_end_user_object(
                 end_user_id=user_api_key_auth.end_user_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -2490,7 +2498,7 @@ class MCPRequestHandler:
                 route="/mcp",
             )
         except Exception as e:  # noqa: BLE001  # entitlement unknown, not known-absent: no ceiling, as before this level
-            verbose_logger.warning(f"Failed to resolve end_user for MCP permissions: {e!s}")
+            verbose_logger.warning("Failed to resolve end_user for MCP permissions: %s", e)
             return None
 
         if end_user_obj is None:
@@ -2541,20 +2549,20 @@ class MCPRequestHandler:
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(object_permission.mcp_servers or [])
 
             # Get MCP servers from access groups
-            access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
                 object_permission.mcp_access_groups or []
             )
 
             # servers referenced in tool permissions should also be accessible
-            tool_perm_servers = list(
+            tool_perm_servers: Final = list(
                 global_mcp_server_manager.expand_tool_permissions(object_permission.mcp_tool_permissions).keys()
             )
 
             # Combine all lists
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            all_servers: Final = direct_mcp_servers + access_group_servers + tool_perm_servers
             return list(set(all_servers))
         except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed MCP servers for end_user: {e!s}")
+            verbose_logger.warning("Failed to get allowed MCP servers for end_user: %s", e)
             return []
 
     @staticmethod
@@ -2590,12 +2598,12 @@ class MCPRequestHandler:
             verbose_logger.debug("prisma_client is None")
             return None
 
-        user_id = user_api_key_auth.user_id
-        object_permission_id = await MCPRequestHandler._user_object_permission_id(user_id, prisma_client)
+        user_id: Final = user_api_key_auth.user_id
+        object_permission_id: Final = await MCPRequestHandler._user_object_permission_id(user_id, prisma_client)
         if object_permission_id is None:
             return None
 
-        object_permission = await get_object_permission(
+        object_permission: Final = await get_object_permission(
             object_permission_id=object_permission_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -2620,16 +2628,16 @@ class MCPRequestHandler:
         """
         from litellm.proxy.proxy_server import user_api_key_cache
 
-        cache_key = user_object_permission_id_cache_key(user_id)
+        cache_key: Final = user_object_permission_id_cache_key(user_id)
         try:
-            cached: object = await user_api_key_cache.async_get_cache(key=cache_key)
+            cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
             if cached == USER_NO_MCP_PERMISSION_SENTINEL:
                 return None
             if isinstance(cached, str) and cached:
                 return cached
-            user_row = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
-            linked: object = getattr(user_row, "object_permission_id", None) if user_row is not None else None
-            object_permission_id = linked if isinstance(linked, str) and linked else None
+            user_row: Final = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
+            linked: Final[object] = getattr(user_row, "object_permission_id", None) if user_row is not None else None
+            object_permission_id: Final = linked if isinstance(linked, str) and linked else None
             await user_api_key_cache.async_set_cache(
                 key=cache_key,
                 value=object_permission_id or USER_NO_MCP_PERMISSION_SENTINEL,
@@ -2637,7 +2645,7 @@ class MCPRequestHandler:
             )
             return object_permission_id
         except Exception as e:  # noqa: BLE001  # unknown whether entitled at all: no ceiling, as before
-            verbose_logger.warning(f"MCP user entitlement: link for {user_id!r} unresolved, no ceiling: {e!s}")
+            verbose_logger.warning("MCP user entitlement: link for %r unresolved, no ceiling: %s", user_id, e)
             return None
 
     @staticmethod
@@ -2656,20 +2664,20 @@ class MCPRequestHandler:
         )
 
         try:
-            object_permissions = await MCPRequestHandler._get_user_object_permission(user_api_key_auth)
+            object_permissions: Final = await MCPRequestHandler._get_user_object_permission(user_api_key_auth)
             if object_permissions is None:
                 return []
 
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or [])
-            access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
                 object_permissions.mcp_access_groups or []
             )
-            tool_perm_servers = list(
+            tool_perm_servers: Final = list(
                 global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
             )
             return list(set(direct_mcp_servers + access_group_servers + tool_perm_servers))
         except Exception as e:  # noqa: BLE001  # any resolution fault is an unresolved ceiling, never "no ceiling"
-            verbose_logger.warning(f"Failed to get allowed MCP servers for user: {e!s}")
+            verbose_logger.warning("Failed to get allowed MCP servers for user: %s", e)
             return None
 
     @staticmethod
@@ -2691,7 +2699,7 @@ class MCPRequestHandler:
         """
         if keyless_source:
             return tuple(allowed_mcp_servers), False
-        entitled = await MCPRequestHandler._get_allowed_mcp_servers_for_user(user_api_key_auth)
+        entitled: Final = await MCPRequestHandler._get_allowed_mcp_servers_for_user(user_api_key_auth)
         if entitled is None:
             raise ValueError(
                 f"MCP user ceiling unresolvable for user_id="
@@ -2699,8 +2707,8 @@ class MCPRequestHandler:
             )
         if not entitled:
             return tuple(allowed_mcp_servers), False
-        capped = tuple(server for server in allowed_mcp_servers if server in set(entitled))
-        verbose_logger.debug(f"Applied user ceiling filter. Final allowed servers: {capped}")
+        capped: Final = tuple(server for server in allowed_mcp_servers if server in set(entitled))
+        verbose_logger.debug("Applied user ceiling filter. Final allowed servers: %s", capped)
         return capped, True
 
     @staticmethod
@@ -2711,7 +2719,7 @@ class MCPRequestHandler:
         UNRESOLVED — a caller uses this to decide whether it may skip the resolver, and skipping it on
         a transient fault would widen access.
         """
-        entitled_servers = await MCPRequestHandler._get_allowed_mcp_servers_for_user(user_api_key_auth)
+        entitled_servers: Final = await MCPRequestHandler._get_allowed_mcp_servers_for_user(user_api_key_auth)
         return entitled_servers is None or len(entitled_servers) > 0
 
     @staticmethod
@@ -2737,9 +2745,9 @@ class MCPRequestHandler:
             return allowed_tools
 
         try:
-            object_permissions = await MCPRequestHandler._get_user_object_permission(user_api_key_auth)
+            object_permissions: Final = await MCPRequestHandler._get_user_object_permission(user_api_key_auth)
         except Exception as e:  # noqa: BLE001  # an unresolved human entitlement must deny, not widen
-            verbose_logger.warning(f"MCP user tool ceiling unresolvable, denying tools on {server_id!r}: {e!s}")
+            verbose_logger.warning("MCP user tool ceiling unresolvable, denying tools on %r: %s", server_id, e)
             return []
 
         if object_permissions is None or not object_permissions.mcp_tool_permissions:
@@ -2768,16 +2776,16 @@ class MCPRequestHandler:
         a link we DID resolve can make the caller deny."""
         from litellm.proxy.proxy_server import user_api_key_cache
 
-        cache_key = f"agent_object_permission_id:{agent_id}"
+        cache_key: Final = f"agent_object_permission_id:{agent_id}"
         try:
-            cached: object = await user_api_key_cache.async_get_cache(key=cache_key)
+            cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
             if cached == MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL:
                 return None
             if isinstance(cached, str) and cached:
                 return cached
-            agent_row = await AgentsRepository(prisma_client).table.find_unique(where={"agent_id": agent_id})
-            linked: object = getattr(agent_row, "object_permission_id", None) if agent_row is not None else None
-            object_permission_id = linked if isinstance(linked, str) and linked else None
+            agent_row: Final = await AgentsRepository(prisma_client).table.find_unique(where={"agent_id": agent_id})
+            linked: Final[object] = getattr(agent_row, "object_permission_id", None) if agent_row is not None else None
+            object_permission_id: Final = linked if isinstance(linked, str) and linked else None
             await user_api_key_cache.async_set_cache(
                 key=cache_key,
                 value=object_permission_id or MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL,
@@ -2785,7 +2793,7 @@ class MCPRequestHandler:
             )
             return object_permission_id
         except Exception as e:  # noqa: BLE001  # entitlement unknown, not known-absent: no ceiling, as before this level
-            verbose_logger.warning(f"Failed to resolve object_permission_id for agent {agent_id!r}: {e!s}")
+            verbose_logger.warning("Failed to resolve object_permission_id for agent %r: %s", agent_id, e)
             return None
 
     @staticmethod
@@ -2811,8 +2819,8 @@ class MCPRequestHandler:
             verbose_logger.debug("prisma_client is None")
             return None
 
-        agent_id = user_api_key_auth.agent_id
-        object_permission_id = await MCPRequestHandler._agent_object_permission_id(agent_id, prisma_client)
+        agent_id: Final = user_api_key_auth.agent_id
+        object_permission_id: Final = await MCPRequestHandler._agent_object_permission_id(agent_id, prisma_client)
         if object_permission_id is None:
             return None
 
@@ -2863,13 +2871,13 @@ class MCPRequestHandler:
                 global_mcp_server_manager,
             )
 
-            expanded_direct_servers = global_mcp_server_manager.expand_permission_list(list(direct_mcp_servers))
+            expanded_direct_servers: Final = global_mcp_server_manager.expand_permission_list(list(direct_mcp_servers))
 
-            access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(mcp_access_groups)
-            all_servers = expanded_direct_servers + access_group_servers
+            access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(mcp_access_groups)
+            all_servers: Final = expanded_direct_servers + access_group_servers
             return list(set(all_servers))
         except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed MCP servers for agent: {e!s}")
+            verbose_logger.warning("Failed to get allowed MCP servers for agent: %s", e)
             return []
 
     @staticmethod
@@ -2900,7 +2908,7 @@ class MCPRequestHandler:
             return None
 
         try:
-            mcp_tool_permissions = getattr(obj_perm, "mcp_tool_permissions", None)
+            mcp_tool_permissions: Final = getattr(obj_perm, "mcp_tool_permissions", None)
             if not mcp_tool_permissions or not isinstance(mcp_tool_permissions, dict):
                 return None
             # Dict keys may be server_ids OR names/aliases; normalize before lookup.
@@ -2908,10 +2916,10 @@ class MCPRequestHandler:
                 global_mcp_server_manager,
             )
 
-            tools = global_mcp_server_manager.expand_tool_permissions(mcp_tool_permissions).get(server_id)
+            tools: Final = global_mcp_server_manager.expand_tool_permissions(mcp_tool_permissions).get(server_id)
             return list(tools) if tools else None
         except Exception as e:
-            verbose_logger.warning(f"Failed to get agent tool permissions for server: {e!s}")
+            verbose_logger.warning("Failed to get agent tool permissions for server: %s", e)
             return None
 
     @staticmethod
@@ -2919,7 +2927,7 @@ class MCPRequestHandler:
         """
         Helper to get server_ids from config-loaded servers that match any of the given access groups.
         """
-        server_ids: set[str] = set()
+        server_ids: Final[set[str]] = set()
         for server_id, server in config_mcp_servers.items():
             if server.access_groups:
                 if any(group in server.access_groups for group in access_groups):
@@ -2931,16 +2939,16 @@ class MCPRequestHandler:
         """
         Helper to get server_ids from DB servers that match any of the given access groups.
         """
-        server_ids: set[str] = set()
+        server_ids: Final[set[str]] = set()
         if access_groups and prisma_client is not None:
             try:
-                mcp_servers = await MCPServerRepository(prisma_client).table.find_many(
+                mcp_servers: Final = await MCPServerRepository(prisma_client).table.find_many(
                     where={"mcp_access_groups": {"hasSome": access_groups}}
                 )
                 for server in mcp_servers:
                     server_ids.add(server.server_id)
             except Exception as e:
-                verbose_logger.debug(f"Error getting MCP servers from access groups: {e}")
+                verbose_logger.debug("Error getting MCP servers from access groups: %s", e)
         return server_ids
 
     @staticmethod
@@ -2959,7 +2967,7 @@ class MCPRequestHandler:
             )
 
             # Use the new helper for config-loaded servers
-            server_ids = MCPRequestHandler._get_config_server_ids_for_access_groups(
+            server_ids: Final = MCPRequestHandler._get_config_server_ids_for_access_groups(
                 global_mcp_server_manager.config_mcp_servers, access_groups
             )
 
@@ -2969,7 +2977,7 @@ class MCPRequestHandler:
 
             return list(server_ids)
         except Exception as e:
-            verbose_logger.warning(f"Failed to get MCP servers from access groups: {e!s}")
+            verbose_logger.warning("Failed to get MCP servers from access groups: %s", e)
             return []
 
     @staticmethod
@@ -2980,8 +2988,8 @@ class MCPRequestHandler:
         Get list of MCP access groups for the given user/key based on permissions
         """
         access_groups: list[str] = []
-        access_groups_for_key = await MCPRequestHandler._get_mcp_access_groups_for_key(user_api_key_auth)
-        access_groups_for_team = await MCPRequestHandler._get_mcp_access_groups_for_team(user_api_key_auth)
+        access_groups_for_key: Final = await MCPRequestHandler._get_mcp_access_groups_for_key(user_api_key_auth)
+        access_groups_for_team: Final = await MCPRequestHandler._get_mcp_access_groups_for_team(user_api_key_auth)
 
         #########################################################
         # If team has access groups, then key must have a subset of the team's access groups
@@ -3017,7 +3025,7 @@ class MCPRequestHandler:
             return []
 
         try:
-            key_object_permission = await get_object_permission(
+            key_object_permission: Final = await get_object_permission(
                 object_permission_id=user_api_key_auth.object_permission_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -3029,7 +3037,7 @@ class MCPRequestHandler:
 
             return key_object_permission.mcp_access_groups or []
         except Exception as e:
-            verbose_logger.warning(f"Failed to get MCP access groups for key: {e!s}")
+            verbose_logger.warning("Failed to get MCP access groups for key: %s", e)
             return []
 
     @staticmethod
@@ -3060,7 +3068,7 @@ class MCPRequestHandler:
             return []
 
         try:
-            team_obj: LiteLLM_TeamTable | None = await get_team_object(
+            team_obj: Final[LiteLLM_TeamTable | None] = await get_team_object(
                 team_id=user_api_key_auth.team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -3071,13 +3079,13 @@ class MCPRequestHandler:
                 verbose_logger.debug("team_obj is None")
                 return []
 
-            object_permissions = team_obj.object_permission
+            object_permissions: Final = team_obj.object_permission
             if object_permissions is None:
                 return []
 
             return object_permissions.mcp_access_groups or []
         except Exception as e:
-            verbose_logger.warning(f"Failed to get MCP access groups for team: {e!s}")
+            verbose_logger.warning("Failed to get MCP access groups for team: %s", e)
             return []
 
     @staticmethod
@@ -3085,7 +3093,7 @@ class MCPRequestHandler:
         """
         Extract and parse the x-mcp-access-groups header as a list of strings.
         """
-        mcp_access_groups_header = headers.get(MCPRequestHandler.LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME)
+        mcp_access_groups_header: Final = headers.get(MCPRequestHandler.LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME)
         if mcp_access_groups_header is not None:
             try:
                 return [s.strip() for s in mcp_access_groups_header.split(",") if s.strip()]
@@ -3098,5 +3106,5 @@ class MCPRequestHandler:
         """
         Extract and parse the x-mcp-access-groups header from an ASGI scope.
         """
-        headers = MCPRequestHandler._safe_get_headers_from_scope(scope)
+        headers: Final = MCPRequestHandler._safe_get_headers_from_scope(scope)
         return MCPRequestHandler.get_mcp_access_groups_from_headers(headers)

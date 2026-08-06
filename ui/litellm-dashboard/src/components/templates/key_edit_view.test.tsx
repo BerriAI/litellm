@@ -1007,7 +1007,7 @@ describe("KeyEditView", () => {
     });
 
     it("should disable the organization dropdown for non-admin users", async () => {
-      const { container } = renderWithProviders(
+      renderWithProviders(
         <KeyEditView
           keyData={MOCK_KEY_DATA}
           onCancel={() => {}}
@@ -1029,7 +1029,7 @@ describe("KeyEditView", () => {
     });
 
     it("should not disable the organization dropdown for admin users", async () => {
-      const { container } = renderWithProviders(
+      renderWithProviders(
         <KeyEditView
           keyData={MOCK_KEY_DATA}
           onCancel={() => {}}

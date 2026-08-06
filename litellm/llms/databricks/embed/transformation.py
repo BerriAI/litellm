@@ -3,6 +3,7 @@ Translates from OpenAI's `/v1/embeddings` to Databricks' `/embeddings`
 """
 
 import types
+from typing import Final
 
 
 class DatabricksEmbeddingConfig:
@@ -15,7 +16,7 @@ class DatabricksEmbeddingConfig:
     )
 
     def __init__(self, instruction: str | None = None) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

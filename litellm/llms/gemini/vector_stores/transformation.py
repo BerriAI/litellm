@@ -5,7 +5,7 @@ Implements the transformation between LiteLLM's unified vector store API
 and Google Gemini's File Search API.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -70,7 +70,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         headers = headers or {}
         headers.setdefault("Content-Type", "application/json")
         if litellm_params:
-            api_key = litellm_params.get("api_key") or get_api_key_from_env()
+            api_key: Final = litellm_params.get("api_key") or get_api_key_from_env()
             if api_key:
                 self._cached_api_key = api_key
                 headers["x-goog-api-key"] = api_key
@@ -91,7 +91,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
             raise ValueError("GEMINI_API_BASE is not set")
 
         # Ensure we're using the v1beta version for File Search
-        api_version = "v1beta"
+        api_version: Final = "v1beta"
         return f"{api_base}/{api_version}"
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> GeminiError:
@@ -127,21 +127,21 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         if model and model.startswith("gemini/"):
             model = model.replace("gemini/", "")
 
-        api_key = litellm_params.get("api_key") or GeminiModelInfo.get_api_key()
+        api_key: Final = litellm_params.get("api_key") or GeminiModelInfo.get_api_key()
         if not api_key:
             raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY is required")
-        url = f"{api_base}/models/{model}:generateContent"
+        url: Final = f"{api_base}/models/{model}:generateContent"
 
         # Build file_search tool configuration (using snake_case as per Gemini docs)
-        file_search_config: dict[str, Any] = {"file_search_store_names": [vector_store_id]}
+        file_search_config: Final[dict[str, Any]] = {"file_search_store_names": [vector_store_id]}
 
         # Add metadata filter if provided
-        metadata_filter = vector_store_search_optional_params.get("filters")
+        metadata_filter: Final = vector_store_search_optional_params.get("filters")
         if metadata_filter:
             # Convert to Gemini filter syntax if it's a dict
             if isinstance(metadata_filter, dict):
                 # Simple conversion - may need more sophisticated mapping
-                filter_parts = []
+                filter_parts: Final = []
                 for key, value in metadata_filter.items():
                     if isinstance(value, str):
                         filter_parts.append(f'{key} = "{value}"')
@@ -152,13 +152,13 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
                 file_search_config["metadata_filter"] = metadata_filter
 
         # Build request body
-        request_body: dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "contents": [{"parts": [{"text": query}]}],
             "tools": [{"file_search": file_search_config}],
         }
 
         # Add max_num_results if specified
-        max_results = vector_store_search_optional_params.get("max_num_results")
+        max_results: Final = vector_store_search_optional_params.get("max_num_results")
         if max_results:
             # This might need to be added to generationConfig or tool config
             # depending on Gemini's API requirements
@@ -178,11 +178,11 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         Extracts grounding metadata and citations from the response.
         """
         try:
-            response_data = response.json()
-            results: list[VectorStoreSearchResult] = []
+            response_data: Final = response.json()
+            results: Final[list[VectorStoreSearchResult]] = []
 
             # Extract candidates and grounding metadata
-            candidates = response_data.get("candidates", [])
+            candidates: Final = response_data.get("candidates", [])
 
             for candidate in candidates:
                 grounding_metadata = candidate.get("groundingMetadata", {})
@@ -246,7 +246,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
                             )
                         )
 
-            query = litellm_logging_obj.model_call_details.get("query", "")
+            query: Final = litellm_logging_obj.model_call_details.get("query", "")
 
             return VectorStoreSearchResponse(
                 object="vector_store.search_results.page",
@@ -256,7 +256,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
 
         except Exception as e:
             raise self.get_error_class(
-                error_message=f"Failed to parse Gemini response: {e!s}",
+                error_message=f"Failed to parse Gemini response: {e}",
                 status_code=response.status_code,
                 headers=response.headers,
             )
@@ -269,14 +269,14 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         """
         Transform create request to Gemini's fileSearchStores format.
         """
-        url = f"{api_base}/fileSearchStores"
+        url: Final = f"{api_base}/fileSearchStores"
 
         # API key is passed via x-goog-api-key header (set in validate_environment)
 
-        request_body: dict[str, Any] = {}
+        request_body: Final[dict[str, Any]] = {}
 
         # Add display name if provided
-        name = vector_store_create_optional_params.get("name")
+        name: Final = vector_store_create_optional_params.get("name")
         if name:
             request_body["displayName"] = name
 
@@ -287,12 +287,12 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         Transform Gemini's fileSearchStore response to standard format.
         """
         try:
-            response_data = response.json()
+            response_data: Final = response.json()
 
             # Extract store name (format: fileSearchStores/xxxxxxx)
-            store_name = response_data.get("name", "")
-            display_name = response_data.get("displayName", "")
-            create_time = response_data.get("createTime", "")
+            store_name: Final = response_data.get("name", "")
+            display_name: Final = response_data.get("displayName", "")
+            create_time: Final = response_data.get("createTime", "")
 
             # Convert ISO timestamp to Unix timestamp
             import datetime
@@ -300,7 +300,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
             created_at = None
             if create_time:
                 try:
-                    dt = datetime.datetime.fromisoformat(create_time.replace("Z", "+00:00"))
+                    dt: Final = datetime.datetime.fromisoformat(create_time.replace("Z", "+00:00"))
                     created_at = int(dt.timestamp())
                 except Exception:
                     created_at = None
@@ -327,7 +327,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
 
         except Exception as e:
             raise self.get_error_class(
-                error_message=f"Failed to parse Gemini create response: {e!s}",
+                error_message=f"Failed to parse Gemini create response: {e}",
                 status_code=response.status_code,
                 headers=response.headers,
             )

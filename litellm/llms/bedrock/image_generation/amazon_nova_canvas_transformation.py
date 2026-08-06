@@ -1,5 +1,5 @@
 import types
-from typing import Any
+from typing import Any, Final
 
 from openai.types.image import Image
 
@@ -64,21 +64,19 @@ class AmazonNovaCanvasConfig:
         """
         Transform the request body for Amazon Nova Canvas model
         """
-        task_type = optional_params.pop("taskType", "TEXT_IMAGE")
+        task_type: Final = optional_params.pop("taskType", "TEXT_IMAGE")
         image_generation_config = optional_params.pop("imageGenerationConfig", {})
 
         # Extract model_id parameter to prevent "extraneous key" error from Bedrock API
         # Following the same pattern as chat completions and embeddings
-        unencoded_model_id = optional_params.pop("model_id", None)  # noqa: F841
+        unencoded_model_id: Final = optional_params.pop("model_id", None)  # noqa: F841
 
         image_generation_config = {**image_generation_config, **optional_params}
         if task_type == "TEXT_IMAGE":
             text_to_image_params: dict[str, Any] = image_generation_config.pop("textToImageParams", {})
             text_to_image_params = {"text": text, **text_to_image_params}
             try:
-                text_to_image_params_typed = AmazonNovaCanvasTextToImageParams(
-                    **text_to_image_params  # type: ignore
-                )
+                text_to_image_params_typed: Final = AmazonNovaCanvasTextToImageParams(**text_to_image_params)
             except Exception as e:
                 raise ValueError(
                     f"Error transforming text to image params: {e}. Got params: {text_to_image_params}, Expected params: {AmazonNovaCanvasTextToImageParams.__annotations__}"
@@ -105,8 +103,8 @@ class AmazonNovaCanvasConfig:
                 **color_guided_generation_params,
             }
             try:
-                color_guided_generation_params_typed = AmazonNovaCanvasColorGuidedGenerationParams(
-                    **color_guided_generation_params  # type: ignore
+                color_guided_generation_params_typed: Final = AmazonNovaCanvasColorGuidedGenerationParams(
+                    **color_guided_generation_params
                 )
             except Exception as e:
                 raise ValueError(
@@ -129,9 +127,7 @@ class AmazonNovaCanvasConfig:
             inpainting_params: dict[str, Any] = image_generation_config.pop("inpaintingParams", {})
             inpainting_params = {"text": text, **inpainting_params}
             try:
-                inpainting_params_typed = AmazonNovaCanvasInpaintingParams(
-                    **inpainting_params  # type: ignore
-                )
+                inpainting_params_typed: Final = AmazonNovaCanvasInpaintingParams(**inpainting_params)
             except Exception as e:
                 raise ValueError(
                     f"Error transforming inpainting params: {e}. Got params: {inpainting_params}, Expected params: {AmazonNovaCanvasInpaintingParams.__annotations__}"
@@ -156,7 +152,7 @@ class AmazonNovaCanvasConfig:
         """
         Map the OpenAI params to the Bedrock params
         """
-        _size = non_default_params.get("size")
+        _size: Final = non_default_params.get("size")
         if _size is not None:
             width, height = _size.split("x")
             optional_params["width"], optional_params["height"] = (
@@ -180,8 +176,8 @@ class AmazonNovaCanvasConfig:
         Transform the response dict to the OpenAI response
         """
 
-        nova_response = AmazonNovaCanvasTextToImageResponse(**response_dict)
-        openai_images: list[Image] = []
+        nova_response: Final = AmazonNovaCanvasTextToImageResponse(**response_dict)
+        openai_images: Final[list[Image]] = []
         for _img in nova_response.get("images", []):
             openai_images.append(Image(b64_json=_img))
 
@@ -196,13 +192,13 @@ class AmazonNovaCanvasConfig:
         size: str | None = None,
         optional_params: dict | None = None,
     ) -> float:
-        get_model_info = get_cached_model_info()
-        model_info = get_model_info(
+        get_model_info: Final = get_cached_model_info()
+        model_info: Final = get_model_info(
             model=model,
             custom_llm_provider="bedrock",
         )
 
-        output_cost_per_image: float = model_info.get("output_cost_per_image") or 0.0
+        output_cost_per_image: Final[float] = model_info.get("output_cost_per_image") or 0.0
         num_images: int = 0
         if image_response.data:
             num_images = len(image_response.data)

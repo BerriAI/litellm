@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from fastapi.responses import StreamingResponse
 
@@ -45,7 +45,7 @@ class FileContentStreamingHandler:
                 file_id=original_file_id,
             )
             resolved_streaming_data.pop("model", None)
-            resolved_streaming_provider = cast(str, credentials["custom_llm_provider"])
+            resolved_streaming_provider: Final = cast(str, credentials["custom_llm_provider"])
             resolved_custom_llm_provider = resolved_streaming_provider
             resolved_file_id = cast(str, resolved_streaming_data["file_id"])
         else:
@@ -88,7 +88,7 @@ class FileContentStreamingHandler:
             raise
         finally:
             if hasattr(stream_iterator, "aclose"):
-                await stream_iterator.aclose()  # type: ignore[attr-defined]
+                await stream_iterator.aclose()
 
     @staticmethod
     async def get_streaming_file_content_response(
@@ -104,7 +104,7 @@ class FileContentStreamingHandler:
             ProxyBaseLLMRequestProcessing,
         )
 
-        stream_result = cast(
+        stream_result: Final = cast(
             FileContentStreamingResult,
             await litellm.afile_content(
                 **{
@@ -112,16 +112,16 @@ class FileContentStreamingHandler:
                     "file_id": file_id,
                     "stream": True,
                     **data,
-                }  # type: ignore
+                }
             ),
         )
 
-        stream_iterator = cast(
+        stream_iterator: Final = cast(
             AsyncIterator[bytes],
             stream_result.stream_iterator,
         )
-        hidden_params = getattr(stream_iterator, "_hidden_params", {}) or {}
-        response_headers = {
+        hidden_params: Final = getattr(stream_iterator, "_hidden_params", {}) or {}
+        response_headers: Final = {
             **stream_result.headers,
             **ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,

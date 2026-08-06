@@ -10,6 +10,8 @@ PATCH /config/cost_margin_config - Update cost margin configuration
 POST /cost/estimate - Estimate cost for a given model and token counts
 """
 
+from typing import Final
+
 from fastapi import APIRouter, Depends, HTTPException
 
 import litellm
@@ -24,7 +26,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.utils import LlmProvidersSet
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 def _resolve_model_for_cost_lookup(model: str) -> tuple[str, str | None]:
@@ -49,34 +51,34 @@ def _resolve_model_for_cost_lookup(model: str) -> tuple[str, str | None]:
     if llm_router is not None:
         try:
             # Get deployments for this model name (handles aliases, wildcards, etc.)
-            deployments = llm_router.get_model_list(model_name=model)
+            deployments: Final = llm_router.get_model_list(model_name=model)
 
             if deployments and len(deployments) > 0:
-                first_deployment = deployments[0]
-                litellm_params = first_deployment.get("litellm_params", {})
-                model_info = first_deployment.get("model_info", {})
+                first_deployment: Final = deployments[0]
+                litellm_params: Final = first_deployment.get("litellm_params", {})
+                model_info: Final = first_deployment.get("model_info", {})
 
                 # Check base_model first (needed for Azure custom deployment names)
-                base_model = model_info.get("base_model") or litellm_params.get("base_model")
+                base_model: Final = model_info.get("base_model") or litellm_params.get("base_model")
                 if base_model:
-                    verbose_proxy_logger.debug(f"Resolved model '{model}' to base_model '{base_model}' from router")
+                    verbose_proxy_logger.debug("Resolved model '%s' to base_model '%s' from router", model, base_model)
                     custom_llm_provider = litellm_params.get("custom_llm_provider")
                     return (
                         str(base_model),
                         (str(custom_llm_provider) if custom_llm_provider is not None else None),
                     )
 
-                resolved_model = litellm_params.get("model")
+                resolved_model: Final = litellm_params.get("model")
 
                 if resolved_model:
-                    verbose_proxy_logger.debug(f"Resolved model '{model}' to '{resolved_model}' from router")
+                    verbose_proxy_logger.debug("Resolved model '%s' to '%s' from router", model, resolved_model)
                     custom_llm_provider = litellm_params.get("custom_llm_provider")
                     return (
                         str(resolved_model),
                         (str(custom_llm_provider) if custom_llm_provider is not None else None),
                     )
         except Exception as e:
-            verbose_proxy_logger.debug(f"Could not resolve model '{model}' from router: {e}")
+            verbose_proxy_logger.debug("Could not resolve model '%s' from router: %s", model, e)
 
     # Return original model if not resolved
     return model, custom_llm_provider
@@ -121,15 +123,15 @@ async def get_cost_discount_config(
 
     try:
         # Load config from DB
-        config = await proxy_config.get_config()
+        config: Final = await proxy_config.get_config()
 
         # Get cost_discount_config from litellm_settings
-        litellm_settings = config.get("litellm_settings", {})
-        cost_discount_config = litellm_settings.get("cost_discount_config", {})
+        litellm_settings: Final = config.get("litellm_settings", {})
+        cost_discount_config: Final = litellm_settings.get("cost_discount_config", {})
 
         return {"values": cost_discount_config}
     except Exception as e:
-        verbose_proxy_logger.error(f"Error fetching cost discount config: {e!s}")
+        verbose_proxy_logger.error("Error fetching cost discount config: %s", e)
         return {"values": {}}
 
 
@@ -176,7 +178,7 @@ async def update_cost_discount_config(
         )
 
     # Validate that all providers are valid LiteLLM providers
-    invalid_providers = []
+    invalid_providers: Final = []
     for provider in cost_discount_config:
         if provider not in LlmProvidersSet:
             invalid_providers.append(provider)
@@ -201,7 +203,7 @@ async def update_cost_discount_config(
 
     try:
         # Load existing config
-        config = await proxy_config.get_config()
+        config: Final = await proxy_config.get_config()
 
         # Ensure litellm_settings exists
         if "litellm_settings" not in config:
@@ -216,7 +218,7 @@ async def update_cost_discount_config(
         # Update in-memory litellm.cost_discount_config
         litellm.cost_discount_config = cost_discount_config
 
-        verbose_proxy_logger.info(f"Updated cost_discount_config: {cost_discount_config}")
+        verbose_proxy_logger.info("Updated cost_discount_config: %s", cost_discount_config)
 
         return {
             "message": "Cost discount configuration updated successfully",
@@ -224,10 +226,10 @@ async def update_cost_discount_config(
             "values": cost_discount_config,
         }
     except Exception as e:
-        verbose_proxy_logger.error(f"Error updating cost discount config: {e!s}")
+        verbose_proxy_logger.error("Error updating cost discount config: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to update cost discount config: {e!s}"},
+            detail={"error": f"Failed to update cost discount config: {e}"},
         )
 
 
@@ -254,15 +256,15 @@ async def get_cost_margin_config(
 
     try:
         # Load config from DB
-        config = await proxy_config.get_config()
+        config: Final = await proxy_config.get_config()
 
         # Get cost_margin_config from litellm_settings
-        litellm_settings = config.get("litellm_settings", {})
-        cost_margin_config = litellm_settings.get("cost_margin_config", {})
+        litellm_settings: Final = config.get("litellm_settings", {})
+        cost_margin_config: Final = litellm_settings.get("cost_margin_config", {})
 
         return {"values": cost_margin_config}
     except Exception as e:
-        verbose_proxy_logger.error(f"Error fetching cost margin config: {e!s}")
+        verbose_proxy_logger.error("Error fetching cost margin config: %s", e)
         return {"values": {}}
 
 
@@ -314,7 +316,7 @@ async def update_cost_margin_config(
         )
 
     # Validate that all providers are valid LiteLLM providers (except "global")
-    invalid_providers = []
+    invalid_providers: Final = []
     for provider in cost_margin_config:
         if provider != "global" and provider not in LlmProvidersSet:
             invalid_providers.append(provider)
@@ -375,7 +377,7 @@ async def update_cost_margin_config(
 
     try:
         # Load existing config
-        config = await proxy_config.get_config()
+        config: Final = await proxy_config.get_config()
 
         # Ensure litellm_settings exists
         if "litellm_settings" not in config:
@@ -390,7 +392,7 @@ async def update_cost_margin_config(
         # Update in-memory litellm.cost_margin_config
         litellm.cost_margin_config = cost_margin_config
 
-        verbose_proxy_logger.info(f"Updated cost_margin_config: {cost_margin_config}")
+        verbose_proxy_logger.info("Updated cost_margin_config: %s", cost_margin_config)
 
         return {
             "message": "Cost margin configuration updated successfully",
@@ -398,10 +400,10 @@ async def update_cost_margin_config(
             "values": cost_margin_config,
         }
     except Exception as e:
-        verbose_proxy_logger.error(f"Error updating cost margin config: {e!s}")
+        verbose_proxy_logger.error("Error updating cost margin config: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to update cost margin config: {e!s}"},
+            detail={"error": f"Failed to update cost margin config: {e}"},
         )
 
 
@@ -450,10 +452,10 @@ async def estimate_cost(
     # Resolve model name (handles router aliases like 'e-model-router' -> 'azure_ai/gpt-4')
     resolved_model, resolved_provider = _resolve_model_for_cost_lookup(request.model)
 
-    verbose_proxy_logger.debug(f"Cost estimate: request.model='{request.model}' resolved to '{resolved_model}'")
+    verbose_proxy_logger.debug("Cost estimate: request.model='%s' resolved to '%s'", request.model, resolved_model)
 
     # Create a mock response with usage for completion_cost
-    mock_response = ModelResponse(
+    mock_response: Final = ModelResponse(
         model=resolved_model,
         usage=Usage(
             prompt_tokens=request.input_tokens,
@@ -463,7 +465,7 @@ async def estimate_cost(
     )
 
     # Create a logging object to capture cost breakdown
-    litellm_logging_obj = LiteLLMLoggingObj(
+    litellm_logging_obj: Final = LiteLLMLoggingObj(
         model=resolved_model,
         messages=[],
         stream=False,
@@ -475,7 +477,7 @@ async def estimate_cost(
 
     # Use completion_cost which handles all the logic including margins/discounts
     try:
-        cost_per_request = completion_cost(
+        cost_per_request: Final = completion_cost(
             completion_response=mock_response,
             model=resolved_model,
             litellm_logging_obj=litellm_logging_obj,
@@ -484,20 +486,20 @@ async def estimate_cost(
         raise HTTPException(
             status_code=404,
             detail={
-                "error": f"Could not calculate cost for model '{request.model}' (resolved to '{resolved_model}'): {e!s}"
+                "error": f"Could not calculate cost for model '{request.model}' (resolved to '{resolved_model}'): {e}"
             },
         )
 
     # Get cost breakdown from the logging object
-    cost_breakdown = litellm_logging_obj.cost_breakdown
+    cost_breakdown: Final = litellm_logging_obj.cost_breakdown
 
-    input_cost = cost_breakdown.get("input_cost", 0.0) if cost_breakdown else 0.0
-    output_cost = cost_breakdown.get("output_cost", 0.0) if cost_breakdown else 0.0
-    margin_cost = cost_breakdown.get("margin_total_amount", 0.0) if cost_breakdown else 0.0
+    input_cost: Final = cost_breakdown.get("input_cost", 0.0) if cost_breakdown else 0.0
+    output_cost: Final = cost_breakdown.get("output_cost", 0.0) if cost_breakdown else 0.0
+    margin_cost: Final = cost_breakdown.get("margin_total_amount", 0.0) if cost_breakdown else 0.0
 
     # Get model info for per-token pricing display
     try:
-        model_info = litellm.get_model_info(model=resolved_model)
+        model_info: Final = litellm.get_model_info(model=resolved_model)
         input_cost_per_token = model_info.get("input_cost_per_token")
         output_cost_per_token = model_info.get("output_cost_per_token")
         custom_llm_provider = model_info.get("litellm_provider")

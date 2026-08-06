@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.watsonx.common_utils import IBMWatsonXMixin
@@ -31,10 +31,10 @@ class WatsonxPassthroughConfig(IBMWatsonXMixin, BasePassthroughConfig):
         This ensures the version parameter is ALWAYS included in the URL,
         solving the query parameter issue.
         """
-        base_target_url = str(self.get_api_base(api_base))
+        base_target_url: Final = str(self.get_api_base(api_base))
 
         # Use the format_url helper to construct URL with query params
-        complete_url = self.format_url(
+        complete_url: Final = self.format_url(
             endpoint=endpoint,
             base_target_url=base_target_url,
             request_query_params=request_query_params,

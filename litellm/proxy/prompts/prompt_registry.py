@@ -2,6 +2,7 @@ import importlib
 import os
 from collections.abc import Callable
 from pathlib import Path
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -24,12 +25,12 @@ def get_prompt_initializer_from_integrations():
     Returns:
         Dict[str, Callable]: A dictionary mapping guardrail types to their initializer functions
     """
-    discovered_initializers: dict[str, Callable] = {}
+    discovered_initializers: Final[dict[str, Callable]] = {}
 
     try:
         # Get the path to the prompt_integrations directory
-        current_dir = Path(__file__).parent.parent.parent
-        integrations_dir = os.path.join(current_dir, "integrations")
+        current_dir: Final = Path(__file__).parent.parent.parent
+        integrations_dir: Final = os.path.join(current_dir, "integrations")
 
         if not os.path.exists(integrations_dir):
             verbose_proxy_logger.debug("integrations directory not found")
@@ -51,7 +52,7 @@ def get_prompt_initializer_from_integrations():
             module_path = f"litellm.integrations.{item}"
             try:
                 # Import the module
-                verbose_proxy_logger.debug(f"Discovering prompt integrations in: {module_path}")
+                verbose_proxy_logger.debug("Discovering prompt integrations in: %s", module_path)
 
                 module = importlib.import_module(module_path)
 
@@ -61,22 +62,22 @@ def get_prompt_initializer_from_integrations():
                     if isinstance(registry, dict):
                         discovered_initializers.update(registry)
                         verbose_proxy_logger.debug(
-                            f"Found prompt_initializer_registry in {module_path}: {list(registry.keys())}"
+                            "Found prompt_initializer_registry in %s: %s", module_path, list(registry.keys())
                         )
 
             except ImportError as e:
-                verbose_proxy_logger.error(f"Could not import {module_path}: {e}")
+                verbose_proxy_logger.error("Could not import %s: %s", module_path, e)
                 continue
             except Exception as e:
-                verbose_proxy_logger.error(f"Error processing {module_path}: {e}")
+                verbose_proxy_logger.error("Error processing %s: %s", module_path, e)
                 continue
 
         verbose_proxy_logger.debug(
-            f"Discovered {len(discovered_initializers)} prompt initializers: {list(discovered_initializers.keys())}"
+            "Discovered %s prompt initializers: %s", len(discovered_initializers), list(discovered_initializers.keys())
         )
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error discovering prompt initializers: {e}")
+        verbose_proxy_logger.error("Error discovering prompt initializers: %s", e)
 
     return discovered_initializers
 
@@ -112,13 +113,13 @@ class InMemoryPromptRegistry:
         """
         import litellm
 
-        prompt_id = prompt.prompt_id
+        prompt_id: Final = prompt.prompt_id
         if prompt_id in self.IN_MEMORY_PROMPTS:
             verbose_proxy_logger.debug("prompt_id already exists in IN_MEMORY_PROMPTS")
             return self.IN_MEMORY_PROMPTS[prompt_id]
 
         custom_prompt_callback: CustomPromptManagement | None = None
-        litellm_params_data = prompt.litellm_params
+        litellm_params_data: Final = prompt.litellm_params
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
         if isinstance(litellm_params_data, dict):
@@ -126,21 +127,21 @@ class InMemoryPromptRegistry:
         else:
             litellm_params = litellm_params_data
 
-        prompt_integration = litellm_params.prompt_integration
+        prompt_integration: Final = litellm_params.prompt_integration
         if prompt_integration is None:
             raise ValueError("prompt_integration is required")
 
-        initializer = prompt_initializer_registry.get(prompt_integration)
+        initializer: Final = prompt_initializer_registry.get(prompt_integration)
 
         if initializer:
             custom_prompt_callback = initializer(litellm_params, prompt)
             if not isinstance(custom_prompt_callback, CustomPromptManagement):
                 raise ValueError(f"CustomPromptManagement is required, got {type(custom_prompt_callback)}")
-            litellm.logging_callback_manager.add_litellm_callback(custom_prompt_callback)  # type: ignore
+            litellm.logging_callback_manager.add_litellm_callback(custom_prompt_callback)
         else:
             raise ValueError(f"Unsupported prompt: {prompt_integration}")
 
-        parsed_prompt = PromptSpec(
+        parsed_prompt: Final = PromptSpec(
             prompt_id=prompt_id,
             litellm_params=litellm_params,
             prompt_info=prompt.prompt_info or PromptInfo(prompt_type="config"),
@@ -178,8 +179,8 @@ class InMemoryPromptRegistry:
         """
         from litellm.proxy.prompts.prompt_endpoints import get_base_prompt_id
 
-        prompts_to_delete = [
-            pid for pid in self.IN_MEMORY_PROMPTS.keys() if get_base_prompt_id(prompt_id=pid) == base_prompt_id
+        prompts_to_delete: Final = [
+            pid for pid in self.IN_MEMORY_PROMPTS if get_base_prompt_id(prompt_id=pid) == base_prompt_id
         ]
 
         for pid in prompts_to_delete:
@@ -190,4 +191,4 @@ class InMemoryPromptRegistry:
         return prompts_to_delete
 
 
-IN_MEMORY_PROMPT_REGISTRY = InMemoryPromptRegistry()
+IN_MEMORY_PROMPT_REGISTRY: Final = InMemoryPromptRegistry()

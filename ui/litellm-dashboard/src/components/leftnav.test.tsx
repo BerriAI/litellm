@@ -1,5 +1,5 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
 
@@ -19,6 +19,7 @@ const { mockUseAuthorized, mockUseOrganizations } = vi.hoisted(() => {
     userId: "test-user-id",
     accessToken: "test-access-token",
     userRole: "admin",
+    isViewOnly: false,
     token: "test-token",
     userEmail: "test@example.com",
     premiumUser: false,
@@ -156,12 +157,15 @@ describe("Sidebar (leftnav)", () => {
 
   describe("Admin Viewer parity", () => {
     // Admin Viewer follows a "read parity with Proxy Admin, no writes, no
-    // cost-incurring actions" rule. Playground stays hidden (incurs LLM
-    // cost); Models + Endpoints and Agents must be visible read-only.
+    // cost-incurring actions" rule. The session hook presents the viewer as
+    // an admin (`userRole: "admin"`) with `isViewOnly: true`; Playground
+    // stays hidden (incurs LLM cost) via the isViewOnly flag, while every
+    // admin page (Models + Endpoints, Agents, Logs, ...) is visible read-only.
     const adminViewerAuth = {
       userId: "admin-viewer-user-id",
       accessToken: "test-access-token",
-      userRole: "admin_viewer",
+      userRole: "admin",
+      isViewOnly: true,
       token: "test-token",
       userEmail: "viewer@example.com",
       premiumUser: false,
@@ -198,6 +202,47 @@ describe("Sidebar (leftnav)", () => {
       mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
       expect(screen.getByText("Logs")).toBeInTheDocument();
+    });
+  });
+
+  describe("capability-gated Tools children", () => {
+    const internalAuth = {
+      userId: "internal-user-id",
+      accessToken: "test-access-token",
+      userRole: "internal",
+      token: "test-token",
+      userEmail: "internal@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    };
+
+    afterEach(() => {
+      mockUseAuthorized.mockReset();
+    });
+
+    it("should hide Tool Policies from internal users while keeping other Tools children", async () => {
+      mockUseAuthorized.mockReturnValue(internalAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Tools"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Search Tools")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Tool Policies")).not.toBeInTheDocument();
+    });
+
+    it("should show Tool Policies to admins", async () => {
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Tools"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Tool Policies")).toBeInTheDocument();
+      });
     });
   });
 

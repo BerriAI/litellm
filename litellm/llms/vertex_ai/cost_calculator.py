@@ -1,6 +1,6 @@
 # What is this?
 ## Cost calculation for Google AI Studio / Vertex AI models
-from typing import Literal
+from typing import Final, Literal
 
 import litellm
 from litellm import verbose_logger
@@ -24,7 +24,7 @@ Vertex AI -> character based pricing
 Google AI Studio -> token based pricing
 """
 
-models_without_dynamic_pricing = ["gemini-1.0-pro", "gemini-pro", "gemini-2"]
+models_without_dynamic_pricing: Final = ["gemini-1.0-pro", "gemini-pro", "gemini-2"]
 
 
 def cost_router(
@@ -114,7 +114,8 @@ def cost_per_character(
                 prompt_cost = prompt_characters * model_info["input_cost_per_character"]
         except Exception as e:
             verbose_logger.debug(
-                f"litellm.litellm_core_utils.llm_cost_calc.google.py::cost_per_character(): Exception occured - {e!s}\nDefaulting to None"
+                "litellm.litellm_core_utils.llm_cost_calc.google.py::cost_per_character(): Exception occured - %s\nDefaulting to None",
+                e,
             )
             prompt_cost, _ = cost_per_token(
                 model=model,
@@ -130,7 +131,7 @@ def cost_per_character(
             usage=usage,
         )
     else:
-        completion_tokens = usage.completion_tokens
+        completion_tokens: Final = usage.completion_tokens
         try:
             if (
                 _is_above_128k(tokens=completion_characters * 4)  # 1 token = 4 char
@@ -152,7 +153,8 @@ def cost_per_character(
                 completion_cost = completion_characters * model_info["output_cost_per_character"]
         except Exception as e:
             verbose_logger.debug(
-                f"litellm.litellm_core_utils.llm_cost_calc.google.py::cost_per_character(): Exception occured - {e!s}\nDefaulting to None"
+                "litellm.litellm_core_utils.llm_cost_calc.google.py::cost_per_character(): Exception occured - %s\nDefaulting to None",
+                e,
             )
             _, completion_cost = cost_per_token(
                 model=model,
@@ -168,11 +170,11 @@ def _handle_128k_pricing(
     usage: Usage,
 ) -> tuple[float, float]:
     ## CALCULATE INPUT COST
-    input_cost_per_token_above_128k_tokens = model_info.get("input_cost_per_token_above_128k_tokens")
+    input_cost_per_token_above_128k_tokens: Final = model_info.get("input_cost_per_token_above_128k_tokens")
     output_cost_per_token_above_128k_tokens = model_info.get("output_cost_per_token_above_128k_tokens")
 
-    prompt_tokens = usage.prompt_tokens
-    completion_tokens = usage.completion_tokens
+    prompt_tokens: Final = usage.prompt_tokens
+    completion_tokens: Final = usage.completion_tokens
 
     if _is_above_128k(tokens=prompt_tokens) and input_cost_per_token_above_128k_tokens is not None:
         prompt_cost = prompt_tokens * input_cost_per_token_above_128k_tokens
@@ -214,11 +216,11 @@ def cost_per_token(
     """
 
     ## GET MODEL INFO
-    model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
     ## HANDLE 128k+ PRICING
-    input_cost_per_token_above_128k_tokens = model_info.get("input_cost_per_token_above_128k_tokens")
-    output_cost_per_token_above_128k_tokens = model_info.get("output_cost_per_token_above_128k_tokens")
+    input_cost_per_token_above_128k_tokens: Final = model_info.get("input_cost_per_token_above_128k_tokens")
+    output_cost_per_token_above_128k_tokens: Final = model_info.get("output_cost_per_token_above_128k_tokens")
     if input_cost_per_token_above_128k_tokens is not None or output_cost_per_token_above_128k_tokens is not None:
         return _handle_128k_pricing(
             model_info=model_info,

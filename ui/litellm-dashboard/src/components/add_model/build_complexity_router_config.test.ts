@@ -1,7 +1,11 @@
 import {
   buildComplexityRouterConfig,
+  normalizeClassifierLlmConfig,
+  getKeywordTierRulesError,
   getMissingTiersError,
   getSemanticConfigError,
+  getTierLabelsError,
+  hydrateTierLabels,
   BuildComplexityRouterConfigParams,
 } from "./build_complexity_router_config";
 
@@ -14,11 +18,14 @@ const tiers = {
 
 const baseParams: BuildComplexityRouterConfigParams = {
   tiers,
+  tierLabels: undefined,
   classifierType: "heuristic",
   classifierLlmConfig: undefined,
   classifierContextWindowSize: undefined,
   classifierContextPerTurnChars: undefined,
   classifierContextIncludeAssistantTurns: undefined,
+  classifierFallback: undefined,
+  sessionAffinity: false,
   customTechnicalKeywords: [],
   keywordTierRules: [],
   semanticMatchingEnabled: false,
@@ -35,7 +42,12 @@ const baseParams: BuildComplexityRouterConfigParams = {
 describe("buildComplexityRouterConfig", () => {
   it("emits tiers, classifier_type, and escalation_keywords when nothing else is configured", () => {
     const config = buildComplexityRouterConfig(baseParams);
-    expect(config).toEqual({ tiers, classifier_type: "heuristic", escalation_keywords: ["LITELLM ESCALATE"] });
+    expect(config).toEqual({
+      tiers,
+      classifier_type: "heuristic",
+      session_affinity: false,
+      escalation_keywords: ["LITELLM ESCALATE"],
+    });
   });
 
   it("trims escalation keywords and drops blank entries", () => {
@@ -177,7 +189,7 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.keyword_tier_rules).toBeUndefined();
   });
 
-  it("trims keywords and drops rules left empty, so unfilled rows never 400 the backend", () => {
+  it("trims keywords but keeps rules left empty, so a dropped row can never pass for a saved one", () => {
     const params: BuildComplexityRouterConfigParams = {
       ...baseParams,
       keywordTierRules: [
@@ -187,17 +199,13 @@ describe("buildComplexityRouterConfig", () => {
       ],
     };
     const config = buildComplexityRouterConfig(params);
-    // r1 keeps only its real keyword (trimmed); r2 and r3 are dropped entirely.
-    expect(config.keyword_tier_rules).toEqual([{ keywords: ["deploy to k8s"], tier: "REASONING" }]);
-  });
-
-  it("omits keyword_tier_rules entirely when every rule is empty", () => {
-    const params: BuildComplexityRouterConfigParams = {
-      ...baseParams,
-      keywordTierRules: [{ id: "r1", keywords: ["", "  "], tier: "COMPLEX" }],
-    };
-    const config = buildComplexityRouterConfig(params);
-    expect(config.keyword_tier_rules).toBeUndefined();
+    // getKeywordTierRulesError blocks this submit; r2 and r3 survive here so the backend rejects
+    // them loudly rather than the caller's rows vanishing on a successful save.
+    expect(config.keyword_tier_rules).toEqual([
+      { keywords: ["deploy to k8s"], tier: "REASONING" },
+      { keywords: [], tier: "COMPLEX" },
+      { keywords: [], tier: "SIMPLE" },
+    ]);
   });
 
   it("omits adaptive fields when adaptive is disabled even if weights linger in state", () => {
@@ -217,6 +225,16 @@ describe("buildComplexityRouterConfig", () => {
   it("omits return_raw_model_name when disabled", () => {
     const config = buildComplexityRouterConfig({ ...baseParams, returnRawModelName: false });
     expect(config.return_raw_model_name).toBeUndefined();
+  });
+
+  it("writes session_affinity=true so turning the toggle on overrides the backend's off-by-default", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, sessionAffinity: true });
+    expect(config.session_affinity).toBe(true);
+  });
+
+  it("writes session_affinity explicitly when off, so the stored config never relies on the backend default", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, sessionAffinity: false });
+    expect(config.session_affinity).toBe(false);
   });
 
   it("includes return_raw_model_name when enabled", () => {
@@ -302,21 +320,56 @@ describe("getSemanticConfigError", () => {
     ).toMatch(/keyword tier rule/i);
   });
 
-  it("errors when a rule has no non-empty keywords", () => {
-    const emptyRule = { id: "r2", keywords: ["", "  "], tier: "SIMPLE" as const };
-    expect(
-      getSemanticConfigError({
-        semanticMatchingEnabled: true,
-        embeddingModel: "voyage-3-5",
-        keywordTierRules: [emptyRule],
-      }),
-    ).toMatch(/at least one keyword/i);
-  });
-
   it("returns null when enabled with both an embedding model and rules", () => {
     expect(
       getSemanticConfigError({ semanticMatchingEnabled: true, embeddingModel: "voyage-3-5", keywordTierRules: [rule] }),
     ).toBeNull();
+  });
+});
+
+describe("getKeywordTierRulesError", () => {
+  it("returns null when every rule carries a keyword", () => {
+    expect(
+      getKeywordTierRulesError([
+        { id: "r1", keywords: ["invoice"], tier: "MEDIUM" },
+        { id: "r2", keywords: ["deploy to k8s"], tier: "REASONING" },
+      ]),
+    ).toBeNull();
+  });
+
+  it("returns null when there are no rules at all, since the section is optional", () => {
+    expect(getKeywordTierRulesError([])).toBeNull();
+  });
+
+  // The whole point of the ticket: the semantic toggle is off by default, and an unfilled row
+  // used to be discarded silently on an otherwise successful create.
+  it("rejects a row left empty while semantic matching is off", () => {
+    expect(getKeywordTierRulesError([{ id: "r1", keywords: [], tier: "COMPLEX" }])).toBe(
+      "Add at least one keyword to keyword rule(s): 1",
+    );
+  });
+
+  it.each([
+    ["whitespace only", ["   "]],
+    ["blank strings, as an unfilled row between filled ones leaves behind", ["", " ", ""]],
+  ])("treats %s as empty rather than as a keyword", (_label, keywords) => {
+    expect(getKeywordTierRulesError([{ id: "r1", keywords, tier: "SIMPLE" }])).toMatch(/keyword rule\(s\): 1/);
+  });
+
+  // Row numbers have to survive rules that are fine, or the message points at the wrong input.
+  it("names each offending row by its position among all rules", () => {
+    expect(
+      getKeywordTierRulesError([
+        { id: "r1", keywords: ["invoice"], tier: "MEDIUM" },
+        { id: "r2", keywords: [], tier: "COMPLEX" },
+        { id: "r3", keywords: ["billing"], tier: "SIMPLE" },
+        { id: "r4", keywords: ["  "], tier: "REASONING" },
+      ]),
+    ).toBe("Add at least one keyword to keyword rule(s): 2, 4");
+  });
+
+  it("keeps a keyword whose surrounding whitespace is the only thing trimmed", () => {
+    expect(getKeywordTierRulesError([{ id: "r1", keywords: ["  invoice  "], tier: "MEDIUM" }])).toBeNull();
   });
 });
 
@@ -349,5 +402,141 @@ describe("buildComplexityRouterConfig assistant turns", () => {
   it("omits it when unset, leaving the backend default", () => {
     const config = buildComplexityRouterConfig(llmParams);
     expect(config.classifier_context_include_assistant_turns).toBeUndefined();
+  });
+});
+
+describe("classifier prompt and fallback", () => {
+  const llmParams: BuildComplexityRouterConfigParams = {
+    ...baseParams,
+    classifierType: "llm",
+    classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400 },
+  };
+
+  it("omits system_prompt when the operator never edited the prompt", () => {
+    // The backend rejects a blank string, and storing a copy of the default would freeze the
+    // rubric so later improvements never reach this router.
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, system_prompt: "   " },
+    });
+    expect(config.classifier_llm_config).toEqual({ model: "haiku-classifier", timeout_ms: 400 });
+    expect(config.classifier_llm_config).not.toHaveProperty("system_prompt");
+  });
+
+  it("keeps a custom system_prompt verbatim, whitespace and all", () => {
+    const systemPrompt = "  Grade data sensitivity.\n\nSIMPLE=public  ";
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, system_prompt: systemPrompt },
+    });
+    expect(config.classifier_llm_config?.system_prompt).toBe(systemPrompt);
+  });
+
+  it("emits classifier_fallback only for the llm classifier", () => {
+    expect(buildComplexityRouterConfig({ ...llmParams, classifierFallback: "default_model" }).classifier_fallback).toBe(
+      "default_model",
+    );
+    expect(buildComplexityRouterConfig({ ...baseParams, classifierFallback: "default_model" })).not.toHaveProperty(
+      "classifier_fallback",
+    );
+  });
+
+  it("omits classifier_fallback when unset so the backend default applies", () => {
+    expect(buildComplexityRouterConfig(llmParams)).not.toHaveProperty("classifier_fallback");
+  });
+
+  it("normalizeClassifierLlmConfig leaves a real prompt untouched and strips an empty one", () => {
+    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "x" })).toEqual({
+      model: "m",
+      timeout_ms: 1,
+      system_prompt: "x",
+    });
+    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "" })).toEqual({
+      model: "m",
+      timeout_ms: 1,
+    });
+  });
+});
+
+describe("tier labels", () => {
+  it("omits tier_labels entirely when the operator renamed nothing", () => {
+    expect(buildComplexityRouterConfig(baseParams).tier_labels).toBeUndefined();
+  });
+
+  it("omits a label that only restates the default, so a later default change still reaches this router", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tierLabels: { SIMPLE: "Simple", MEDIUM: "Medium", COMPLEX: "Complex", REASONING: "Reasoning" },
+    });
+    expect(config.tier_labels).toBeUndefined();
+  });
+
+  it("emits only the renamed tiers, trimmed, and leaves the tier keys canonical", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tierLabels: { SIMPLE: "  Cheap  ", REASONING: "Deep" },
+    });
+    expect(config.tier_labels).toEqual({ SIMPLE: "Cheap", REASONING: "Deep" });
+    expect(Object.keys(config.tiers)).toEqual(["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]);
+  });
+
+  it("treats a whitespace-only label as no rename rather than sending a blank the backend rejects", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, tierLabels: { SIMPLE: "   " } });
+    expect(config.tier_labels).toBeUndefined();
+  });
+});
+
+describe("getTierLabelsError", () => {
+  it("accepts an unrenamed router", () => {
+    expect(getTierLabelsError(undefined)).toBeNull();
+  });
+
+  it("accepts a full distinct rename", () => {
+    const fullRename = { SIMPLE: "Cheap", MEDIUM: "Standard", COMPLEX: "Premium", REASONING: "Deep" };
+    expect(getTierLabelsError(fullRename)).toBeNull();
+  });
+
+  it("rejects two tiers sharing a name, which would be ambiguous in the logs", () => {
+    expect(getTierLabelsError({ SIMPLE: "Cheap", MEDIUM: "Cheap" })).toMatch(/unique/i);
+  });
+
+  it("rejects names that differ only by case, since the logs would not tell them apart", () => {
+    expect(getTierLabelsError({ SIMPLE: "Cheap", MEDIUM: "cheap" })).toMatch(/unique/i);
+  });
+
+  it("rejects a rename that collides with an untouched tier's name", () => {
+    expect(getTierLabelsError({ SIMPLE: "Medium" })).toMatch(/another tier's name/i);
+  });
+
+  it("rejects a label that is another tier's canonical name", () => {
+    expect(getTierLabelsError({ SIMPLE: "COMPLEX" })).toMatch(/another tier's name/i);
+  });
+
+  it("allows a label equal to that tier's own canonical name, which is a no-op", () => {
+    expect(getTierLabelsError({ SIMPLE: "SIMPLE" })).toBeNull();
+  });
+});
+
+describe("hydrateTierLabels", () => {
+  it("returns undefined for a config that never set labels", () => {
+    expect(hydrateTierLabels(undefined)).toBeUndefined();
+  });
+
+  it("keeps the stored labels", () => {
+    expect(hydrateTierLabels({ SIMPLE: "Cheap", REASONING: "Deep" })).toEqual({ SIMPLE: "Cheap", REASONING: "Deep" });
+  });
+
+  it("drops non-string and blank values a hand-edited config could hold", () => {
+    const handEdited = { SIMPLE: 7, MEDIUM: "  ", COMPLEX: null, REASONING: "Deep" };
+    expect(hydrateTierLabels(handEdited)).toEqual({ REASONING: "Deep" });
+  });
+
+  it("ignores keys that are not tiers", () => {
+    expect(hydrateTierLabels({ CHEAP: "Cheap" })).toBeUndefined();
+  });
+
+  it("returns undefined for a value that is not an object", () => {
+    expect(hydrateTierLabels("Cheap")).toBeUndefined();
+    expect(hydrateTierLabels(["Cheap"])).toBeUndefined();
   });
 });
