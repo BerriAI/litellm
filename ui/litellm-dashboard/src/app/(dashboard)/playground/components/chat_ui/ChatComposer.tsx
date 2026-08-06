@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React from "react";
 import { ArrowUp, Code2, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from "@/components/ui/input-group";
@@ -38,17 +38,6 @@ export function ChatComposer({
   onSuggestionSelect,
   className,
 }: ChatComposerProps) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el || body) {
-      return;
-    }
-    el.style.height = "0px";
-    el.style.height = `${Math.min(el.scrollHeight, 192)}px`;
-  }, [value, body]);
-
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
@@ -101,13 +90,12 @@ export function ChatComposer({
             <div className="max-h-48 min-h-24 w-full overflow-y-auto px-3 pt-3">{body}</div>
           ) : (
             <InputGroupTextarea
-              ref={textareaRef}
               data-testid="chat-composer-input"
               value={value}
               disabled={disabled}
               placeholder={placeholder}
               rows={1}
-              className="min-h-24 max-h-48 resize-none border-0 bg-transparent px-4 pt-3.5 pb-1.5 text-[13px] leading-relaxed shadow-none placeholder:text-muted-foreground/50 focus-visible:ring-0"
+              className="min-h-24 max-h-48 resize-none overflow-y-auto border-0 bg-transparent px-4 pt-3.5 pb-1.5 text-[13px] leading-relaxed shadow-none placeholder:text-muted-foreground/50 focus-visible:ring-0 [field-sizing:content]"
               onChange={(event) => onChange(event.target.value)}
               onKeyDown={handleKeyDown}
             />
