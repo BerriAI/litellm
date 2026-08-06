@@ -10,6 +10,7 @@ LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY = "litellm_pass_through_custom_body"
 # Request.state key for programmatic pass-through callers that must preserve an
 # exact byte/string body, such as AWS SigV4-signed requests.
 LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY = "litellm_pass_through_raw_body"
+LITELLM_PASS_THROUGH_RAW_QUERY_STATE_KEY = "litellm_pass_through_raw_query"
 
 # Attribute set on the FastAPI endpoint function of every user-defined pass-through
 # route. Auth reads it off the dispatched endpoint (``request.scope["endpoint"]``) to

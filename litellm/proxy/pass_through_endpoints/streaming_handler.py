@@ -1,6 +1,8 @@
+import asyncio
 from datetime import datetime
 from typing import List, Optional, Tuple
 
+import anyio
 import httpx
 
 import litellm
@@ -93,6 +95,13 @@ class PassThroughStreamingHandler:
             verbose_proxy_logger.error(f"Error in chunk_processor: {str(e)}")
             raise
         finally:
+            with anyio.CancelScope(shield=True):
+                try:
+                    await response.aclose()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    verbose_proxy_logger.debug("Error closing passthrough response: %s", e)
             # GeneratorExit (raised on client disconnect) is not caught by
             # `except Exception`; the finally block ensures partial usage
             # still gets logged for spend tracking. See LIT-2642.

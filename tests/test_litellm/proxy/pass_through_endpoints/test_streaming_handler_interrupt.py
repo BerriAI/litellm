@@ -88,6 +88,7 @@ async def test_chunk_processor_logs_on_client_disconnect():
         await asyncio.sleep(0)
 
     assert first == chunks[0]
+    response.aclose.assert_awaited_once()
     mock_route.assert_called_once()
     call_kwargs = mock_route.call_args.kwargs
     assert call_kwargs["raw_bytes"] == [chunks[0]]

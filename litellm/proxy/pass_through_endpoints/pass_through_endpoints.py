@@ -74,6 +74,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_QUERY_STATE_KEY,
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
@@ -856,6 +857,14 @@ async def pass_through_request(
         )
         if state_raw_body is not None and not isinstance(state_raw_body, (str, bytes, bytearray)):
             state_raw_body = None
+        state_raw_query = (
+            getattr(_request_state, LITELLM_PASS_THROUGH_RAW_QUERY_STATE_KEY, None)
+            if _request_state is not None
+            else None
+        )
+        if isinstance(state_raw_query, bytes):
+            url = url.copy_with(query=state_raw_query)
+            requested_query_params = None
 
         # Skip body parsing for multipart requests - make_multipart_http_request will handle it
         # But if custom_body is provided (e.g., JSON parsed despite multipart content-type), use it
@@ -1798,6 +1807,8 @@ def create_pass_through_route(
                     delattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY)
                 if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY):
                     delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
+                if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_QUERY_STATE_KEY):
+                    delattr(request.state, LITELLM_PASS_THROUGH_RAW_QUERY_STATE_KEY)
 
     setattr(endpoint_func, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
     return endpoint_func

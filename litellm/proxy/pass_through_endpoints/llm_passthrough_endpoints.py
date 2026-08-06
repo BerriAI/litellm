@@ -46,6 +46,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_QUERY_STATE_KEY,
 )
 from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
@@ -2025,7 +2026,22 @@ class BaseOpenAIPassThroughHandler:
 
 
 CHATGPT_CREDENTIAL_COOKIE = "litellm_api_key"
-CHATGPT_STRIPPED_REQUEST_HEADERS = frozenset({"cookie", "x-litellm-api-key", "content-length", "host"})
+CHATGPT_STRIPPED_REQUEST_HEADERS = frozenset(
+    {
+        "connection",
+        "content-length",
+        "cookie",
+        "host",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "x-litellm-api-key",
+    }
+)
 
 
 def get_chatgpt_gateway_credential(request: Request) -> str | None:
@@ -2036,10 +2052,14 @@ def get_chatgpt_gateway_credential(request: Request) -> str | None:
 
 
 def build_chatgpt_forward_headers(request: Request) -> dict[str, str]:
+    request_headers = _safe_get_request_headers(request)
+    connection_headers = frozenset(
+        header_name.strip().lower() for header_name in request_headers.get("connection", "").split(",")
+    )
     return {
         header_name: header_value
-        for header_name, header_value in _safe_get_request_headers(request).items()
-        if header_name.lower() not in CHATGPT_STRIPPED_REQUEST_HEADERS
+        for header_name, header_value in request_headers.items()
+        if header_name.lower() not in CHATGPT_STRIPPED_REQUEST_HEADERS and header_name.lower() not in connection_headers
     }
 
 
@@ -2086,6 +2106,9 @@ async def chatgpt_proxy_route(
     )
 
     is_streaming_request = await is_streaming_request_fn(request)
+    raw_request_body = await request.body()
+    setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, raw_request_body)
+    setattr(request.state, LITELLM_PASS_THROUGH_RAW_QUERY_STATE_KEY, request.scope.get("query_string", b""))
 
     endpoint_func = create_pass_through_route(
         endpoint=endpoint,
@@ -2093,6 +2116,7 @@ async def chatgpt_proxy_route(
         custom_headers=build_chatgpt_forward_headers(request),
         custom_llm_provider=LlmProviders.CHATGPT.value,
         is_streaming_request=is_streaming_request,
+        query_params=dict(request.query_params),
     )
     return await endpoint_func(
         request,

@@ -3029,12 +3029,17 @@ class TestChatGPTProxyRoute:
     Tests for the Codex Sign-in-with-ChatGPT (SIWC) passthrough (/chatgpt)
     """
 
-    def _build_request(self, headers: dict, cookies: dict, body: dict) -> MagicMock:
+    def _build_request(
+        self, headers: dict, cookies: dict, body: dict, query_params: dict | None = None
+    ) -> MagicMock:
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
         mock_request.headers = headers
         mock_request.cookies = cookies
-        mock_request.query_params = {}
+        mock_request.query_params = query_params or {}
+        mock_request.scope = {"query_string": b"include=usage" if query_params else b""}
+        mock_request.body = AsyncMock(return_value=json.dumps(body).encode())
+        mock_request.state = MagicMock()
         return mock_request
 
     def _codex_headers(self, extra: dict) -> dict:
@@ -3097,6 +3102,7 @@ class TestChatGPTProxyRoute:
         assert call_args["target"] == "https://chatgpt.com/backend-api/codex/responses"
         assert call_args["custom_llm_provider"] == "chatgpt"
         assert call_args["is_streaming_request"] is True
+        assert call_args["query_params"] == {}
 
         forwarded = call_args["custom_headers"]
         assert forwarded["authorization"] == "Bearer chatgpt-oauth-access-token"
@@ -3108,6 +3114,43 @@ class TestChatGPTProxyRoute:
         assert "host" not in forwarded
         assert "content-length" not in forwarded
         assert result == {"id": "resp_1"}
+
+    @pytest.mark.asyncio
+    async def test_preserves_raw_body_query_and_strips_hop_by_hop_headers(self):
+        from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+            LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+            LITELLM_PASS_THROUGH_RAW_QUERY_STATE_KEY,
+        )
+
+        body = {"model": "gpt-5.3-codex", "unknown": {"encrypted_reasoning": "opaque"}}
+        mock_request = self._build_request(
+            headers=self._codex_headers(
+                {
+                    "x-litellm-api-key": "sk-litellm-virtual-key",
+                    "connection": "keep-alive, x-remove-me",
+                    "keep-alive": "timeout=5",
+                    "transfer-encoding": "chunked",
+                    "x-remove-me": "dynamic-hop-header",
+                    "traceparent": "00-trace-parent",
+                }
+            ),
+            cookies={},
+            body=body,
+            query_params={"include": "usage"},
+        )
+
+        _, _, mock_create_route = await self._call_route(mock_request, body)
+
+        call_args = mock_create_route.call_args[1]
+        assert call_args["query_params"] == {"include": "usage"}
+        forwarded = call_args["custom_headers"]
+        assert forwarded["traceparent"] == "00-trace-parent"
+        assert "connection" not in forwarded
+        assert "keep-alive" not in forwarded
+        assert "transfer-encoding" not in forwarded
+        assert "x-remove-me" not in forwarded
+        assert getattr(mock_request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY) == json.dumps(body).encode()
+        assert getattr(mock_request.state, LITELLM_PASS_THROUGH_RAW_QUERY_STATE_KEY) == b"include=usage"
 
     @pytest.mark.asyncio
     async def test_auth_from_cookie(self):
