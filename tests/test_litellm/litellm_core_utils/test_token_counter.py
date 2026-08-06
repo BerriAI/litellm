@@ -1116,11 +1116,20 @@ def test_count_content_list_rejects_unknown_type():
     assert "tool_reference" in message
 
 
-def test_token_counter_anthropic_image_block():
+def _png_base64(width: int, height: int) -> str:
+    import base64
+    import struct
+    import zlib
+
+    ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    ihdr = struct.pack(">I", 13) + b"IHDR" + ihdr_data + struct.pack(">I", zlib.crc32(b"IHDR" + ihdr_data))
+    return base64.b64encode(b"\x89PNG\r\n\x1a\n" + ihdr).decode()
+
+
+def test_token_counter_anthropic_image_block_counts_instead_of_raising():
     """Anthropic-format image blocks ({"type": "image", "source": ...}) must
-    count (flat default) instead of raising; a raise here breaks router
-    pre-call checks and cost tracking for anthropic messages traffic"""
-    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
+    count instead of raising; a raise here breaks router pre-call checks and
+    cost tracking for anthropic messages traffic"""
     from litellm.utils import token_counter
 
     messages = [
@@ -1133,7 +1142,7 @@ def test_token_counter_anthropic_image_block():
                     "source": {
                         "type": "base64",
                         "media_type": "image/png",
-                        "data": "iVBORw0KGgo=",
+                        "data": _png_base64(1, 1),
                     },
                 },
             ],
@@ -1143,4 +1152,32 @@ def test_token_counter_anthropic_image_block():
         model="gpt-4o", messages=[{"role": "user", "content": "What is in this image?"}]
     )
     with_image = token_counter(model="gpt-4o", messages=messages)
-    assert with_image >= text_only + DEFAULT_IMAGE_TOKEN_COUNT
+    assert with_image > text_only
+
+
+def test_token_counter_anthropic_image_block_scales_with_dimensions():
+    """Large images must count more than small ones; a flat estimate would
+    under-reserve budget for high-resolution images"""
+    from litellm.litellm_core_utils.token_counter import _count_anthropic_image_tokens
+
+    small = _count_anthropic_image_tokens(
+        {"type": "base64", "media_type": "image/png", "data": _png_base64(1, 1)},
+        use_default_image_token_count=False,
+    )
+    large = _count_anthropic_image_tokens(
+        {"type": "base64", "media_type": "image/png", "data": _png_base64(2048, 1024)},
+        use_default_image_token_count=False,
+    )
+    assert small > 0
+    assert large > small
+
+
+def test_token_counter_anthropic_image_block_missing_source_uses_default():
+    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
+    from litellm.litellm_core_utils.token_counter import _count_anthropic_image_tokens
+
+    assert _count_anthropic_image_tokens(None, use_default_image_token_count=False) == DEFAULT_IMAGE_TOKEN_COUNT
+    assert (
+        _count_anthropic_image_tokens({"type": "base64"}, use_default_image_token_count=False)
+        == DEFAULT_IMAGE_TOKEN_COUNT
+    )
