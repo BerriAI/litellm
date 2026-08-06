@@ -22,7 +22,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
   const items = [
     {
       key: "usage",
-      label: "Usage",
+      label: "Overall",
       children: <UsageTab accessToken={accessToken} activity={activity} />,
     },
     {
@@ -37,7 +37,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
     },
     {
       key: "autorouter-usage",
-      label: "Auto-Router Usage",
+      label: "Auto-Router",
       children: <AutoRouterBenchmarksTab accessToken={accessToken} />,
     },
   ];

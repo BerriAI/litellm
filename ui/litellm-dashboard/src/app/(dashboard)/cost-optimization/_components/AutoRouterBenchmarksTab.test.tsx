@@ -155,19 +155,43 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText(/turns measured/)).toBeInTheDocument();
   });
 
-  it("recomputes the expired-miss share from the miss counts", () => {
+  it("computes the expired-miss share over every measured turn, not just return-to-tier misses", () => {
     mockHook({ data: response([group()]) });
     renderTab();
 
     expect(screen.getByText("Expired-miss")).toBeInTheDocument();
-    expect(screen.getByText("27.1%")).toBeInTheDocument();
+    expect(screen.getByText("2.3%")).toBeInTheDocument();
   });
 
-  it("hides the expired-miss row when every return turn hit", () => {
+  it("exposes the whole expired-miss row as a focusable tooltip trigger", () => {
+    mockHook({ data: response([group()]) });
+    renderTab();
+
+    const trigger = screen.getByRole("button", { name: /Expired-miss/ });
+    expect(trigger).toHaveTextContent("2.3%");
+  });
+
+  it("shows a zero expired-miss share, rather than hiding the row, when every return turn hit", () => {
     const allHits = totals({
       cache: cache({ return_to_tier: { turns: 381, hits: 381, hit_rate_pct: 100 }, return_misses_expired: 0 }),
     });
     mockHook({ data: response([group(allHits)], allHits) });
+    renderTab();
+
+    const trigger = screen.getByRole("button", { name: /Expired-miss/ });
+    expect(trigger).toHaveTextContent("0.0%");
+  });
+
+  it("hides the expired-miss row only when no turns were measured at all", () => {
+    const empty = { turns: 0, hits: 0, hit_rate_pct: 0 };
+    const nothingMeasured = {
+      same_model: empty,
+      first_visit: empty,
+      return_to_tier: empty,
+      return_misses_expired: 0,
+    };
+    const noTurns = totals({ cache: cache(nothingMeasured) });
+    mockHook({ data: response([group(noTurns)], noTurns) });
     renderTab();
 
     expect(screen.queryByText("Expired-miss")).not.toBeInTheDocument();
