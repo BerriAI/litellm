@@ -6,7 +6,7 @@ to AWS Bedrock's CountTokens API format and vice versa.
 """
 
 import re
-from typing import Any
+from typing import Any, Final
 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
@@ -14,7 +14,7 @@ from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 # Placeholder satisfying the Anthropic InvokeModel schema's required
 # max_tokens field; CountTokens only counts input, so it has no effect
 # on any generation.
-DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS = 1024
+DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS: Final = 1024
 
 
 class BedrockCountTokensConfig(BaseAWSLLM):
@@ -37,7 +37,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         Returns:
             'converse' or 'invokeModel'
         """
-        messages = request_data.get("messages")
+        messages: Final = request_data.get("messages")
         if isinstance(messages, list):
             # Anthropic content blocks carry a "type" key ({"type": "text", ...});
             # Converse blocks don't ({"text": ...}, {"toolUse": ...}). Converse
@@ -88,7 +88,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             }
         }
         """
-        input_type = self._detect_input_type(request_data)
+        input_type: Final = self._detect_input_type(request_data)
 
         if input_type == "converse":
             return self._transform_to_converse_format(request_data)
@@ -97,12 +97,12 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
     def _transform_to_converse_format(self, request_data: dict[str, Any]) -> dict[str, Any]:
         """Transform to Converse input format, including system and tools."""
-        messages = request_data.get("messages", [])
-        system = request_data.get("system")
-        tools = request_data.get("tools")
+        messages: Final = request_data.get("messages", [])
+        system: Final = request_data.get("system")
+        tools: Final = request_data.get("tools")
 
         # Transform messages
-        user_messages = []
+        user_messages: Final = []
         for message in messages:
             transformed_message: dict[str, Any] = {
                 "role": message.get("role"),
@@ -115,15 +115,15 @@ class BedrockCountTokensConfig(BaseAWSLLM):
                 transformed_message["content"] = content
             user_messages.append(transformed_message)
 
-        converse_input: dict[str, Any] = {"messages": user_messages}
+        converse_input: Final[dict[str, Any]] = {"messages": user_messages}
 
         # Transform system prompt (string or list of blocks → Bedrock format)
-        system_blocks = self._transform_system(system)
+        system_blocks: Final = self._transform_system(system)
         if system_blocks:
             converse_input["system"] = system_blocks
 
         # Transform tools (Anthropic format → Bedrock toolConfig)
-        tool_config = self._transform_tools(tools)
+        tool_config: Final = self._transform_tools(tools)
         if tool_config:
             converse_input["toolConfig"] = tool_config
 
@@ -145,7 +145,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         if not tools:
             return None
 
-        bedrock_tools = []
+        bedrock_tools: Final = []
         for tool in tools:
             name = tool.get("name", "")
             # Bedrock tool names must match [a-zA-Z][a-zA-Z0-9_]* and max 64 chars
@@ -176,7 +176,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         # For InvokeModel, we need to provide the raw body that would be sent to the model
         # Remove the 'model' field from the body as it's not part of the model input
-        body_data = {k: v for k, v in request_data.items() if k != "model"}
+        body_data: Final = {k: v for k, v in request_data.items() if k != "model"}
 
         if "messages" in body_data:
             # Bedrock validates the body against the model's InvokeModel schema;
@@ -185,7 +185,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             body_data.setdefault("max_tokens", DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS)
 
         # The CountTokens API expects invokeModel.body as a base64-encoded blob
-        encoded_body = base64.b64encode(json.dumps(body_data).encode()).decode()
+        encoded_body: Final = base64.b64encode(json.dumps(body_data).encode()).decode()
         return {"input": {"invokeModel": {"body": encoded_body}}}
 
     def get_bedrock_count_tokens_endpoint(
@@ -212,14 +212,14 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         # Remove bedrock/ prefix if present
         model_id = model_id.removeprefix("bedrock/")  # Remove "bedrock/" prefix
-        encoded_model_id = self.encode_model_id(model_id=model_id)
+        encoded_model_id: Final = self.encode_model_id(model_id=model_id)
 
         base_url, _ = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
         )
-        endpoint = f"{base_url}/model/{encoded_model_id}/count-tokens"
+        endpoint: Final = f"{base_url}/model/{encoded_model_id}/count-tokens"
 
         return endpoint
 
@@ -237,7 +237,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             "input_tokens": 123
         }
         """
-        input_tokens = bedrock_response.get("inputTokens", 0)
+        input_tokens: Final = bedrock_response.get("inputTokens", 0)
 
         return {"input_tokens": input_tokens}
 
@@ -255,11 +255,11 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         if not request_data.get("model"):
             raise ValueError("model parameter is required")
 
-        input_type = self._detect_input_type(request_data)
+        input_type: Final = self._detect_input_type(request_data)
 
         if input_type == "converse":
             # Validate Converse format (messages-based)
-            messages = request_data.get("messages", [])
+            messages: Final = request_data.get("messages", [])
             if not messages:
                 raise ValueError("messages parameter is required for Converse input")
 

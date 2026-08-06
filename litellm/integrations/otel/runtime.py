@@ -10,7 +10,7 @@ identity unconditionally.
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import cache
-from typing import Any
+from typing import Any, Final
 
 
 @cache
@@ -35,7 +35,7 @@ def phase_span(name: str) -> "Iterator[Any]":
     Yields ``None`` (a plain no-op) when the OTel SDK is unavailable or V2 is not
     the active logger.
     """
-    runtime = _otel_runtime()
+    runtime: Final = _otel_runtime()
     if runtime is None:
         yield None
         return
@@ -45,7 +45,7 @@ def phase_span(name: str) -> "Iterator[Any]":
 
 def seed_request_identity(user_api_key_dict: Any, model: Any = None) -> None:
     """Seed request-identity Baggage at the auth boundary (no-op without V2)."""
-    runtime = _otel_runtime()
+    runtime: Final = _otel_runtime()
     if runtime is None:
         return
     runtime[1](user_api_key_dict, model=model)
