@@ -8,7 +8,7 @@ Router cooldown handlers
 
 import asyncio
 import math
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -31,12 +31,12 @@ if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     LitellmRouter = Any
     Span = Any
 
-_ADVISOR_ORCHESTRATION_FAILURE_ATTR = "_litellm_advisor_orchestration_failure"
+_ADVISOR_ORCHESTRATION_FAILURE_ATTR: Final = "_litellm_advisor_orchestration_failure"
 
 
 def mark_advisor_orchestration_failure(exception: BaseException) -> None:
@@ -75,7 +75,7 @@ def _is_cooldown_required(
         bool: True if a cooldown is required, False otherwise.
     """
     try:
-        ignored_strings = ["APIConnectionError"]
+        ignored_strings: Final = ["APIConnectionError"]
         if exception_str is not None:  # don't cooldown on litellm api connection errors errors
             for ignored_string in ignored_strings:
                 if ignored_string in exception_str:
@@ -191,7 +191,7 @@ def _should_cooldown_deployment(
     - v1 logic (Legacy): if allowed fails or allowed fail policy set, coolsdown if num fails in this minute > allowed fails
     """
     ## BASE CASE - single deployment
-    model_group = litellm_router_instance.get_model_group(id=deployment)
+    model_group: Final = litellm_router_instance.get_model_group(id=deployment)
     is_single_deployment_model_group = False
     if model_group is not None and len(model_group) == 1:
         is_single_deployment_model_group = True
@@ -199,14 +199,14 @@ def _should_cooldown_deployment(
         litellm_router_instance.allowed_fails_policy is None
         and _is_allowed_fails_set_on_router(litellm_router_instance=litellm_router_instance) is False
     ):
-        num_successes_this_minute = get_deployment_successes_for_current_minute(
+        num_successes_this_minute: Final = get_deployment_successes_for_current_minute(
             litellm_router_instance=litellm_router_instance, deployment_id=deployment
         )
-        num_fails_this_minute = get_deployment_failures_for_current_minute(
+        num_fails_this_minute: Final = get_deployment_failures_for_current_minute(
             litellm_router_instance=litellm_router_instance, deployment_id=deployment
         )
 
-        total_requests_this_minute = num_successes_this_minute + num_fails_this_minute
+        total_requests_this_minute: Final = num_successes_this_minute + num_fails_this_minute
         percent_fails = 0.0
         if total_requests_this_minute > 0:
             percent_fails = num_fails_this_minute / (num_successes_this_minute + num_fails_this_minute)
@@ -218,7 +218,7 @@ def _should_cooldown_deployment(
             num_fails_this_minute,
         )
 
-        exception_status_int = cast_exception_status_to_int(exception_status)
+        exception_status_int: Final = cast_exception_status_to_int(exception_status)
         if exception_status_int == 429 and not is_single_deployment_model_group:
             return True
         elif percent_fails == 1.0 and total_requests_this_minute >= SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD:
@@ -280,8 +280,8 @@ def _set_cooldown_deployments(
         verbose_router_logger.debug("should_run_cooldown_logic returned False")
         return False
 
-    exception_status_int = cast_exception_status_to_int(exception_status)
-    verbose_router_logger.debug(f"Attempting to add {deployment} to cooldown list")
+    exception_status_int: Final = cast_exception_status_to_int(exception_status)
+    verbose_router_logger.debug("Attempting to add %s to cooldown list", deployment)
 
     if _should_cooldown_deployment(
         litellm_router_instance=litellm_router_instance,
@@ -316,8 +316,8 @@ async def _async_get_cooldown_deployments(
     """
     Async implementation of '_get_cooldown_deployments'
     """
-    model_ids = litellm_router_instance.get_model_ids()
-    cooldown_models = await litellm_router_instance.cooldown_cache.async_get_active_cooldowns(
+    model_ids: Final = litellm_router_instance.get_model_ids()
+    cooldown_models: Final = await litellm_router_instance.cooldown_cache.async_get_active_cooldowns(
         model_ids=model_ids,
         parent_otel_span=parent_otel_span,
     )
@@ -331,7 +331,7 @@ async def _async_get_cooldown_deployments(
     ):
         cached_value_deployment_ids = [cv[0] for cv in cooldown_models]
 
-    verbose_router_logger.debug(f"retrieve cooldown models: {cooldown_models}")
+    verbose_router_logger.debug("retrieve cooldown models: %s", cooldown_models)
     return cached_value_deployment_ids
 
 
@@ -342,12 +342,12 @@ async def _async_get_cooldown_deployments_with_debug_info(
     """
     Async implementation of '_get_cooldown_deployments'
     """
-    model_ids = litellm_router_instance.get_model_ids()
-    cooldown_models = await litellm_router_instance.cooldown_cache.async_get_active_cooldowns(
+    model_ids: Final = litellm_router_instance.get_model_ids()
+    cooldown_models: Final = await litellm_router_instance.cooldown_cache.async_get_active_cooldowns(
         model_ids=model_ids, parent_otel_span=parent_otel_span
     )
 
-    verbose_router_logger.debug(f"retrieve cooldown models: {cooldown_models}")
+    verbose_router_logger.debug("retrieve cooldown models: %s", cooldown_models)
     return cooldown_models
 
 
@@ -360,9 +360,9 @@ def _get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_ote
     # ----------------------
     # Return cooldown models
     # ----------------------
-    model_ids = litellm_router_instance.get_model_ids()
+    model_ids: Final = litellm_router_instance.get_model_ids()
 
-    cooldown_models = litellm_router_instance.cooldown_cache.get_active_cooldowns(
+    cooldown_models: Final = litellm_router_instance.cooldown_cache.get_active_cooldowns(
         model_ids=model_ids, parent_otel_span=parent_otel_span
     )
 
@@ -390,16 +390,16 @@ def should_cooldown_based_on_allowed_fails_policy(
     - True if fails exceed the allowed limit (should cooldown)
     - False if fails are within the allowed limit (should not cooldown)
     """
-    allowed_fails = (
+    allowed_fails: Final = (
         litellm_router_instance.get_allowed_fails_from_policy(
             exception=original_exception,
         )
         or litellm_router_instance.allowed_fails
     )
-    cooldown_time = litellm_router_instance.cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
+    cooldown_time: Final = litellm_router_instance.cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
 
-    current_fails = litellm_router_instance.failed_calls.get_cache(key=deployment) or 0
-    updated_fails = current_fails + 1
+    current_fails: Final = litellm_router_instance.failed_calls.get_cache(key=deployment) or 0
+    updated_fails: Final = current_fails + 1
 
     if updated_fails > allowed_fails:
         return True
@@ -432,7 +432,7 @@ def cast_exception_status_to_int(exception_status: str | int) -> int:
             exception_status = int(exception_status)
         except Exception:
             verbose_router_logger.debug(
-                f"Unable to cast exception status to int {exception_status}. Defaulting to status=500."
+                "Unable to cast exception status to int %s. Defaulting to status=500.", exception_status
             )
             exception_status = 500
     return exception_status

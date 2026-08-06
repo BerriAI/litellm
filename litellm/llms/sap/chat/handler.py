@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import AsyncIterator, Iterator
+from typing import Final
 
 import httpx
 
@@ -50,7 +51,7 @@ class _StreamParser:
         """
         Accepts orchestration_result shape and maps it to an OpenAI-like *chunk*.
         """
-        orc = evt.get("orchestration_result") or {}
+        orc: Final = evt.get("orchestration_result") or {}
         if not orc:
             return None
 
@@ -88,7 +89,7 @@ class _StreamParser:
 
         # FINAL RESULT IS *NOT* TERMINAL: treat it as the next chunk
         if "final_result" in event_obj:
-            fr = event_obj["final_result"] or {}
+            fr: Final = event_obj["final_result"] or {}
             # ensure it looks like an OpenAI chunk
             if "object" not in fr:
                 fr["object"] = "chat.completion.chunk"

@@ -721,3 +721,48 @@ class TestUnpackLegacyDefs:
         out = unpack_legacy_defs(schema)
         assert "components" not in out
         assert out["properties"]["r0"]["properties"]["p0"] == {"type": "string"}
+
+
+class TestCustomToolFormatShapeConversion:
+    def test_flat_grammar_to_chat_shape(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            convert_custom_tool_format_to_chat_shape,
+        )
+
+        assert convert_custom_tool_format_to_chat_shape(
+            {"type": "grammar", "definition": "start: patch", "syntax": "lark"}
+        ) == {"type": "grammar", "grammar": {"definition": "start: patch", "syntax": "lark"}}
+
+    def test_nested_grammar_to_responses_shape(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            convert_custom_tool_format_to_responses_shape,
+        )
+
+        assert convert_custom_tool_format_to_responses_shape(
+            {"type": "grammar", "grammar": {"definition": "start: patch", "syntax": "regex"}}
+        ) == {"type": "grammar", "definition": "start: patch", "syntax": "regex"}
+
+    def test_both_directions_are_idempotent_and_pass_text_through(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            convert_custom_tool_format_to_chat_shape,
+            convert_custom_tool_format_to_responses_shape,
+        )
+
+        flat = {"type": "grammar", "definition": "d", "syntax": "lark"}
+        nested = {"type": "grammar", "grammar": {"definition": "d", "syntax": "lark"}}
+        text = {"type": "text"}
+        assert convert_custom_tool_format_to_chat_shape(nested) == nested
+        assert convert_custom_tool_format_to_responses_shape(flat) == flat
+        assert convert_custom_tool_format_to_chat_shape(text) == text
+        assert convert_custom_tool_format_to_responses_shape(text) == text
+        assert convert_custom_tool_format_to_chat_shape(convert_custom_tool_format_to_responses_shape(nested)) == nested
+
+    def test_unrecognized_formats_pass_through(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            convert_custom_tool_format_to_chat_shape,
+            convert_custom_tool_format_to_responses_shape,
+        )
+
+        for weird in ({}, {"type": "grammar"}, {"type": "future_format", "x": 1}):
+            assert convert_custom_tool_format_to_chat_shape(dict(weird)) in (weird, {"type": "grammar", "grammar": {}})
+            assert convert_custom_tool_format_to_responses_shape(dict(weird)) == weird
