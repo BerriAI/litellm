@@ -33,6 +33,30 @@ EXPECTED = {
     "mode": "image_generation",
 }
 
+EXPECTED_CAPABILITIES = {
+    "max_output_tokens": 4096,
+    "max_tokens": 4096,
+    "supports_response_schema": False,
+    "supports_reasoning": True,
+}
+
+EXPECTED_PER_ROUTE = {
+    "gemini-3.1-flash-lite-image": {
+        "supports_prompt_caching": True,
+        "supports_function_calling": False,
+    },
+    "vertex_ai/gemini-3.1-flash-lite-image": {
+        "supports_prompt_caching": True,
+        "supports_function_calling": False,
+    },
+    "gemini/gemini-3.1-flash-lite-image": {
+        "supports_prompt_caching": False,
+        "supports_function_calling": True,
+        "input_cost_per_token_batches": 1.25e-07,
+        "output_cost_per_token_batches": 7.5e-07,
+    },
+}
+
 
 def _load_json(path: str) -> dict:
     with open(path, encoding="utf-8") as f:
@@ -64,6 +88,28 @@ class TestGeminiFlashLiteImagePricingData:
                 entry = data[key]
                 for field, value in EXPECTED.items():
                     assert entry[field] == value, f"{key} {field} in {label}: {entry.get(field)} != {value}"
+
+    def test_capabilities_match_model_cards(self):
+        main = _load_json(_main_path())
+        backup = _load_json(_backup_path())
+        for key in VARIANTS:
+            expected = {**EXPECTED_CAPABILITIES, **EXPECTED_PER_ROUTE[key]}
+            for label, data in (("main", main), ("backup", backup)):
+                entry = data[key]
+                for field, value in expected.items():
+                    assert entry[field] == value, f"{key} {field} in {label}: {entry.get(field)} != {value}"
+
+    def test_grounding_fields_absent(self):
+        """Grounding with Google Search is unsupported on Lite, so no search pricing."""
+        for path in (_main_path(), _backup_path()):
+            data = _load_json(path)
+            for key in VARIANTS:
+                for field in (
+                    "supports_web_search",
+                    "search_context_cost_per_query",
+                    "web_search_billing_unit",
+                ):
+                    assert field not in data[key], f"{key} should not define {field}"
 
     def test_image_output_pricing_consistent(self):
         """1120 image-output tokens * output_cost_per_image_token == output_cost_per_image."""
