@@ -49,6 +49,15 @@ describe("UsageExportHeader", () => {
     expect(screen.queryByTestId("export-modal")).not.toBeInTheDocument();
   });
 
+  it("should block the export while the data on screen is incomplete", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<UsageExportHeader {...defaultProps} exportDisabled exportDisabledReason="Still loading" />);
+    const exportButton = screen.getByRole("button", { name: /export data/i });
+    expect(exportButton).toBeDisabled();
+    await user.click(exportButton);
+    expect(screen.queryByTestId("export-modal")).not.toBeInTheDocument();
+  });
+
   it("should not show filter dropdown when showFilters is false", () => {
     renderWithProviders(<UsageExportHeader {...defaultProps} showFilters={false} />);
     expect(screen.queryByText(/filter/i)).not.toBeInTheDocument();
