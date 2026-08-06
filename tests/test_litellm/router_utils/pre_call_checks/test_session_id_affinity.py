@@ -1,5 +1,6 @@
 import os
 import sys
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -316,6 +317,36 @@ async def test_complexity_router_session_affinity_uses_router_configured_ttl():
         (call.args[0], call.args[1]) for call in cache.async_set_cache.call_args_list
     ]
     assert any(call.kwargs.get("ttl") == 17 for call in cache.async_set_cache.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_complexity_router_session_affinity_expires_and_reselects():
+    router = _complexity_router(session_affinity_ttl_seconds=1)
+
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post,
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=_deterministic_choice(),
+        ),
+    ):
+        mock_post.return_value = _responses_mock()
+        first_response = await router.aresponses(
+            model="smart-router",
+            input="Hello",
+            metadata={"session_id": "expiry-session", "user_api_key_hash": "key-1"},
+        )
+        await asyncio.sleep(1.2)
+        second_response = await router.aresponses(
+            model="smart-router",
+            input="Follow-up",
+            metadata={"session_id": "expiry-session", "user_api_key_hash": "key-1"},
+        )
+
+    assert second_response._hidden_params["model_id"] != first_response._hidden_params["model_id"]
 
 
 def test_complexity_router_registers_model_pool_groups_and_respects_disabled_affinity():
