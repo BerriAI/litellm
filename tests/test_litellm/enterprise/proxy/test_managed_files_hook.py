@@ -144,8 +144,11 @@ async def test_get_user_created_file_ids_skips_rows_without_file_object():
     managed_files = _make_managed_files_instance()
     managed_files.prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(
         return_value=[
-            MagicMock(file_object=_make_file_object().model_dump()),
-            MagicMock(file_object=None),
+            MagicMock(
+                file_object=_make_file_object().model_dump(),
+                unified_file_id="unified-id-1",
+            ),
+            MagicMock(file_object=None, unified_file_id="unified-id-2"),
         ]
     )
 
@@ -153,7 +156,37 @@ async def test_get_user_created_file_ids_skips_rows_without_file_object():
         _make_user_api_key_dict(), ["file-output-abc"]
     )
 
-    assert [file.id for file in files] == ["file-output-abc"]
+    assert [file.id for file in files] == ["unified-id-1"]
+
+
+@pytest.mark.asyncio
+async def test_get_user_created_file_ids_remaps_stored_raw_provider_id_to_unified_id():
+    """
+    Rows registered from batch outputs store the provider's file object, whose
+    id is the raw provider id (e.g. file-abc). Listing must return the row's
+    unified_file_id so callers get ids that work on the managed routes.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/35362.
+    """
+    unified_id = "bGl0ZWxsbV9wcm94eTt1bmlmaWVkX2lkLGRlYWRiZWVm"
+    raw_provider_object = _make_file_object("file-raw-provider-123")
+    managed_files = _make_managed_files_instance()
+    managed_files.prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(
+                file_object=raw_provider_object.model_dump(),
+                unified_file_id=unified_id,
+            ),
+        ]
+    )
+
+    files = await managed_files.get_user_created_file_ids(
+        _make_user_api_key_dict(), ["file-raw-provider-123"]
+    )
+
+    assert [file.id for file in files] == [unified_id]
+    assert files[0].filename == raw_provider_object.filename
+    assert files[0].purpose == raw_provider_object.purpose
 
 
 @pytest.mark.asyncio
