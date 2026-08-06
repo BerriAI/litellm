@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import random
 import threading
+from collections.abc import Mapping
 from datetime import datetime
 
 from litellm.integrations.custom_logger import CustomLogger
@@ -41,13 +42,15 @@ class TickerrLogger(CustomLogger):
         TICKERR_SAMPLE_RATE   - fraction of successes to report (0.0-1.0, default 0 = off)
     """
 
-    def __init__(self, **kwargs: object) -> None:  # pyright: ignore[reportAny]  # parent is untyped
+    def __init__(
+        self, **kwargs: object
+    ) -> None:  # kwargs-ok: parent signature is untyped  # pyright: ignore[reportAny]
         super().__init__(**kwargs)
-        self.disabled: bool = os.environ.get("TICKERR_DISABLED", "").lower() in {
+        self.disabled: bool = os.environ.get("TICKERR_DISABLED", "").lower() in (
             "1",
             "true",
             "yes",
-        }
+        )
         self.region: str | None = os.environ.get("TICKERR_REGION")
         try:
             self.sample_rate: float = min(1.0, max(0.0, float(os.environ.get("TICKERR_SAMPLE_RATE", "0"))))
@@ -56,7 +59,7 @@ class TickerrLogger(CustomLogger):
 
     def log_failure_event(  # pyright: ignore[reportAny]  # parent is untyped
         self,
-        kwargs: dict[str, object],
+        kwargs: Mapping[str, object],
         response_obj: object,
         start_time: datetime | float,
         end_time: datetime | float,
@@ -65,7 +68,7 @@ class TickerrLogger(CustomLogger):
 
     async def async_log_failure_event(  # pyright: ignore[reportAny]  # parent is untyped
         self,
-        kwargs: dict[str, object],
+        kwargs: Mapping[str, object],
         response_obj: object,
         start_time: datetime | float,
         end_time: datetime | float,
@@ -74,7 +77,7 @@ class TickerrLogger(CustomLogger):
 
     def log_success_event(  # pyright: ignore[reportAny]  # parent is untyped
         self,
-        kwargs: dict[str, object],
+        kwargs: Mapping[str, object],
         response_obj: object,
         start_time: datetime | float,
         end_time: datetime | float,
@@ -84,7 +87,7 @@ class TickerrLogger(CustomLogger):
 
     async def async_log_success_event(  # pyright: ignore[reportAny]  # parent is untyped
         self,
-        kwargs: dict[str, object],
+        kwargs: Mapping[str, object],
         response_obj: object,
         start_time: datetime | float,
         end_time: datetime | float,
@@ -94,7 +97,7 @@ class TickerrLogger(CustomLogger):
 
     def _report(
         self,
-        kwargs: dict[str, object],
+        kwargs: Mapping[str, object],
         start_time: datetime | float,
         end_time: datetime | float,
         is_success: bool = False,
@@ -111,7 +114,7 @@ class TickerrLogger(CustomLogger):
 
         litellm_params = kwargs.get("litellm_params")
         provider: str | None = None
-        if isinstance(litellm_params, dict):
+        if isinstance(litellm_params, Mapping):
             raw = litellm_params.get("custom_llm_provider")
             if isinstance(raw, str):
                 provider = raw
@@ -126,17 +129,15 @@ class TickerrLogger(CustomLogger):
         if isinstance(raw_code, int):
             status_code = raw_code
 
-        payload: dict[str, str | int] = {}
-        if provider is not None:
-            payload["provider"] = provider
-        if model:
-            payload["model"] = model
-        payload["latency_ms"] = latency
-        payload["event_type"] = "success" if is_success else "failure"
-        if status_code is not None:
-            payload["status_code"] = status_code
-        if self.region is not None:
-            payload["region"] = self.region
+        pairs: tuple[tuple[str, str | int], ...] = (
+            *((("provider", provider),) if provider is not None else ()),
+            *((("model", model),) if model else ()),
+            ("latency_ms", latency),
+            ("event_type", "success" if is_success else "failure"),
+            *((("status_code", status_code),) if status_code is not None else ()),
+            *((("region", self.region),) if self.region is not None else ()),
+        )
+        payload = dict(pairs)  # mutable-ok: consumed once by httpx.post(json=...)
 
         def _send() -> None:
             if not _MAX_INFLIGHT.acquire(blocking=False):
@@ -146,7 +147,7 @@ class TickerrLogger(CustomLogger):
                 client.post(
                     _REPORT_URL,
                     json=payload,
-                    headers={"User-Agent": _UA},
+                    headers={"User-Agent": _UA},  # mutable-ok: consumed once by httpx
                     timeout=2,
                 )
             except (OSError, ValueError):  # fire-and-forget; network errors are expected
