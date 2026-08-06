@@ -89,8 +89,12 @@ export function ChatComposer({
       >
         <InputGroup
           className={cn(
-            "h-auto min-h-[7.5rem] flex-col overflow-hidden rounded-2xl border border-border/40 bg-card shadow-sm",
-            "has-[[data-slot=input-group-control]:focus-visible]:border-ring has-[[data-slot=input-group-control]:focus-visible]:ring-2 has-[[data-slot=input-group-control]:focus-visible]:ring-ring/30",
+            "h-auto min-h-[7.5rem] flex-col overflow-hidden rounded-2xl border border-border bg-card",
+            "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_8px_24px_rgba(0,0,0,0.08)] ring-1 ring-black/5",
+            "transition-[box-shadow,border-color,ring] duration-200",
+            "has-[[data-slot=input-group-control]:focus-visible]:border-ring",
+            "has-[[data-slot=input-group-control]:focus-visible]:shadow-[0_2px_8px_rgba(0,0,0,0.08),0_12px_32px_rgba(0,0,0,0.12)]",
+            "has-[[data-slot=input-group-control]:focus-visible]:ring-2 has-[[data-slot=input-group-control]:focus-visible]:ring-ring/40",
           )}
         >
           {body ? (
