@@ -614,7 +614,7 @@ class CheckBatchCost:
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
             if (
-                response.status == "completed"
+                response.status in ("completed", "complete", "expired")
                 and response.output_file_id is not None
             ):
                 try:
@@ -655,7 +655,13 @@ class CheckBatchCost:
                         f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
                     )
 
-            elif response.status in ("failed", "expired", "cancelled"):
+            elif response.status in (
+                "completed",
+                "complete",
+                "failed",
+                "expired",
+                "cancelled",
+            ):
                 try:
                     update_data = {
                         "status": response.status,
