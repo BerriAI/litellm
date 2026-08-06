@@ -5,7 +5,7 @@ const { Option } = Select;
 
 interface BudgetDurationDropdownProps {
   value?: string | null;
-  onChange?: (value: string) => void;
+  onChange?: (value: string | undefined) => void;
   className?: string;
   style?: React.CSSProperties;
 }
@@ -22,7 +22,7 @@ const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
       value={value || undefined}
       onChange={onChange}
       className={className}
-      placeholder="n/a"
+      placeholder="Never resets"
       allowClear
     >
       <Option value="1h">hourly</Option>
