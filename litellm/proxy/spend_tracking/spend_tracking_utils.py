@@ -481,8 +481,10 @@ def _get_session_id_for_spend_log(
     """
     from litellm._uuid import uuid
 
-    if standard_logging_payload is not None and standard_logging_payload.get("trace_id") is not None:
-        return str(standard_logging_payload.get("trace_id"))
+    if standard_logging_payload is not None:
+        session_id: Final = standard_logging_payload.get("session_id") or standard_logging_payload.get("trace_id")
+        if session_id is not None:
+            return str(session_id)
 
     # Users can dynamically set the trace_id for each request by passing `litellm_trace_id` in kwargs
     if kwargs.get("litellm_trace_id") is not None:

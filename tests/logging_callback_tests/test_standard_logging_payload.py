@@ -509,6 +509,59 @@ def test_get_standard_logging_payload_trace_id():
     assert isinstance(result, str)
 
 
+def test_trace_id_and_session_id_are_resolved_independently():
+    """A caller setting both must get their trace_id as the trace and their session_id as the session."""
+    from unittest.mock import MagicMock
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_trace_id = "fallback-id"
+
+    litellm_params = {"metadata": {"trace_id": "caller-trace", "session_id": "caller-session"}}
+
+    assert (
+        StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+            logging_obj=mock_logging_obj, litellm_params=litellm_params
+        )
+        == "caller-trace"
+    )
+    assert (
+        StandardLoggingPayloadSetup._get_standard_logging_payload_session_id(
+            logging_obj=mock_logging_obj, litellm_params=litellm_params
+        )
+        == "caller-session"
+    )
+
+
+def test_trace_id_and_session_id_fall_back_to_each_other():
+    """Either id alone still populates both, so existing single-id callers are unaffected."""
+    from unittest.mock import MagicMock
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_trace_id = "fallback-id"
+
+    session_only = {"litellm_session_id": "s-1"}
+    assert (
+        StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+            logging_obj=mock_logging_obj, litellm_params=session_only
+        )
+        == "s-1"
+    )
+    assert (
+        StandardLoggingPayloadSetup._get_standard_logging_payload_session_id(
+            logging_obj=mock_logging_obj, litellm_params=session_only
+        )
+        == "s-1"
+    )
+
+    trace_only = {"litellm_trace_id": "t-1"}
+    assert (
+        StandardLoggingPayloadSetup._get_standard_logging_payload_session_id(
+            logging_obj=mock_logging_obj, litellm_params=trace_only
+        )
+        == "t-1"
+    )
+
+
 def test_truncate_standard_logging_payload():
     """
     1. original messages, response, and error_str should NOT BE MODIFIED, since these are from kwargs

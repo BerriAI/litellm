@@ -2959,3 +2959,16 @@ def test_user_traffic_carries_no_internal_call_origin():
     )
     metadata = json.loads(payload["metadata"])
     assert metadata["internal_call_origin"] is None
+
+
+def test_spend_log_session_id_prefers_session_over_trace():
+    """SpendLogs.session_id must keep session semantics now that trace_id is trace-first."""
+    from litellm.proxy.spend_tracking.spend_tracking_utils import (
+        _get_session_id_for_spend_log,
+    )
+
+    payload = {"trace_id": "caller-trace", "session_id": "caller-session"}
+    assert _get_session_id_for_spend_log(kwargs={}, standard_logging_payload=payload) == "caller-session"
+
+    legacy_payload = {"trace_id": "only-trace"}
+    assert _get_session_id_for_spend_log(kwargs={}, standard_logging_payload=legacy_payload) == "only-trace"

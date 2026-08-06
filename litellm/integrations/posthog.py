@@ -285,9 +285,11 @@ class PostHogLogger(CustomBatchLogger):
         end_user: Final = self._safe_get(standard_logging_object, "end_user")
         if end_user:
             return str(end_user)
-        trace_id: Final = self._safe_get(standard_logging_object, "trace_id")
-        if trace_id:
-            return str(trace_id)
+        session_id: Final = self._safe_get(standard_logging_object, "session_id") or self._safe_get(
+            standard_logging_object, "trace_id"
+        )
+        if session_id:
+            return str(session_id)
 
         return self._safe_uuid()
 

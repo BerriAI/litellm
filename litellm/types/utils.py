@@ -3127,6 +3127,7 @@ class StandardAuditLogPayload(TypedDict):
 class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
+    session_id: str
     litellm_call_id: str | None  # UUID returned in x-litellm-call-id response header
     call_type: str
     stream: bool | None

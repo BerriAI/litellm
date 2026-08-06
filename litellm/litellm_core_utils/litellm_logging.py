@@ -5051,32 +5051,46 @@ class StandardLoggingPayloadSetup:
             return end_time_float - start_time_float
 
     @staticmethod
+    def _get_standard_logging_payload_session_id(
+        logging_obj: Logging,
+        litellm_params: dict,
+    ) -> str:
+        """
+        Returns the session id for this request, preferring session-scoped values.
+
+        This links multiple requests made in a single session
+        """
+        metadata: Final = litellm_params.get("metadata") or {}
+        for candidate in (
+            litellm_params.get("litellm_session_id"),
+            metadata.get("session_id"),
+            litellm_params.get("litellm_trace_id"),
+            metadata.get("trace_id"),
+        ):
+            if candidate:
+                return str(candidate)
+        return logging_obj.litellm_trace_id
+
+    @staticmethod
     def _get_standard_logging_payload_trace_id(
         logging_obj: Logging,
         litellm_params: dict,
     ) -> str:
         """
-        Returns the `litellm_trace_id` for this request
+        Returns the trace id for this request, preferring trace-scoped values.
 
-        This helps link sessions when multiple requests are made in a single session
+        This groups the LLM calls belonging to one overall request, such as fallbacks
+        and retries
         """
-        dynamic_litellm_session_id: Final = litellm_params.get("litellm_session_id")
-        dynamic_litellm_trace_id: Final = litellm_params.get("litellm_trace_id")
-
-        # Note: we recommend using `litellm_session_id` for session tracking
-        # `litellm_trace_id` is an internal litellm param
-        if dynamic_litellm_session_id:
-            return str(dynamic_litellm_session_id)
-        elif dynamic_litellm_trace_id:
-            return str(dynamic_litellm_trace_id)
-        # Fallback: use metadata.session_id or metadata.trace_id for call chaining
         metadata: Final = litellm_params.get("metadata") or {}
-        metadata_session_id: Final = metadata.get("session_id")
-        metadata_trace_id: Final = metadata.get("trace_id")
-        if metadata_session_id:
-            return str(metadata_session_id)
-        if metadata_trace_id:
-            return str(metadata_trace_id)
+        for candidate in (
+            litellm_params.get("litellm_trace_id"),
+            metadata.get("trace_id"),
+            litellm_params.get("litellm_session_id"),
+            metadata.get("session_id"),
+        ):
+            if candidate:
+                return str(candidate)
         return logging_obj.litellm_trace_id
 
     @staticmethod
@@ -5383,6 +5397,10 @@ def get_standard_logging_object_payload(
             id=str(id),
             litellm_call_id=kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
             trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+                logging_obj=logging_obj,
+                litellm_params=litellm_params,
+            ),
+            session_id=StandardLoggingPayloadSetup._get_standard_logging_payload_session_id(
                 logging_obj=logging_obj,
                 litellm_params=litellm_params,
             ),
