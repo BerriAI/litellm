@@ -51,14 +51,14 @@ export function ChatComposer({
     <div className={cn("relative flex w-full flex-col gap-3", className)}>
       {showSuggestions && suggestions.length > 0 && (
         <div
-          className="flex w-full gap-2 overflow-x-auto pb-1 sm:grid sm:grid-cols-2 sm:overflow-visible"
+          className="mx-auto grid w-full max-w-xl grid-cols-3 gap-2"
           data-testid="chat-suggested-actions"
         >
           {suggestions.map((suggestion) => (
             <button
               key={suggestion}
               type="button"
-              className="min-w-[200px] shrink-0 rounded-xl border border-border/50 bg-card/30 px-4 py-3 text-left text-[12px] leading-relaxed text-muted-foreground transition-all duration-200 hover:-translate-y-0.5 hover:bg-card/60 hover:text-foreground sm:min-w-0 sm:whitespace-normal sm:p-4 sm:text-[13px]"
+              className="rounded-lg border border-border/50 bg-card/30 px-2.5 py-2 text-left text-[11px] leading-snug text-muted-foreground transition-all duration-200 hover:-translate-y-0.5 hover:bg-card/60 hover:text-foreground"
               onClick={() => onSuggestionSelect?.(suggestion)}
             >
               {suggestion}
