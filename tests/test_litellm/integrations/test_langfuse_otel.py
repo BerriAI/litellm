@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -352,6 +353,57 @@ class TestLangfuseOtelIntegration:
             assert (
                 actual == expected
             ), "Mismatch in observation output OTEL attribute for tool calls."
+
+    def test_streaming_response_model_uses_proxy_alias(self):
+        """Regression for https://github.com/BerriAI/litellm/issues/25628.
+
+        The langfuse_otel callback must surface `litellm_params.metadata.model_group`
+        (proxy alias) as the observation model, not `response_obj.model` (the upstream
+        provider model). Bug manifested on streaming requests where the proxy had
+        not restamped `response_obj.model` before the callback fired."""
+        from datetime import datetime, timedelta
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            get_standard_logging_object_payload,
+        )
+        from litellm.types.utils import ModelResponse
+
+        proxy_alias = "groq-gpt-oss-120b"
+        upstream_model = "openai/gpt-oss-120b"
+
+        response_obj = ModelResponse(model=upstream_model)
+        start_time = datetime(2025, 1, 1, 0, 0, 0)
+        end_time = start_time + timedelta(seconds=1)
+
+        proxy_shaped_kwargs: dict[str, Any] = {
+            "litellm_params": {"metadata": {"model_group": proxy_alias}},
+        }
+
+        logging_obj = MagicMock()
+        standard_logging_object = get_standard_logging_object_payload(
+            kwargs=proxy_shaped_kwargs,
+            init_response_obj=response_obj,
+            start_time=start_time,
+            end_time=end_time,
+            logging_obj=logging_obj,
+            status="success",
+        )
+        assert standard_logging_object is not None
+        assert standard_logging_object["model_group"] == proxy_alias
+
+        callback_kwargs = {**proxy_shaped_kwargs, "standard_logging_object": standard_logging_object}
+
+        mock_span = MagicMock()
+        LangfuseOtelLogger.set_langfuse_otel_attributes(
+            mock_span, callback_kwargs, response_obj
+        )
+
+        attrs = {
+            call.args[0]: call.args[1]
+            for call in mock_span.set_attribute.call_args_list
+        }
+
+        assert attrs.get("langfuse.observation.model.name") == proxy_alias
 
     def test_construct_dynamic_otel_headers_with_langfuse_keys(self):
         """Test that construct_dynamic_otel_headers creates proper auth headers when langfuse keys are provided."""
