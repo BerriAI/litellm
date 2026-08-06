@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any  # noqa: TID251  # required for type signature compatibility
 
 import httpx
 
@@ -38,9 +38,7 @@ class BytePlusImageGenerationConfig(BaseImageGenerationConfig):
         drop_params: bool,
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
-        for k, v in non_default_params.items():
-            if k in supported_params:
-                optional_params[k] = v
+        optional_params.update({k: v for k, v in non_default_params.items() if k in supported_params})
 
         return optional_params
 
@@ -131,7 +129,7 @@ class BytePlusImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: Any,  # noqa: ANN401  # required for type signature compatibility
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:

@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Any
+import json
+from typing import TYPE_CHECKING, Any  # noqa: TID251  # required for type signature compatibility
 
 import httpx
 
@@ -34,7 +35,7 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> "BytePlusEmbeddingConfig":
         return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> list[str]:
@@ -84,10 +85,8 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, Any]:
-        for param, value in non_default_params.items():
-            if param in self.get_supported_openai_params(model):
-                optional_params[param] = value
-
+        supported = self.get_supported_openai_params(model)
+        optional_params.update({k: v for k, v in non_default_params.items() if k in supported})
         return optional_params
 
     def transform_embedding_request(
@@ -139,7 +138,7 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
     ) -> EmbeddingResponse:
         try:
             response_json = raw_response.json()
-        except Exception as e:
+        except (json.JSONDecodeError, ValueError) as e:
             raise ValueError(f"Failed to parse BytePlus response as JSON: {e}")
 
         data_raw = response_json.get("data", [])

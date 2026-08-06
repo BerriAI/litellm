@@ -4,7 +4,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 
 class BytePlusError(BaseLLMException):
-    def __init__(self, status_code: int, message: str, headers: httpx.Headers | None = None):
+    def __init__(self, status_code: int, message: str, headers: httpx.Headers | None = None) -> None:
         self.status_code = status_code
         self.message = message
         self.headers = headers or httpx.Headers()

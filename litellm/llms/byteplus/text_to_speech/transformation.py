@@ -1,6 +1,6 @@
 import base64
 import json
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, ClassVar, Final  # noqa: TID251  # required for type signature compatibility
 
 import httpx
 from httpx import Headers
@@ -87,7 +87,7 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
 
         return mapped_voice, mapped_params
 
-    VOICE_MAPPINGS = {
+    VOICE_MAPPINGS: ClassVar[dict[str, str]] = {
         "alloy": "en_female_stokie_uranus_bigtts",
         "echo": "en_male_adam_mars_bigtts",
         "fable": "en_female_skye_emo_v2_mars_bigtts",
@@ -194,7 +194,7 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
                 parsed_user_additions = json.loads(user_additions)
                 if isinstance(parsed_user_additions, dict):
                     additions_dict.update(parsed_user_additions)
-            except Exception:
+            except (json.JSONDecodeError, ValueError):  # noqa: BLE001  # ignore invalid user additions
                 pass
         elif isinstance(user_additions, dict):
             additions_dict.update(user_additions)
@@ -245,7 +245,7 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
                 continue
             try:
                 data = json.loads(line)
-            except Exception:
+            except (json.JSONDecodeError, ValueError):  # noqa: BLE001  # skip invalid line
                 continue
 
             code = data.get("code", 0)
@@ -254,7 +254,7 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
                 try:
                     chunk_audio = base64.b64decode(data["data"])
                     audio_bytes.extend(chunk_audio)
-                except Exception:
+                except (TypeError, ValueError):  # noqa: BLE001  # skip invalid audio chunk
                     pass
             elif code == 20000000:
                 break
@@ -292,12 +292,12 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
         extra_headers: dict[str, Any] | None,
-        base_llm_http_handler: Any,
+        base_llm_http_handler: Any,  # noqa: ANN401  # required for type signature compatibility
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
-        **kwargs: Any,
-    ) -> Any:
+        **kwargs: Any,  # noqa: ANN401  # required for type signature compatibility
+    ) -> Any:  # noqa: ANN401  # required for type signature compatibility
         safe_extra_headers: Final[dict[str, Any] | None] = (
             {k: v for k, v in extra_headers.items() if k.lower() not in _BYTEPLUS_TTS_AUTH_HEADERS}
             if extra_headers
