@@ -4,7 +4,7 @@
 .PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
-	info lint lint-dev lint-checks format \
+	info lint lint-dev lint-checks format typecheck typecheck-checks \
 	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
@@ -23,9 +23,10 @@ help:
 	@echo "  make install-helm-unittest - Install helm unittest plugin"
 	@echo "  make install-hooks      - Install git hooks (Conventional Commits + Branches)"
 	@echo "  make pre-commit         - Run CI-equivalent lint on staged files (run before committing)"
+	@echo "  make typecheck          - Run every basedpyright pass (litellm budget + tests/e2e)"
 	@echo "  make format             - Apply ruff format code formatting"
 	@echo "  make format-check       - Check ruff format code formatting (matches CI)"
-	@echo "  make lint               - Run all linting (Ruff, basedpyright, format check, circular imports, import safety)"
+	@echo "  make lint               - Run all non-basedpyright linting (Ruff, format check, budgets, circular imports, import safety)"
 	@echo "  make lint-ruff          - Run Ruff linting only"
 	@echo "  make lint-basedpyright  - Run basedpyright strict, gated by per-rule error counts"
 	@echo "  make lint-e2e-basedpyright - Run basedpyright over tests/e2e (zero errors allowed)"
@@ -220,18 +221,30 @@ check-circular-imports: $(LINT_DEP_INSTALL)
 check-import-safety: $(LINT_DEP_INSTALL)
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
-# Combined linting, isomorphic to test-linting.yml's lint job so a local pass means a
-# green CI lint: it installs the same env (proxy-dev + generated Prisma client) and then
-# runs the diff-scoped ruff format check, whole-tree ruff check, the strict-rule /
-# type-discipline / basedpyright budgets as a delta vs the base, then the circular-import
-# and import-safety checks. Steps that compare against the base resolve it the same way CI
+# Every basedpyright pass test-linting.yml runs, split out of `lint` (and so out of
+# `make pre-commit`) because it dominates the wall clock: the rest of the lint job
+# finishes in seconds while basedpyright takes minutes, and the two answer different
+# questions, so a dev fixing a ruff nit shouldn't have to sit through a type check.
+# `make lint && make typecheck` is the CI-parity pair. Setup runs once here, then a
+# sub-make fans the two passes out with the dep vars emptied, same as `lint`.
+typecheck: lint-install lint-fetch-base
+	$(MAKE) -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= typecheck-checks
+
+typecheck-checks: lint-basedpyright lint-e2e-basedpyright
+
+# Combined linting: test-linting.yml's lint job minus its basedpyright steps (those are
+# `make typecheck`). It installs the same env (proxy-dev + generated Prisma client) and
+# then runs the diff-scoped ruff format check, whole-tree ruff check, the strict-rule and
+# type-discipline budgets as a delta vs the base, then the circular-import and
+# import-safety checks. Steps that compare against the base resolve it the same way CI
 # does (merge-base with origin/litellm_internal_staging). Setup (env sync, Prisma client,
 # base fetch) runs once up front; the checks themselves are independent, so a sub-make
-# fans them out with -j and the fast ones finish under basedpyright's shadow.
+# fans them out with -j.
 lint: lint-install lint-fetch-base
 	$(MAKE) -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= lint-checks
+	@echo "lint: clean. basedpyright is not part of this target; run 'make typecheck' for it."
 
-lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety
+lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline check-circular-imports check-import-safety
 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed check-circular-imports check-import-safety
@@ -239,6 +252,7 @@ lint-dev: lint-format-changed check-circular-imports check-import-safety
 # Run the gating CI checks against your staged files right before committing. Mirrors
 # test-linting.yml (Python), test-litellm-ui-build.yml's frontend-lint (dashboard), and
 # check-ui-api-types.yml (API-type drift), skipping any whose files you didn't stage.
+# basedpyright is the one CI check it leaves out; run `make typecheck` for that.
 # Not auto-installed as a git hook so it never slows an unrelated human commit.
 pre-commit: bootstrap
 	./scripts/pre_commit_lint.sh

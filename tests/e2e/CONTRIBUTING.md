@@ -138,7 +138,7 @@ Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure cover
 
 Before you push
 
-1. Run `make lint-e2e-basedpyright` (or `make pre-commit` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py`
+1. Run `make typecheck` (or `make lint-e2e-basedpyright` for just this tree); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py`. `make pre-commit` covers the rest of the CI lint, but not basedpyright
 
 2. Add the models your test needs to the config your local proxy loads
 
