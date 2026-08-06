@@ -1428,6 +1428,85 @@ def test_calculate_total_usage_with_cost():
     assert usage.completion_tokens == 5
 
 
+def test_openai_choice_usage_chunk_normalizes_sdk_usage(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    from openai.types.chat import ChatCompletionChunk
+    from openai.types.chat.chat_completion_chunk import Choice, ChoiceDelta
+    from openai.types.completion_usage import CompletionUsage, PromptTokensDetails
+
+    initialized_custom_stream_wrapper.model = "openai/glm-5.2"
+    initialized_custom_stream_wrapper.custom_llm_provider = "openai"
+    initialized_custom_stream_wrapper.stream_options = {"include_usage": True}
+    chunk = ChatCompletionChunk(
+        id="chatcmpl-cached-usage",
+        choices=[
+            Choice(
+                delta=ChoiceDelta(content="", role="assistant"),
+                finish_reason="stop",
+                index=0,
+                logprobs=None,
+            )
+        ],
+        created=1745513206,
+        model="glm-5.2",
+        object="chat.completion.chunk",
+        usage=CompletionUsage(
+            completion_tokens=100,
+            prompt_tokens=1000,
+            total_tokens=1100,
+            prompt_tokens_details=PromptTokensDetails(
+                audio_tokens=0,
+                cached_tokens=600,
+            ),
+        ),
+    )
+
+    processed_chunk = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    assert processed_chunk is not None
+    assert isinstance(processed_chunk.usage, Usage)
+    assembled_response = litellm.stream_chunk_builder(
+        chunks=[processed_chunk],
+        messages=[{"role": "user", "content": "cached prompt"}],
+    )
+    assert assembled_response is not None
+    assert assembled_response.usage.prompt_tokens == 1000
+    assert assembled_response.usage.completion_tokens == 100
+    assert assembled_response.usage.prompt_tokens_details is not None
+    assert assembled_response.usage.prompt_tokens_details.cached_tokens == 600
+
+
+def test_calculate_total_usage_preserves_token_details():
+    from openai.types.completion_usage import CompletionUsage, PromptTokensDetails
+
+    from litellm.litellm_core_utils.streaming_handler import calculate_total_usage
+
+    raw_usage = CompletionUsage(
+        completion_tokens=100,
+        prompt_tokens=1000,
+        total_tokens=1100,
+        prompt_tokens_details=PromptTokensDetails(
+            audio_tokens=0,
+            cached_tokens=600,
+        ),
+    )
+    chunk = ModelResponseStream(
+        id="chatcmpl-cached-usage",
+        created=1745513206,
+        model="openai/glm-5.2",
+        choices=[],
+    )
+    chunk.usage = raw_usage
+
+    usage = calculate_total_usage([chunk])
+
+    assert usage.prompt_tokens == 1000
+    assert usage.completion_tokens == 100
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 600
+
+
 def test_calculate_total_usage_with_dict_usage_cost():
     """Regression: dict-shaped `usage` with a `cost` key must still surface
     provider cost even though `hasattr` on a dict does not consult its keys."""
