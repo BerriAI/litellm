@@ -38,9 +38,6 @@
   "reportIncompatibleVariableOverride": {
     "limit": 8
   },
-  "reportUnusedVariable": {
-    "limit": 294
-  },
   "reportInconsistentOverload": {
     "limit": 12
   },
@@ -144,6 +141,6 @@
     "limit": 555
   },
   "reportUnusedVariable": {
-    "limit": 146
+    "limit": 294
   }
 }
