@@ -50,15 +50,12 @@ export function ChatComposer({
   return (
     <div className={cn("relative flex w-full flex-col gap-3", className)}>
       {showSuggestions && suggestions.length > 0 && (
-        <div
-          className="mx-auto grid w-full max-w-xl grid-cols-3 gap-2"
-          data-testid="chat-suggested-actions"
-        >
+        <div className="grid w-full grid-cols-3 gap-2" data-testid="chat-suggested-actions">
           {suggestions.map((suggestion) => (
             <button
               key={suggestion}
               type="button"
-              className="rounded-lg border border-border/50 bg-card/30 px-2.5 py-2 text-left text-[11px] leading-snug text-muted-foreground transition-all duration-200 hover:-translate-y-0.5 hover:bg-card/60 hover:text-foreground"
+              className="rounded-xl border border-border/50 bg-card/30 px-3 py-2.5 text-left text-[12px] leading-snug text-muted-foreground transition-all duration-200 hover:-translate-y-0.5 hover:bg-card/60 hover:text-foreground"
               onClick={() => onSuggestionSelect?.(suggestion)}
             >
               {suggestion}
