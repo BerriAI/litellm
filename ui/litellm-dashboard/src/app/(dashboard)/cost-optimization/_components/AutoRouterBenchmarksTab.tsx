@@ -199,7 +199,8 @@ const CachingCard: React.FC<{ cache: AutoRouterCacheStats }> = ({ cache }) => {
                   <span className="font-medium tabular-nums text-foreground">{pctLabel(expiredMissPct)}</span>
                 </TooltipTrigger>
                 <TooltipContent className="max-w-64">
-                  percentage of return-to-tier cache misses caused by cache expiring
+                  share of all measured turns that missed cache because a return to an earlier tier came after its TTL
+                  lapsed
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
