@@ -26,7 +26,6 @@ export interface CodeInterpreterState {
  */
 export function handleCodeInterpreterCall(event: any, state: CodeInterpreterState): CodeInterpreterState {
   if (event.type === "response.output_item.done" && event.item?.type === "code_interpreter_call") {
-    console.log("Code interpreter call completed:", event.item);
     return {
       code: event.item.code || "",
       containerId: event.item.container_id || "",

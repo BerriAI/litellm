@@ -69,6 +69,7 @@ const mockKeys: KeyResponse[] = [
     organization_id: null,
     created_at: "2024-01-01T00:00:00Z",
     updated_at: "2024-01-01T00:00:00Z",
+    last_active: null,
     team_spend: 0,
     team_alias: "",
     team_tpm_limit: 0,
@@ -125,6 +126,7 @@ const mockKeys: KeyResponse[] = [
     organization_id: null,
     created_at: "2024-01-01T00:00:00Z",
     updated_at: "2024-01-01T00:00:00Z",
+    last_active: null,
     team_spend: 0,
     team_alias: "test-team",
     team_tpm_limit: 1000,
@@ -458,6 +460,63 @@ describe("useKeys", () => {
 
     const callUrl = mockFetch.mock.calls[0][0];
     expect(callUrl).not.toContain("project_id");
+  });
+
+  // LIT-4080 guard: filter options must be part of the query key, not just the
+  // queryFn closure. If they were dropped from the key, changing a filter would
+  // reuse the cached (unfiltered) result and never refetch — exactly the bug
+  // where deleting a key wiped the active User ID filter.
+  it("refetches with the new filter when a filter option changes (options are in the query key)", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => mockKeysResponse,
+    });
+
+    const { result, rerender } = renderHook(({ userID }) => useKeys(1, 10, { userID }), {
+      wrapper,
+      initialProps: { userID: "user-1" },
+    });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0][0]).toContain("user_id=user-1");
+
+    rerender({ userID: "user-2" });
+
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+    expect(mockFetch.mock.calls[1][0]).toContain("user_id=user-2");
+  });
+
+  it("should pass agentID filter to the API", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockKeysResponse,
+    });
+
+    const { result } = renderHook(() => useKeys(1, 10, { agentID: "agent-123" }), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const callUrl = mockFetch.mock.calls[0][0];
+    expect(callUrl).toContain("agent_id=agent-123");
+  });
+
+  it("should not include agent_id param when agentID is null", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockKeysResponse,
+    });
+
+    const { result } = renderHook(() => useKeys(1, 10, { agentID: null }), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const callUrl = mockFetch.mock.calls[0][0];
+    expect(callUrl).not.toContain("agent_id");
   });
 });
 

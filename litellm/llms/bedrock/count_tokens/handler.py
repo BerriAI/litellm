@@ -4,7 +4,7 @@ AWS Bedrock CountTokens API handler.
 Simplified handler leveraging existing LiteLLM Bedrock infrastructure.
 """
 
-from typing import Any, Dict
+from typing import Any, Final
 
 import httpx
 
@@ -24,10 +24,10 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
 
     async def handle_count_tokens_request(
         self,
-        request_data: Dict[str, Any],
-        litellm_params: Dict[str, Any],
+        request_data: dict[str, Any],
+        litellm_params: dict[str, Any],
         resolved_model: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Handle a CountTokens request using existing LiteLLM patterns.
 
@@ -43,44 +43,38 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             # Validate the request
             self.validate_count_tokens_request(request_data)
 
-            verbose_logger.debug(
-                f"Processing CountTokens request for resolved model: {resolved_model}"
-            )
+            verbose_logger.debug("Processing CountTokens request for resolved model: %s", resolved_model)
 
             # Get AWS region using existing LiteLLM function
-            aws_region_name = self._get_aws_region_name(
+            aws_region_name: Final = self._get_aws_region_name(
                 optional_params=litellm_params,
                 model=resolved_model,
                 model_id=None,
             )
 
-            verbose_logger.debug(f"Retrieved AWS region: {aws_region_name}")
+            verbose_logger.debug("Retrieved AWS region: %s", aws_region_name)
 
             # Transform request to Bedrock format (supports both Converse and InvokeModel)
-            bedrock_request = self.transform_anthropic_to_bedrock_count_tokens(
-                request_data=request_data
-            )
+            bedrock_request: Final = self.transform_anthropic_to_bedrock_count_tokens(request_data=request_data)
 
-            verbose_logger.debug(f"Transformed request: {bedrock_request}")
+            verbose_logger.debug("Transformed request: %s", bedrock_request)
 
             # Get endpoint URL using simplified function
-            api_base = litellm_params.get("api_base", None)
-            aws_bedrock_runtime_endpoint = litellm_params.get(
-                "aws_bedrock_runtime_endpoint", None
-            )
-            endpoint_url = self.get_bedrock_count_tokens_endpoint(
+            api_base: Final = litellm_params.get("api_base", None)
+            aws_bedrock_runtime_endpoint: Final = litellm_params.get("aws_bedrock_runtime_endpoint", None)
+            endpoint_url: Final = self.get_bedrock_count_tokens_endpoint(
                 model=resolved_model,
                 aws_region_name=aws_region_name,
                 api_base=api_base,
                 aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             )
 
-            verbose_logger.debug(f"Making request to: {endpoint_url}")
+            verbose_logger.debug("Making request to: %s", endpoint_url)
 
             # Use existing _sign_request method from BaseAWSLLM
             # Extract api_key for bearer token auth if provided
-            api_key = litellm_params.get("api_key", None)
-            headers = {"Content-Type": "application/json"}
+            api_key: Final = litellm_params.get("api_key", None)
+            headers: Final = {"Content-Type": "application/json"}
             signed_headers, signed_body = self._sign_request(
                 service_name="bedrock",
                 headers=headers,
@@ -91,37 +85,33 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
                 api_key=api_key,
             )
 
-            async_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.BEDROCK
-            )
+            async_client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.BEDROCK)
 
-            response = await async_client.post(
+            response: Final = await async_client.post(
                 endpoint_url,
                 headers=signed_headers,
                 data=signed_body,
                 timeout=30.0,
             )
 
-            verbose_logger.debug(f"Response status: {response.status_code}")
+            verbose_logger.debug("Response status: %s", response.status_code)
 
             if response.status_code != 200:
-                error_text = response.text
-                verbose_logger.error(f"AWS Bedrock error: {error_text}")
+                error_text: Final = response.text
+                verbose_logger.error("AWS Bedrock error: %s", error_text)
                 raise BedrockError(
                     status_code=response.status_code,
                     message=error_text,
                 )
 
-            bedrock_response = response.json()
+            bedrock_response: Final = response.json()
 
-            verbose_logger.debug(f"Bedrock response: {bedrock_response}")
+            verbose_logger.debug("Bedrock response: %s", bedrock_response)
 
             # Transform response back to expected format
-            final_response = self.transform_bedrock_response_to_anthropic(
-                bedrock_response
-            )
+            final_response: Final = self.transform_bedrock_response_to_anthropic(bedrock_response)
 
-            verbose_logger.debug(f"Final response: {final_response}")
+            verbose_logger.debug("Final response: %s", final_response)
 
             return final_response
 
@@ -130,14 +120,14 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             raise
         except httpx.HTTPStatusError as e:
             # HTTP errors - preserve the actual status code
-            verbose_logger.error(f"HTTP error in CountTokens handler: {str(e)}")
+            verbose_logger.error("HTTP error in CountTokens handler: %s", e)
             raise BedrockError(
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
         except Exception as e:
-            verbose_logger.error(f"Error in CountTokens handler: {str(e)}")
+            verbose_logger.error("Error in CountTokens handler: %s", e)
             raise BedrockError(
                 status_code=500,
-                message=f"CountTokens processing error: {str(e)}",
+                message=f"CountTokens processing error: {e}",
             )

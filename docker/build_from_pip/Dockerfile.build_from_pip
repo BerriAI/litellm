@@ -36,7 +36,7 @@ RUN uv venv --python python && \
       "opentelemetry-api==1.28.0" \
       "opentelemetry-sdk==1.28.0" \
       "opentelemetry-exporter-otlp==1.28.0" \
-      "ddtrace==2.19.0" \
+      "ddtrace==4.11.0" \
       "sentry-sdk==2.21.0" \
       "mangum==0.17.0" \
       "azure-ai-contentsafety==1.0.0" \
@@ -47,7 +47,13 @@ RUN uv venv --python python && \
       "prisma==0.11.0" \
       "openai==2.24.0"
 
-RUN prisma generate --schema=./schema.prisma
+RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
+    npm_config_cache=/root/.npm \
+    prisma generate --schema=./schema.prisma && \
+    chmod -R a+rX /opt/prisma && \
+    python -c "import sys; from prisma.client import BINARY_PATHS; bad = sorted(p for group in BINARY_PATHS.model_dump().values() for p in group.values() if not p.startswith('/opt/prisma/')); sys.exit('prisma engines baked outside /opt/prisma: %r' % bad) if bad else None"
+
+ENV PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries
 
 EXPOSE 4000/tcp
 

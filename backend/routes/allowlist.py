@@ -18,6 +18,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/team/",
     "/v2/team/",
     "/organization/",
+    "/v2/organization/",
     "/customer/",
     "/end_user/",
     "/sso/",
@@ -43,9 +44,11 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/router/",
     "/router_settings",
     "/adaptive_router/",
+    "/auto_router/",
     "/fallback",
     "/fallbacks",
     "/cache_settings",
+    "/coordination_redis/",
     "/cost_tracking",
     "/cost/",
     "/credentials",
@@ -68,6 +71,10 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/project/",
     "/memory/",
     "/mcp/",
+    # Control plane (see the List Endpoints + Tables standard). Every resource
+    # eventually moves under this prefix, so allowlist it once rather than
+    # per-resource.
+    "/management/v1/",
     # Spend / analytics
     "/spend/",
     "/analytics/",
@@ -75,6 +82,9 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/user_agent",
     "/usage/",
     "/daily/",
+    # Deployment-wide gateway request counts. Scoped to the analytics read rather
+    # than all of /gateway/, which stays free for data-plane routes.
+    "/gateway/daily/",
     # CloudZero cost-export admin (init / settings / export / dry-run / delete)
     "/cloudzero/",
     # Caching admin
@@ -84,6 +94,8 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/active/callbacks",
     "/callbacks",
     "/team_callback",
+    # Rust data-plane gateway → proxy control-plane API (logging today, auth later)
+    "/v1/rust_control_plane/",
     # Alerting / email / IP allowlist
     "/alerting/",
     "/email/",

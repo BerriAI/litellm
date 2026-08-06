@@ -8,7 +8,7 @@ or cloud). The search response uses the Firecrawl-compatible envelope
 fastCRW API Reference: https://fastcrw.com/docs/rest-api
 """
 
-from typing import Optional, TypedDict, Union
+from typing import Final, TypedDict
 
 import httpx
 
@@ -34,9 +34,7 @@ class FastCRWSearchRequest(_FastCRWSearchRequestRequired, total=False):
     """
 
     limit: int  # Optional - maximum number of results to return
-    sources: list[
-        str
-    ]  # Optional - sources to search ('web', 'images'), default ['web']
+    sources: list[str]  # Optional - sources to search ('web', 'images'), default ['web']
     scrapeOptions: dict  # Optional - options for scraping search results
 
 
@@ -50,8 +48,8 @@ class FastCRWSearchConfig(BaseSearchConfig):
     def validate_environment(
         self,
         headers: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
     ) -> dict:
         """
@@ -65,18 +63,16 @@ class FastCRWSearchConfig(BaseSearchConfig):
             default_api_base=self.FASTCRW_API_BASE,
         )
         if not api_key:
-            raise ValueError(
-                "CRW_API_KEY is not set. Set `CRW_API_KEY` environment variable."
-            )
+            raise ValueError("CRW_API_KEY is not set. Set `CRW_API_KEY` environment variable.")
         headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
         return headers
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[dict, list[dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -92,7 +88,7 @@ class FastCRWSearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: Union[str, list[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
     ) -> dict:
@@ -116,7 +112,7 @@ class FastCRWSearchConfig(BaseSearchConfig):
             # fastCRW only supports single string queries, join with spaces
             query = " ".join(query)
 
-        request_data: FastCRWSearchRequest = {
+        request_data: Final[FastCRWSearchRequest] = {
             "query": query,
         }
 
@@ -125,14 +121,11 @@ class FastCRWSearchConfig(BaseSearchConfig):
             request_data["limit"] = optional_params["max_results"]
 
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        result_data: Final = dict(request_data)
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         # By default, request markdown content if not explicitly specified
@@ -164,11 +157,11 @@ class FastCRWSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
-        results = []
+        results: Final = []
 
-        data = response_json.get("data", [])
+        data: Final = response_json.get("data", [])
 
         if isinstance(data, list):
             for result in data:

@@ -1,7 +1,8 @@
 import base64
 import time
+from collections.abc import Mapping
 from io import BytesIO
-from typing import Any, List, Mapping, Optional, Tuple, Union
+from typing import Any, Final
 
 from aiohttp import ClientResponse
 from httpx import Headers, Response
@@ -23,19 +24,17 @@ from ..common_utils import TopazException, TopazModelInfo
 
 
 class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageVariationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageVariationOptionalParams]:
         return ["response_format", "size"]
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         api_base = api_base or "https://api.topazlabs.com"
         return f"{api_base}/image/v1/enhance"
@@ -60,14 +59,14 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
     def prepare_file_tuple(
         self,
         file_data: FileTypes,
-    ) -> Tuple[str, Optional[FileTypes], str, Mapping[str, str]]:
+    ) -> tuple[str, FileTypes | None, str, Mapping[str, str]]:
         """
         Convert various file input formats to a consistent tuple format for HTTPX
         Returns: (filename, file_content, content_type, headers)
         """
         # Default values
         filename = "image.png"
-        content: Optional[FileTypes] = None
+        content: FileTypes | None = None
         content_type = "image/png"
         headers: Mapping[str, str] = {}
 
@@ -95,12 +94,12 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
 
     def transform_request_image_variation(
         self,
-        model: Optional[str],
+        model: str | None,
         image: FileTypes,
         optional_params: dict,
         headers: dict,
     ) -> HttpHandlerRequestFields:
-        request_params = HttpHandlerRequestFields(
+        request_params: Final = HttpHandlerRequestFields(
             files={"image": self.prepare_file_tuple(image)},
             data=optional_params,
         )
@@ -113,7 +112,7 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         response_ms: float,
     ) -> ImageResponse:
         # Convert to base64
-        base64_image = base64.b64encode(image_content).decode("utf-8")
+        base64_image: Final = base64.b64encode(image_content).decode("utf-8")
 
         return ImageResponse(
             created=int(time.time()),
@@ -129,7 +128,7 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
 
     async def async_transform_response_image_variation(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: ClientResponse,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
@@ -138,19 +137,17 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ) -> ImageResponse:
-        image_content = await raw_response.read()
+        image_content: Final = await raw_response.read()
 
-        response_ms = logging_obj.get_response_ms()
+        response_ms: Final = logging_obj.get_response_ms()
 
-        return self._common_transform_response_image_variation(
-            image_content, response_ms
-        )
+        return self._common_transform_response_image_variation(image_content, response_ms)
 
     def transform_response_image_variation(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
@@ -159,21 +156,15 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ) -> ImageResponse:
-        image_content = raw_response.content
+        image_content: Final = raw_response.content
 
-        response_ms = (
-            raw_response.elapsed.total_seconds() * 1000
-        )  # Convert to milliseconds
+        response_ms: Final = raw_response.elapsed.total_seconds() * 1000  # Convert to milliseconds
 
-        return self._common_transform_response_image_variation(
-            image_content, response_ms
-        )
+        return self._common_transform_response_image_variation(image_content, response_ms)
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return TopazException(
             status_code=status_code,
             message=error_message,

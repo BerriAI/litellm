@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 from litellm.types.proxy.guardrails.guardrail_hooks.ibm import IBMDetectorOptionalParams
@@ -19,26 +19,24 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     if not litellm_params.detector_id:
         raise ValueError("IBM Guardrails: detector_id is required")
 
-    guardrail_name = guardrail.get("guardrail_name")
+    guardrail_name: Final = guardrail.get("guardrail_name")
     if not guardrail_name:
         raise ValueError("IBM Guardrails: guardrail_name is required")
 
-    verify_ssl = getattr(litellm_params, "verify_ssl", True)
+    verify_ssl: Final = getattr(litellm_params, "verify_ssl", True)
 
     # Get optional params
-    optional_params = getattr(
-        litellm_params, "optional_params", IBMDetectorOptionalParams()
-    )
-    detector_params = getattr(optional_params, "detector_params", {})
-    extra_headers = getattr(optional_params, "extra_headers", {})
-    score_threshold = getattr(optional_params, "score_threshold", None)
-    block_on_detection = getattr(optional_params, "block_on_detection", True)
+    optional_params: Final = getattr(litellm_params, "optional_params", IBMDetectorOptionalParams())
+    detector_params: Final = getattr(optional_params, "detector_params", {})
+    extra_headers: Final = getattr(optional_params, "extra_headers", {})
+    score_threshold: Final = getattr(optional_params, "score_threshold", None)
+    block_on_detection: Final = getattr(optional_params, "block_on_detection", True)
 
     is_detector_server = litellm_params.is_detector_server
     if is_detector_server is None:
         is_detector_server = True
 
-    ibm_guardrail = IBMGuardrailDetector(
+    ibm_guardrail: Final = IBMGuardrailDetector(
         guardrail_name=guardrail_name,
         auth_token=litellm_params.auth_token,
         base_url=litellm_params.base_url,
@@ -57,12 +55,12 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return ibm_guardrail
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.IBM_GUARDRAILS.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.IBM_GUARDRAILS.value: IBMGuardrailDetector,
 }
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
-from typing import Any, Optional
+from typing import Any, Final
 
 import httpx  # noqa: F401 - used at runtime (AsyncClient, HTTPStatusError)
 
@@ -18,14 +18,14 @@ from litellm.llms.custom_httpx.http_handler import (
 from .base import FocusDestination, FocusTimeWindow
 
 # Vantage enforces a 10,000-row / 2 MB limit per upload.
-VANTAGE_MAX_ROWS_PER_UPLOAD = 10_000
-VANTAGE_MAX_BYTES_PER_UPLOAD = 2 * 1024 * 1024  # 2 MB
+VANTAGE_MAX_ROWS_PER_UPLOAD: Final = 10_000
+VANTAGE_MAX_BYTES_PER_UPLOAD: Final = 2 * 1024 * 1024  # 2 MB
 
 # Columns that Vantage actually supports for custom provider CSV uploads.
 # See: https://docs.vantage.sh/connecting_custom_providers
 # Columns not in this set are silently dropped before upload so Vantage
 # does not reject the file.
-VANTAGE_SUPPORTED_COLUMNS = {
+VANTAGE_SUPPORTED_COLUMNS: Final = {
     # Required
     "ChargeCategory",
     "ChargePeriodStart",
@@ -62,29 +62,23 @@ def _strip_unsupported_columns(csv_bytes: bytes) -> bytes:
     Parses the header row, identifies column indices to keep, and
     rebuilds the CSV with only those columns.
     """
-    lines = csv_bytes.split(b"\n")
+    lines: Final = csv_bytes.split(b"\n")
     if not lines:
         return csv_bytes
 
-    header_cols = lines[0].decode("utf-8").split(",")
-    keep_indices = [
-        i
-        for i, col in enumerate(header_cols)
-        if col.strip('"') in VANTAGE_SUPPORTED_COLUMNS
-    ]
+    header_cols: Final = lines[0].decode("utf-8").split(",")
+    keep_indices: Final = [i for i, col in enumerate(header_cols) if col.strip('"') in VANTAGE_SUPPORTED_COLUMNS]
 
     # If all columns are supported, return as-is
     if len(keep_indices) == len(header_cols):
         return csv_bytes
 
-    dropped = [col for i, col in enumerate(header_cols) if i not in keep_indices]
-    verbose_logger.debug(
-        "Vantage destination: dropping unsupported columns: %s", dropped
-    )
+    dropped: Final = [col for i, col in enumerate(header_cols) if i not in keep_indices]
+    verbose_logger.debug("Vantage destination: dropping unsupported columns: %s", dropped)
 
-    output = io.StringIO()
-    writer = csv.writer(output)
-    reader = csv.reader(io.StringIO(csv_bytes.decode("utf-8")))
+    output: Final = io.StringIO()
+    writer: Final = csv.writer(output)
+    reader: Final = csv.reader(io.StringIO(csv_bytes.decode("utf-8")))
     for row in reader:
         if not row:
             continue
@@ -100,11 +94,11 @@ class FocusVantageDestination(FocusDestination):
         self,
         *,
         prefix: str,
-        config: Optional[dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
     ) -> None:
         config = config or {}
-        api_key = config.get("api_key")
-        integration_token = config.get("integration_token")
+        api_key: Final = config.get("api_key")
+        integration_token: Final = config.get("integration_token")
         if not api_key:
             raise ValueError(
                 "api_key must be provided for Vantage destination "
@@ -136,17 +130,14 @@ class FocusVantageDestination(FocusDestination):
         # rejection (e.g. InvoiceIssuerName, ProviderName, PublisherName).
         content = _strip_unsupported_columns(content)
 
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback,
         )
 
         # Check both size and row-count limits before single-shot upload
-        lines = content.split(b"\n")
-        data_line_count = sum(1 for line in lines[1:] if line.strip())
-        within_limits = (
-            len(content) <= VANTAGE_MAX_BYTES_PER_UPLOAD
-            and data_line_count <= VANTAGE_MAX_ROWS_PER_UPLOAD
-        )
+        lines: Final = content.split(b"\n")
+        data_line_count: Final = sum(1 for line in lines[1:] if line.strip())
+        within_limits = len(content) <= VANTAGE_MAX_BYTES_PER_UPLOAD and data_line_count <= VANTAGE_MAX_ROWS_PER_UPLOAD
         if within_limits:
             await self._upload_csv(client, content, filename)
             return
@@ -154,11 +145,9 @@ class FocusVantageDestination(FocusDestination):
         # Otherwise split into batches respecting both limits
         await self._upload_batched(client, content, filename)
 
-    async def _upload_csv(
-        self, client: AsyncHTTPHandler, csv_bytes: bytes, filename: str
-    ) -> None:
-        url = f"{self.base_url}/v2/integrations/" f"{self.integration_token}/costs.csv"
-        headers = {
+    async def _upload_csv(self, client: AsyncHTTPHandler, csv_bytes: bytes, filename: str) -> None:
+        url: Final = f"{self.base_url}/v2/integrations/{self.integration_token}/costs.csv"
+        headers: Final = {
             "Authorization": f"Bearer {self.api_key}",
         }
 
@@ -174,19 +163,17 @@ class FocusVantageDestination(FocusDestination):
             filename,
         )
 
-    async def _upload_batched(
-        self, client: AsyncHTTPHandler, csv_bytes: bytes, filename: str
-    ) -> None:
+    async def _upload_batched(self, client: AsyncHTTPHandler, csv_bytes: bytes, filename: str) -> None:
         """Split the CSV into batches and upload each.
 
         Continues uploading remaining batches even if one fails, then raises
         the first error encountered so callers know the export was partial.
         """
-        lines = csv_bytes.split(b"\n")
-        header = lines[0]
-        data_lines = [line for line in lines[1:] if line.strip()]
+        lines: Final = csv_bytes.split(b"\n")
+        header: Final = lines[0]
+        data_lines: Final = [line for line in lines[1:] if line.strip()]
 
-        first_error: Optional[Exception] = None
+        first_error: Exception | None = None
         batch_num = 0
         for start in range(0, len(data_lines), VANTAGE_MAX_ROWS_PER_UPLOAD):
             batch_lines = data_lines[start : start + VANTAGE_MAX_ROWS_PER_UPLOAD]
@@ -195,16 +182,12 @@ class FocusVantageDestination(FocusDestination):
             try:
                 # If a single batch still exceeds 2 MB, split further by size
                 if len(batch_csv) > VANTAGE_MAX_BYTES_PER_UPLOAD:
-                    await self._upload_size_limited(
-                        client, header, batch_lines, filename, batch_num
-                    )
+                    await self._upload_size_limited(client, header, batch_lines, filename, batch_num)
                 else:
                     batch_filename = f"{filename}.part{batch_num}"
                     await self._upload_csv(client, batch_csv, batch_filename)
             except Exception as e:
-                verbose_logger.error(
-                    "Vantage destination: batch %d failed: %s", batch_num, e
-                )
+                verbose_logger.error("Vantage destination: batch %d failed: %s", batch_num, e)
                 if first_error is None:
                     first_error = e
             batch_num += 1
@@ -230,8 +213,8 @@ class FocusVantageDestination(FocusDestination):
         current_chunk: list[bytes] = []
         current_size = len(header) + 1  # header + newline
         sub_batch = 0
-        header_size = len(header) + 1
-        first_error: Optional[Exception] = None
+        header_size: Final = len(header) + 1
+        first_error: Exception | None = None
 
         for line in data_lines:
             line_size = len(line) + 1  # line + newline
@@ -244,10 +227,7 @@ class FocusVantageDestination(FocusDestination):
                 )
                 continue
 
-            if (
-                current_size + line_size > VANTAGE_MAX_BYTES_PER_UPLOAD
-                and current_chunk
-            ):
+            if current_size + line_size > VANTAGE_MAX_BYTES_PER_UPLOAD and current_chunk:
                 batch_csv = header + b"\n" + b"\n".join(current_chunk) + b"\n"
                 batch_filename = f"{filename}.part{batch_offset}_{sub_batch}"
                 try:

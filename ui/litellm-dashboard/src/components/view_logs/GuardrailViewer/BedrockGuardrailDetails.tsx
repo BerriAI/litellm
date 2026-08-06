@@ -274,7 +274,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                       <Section title="Custom Words" defaultOpen>
                         <div className="space-y-2">
                           {assess.wordPolicy.customWords!.map((w, i) => (
-                            <div key={i} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                            <div key={i} className="flex justify-between items-center p-2 bg-gray-50 rounded-sm">
                               <div className="flex items-center gap-2">
                                 {chip(w.action ?? "N/A", w.detected ? "red" : "slate")}
                                 <span className="font-mono text-sm break-all">{w.match}</span>
@@ -289,7 +289,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                       <Section title="Managed Word Lists" defaultOpen={false}>
                         <div className="space-y-2">
                           {assess.wordPolicy.managedWordLists!.map((w, i) => (
-                            <div key={i} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                            <div key={i} className="flex justify-between items-center p-2 bg-gray-50 rounded-sm">
                               <div className="flex items-center gap-2">
                                 {chip(w.action ?? "N/A", w.detected ? "red" : "slate")}
                                 <span className="font-mono text-sm break-all">{w.match}</span>
@@ -374,7 +374,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                       <Section title="PII Entities" defaultOpen>
                         <div className="space-y-2">
                           {assess.sensitiveInformationPolicy.piiEntities!.map((p, i) => (
-                            <div key={i} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                            <div key={i} className="flex justify-between items-center p-2 bg-gray-50 rounded-sm">
                               <div className="flex items-center gap-2">
                                 {chip(p.action ?? "N/A", p.detected ? "red" : "slate")}
                                 {p.type && chip(p.type, "slate")}
@@ -392,7 +392,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                           {assess.sensitiveInformationPolicy.regexes!.map((r, i) => (
                             <div
                               key={i}
-                              className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-2 bg-gray-50 rounded gap-1"
+                              className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-2 bg-gray-50 rounded-sm gap-1"
                             >
                               <div className="flex items-center gap-2">
                                 {chip(r.action ?? "N/A", r.detected ? "red" : "slate")}
@@ -481,7 +481,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                   <Section title="Automated Reasoning Findings" defaultOpen={false}>
                     <div className="space-y-2">
                       {assess.automatedReasoningPolicy.findings!.map((f, i) => (
-                        <pre key={i} className="bg-gray-50 rounded p-2 text-xs overflow-x-auto">
+                        <pre key={i} className="bg-gray-50 rounded-sm p-2 text-xs overflow-x-auto">
                           {JSON.stringify(f, null, 2)}
                         </pre>
                       ))}
@@ -496,7 +496,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
 
       {/* Raw JSON (for debugging / completeness) */}
       <Section title="Raw Bedrock Guardrail Response" defaultOpen={false}>
-        <pre className="bg-gray-50 rounded p-3 text-xs overflow-x-auto">{JSON.stringify(response, null, 2)}</pre>
+        <pre className="bg-gray-50 rounded-sm p-3 text-xs overflow-x-auto">{JSON.stringify(response, null, 2)}</pre>
       </Section>
     </div>
   );

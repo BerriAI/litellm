@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import redact_secrets, verbose_router_logger
 from litellm.constants import MAX_EXCEPTION_MESSAGE_LENGTH
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     LitellmRouter = Any
     Span = Any
@@ -51,7 +51,7 @@ async def send_llm_exception_alert(
         # the proxy is already instrumented to send LLM API call failures
         return
 
-    litellm_debug_info = getattr(original_exception, "litellm_debug_info", None)
+    litellm_debug_info: Final = getattr(original_exception, "litellm_debug_info", None)
     exception_str = str(original_exception)
     if litellm_debug_info is not None:
         exception_str += litellm_debug_info
@@ -69,27 +69,25 @@ async def send_llm_exception_alert(
 
 
 async def async_raise_no_deployment_exception(
-    litellm_router_instance: LitellmRouter, model: str, parent_otel_span: Optional[Span]
+    litellm_router_instance: LitellmRouter, model: str, parent_otel_span: Span | None
 ):
     """
     Raises a RouterRateLimitError if no deployment is found for the given model.
     """
-    verbose_router_logger.info(
-        f"get_available_deployment for model: {model}, No deployment available"
-    )
-    model_ids = litellm_router_instance.get_model_ids(model_name=model)
-    _cooldown_time = litellm_router_instance.cooldown_cache.get_min_cooldown(
+    verbose_router_logger.info("get_available_deployment for model: %s, No deployment available", model)
+    model_ids: Final = litellm_router_instance.get_model_ids(model_name=model)
+    _cooldown_time: Final = litellm_router_instance.cooldown_cache.get_min_cooldown(
         model_ids=model_ids, parent_otel_span=parent_otel_span
     )
-    _cooldown_list = await _async_get_cooldown_deployments_with_debug_info(
+    _cooldown_list: Final = await _async_get_cooldown_deployments_with_debug_info(
         litellm_router_instance=litellm_router_instance,
         parent_otel_span=parent_otel_span,
     )
     verbose_router_logger.info(
-        f"No deployment found for model: {model}, cooldown_list with debug info: {_cooldown_list}"
+        "No deployment found for model: %s, cooldown_list with debug info: %s", model, _cooldown_list
     )
 
-    cooldown_list_ids = [cooldown_model[0] for cooldown_model in (_cooldown_list or [])]
+    cooldown_list_ids: Final = [cooldown_model[0] for cooldown_model in (_cooldown_list or [])]
     return RouterRateLimitError(
         model=model,
         cooldown_time=_cooldown_time,

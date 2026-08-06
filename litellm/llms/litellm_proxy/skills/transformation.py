@@ -7,7 +7,8 @@ API requests to database operations via LiteLLMSkillsHandler.
 Pattern follows litellm/llms/litellm_proxy/responses/transformation.py
 """
 
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, List, Optional, Union
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm.types.llms.anthropic_skills import (
     DeleteSkillResponse,
@@ -36,21 +37,21 @@ class LiteLLMSkillsTransformationHandler:
 
     def create_skill_handler(
         self,
-        display_title: Optional[str] = None,
-        description: Optional[str] = None,
-        instructions: Optional[str] = None,
-        files: Optional[List[Any]] = None,
-        file_content: Optional[bytes] = None,
-        file_name: Optional[str] = None,
-        file_type: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        user_id: Optional[str] = None,
+        display_title: str | None = None,
+        description: str | None = None,
+        instructions: str | None = None,
+        files: list[Any] | None = None,
+        file_content: bytes | None = None,
+        file_name: str | None = None,
+        file_type: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        user_id: str | None = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         _is_async: bool = False,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        litellm_call_id: Optional[str] = None,
+        litellm_call_id: str | None = None,
         **kwargs,
-    ) -> Union[Skill, Coroutine[Any, Any, Skill]]:
+    ) -> Skill | Coroutine[Any, Any, Skill]:
         """
         Create a skill in LiteLLM database.
 
@@ -83,13 +84,11 @@ class LiteLLMSkillsTransformationHandler:
         # files is a list of tuples: [(filename, content, content_type), ...]
         if files and not file_content:
             if isinstance(files, list) and len(files) > 0:
-                first_file = files[0]
+                first_file: Final = files[0]
                 if isinstance(first_file, tuple) and len(first_file) >= 2:
                     file_name = first_file[0]
                     file_content = first_file[1]
-                    file_type = (
-                        first_file[2] if len(first_file) > 2 else "application/zip"
-                    )
+                    file_type = first_file[2] if len(first_file) > 2 else "application/zip"
 
         if _is_async:
             return self._async_create_skill(
@@ -122,14 +121,14 @@ class LiteLLMSkillsTransformationHandler:
 
     async def _async_create_skill(
         self,
-        display_title: Optional[str] = None,
-        description: Optional[str] = None,
-        instructions: Optional[str] = None,
-        file_content: Optional[bytes] = None,
-        file_name: Optional[str] = None,
-        file_type: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        user_id: Optional[str] = None,
+        display_title: str | None = None,
+        description: str | None = None,
+        instructions: str | None = None,
+        file_content: bytes | None = None,
+        file_name: str | None = None,
+        file_type: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        user_id: str | None = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
     ) -> Skill:
         """Async implementation of create_skill."""
@@ -137,7 +136,7 @@ class LiteLLMSkillsTransformationHandler:
         from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
         from litellm.proxy._types import NewSkillRequest
 
-        skill_request = NewSkillRequest(
+        skill_request: Final = NewSkillRequest(
             display_title=display_title,
             description=description,
             instructions=instructions,
@@ -147,7 +146,7 @@ class LiteLLMSkillsTransformationHandler:
             metadata=metadata,
         )
 
-        db_skill = await LiteLLMSkillsHandler.create_skill(
+        db_skill: Final = await LiteLLMSkillsHandler.create_skill(
             data=skill_request,
             user_id=user_id,
             user_api_key_dict=user_api_key_dict,
@@ -161,10 +160,10 @@ class LiteLLMSkillsTransformationHandler:
         offset: int = 0,
         _is_async: bool = False,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        litellm_call_id: Optional[str] = None,
+        litellm_call_id: str | None = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         **kwargs,
-    ) -> Union[ListSkillsResponse, Coroutine[Any, Any, ListSkillsResponse]]:
+    ) -> ListSkillsResponse | Coroutine[Any, Any, ListSkillsResponse]:
         """
         List skills from LiteLLM database.
 
@@ -215,13 +214,13 @@ class LiteLLMSkillsTransformationHandler:
         # Lazy import to avoid SDK dependency on proxy
         from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
-        db_skills = await LiteLLMSkillsHandler.list_skills(
+        db_skills: Final = await LiteLLMSkillsHandler.list_skills(
             limit=limit,
             offset=offset,
             user_api_key_dict=user_api_key_dict,
         )
 
-        skills = [self._db_skill_to_response(s) for s in db_skills]
+        skills: Final = [self._db_skill_to_response(s) for s in db_skills]
         return ListSkillsResponse(
             data=skills,
             has_more=len(skills) >= limit,
@@ -233,10 +232,10 @@ class LiteLLMSkillsTransformationHandler:
         skill_id: str,
         _is_async: bool = False,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        litellm_call_id: Optional[str] = None,
+        litellm_call_id: str | None = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         **kwargs,
-    ) -> Union[Skill, Coroutine[Any, Any, Skill]]:
+    ) -> Skill | Coroutine[Any, Any, Skill]:
         """
         Get a skill from LiteLLM database.
 
@@ -283,7 +282,7 @@ class LiteLLMSkillsTransformationHandler:
         # Lazy import to avoid SDK dependency on proxy
         from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
-        db_skill = await LiteLLMSkillsHandler.get_skill(
+        db_skill: Final = await LiteLLMSkillsHandler.get_skill(
             skill_id=skill_id,
             user_api_key_dict=user_api_key_dict,
         )
@@ -294,10 +293,10 @@ class LiteLLMSkillsTransformationHandler:
         skill_id: str,
         _is_async: bool = False,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        litellm_call_id: Optional[str] = None,
+        litellm_call_id: str | None = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         **kwargs,
-    ) -> Union[DeleteSkillResponse, Coroutine[Any, Any, DeleteSkillResponse]]:
+    ) -> DeleteSkillResponse | Coroutine[Any, Any, DeleteSkillResponse]:
         """
         Delete a skill from LiteLLM database.
 
@@ -344,7 +343,7 @@ class LiteLLMSkillsTransformationHandler:
         # Lazy import to avoid SDK dependency on proxy
         from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
-        result = await LiteLLMSkillsHandler.delete_skill(
+        result: Final = await LiteLLMSkillsHandler.delete_skill(
             skill_id=skill_id,
             user_api_key_dict=user_api_key_dict,
         )

@@ -1,6 +1,6 @@
 """Support for Azure OpenAI gpt-5 model family."""
 
-from typing import List
+from typing import Final
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
@@ -53,12 +53,10 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         # Using a startswith("gpt-5-chat") prefix check on the normalized name (rather
         # than a substring check) makes this boundary explicit and avoids any ambiguity
         # if future model names coincidentally contain "gpt-5-chat" as an interior run.
-        _normalized = model.split("/")[-1]  # strip provider prefix, e.g. "azure/"
-        return (
-            "gpt-5" in model and not _normalized.startswith("gpt-5-chat")
-        ) or "gpt5_series" in model
+        _normalized: Final = model.split("/")[-1]  # strip provider prefix, e.g. "azure/"
+        return ("gpt-5" in model and not _normalized.startswith("gpt-5-chat")) or "gpt5_series" in model
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """Get supported parameters for Azure OpenAI GPT-5 models.
 
         Azure OpenAI GPT-5.2/5.4 models support logprobs, unlike OpenAI's GPT-5.
@@ -79,12 +77,10 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         # Only gpt-5.2+ has been verified to support logprobs on Azure.
         # The base OpenAI class includes logprobs for gpt-5.1+, but Azure
         # hasn't verified support for gpt-5.1, so remove them unless gpt-5.2/5.4+.
-        if self._supports_reasoning_effort_level(
-            model, "none"
-        ) and not self.is_model_gpt_5_2_model(model):
+        if self._supports_reasoning_effort_level(model, "none") and not self.is_model_gpt_5_2_model(model):
             params = [p for p in params if p not in ["logprobs", "top_logprobs"]]
         elif self.is_model_gpt_5_2_model(model):
-            azure_supported_params = ["logprobs", "top_logprobs"]
+            azure_supported_params: Final = ["logprobs", "top_logprobs"]
             params.extend(azure_supported_params)
 
         return params
@@ -97,25 +93,18 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         drop_params: bool,
         api_version: str = "",
     ) -> dict:
-        reasoning_effort_value = non_default_params.get(
-            "reasoning_effort"
-        ) or optional_params.get("reasoning_effort")
-        effective_effort = _get_effort_level(reasoning_effort_value)
+        reasoning_effort_value = non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")
+        effective_effort: Final = _get_effort_level(reasoning_effort_value)
 
         # gpt-5.1/5.2/5.4 support reasoning_effort='none', but other gpt-5 models don't
         # See: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/reasoning
-        supports_none = self._supports_reasoning_effort_level(model, "none")
+        supports_none: Final = self._supports_reasoning_effort_level(model, "none")
 
         if effective_effort == "none" and not supports_none:
-            if litellm.drop_params is True or (
-                drop_params is not None and drop_params is True
-            ):
+            if litellm.drop_params is True or (drop_params is not None and drop_params is True):
                 non_default_params = non_default_params.copy()
                 optional_params = optional_params.copy()
-                if (
-                    _get_effort_level(non_default_params.get("reasoning_effort"))
-                    == "none"
-                ):
+                if _get_effort_level(non_default_params.get("reasoning_effort")) == "none":
                     non_default_params.pop("reasoning_effort")
                 if _get_effort_level(optional_params.get("reasoning_effort")) == "none":
                     optional_params.pop("reasoning_effort")
@@ -131,7 +120,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
                     ),
                 )
 
-        result = OpenAIGPT5Config.map_openai_params(
+        result: Final = OpenAIGPT5Config.map_openai_params(
             self,
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -140,7 +129,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         )
 
         # Only drop reasoning_effort='none' for models that don't support it
-        result_effort = _get_effort_level(result.get("reasoning_effort"))
+        result_effort: Final = _get_effort_level(result.get("reasoning_effort"))
         if result_effort == "none" and not supports_none:
             result.pop("reasoning_effort")
 
@@ -153,7 +142,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,

@@ -1,6 +1,6 @@
 import json
 import threading
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -39,8 +39,8 @@ class MlflowLogger(CustomLogger):
             if kwargs.get("stream"):
                 self._handle_stream_event(kwargs, response_obj, start_time, end_time)
             else:
-                span = self._start_span_or_trace(kwargs, start_time)
-                end_time_ns = int(end_time.timestamp() * 1e9)
+                span: Final = self._start_span_or_trace(kwargs, start_time)
+                end_time_ns: Final = int(end_time.timestamp() * 1e9)
                 self._extract_and_set_chat_attributes(span, kwargs, response_obj)
                 self._end_span_or_trace(
                     span=span,
@@ -53,17 +53,16 @@ class MlflowLogger(CustomLogger):
 
     def _extract_and_set_chat_attributes(self, span, kwargs, response_obj):
         try:
-            from mlflow.tracing.utils import set_span_chat_messages  # type: ignore
-            from mlflow.tracing.utils import set_span_chat_tools  # type: ignore
+            from mlflow.tracing.utils import (
+                set_span_chat_messages,
+                set_span_chat_tools,
+            )
         except ImportError:
             return
 
-        inputs = self._construct_input(kwargs)
-        input_messages = inputs.get("messages", [])
-        output_messages = [
-            c.message.model_dump(exclude_none=True)
-            for c in getattr(response_obj, "choices", [])
-        ]
+        inputs: Final = self._construct_input(kwargs)
+        input_messages: Final = inputs.get("messages", [])
+        output_messages: Final = [c.message.model_dump(exclude_none=True) for c in getattr(response_obj, "choices", [])]
         if messages := [*input_messages, *output_messages]:
             set_span_chat_messages(span, messages)
         if tools := inputs.get("tools"):
@@ -83,13 +82,13 @@ class MlflowLogger(CustomLogger):
         from mlflow.entities import SpanEvent, SpanStatusCode
 
         try:
-            span = self._start_span_or_trace(kwargs, start_time)
+            span: Final = self._start_span_or_trace(kwargs, start_time)
 
-            end_time_ns = int(end_time.timestamp() * 1e9)
+            end_time_ns: Final = int(end_time.timestamp() * 1e9)
 
             # Record exception info as event
             if exception := kwargs.get("exception"):
-                span.add_event(SpanEvent.from_exception(exception))  # type: ignore
+                span.add_event(SpanEvent.from_exception(exception))
 
             self._extract_and_set_chat_attributes(span, kwargs, response_obj)
             self._end_span_or_trace(
@@ -100,7 +99,7 @@ class MlflowLogger(CustomLogger):
             )
 
         except Exception as e:
-            verbose_logger.debug(f"MLflow Logging Error - {e}", stack_info=True)
+            verbose_logger.debug("MLflow Logging Error - %s", e, stack_info=True)
 
     def _handle_stream_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -114,7 +113,7 @@ class MlflowLogger(CustomLogger):
         """
         from mlflow.entities import SpanStatusCode
 
-        litellm_call_id = kwargs.get("litellm_call_id")
+        litellm_call_id: Final = kwargs.get("litellm_call_id")
 
         if litellm_call_id not in self._stream_id_to_span:
             with self._lock:
@@ -130,11 +129,9 @@ class MlflowLogger(CustomLogger):
 
         # If this is the final chunk, end the span. The final chunk
         # has the assembled streaming response (key differs between sync/async paths).
-        final_response = kwargs.get("complete_streaming_response") or kwargs.get(
-            "async_complete_streaming_response"
-        )
+        final_response = kwargs.get("complete_streaming_response") or kwargs.get("async_complete_streaming_response")
         if final_response:
-            end_time_ns = int(end_time.timestamp() * 1e9)
+            end_time_ns: Final = int(end_time.timestamp() * 1e9)
 
             self._extract_and_set_chat_attributes(span, kwargs, final_response)
             self._end_span_or_trace(
@@ -156,9 +153,7 @@ class MlflowLogger(CustomLogger):
                 span.add_event(
                     SpanEvent(
                         name="streaming_chunk",
-                        attributes={
-                            "delta": json.dumps(choice.delta.model_dump, default=str)
-                        },
+                        attributes={"delta": json.dumps(choice.delta.model_dump, default=str)},
                     )
                 )
         except Exception:
@@ -166,7 +161,7 @@ class MlflowLogger(CustomLogger):
 
     def _construct_input(self, kwargs):
         """Construct span inputs with optional parameters"""
-        inputs = {"messages": kwargs.get("messages")}
+        inputs: Final = {"messages": kwargs.get("messages")}
         if tools := kwargs.get("tools"):
             inputs["tools"] = tools
 
@@ -187,14 +182,12 @@ class MlflowLogger(CustomLogger):
         canonical information for logging. If it is not present, we extract
         subset of attributes from other kwargs.
         """
-        attributes = {
+        attributes: Final = {
             "litellm_call_id": kwargs.get("litellm_call_id"),
             "call_type": kwargs.get("call_type"),
             "model": kwargs.get("model"),
         }
-        standard_obj: Optional[StandardLoggingPayload] = kwargs.get(
-            "standard_logging_object"
-        )
+        standard_obj: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
         if standard_obj:
             attributes.update(
                 {
@@ -212,7 +205,7 @@ class MlflowLogger(CustomLogger):
                 }
             )
         else:
-            litellm_params = kwargs.get("litellm_params", {})
+            litellm_params: Final = kwargs.get("litellm_params", {})
             attributes.update(
                 {
                     "model": kwargs.get("model"),
@@ -224,7 +217,7 @@ class MlflowLogger(CustomLogger):
             )
         return attributes
 
-    def _get_span_type(self, call_type: Optional[str]) -> str:
+    def _get_span_type(self, call_type: str | None) -> str:
         from mlflow.entities import SpanType
 
         if call_type in ["completion", "acompletion"]:
@@ -243,15 +236,15 @@ class MlflowLogger(CustomLogger):
         """
         import mlflow
 
-        call_type = kwargs.get("call_type", "completion")
-        span_name = f"litellm-{call_type}"
-        span_type = self._get_span_type(call_type)
-        start_time_ns = int(start_time.timestamp() * 1e9)
+        call_type: Final = kwargs.get("call_type", "completion")
+        span_name: Final = f"litellm-{call_type}"
+        span_type: Final = self._get_span_type(call_type)
+        start_time_ns: Final = int(start_time.timestamp() * 1e9)
 
-        inputs = self._construct_input(kwargs)
-        attributes = self._extract_attributes(kwargs)
+        inputs: Final = self._construct_input(kwargs)
+        attributes: Final = self._extract_attributes(kwargs)
 
-        if active_span := mlflow.get_current_active_span():  # type: ignore
+        if active_span := mlflow.get_current_active_span():
             return self._client.start_span(
                 name=span_name,
                 trace_id=active_span.request_id,
@@ -267,9 +260,7 @@ class MlflowLogger(CustomLogger):
                 span_type=span_type,
                 inputs=inputs,
                 attributes=attributes,
-                tags=self._transform_tag_list_to_dict(
-                    attributes.get("request_tags", [])
-                ),
+                tags=self._transform_tag_list_to_dict(attributes.get("request_tags", [])),
                 start_time_ns=start_time_ns,
             )
 
@@ -278,7 +269,7 @@ class MlflowLogger(CustomLogger):
         Transform a list of colon-separated tags into a dictionary.
         Tags without colons are stored with empty string as the value.
         """
-        tags = {}
+        tags: Final = {}
         for tag in tag_list:
             if ":" in tag:
                 k, v = tag.split(":", 1)

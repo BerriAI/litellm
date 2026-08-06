@@ -2,7 +2,8 @@
 Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
+from collections.abc import Coroutine
+from typing import Any, Final, Literal, cast, overload
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -18,20 +19,20 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 class MoonshotChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]: ...
+    ) -> list[AllMessageValues]: ...
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: bool = False
-    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        self, messages: list[AllMessageValues], model: str, is_async: bool = False
+    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         """
         Moonshot text-only models don't support content in list format.
         Multimodal models (kimi-k2.5, kimi-latest, etc.) accept the
@@ -53,29 +54,25 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             messages = handle_messages_with_content_list_to_str_conversion(messages)
 
         if is_async:
-            return super()._transform_messages(
-                messages=messages, model=model, is_async=True
-            )
+            return super()._transform_messages(messages=messages, model=model, is_async=True)
         else:
-            return super()._transform_messages(
-                messages=messages, model=model, is_async=False
-            )
+            return super()._transform_messages(messages=messages, model=model, is_async=False)
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("MOONSHOT_API_KEY")
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
+        api_base = api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
+        dynamic_api_key: Final = api_key or get_secret_str("MOONSHOT_API_KEY")
         return api_base, dynamic_api_key
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         If api_base is not provided, use the default Moonshot AI /chat/completions endpoint.
@@ -97,14 +94,14 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         - tool_choice doesn't support "required" value
         - kimi-thinking-preview doesn't support tool calls at all
         """
-        excluded_params: List[str] = ["functions"]
+        excluded_params: Final[list[str]] = ["functions"]
 
         # kimi-thinking-preview has additional limitations
         if "kimi-thinking-preview" in model:
             excluded_params.extend(["tools", "tool_choice"])
 
-        base_openai_params = super().get_supported_openai_params(model=model)
-        final_params: List[str] = []
+        base_openai_params: Final = super().get_supported_openai_params(model=model)
+        final_params: Final[list[str]] = []
         for param in base_openai_params:
             if param not in excluded_params:
                 final_params.append(param)
@@ -125,7 +122,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         - tool_choice doesn't support "required" value
         - Temperature <0.3 limitation for n>1
         """
-        supported_openai_params = self.get_supported_openai_params(model)
+        supported_openai_params: Final = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
@@ -143,15 +140,12 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         if supports_reasoning(model=model, custom_llm_provider="moonshot"):
             optional_params.pop("temperature", None)
         elif "temperature" in optional_params:
-            if optional_params["temperature"] > 1:
-                optional_params["temperature"] = 1
+            optional_params["temperature"] = min(optional_params["temperature"], 1)
             if optional_params["temperature"] < 0.3 and optional_params.get("n", 1) > 1:
                 optional_params["temperature"] = 0.3
         return optional_params
 
-    def fill_reasoning_content(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
+    def fill_reasoning_content(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
         """
         Moonshot reasoning models require `reasoning_content` on every assistant
         message that contains tool_calls (multi-turn tool-calling flows).
@@ -165,7 +159,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         Messages that already carry the field, or are not assistant/tool-call messages,
         are appended as-is (no copy made).
         """
-        result: List[AllMessageValues] = []
+        result: Final[list[AllMessageValues]] = []
         for msg in messages:
             if (
                 msg.get("role") == "assistant"
@@ -200,7 +194,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -231,18 +225,18 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         )
 
     def _add_tool_choice_required_message(
-        self, messages: List[AllMessageValues], optional_params: dict
-    ) -> List[AllMessageValues]:
+        self, messages: list[AllMessageValues], optional_params: dict
+    ) -> list[AllMessageValues]:
         """
         Add a message to the messages list to indicate that the tool choice is required.
 
         https://platform.moonshot.ai/docs/guide/migrating-from-openai-to-kimi#about-tool_choice
         """
-        messages.append(
+        optional_params.pop("tool_choice")
+        return [
+            *messages,
             {
                 "role": "user",
                 "content": "Please select a tool to handle the current issue.",  # Usually, the Kimi large language model understands the intention to invoke a tool and selects one for invocation
-            }
-        )
-        optional_params.pop("tool_choice")
-        return messages
+            },
+        ]

@@ -6,18 +6,18 @@ package-level defaults. See https://apiserpent.com/docs.
 """
 
 from dataclasses import asdict, dataclass
-from typing import Dict, Literal, Optional
+from typing import Final, Literal
 
 SearchEngine = Literal["google", "bing", "yahoo", "ddg"]
 SafeSearch = Literal["off", "moderate", "strict"]
 Freshness = Literal["h", "1h", "d", "1d", "7d", "w", "m", "1m", "y", "1y"]
 ResponseFormat = Literal["full", "simple"]
 
-NUM_MIN = 1
-NUM_MIN_DEEP = 10
-NUM_MAX = 100
-PAGES_MIN = 1
-PAGES_MAX = 10
+NUM_MIN: Final = 1
+NUM_MIN_DEEP: Final = 10
+NUM_MAX: Final = 100
+PAGES_MIN: Final = 1
+PAGES_MAX: Final = 10
 
 
 @dataclass(frozen=True)
@@ -34,27 +34,23 @@ class APISerpentSearchParams:
     country: str = "us"
     num: int = 10
     format: ResponseFormat = "full"
-    pages: Optional[int] = None
-    freshness: Optional[Freshness] = None
-    safe: Optional[SafeSearch] = None
-    language: Optional[str] = None
-    pixel_position: Optional[bool] = None
+    pages: int | None = None
+    freshness: Freshness | None = None
+    safe: SafeSearch | None = None
+    language: str | None = None
+    pixel_position: bool | None = None
 
     def __post_init__(self) -> None:
         # num's deep-search floor (NUM_MIN_DEEP) is endpoint-specific and enforced
         # in the transform layer; here we only bound the absolute range.
         if not NUM_MIN <= self.num <= NUM_MAX:
-            raise ValueError(
-                f"num must be between {NUM_MIN} and {NUM_MAX}, got {self.num}"
-            )
+            raise ValueError(f"num must be between {NUM_MIN} and {NUM_MAX}, got {self.num}")
         if self.pages is not None and not PAGES_MIN <= self.pages <= PAGES_MAX:
-            raise ValueError(
-                f"pages must be between {PAGES_MIN} and {PAGES_MAX}, got {self.pages}"
-            )
+            raise ValueError(f"pages must be between {PAGES_MIN} and {PAGES_MAX}, got {self.pages}")
 
-    def to_request_params(self) -> Dict:
+    def to_request_params(self) -> dict:
         """Return non-None fields as request params, booleans lowercased."""
-        params: Dict = {}
+        params: Final[dict] = {}
         for key, value in asdict(self).items():
             if value is None:
                 continue
@@ -66,5 +62,5 @@ class APISerpentSearchParams:
         return set(cls.__dataclass_fields__.keys())
 
 
-QUICK_SEARCH_PATH = "/api/search/quick"
-DEEP_SEARCH_PATH = "/api/search"
+QUICK_SEARCH_PATH: Final = "/api/search/quick"
+DEEP_SEARCH_PATH: Final = "/api/search"

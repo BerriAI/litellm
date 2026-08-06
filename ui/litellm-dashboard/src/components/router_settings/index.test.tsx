@@ -146,4 +146,45 @@ describe("RouterSettings", () => {
 
     expect(NotificationsManager.success).toHaveBeenCalledWith("router settings updated successfully");
   });
+
+  it("should not render or save routing_groups (owned by the Routing Groups tab)", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCallbacksCall).mockResolvedValue({
+      router_settings: {
+        routing_strategy: "simple-shuffle",
+        num_retries: 3,
+        routing_groups: [{ group_name: "g1", models: ["gpt-4"], routing_strategy: "simple-shuffle" }],
+      },
+    });
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
+    });
+    expect(document.querySelector('input[name="routing_groups"]')).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith("test-token", {
+        router_settings: expect.not.objectContaining({ routing_groups: expect.anything() }),
+      }),
+    );
+  });
+
+  it("should surface an error and not claim success when saving fails", async () => {
+    const user = userEvent.setup();
+    vi.mocked(setCallbacksCall).mockRejectedValue(new Error("422 Unprocessable Entity"));
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(NotificationsManager.fromBackend).toHaveBeenCalled();
+    });
+    expect(NotificationsManager.success).not.toHaveBeenCalled();
+  });
 });

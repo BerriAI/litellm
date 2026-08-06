@@ -24,7 +24,6 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
   onTestComplete,
 }) => {
   const [error, setError] = React.useState<Error | string | null>(null);
-  const [rawRequest, setRawRequest] = React.useState<any>(null);
   const [rawResponse, setRawResponse] = React.useState<any>(null);
   const [isLoading, setIsLoading] = React.useState<boolean>(true);
   const [isSuccess, setIsSuccess] = React.useState<boolean>(false);
@@ -34,7 +33,6 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
     setIsLoading(true);
     setShowDetails(false);
     setError(null);
-    setRawRequest(null);
     setRawResponse(null);
     setIsSuccess(false);
 
@@ -42,20 +40,16 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     try {
-      console.log("Testing connection with form values:", formValues);
       const result = await prepareModelAddRequest(formValues, accessToken, null);
 
       if (!result) {
-        console.log("No result from prepareModelAddRequest");
         setError("Failed to prepare model data. Please check your form inputs.");
         setIsSuccess(false);
         setIsLoading(false);
         return;
       }
 
-      console.log("Result from prepareModelAddRequest:", result);
-
-      const { litellmParamsObj, modelInfoObj, modelName: returnedModelName } = result[0];
+      const { litellmParamsObj, modelInfoObj } = result[0];
 
       const response = await testConnectionRequest(accessToken, litellmParamsObj, modelInfoObj, modelInfoObj?.mode);
       if (response.status === "success") {
@@ -65,7 +59,6 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
       } else {
         const errorMessage = response.result?.error || response.message || "Unknown error";
         setError(errorMessage);
-        setRawRequest(litellmParamsObj);
         setRawResponse(response.result?.raw_request_typed_dict);
         setIsSuccess(false);
       }

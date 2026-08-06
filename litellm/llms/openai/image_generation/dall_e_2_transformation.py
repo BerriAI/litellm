@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -18,9 +18,7 @@ class DallE2ImageGenerationConfig(BaseImageGenerationConfig):
     OpenAI dall-e-2 image generation config
     """
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         return ["n", "response_format", "quality", "size", "user"]
 
     def map_openai_params(
@@ -30,9 +28,9 @@ class DallE2ImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        supported_params: Final = self.get_supported_openai_params(model)
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     optional_params[k] = non_default_params[k]
                 elif drop_params:
@@ -54,12 +52,12 @@ class DallE2ImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
-        response = raw_response.json()
+        response: Final = raw_response.json()
 
-        stringified_response = response
+        stringified_response: Final = response
         ## LOGGING
         logging_obj.post_call(
             input=request_data.get("prompt", ""),
@@ -67,21 +65,15 @@ class DallE2ImageGenerationConfig(BaseImageGenerationConfig):
             additional_args={"complete_input_dict": request_data},
             original_response=stringified_response,
         )
-        image_response: ImageResponse = convert_to_model_response_object(  # type: ignore
+        image_response: Final[ImageResponse] = convert_to_model_response_object(
             response_object=stringified_response,
             model_response_object=model_response,
             response_type="image_generation",
         )
 
         # set optional params
-        image_response.size = optional_params.get(
-            "size", "1024x1024"
-        )  # default is always 1024x1024
-        image_response.quality = optional_params.get(
-            "quality", "standard"
-        )  # always standard for dall-e-2
-        image_response.output_format = optional_params.get(
-            "output_format", "png"
-        )  # always png for dall-e-2
+        image_response.size = optional_params.get("size", "1024x1024")  # default is always 1024x1024
+        image_response.quality = optional_params.get("quality", "standard")  # always standard for dall-e-2
+        image_response.output_format = optional_params.get("output_format", "png")  # always png for dall-e-2
 
         return image_response
