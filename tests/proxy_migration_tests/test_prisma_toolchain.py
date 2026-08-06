@@ -119,6 +119,32 @@ def test_absent_toolchain_is_not_an_error(toolchain_env: tuple[Path, Path]) -> N
     assert not cache_dir.exists()
 
 
+_CAN_DENY_ACCESS = os.name != "nt" and hasattr(os, "geteuid") and os.geteuid() != 0
+
+
+@pytest.mark.skipif(
+    not _CAN_DENY_ACCESS, reason="root and Windows do not honour a 0o000 directory"
+)
+def test_unreadable_cache_dir_is_not_an_error(
+    toolchain_env: tuple[Path, Path],
+) -> None:
+    """A cache dir this process cannot stat means nothing to heal, not a crash.
+
+    Images bake the cache under the build user's home, and a container started
+    under any other uid cannot search that directory. `Path.is_dir()` only
+    swallows ENOENT-shaped errnos, so it raises `PermissionError` there and
+    kills the migration before Prisma is ever invoked.
+    """
+    cache_dir, _ = toolchain_env
+    _make_incomplete_cache(cache_dir)
+    cache_dir.parent.chmod(0o000)
+
+    try:
+        assert heal_incomplete_nodeenv_cache() is False
+    finally:
+        cache_dir.parent.chmod(0o700)
+
+
 def test_bootstrap_clears_the_cache_before_invoking_prisma(
     toolchain_env: tuple[Path, Path],
 ) -> None:

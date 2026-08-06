@@ -1399,10 +1399,7 @@ class Logging(LiteLLMLoggingBaseClass):
             litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None)
         )
 
-        prompt = ""  # use for tts cost calc
-        _input: Final = self.model_call_details.get("input", None)
-        if _input is not None and isinstance(_input, str):
-            prompt = _input
+        prompt = self._prompt_for_cost_calculation()
 
         if cache_hit is None:
             cache_hit = self.model_call_details.get("cache_hit", False)
@@ -1460,6 +1457,19 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["response_cost_failure_debug_information"] = debug_info
 
         return None
+
+    def _prompt_for_cost_calculation(self) -> str:
+        """
+        The raw input string is only priced directly for text-to-speech, which bills per character.
+        Every other call type gets its billable units from the response usage object, and call types
+        that carry no usage at all (file content retrieval, and anything else `function_setup` cannot
+        build messages for) only have the ``"default-message-value"`` placeholder here, so passing the
+        input along would token-price that placeholder.
+        """
+        if self.call_type not in (CallTypes.speech.value, CallTypes.aspeech.value):
+            return ""
+        _input = self.model_call_details.get("input", None)
+        return _input if isinstance(_input, str) else ""
 
     def _generate_content_result_as_model_response(self, result: object) -> ModelResponse | None:
         """
@@ -4827,7 +4837,7 @@ class StandardLoggingPayloadSetup:
 
         # Populate well-known typed fields with int/str coercion where needed
         typed_keys: Final[dict] = {}
-        for key in StandardLoggingAdditionalHeaders.__annotations__.keys():
+        for key in StandardLoggingAdditionalHeaders.__annotations__:
             _key = key.lower().replace("_", "-")
             typed_keys[_key] = key
             if _key in additiona_headers:
@@ -4859,7 +4869,7 @@ class StandardLoggingPayloadSetup:
             usage_object=None,
         )
         if hidden_params is not None:
-            for key in StandardLoggingHiddenParams.__annotations__.keys():
+            for key in StandardLoggingHiddenParams.__annotations__:
                 if key in hidden_params:
                     if key == "additional_headers":
                         clean_hidden_params["additional_headers"] = StandardLoggingPayloadSetup.get_additional_headers(
@@ -5501,7 +5511,7 @@ def get_standard_logging_metadata(
     )
     if isinstance(metadata, dict):
         # Update the clean_metadata with values from input metadata that match StandardLoggingMetadata fields
-        for key in StandardLoggingMetadata.__annotations__.keys():
+        for key in StandardLoggingMetadata.__annotations__:
             if key in metadata:
                 clean_metadata[key] = metadata[key]
 

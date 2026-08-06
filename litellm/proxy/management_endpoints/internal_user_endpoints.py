@@ -584,7 +584,7 @@ async def new_user(
         special_keys: Final = ["token", "token_id"]
         response_dict: Final = {}
         for key, value in response.items():
-            if key in NewUserResponse.model_fields.keys() and key not in special_keys:
+            if key in NewUserResponse.model_fields and key not in special_keys:
                 response_dict[key] = value
 
         response_dict["key"] = response.get("token", "")
@@ -2650,6 +2650,13 @@ async def get_user_daily_activity(
         description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
         "Matches JavaScript's Date.getTimezoneOffset() convention.",
     ),
+    include_current_utc_day: bool = fastapi.Query(
+        default=False,
+        description="When the range ends on the caller's current local day, extend it to "
+        "today's UTC bucket so spend written after the caller's local midnight (in UTC "
+        "terms) is included. Requires the timezone parameter. Historical ranges are "
+        "never extended.",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> SpendAnalyticsPaginatedResponse:
     """
@@ -2711,6 +2718,7 @@ async def get_user_daily_activity(
             page=page,
             page_size=page_size,
             timezone_offset_minutes=timezone,
+            include_current_utc_day=include_current_utc_day,
             resolve_entity_metadata=lambda records: _resolve_user_email_metadata(prisma_client, records),
         )
 
