@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 import litellm
 from litellm import Router, verbose_logger
@@ -80,9 +81,15 @@ def _parse_managed_file_object(
         return None
     try:
         return OpenAIFileObject.model_validate(raw_file_object)
+    except ValidationError as e:
+        verbose_logger.warning(
+            f"Failed to parse managed file object {unified_file_id}: "
+            f"{e.errors(include_input=False, include_url=False, include_context=False)}"
+        )
+        return None
     except Exception as e:
         verbose_logger.warning(
-            f"Failed to parse managed file object {unified_file_id}: {e}"
+            f"Failed to parse managed file object {unified_file_id}: {type(e).__name__}"
         )
         return None
 
