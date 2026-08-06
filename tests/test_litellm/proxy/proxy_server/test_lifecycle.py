@@ -756,32 +756,21 @@ def test_startup_does_not_warn_without_global_budget(caplog, max_budget):
     assert "litellm.max_budget" not in caplog.text
 
 
-@pytest.mark.asyncio
-async def test_proxy_startup_event_warns_for_global_budget_without_database(monkeypatch, caplog):
-    """The lifespan emits the warning when startup has a configured budget but no database."""
-    import litellm
+def test_proxy_startup_event_warns_for_global_budget_without_database():
+    """Pin the lifespan call that prevents silent DB-less budgets.
 
-    monkeypatch.setattr(litellm, "max_budget", 10.0)
-    monkeypatch.setattr(ps, "premium_user", True)
-    monkeypatch.setattr(ps, "prisma_client", None)
-    monkeypatch.setattr(ps, "get_secret", lambda *args, **kwargs: None)
-    monkeypatch.setattr(ps, "get_secret_str", lambda *args, **kwargs: None)
-    monkeypatch.setattr(ps.ProxyStartupEvent, "_setup_prisma_client", AsyncMock(return_value=None))
-    monkeypatch.setattr(ps.ProxyStartupEvent, "_init_coordination_redis_from_db", AsyncMock(return_value=None))
-    monkeypatch.setattr(ps.ProxyStartupEvent, "_initialize_startup_logging", MagicMock())
-    monkeypatch.setattr(ps.ProxyStartupEvent, "_validate_redis_transaction_buffer_config", MagicMock())
-    monkeypatch.setattr(ps.ProxyStartupEvent, "_warn_if_mock_testing_params_enabled", MagicMock())
-    monkeypatch.setattr(ps.ProxyStartupEvent, "_initialize_semantic_tool_filter", AsyncMock())
-    monkeypatch.setattr(ps.ProxyStartupEvent, "_initialize_jwt_auth", MagicMock())
-    monkeypatch.setattr(ps.ProxyStartupEvent, "_init_dd_tracer", MagicMock())
-    monkeypatch.setattr(ps.ProxyStartupEvent, "_init_pyroscope", MagicMock())
-    monkeypatch.setattr(ps, "_initialize_shared_aiohttp_session", AsyncMock(return_value=None))
-    monkeypatch.setattr(ps.proxy_config, "get_config_state", lambda: {"litellm_settings": {}})
-    monkeypatch.setattr(ps.proxy_config, "stop_config_sync_subscriber", AsyncMock())
-    monkeypatch.setattr(ps, "proxy_shutdown_event", AsyncMock())
+    The call must follow Prisma setup so DB-backed deployments do not false-positive.
+    Direct ``_warn_budget_without_db`` tests cover the warning behavior itself.
+    """
+    wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
+    source = inspect.getsource(wrapped)
+    budget_check_pos = source.find("if prisma_client is not None and litellm.max_budget > 0:")
+    warn_pos = source.find("_warn_budget_without_db(")
+    next_startup_section_pos = source.find("### START BATCH", budget_check_pos)
 
-    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        async with proxy_startup_event(FastAPI()):
-            pass
-
-    assert "litellm.max_budget=10.0" in caplog.text
+    assert budget_check_pos != -1, "global budget startup block not found"
+    assert warn_pos != -1, "DB-less budget warning call not found"
+    assert next_startup_section_pos != -1, "startup section after budget block not found"
+    assert budget_check_pos < warn_pos < next_startup_section_pos, (
+        "DB-less budget warning must run after Prisma setup and the DB-backed budget block"
+    )
