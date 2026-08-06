@@ -128,9 +128,6 @@ python_checks() {
     return $rc
 }
 
-# Every scratch file lives in one directory created before any job starts, so an
-# interrupt can't leak one: cleanup is a single rm -rf that doesn't depend on which
-# per-file variable happened to be assigned when the signal landed.
 on_interrupt() {
     trap - INT TERM
     for job_pid in ${python_pid:-} ${dash_pid:-} ${gen_pid:-}; do

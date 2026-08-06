@@ -221,30 +221,26 @@ check-circular-imports: $(LINT_DEP_INSTALL)
 check-import-safety: $(LINT_DEP_INSTALL)
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
-# Every basedpyright pass test-linting.yml runs, split out of `lint` (and so out of
-# `make pre-commit`) because it dominates the wall clock: the rest of the lint job
-# finishes in seconds while basedpyright takes minutes, and the two answer different
-# questions, so a dev fixing a ruff nit shouldn't have to sit through a type check.
-# `make lint && make typecheck` is the CI-parity pair. Setup runs once here, then a
-# sub-make fans the two passes out with the dep vars emptied, same as `lint`.
-typecheck: lint-install lint-fetch-base
-	$(MAKE) -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= typecheck-checks
-
-typecheck-checks: lint-basedpyright lint-e2e-basedpyright
-
-# Combined linting: test-linting.yml's lint job minus its basedpyright steps (those are
-# `make typecheck`). It installs the same env (proxy-dev + generated Prisma client) and
-# then runs the diff-scoped ruff format check, whole-tree ruff check, the strict-rule and
-# type-discipline budgets as a delta vs the base, then the circular-import and
-# import-safety checks. Steps that compare against the base resolve it the same way CI
-# does (merge-base with origin/litellm_internal_staging). Setup (env sync, Prisma client,
-# base fetch) runs once up front; the checks themselves are independent, so a sub-make
-# fans them out with -j.
+# Combined linting: test-linting.yml's lint job minus its basedpyright steps, which are
+# `make typecheck` below because they take minutes while everything here takes seconds,
+# so `make lint && make typecheck` is the CI-parity pair. It installs the same env
+# (proxy-dev + generated Prisma client) and then runs the diff-scoped ruff format check,
+# whole-tree ruff check, the strict-rule and type-discipline budgets as a delta vs the
+# base, then the circular-import and import-safety checks. Steps that compare against the
+# base resolve it the same way CI does (merge-base with origin/litellm_internal_staging).
+# Setup (env sync, Prisma client, base fetch) runs once up front; the checks themselves
+# are independent, so a sub-make fans them out with -j. `typecheck` reuses that same
+# setup, so its passes resolve imports exactly as CI's do.
 lint: lint-install lint-fetch-base
 	$(MAKE) -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= lint-checks
 	@echo "lint: clean. basedpyright is not part of this target; run 'make typecheck' for it."
 
 lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline check-circular-imports check-import-safety
+
+typecheck: lint-install lint-fetch-base
+	$(MAKE) -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= typecheck-checks
+
+typecheck-checks: lint-basedpyright lint-e2e-basedpyright
 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed check-circular-imports check-import-safety
