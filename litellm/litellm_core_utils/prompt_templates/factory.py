@@ -18,6 +18,7 @@ from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
+from litellm.types.completion import ChatCompletionContentPartTextParam
 from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import CachePointBlock
@@ -107,7 +108,20 @@ def map_system_message_pt(messages: list) -> list:
                 next_role = next_m["role"]
                 if next_role == "user" or next_role == "assistant":  # Next message is a user or assistant message
                     # Merge system prompt into the next message
-                    next_m["content"] = m["content"] + " " + next_m["content"]
+                    system_content = m["content"]
+                    next_content = next_m["content"]
+                    if isinstance(system_content, list):
+                        next_m["content"] = tuple(system_content) + (
+                            tuple(next_content)
+                            if isinstance(next_content, list)
+                            else (ChatCompletionContentPartTextParam(type="text", text=next_content),)
+                        )
+                    elif isinstance(next_content, list):
+                        next_m["content"] = (
+                            ChatCompletionContentPartTextParam(type="text", text=system_content),
+                        ) + tuple(next_content)
+                    else:
+                        next_m["content"] = system_content + " " + next_content
                 elif next_role == "system":  # Next message is a system message
                     # Append a user message instead of the system message
                     new_message = {"role": "user", "content": m["content"]}

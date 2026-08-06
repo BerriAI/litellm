@@ -56,6 +56,53 @@ def test_supports_system_message():
 
 
 @pytest.mark.parametrize(
+    "system_content,user_content,expected_content",
+    [
+        (
+            [{"type": "text", "text": "Follow these instructions."}],
+            [{"type": "text", "text": "Hello there!"}],
+            (
+                {"type": "text", "text": "Follow these instructions."},
+                {"type": "text", "text": "Hello there!"},
+            ),
+        ),
+        (
+            [{"type": "text", "text": "Follow these instructions."}],
+            "Hello there!",
+            (
+                {"type": "text", "text": "Follow these instructions."},
+                {"type": "text", "text": "Hello there!"},
+            ),
+        ),
+        (
+            "Follow these instructions.",
+            [{"type": "text", "text": "Hello there!"}],
+            (
+                {"type": "text", "text": "Follow these instructions."},
+                {"type": "text", "text": "Hello there!"},
+            ),
+        ),
+        (
+            "Follow these instructions.",
+            "Hello there!",
+            "Follow these instructions. Hello there!",
+        ),
+    ],
+)
+def test_map_system_message_with_mixed_content_types(
+    system_content, user_content, expected_content
+):
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content},
+    ]
+
+    new_messages = map_system_message_pt(messages=messages)
+
+    assert new_messages == [{"role": "user", "content": expected_content}]
+
+
+@pytest.mark.parametrize(
     "stop_sequence, expected_count", [("\n", 0), (["\n"], 0), (["finish_reason"], 1)]
 )
 def test_anthropic_optional_params(stop_sequence, expected_count):
