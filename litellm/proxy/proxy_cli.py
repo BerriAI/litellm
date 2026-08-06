@@ -1103,6 +1103,8 @@ def run_server(
             os.environ["IAM_TOKEN_DB_AUTH"] = "True"
             if azure_postgresql_auth:
                 os.environ[AZURE_POSTGRESQL_AUTH_MARKER_ENV] = "True"
+            else:
+                os.environ.pop(AZURE_POSTGRESQL_AUTH_MARKER_ENV, None)
 
         ### DECRYPT ENV VAR ###
 

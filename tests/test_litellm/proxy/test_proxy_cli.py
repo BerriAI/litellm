@@ -1899,6 +1899,85 @@ class TestRunServerDbSetup:
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
+    def test_rds_iam_auth_clears_stale_azure_marker(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+    ):
+        from litellm.proxy.db.prisma_client import (
+            AZURE_POSTGRESQL_AUTH_MARKER_ENV,
+            IAMEndpoint,
+        )
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_should_update_schema.return_value = True
+        mock_setup_database.return_value = True
+
+        endpoint = IAMEndpoint(
+            host="db.example.rds.amazonaws.com",
+            port="5432",
+            user="litellm",
+            name="litellm",
+        )
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        stale_env = {
+            **{
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("DATABASE_URL", "DIRECT_URL", "IAM_TOKEN_DB_AUTH")
+            },
+            AZURE_POSTGRESQL_AUTH_MARKER_ENV: "True",
+        }
+
+        with (
+            patch.dict(os.environ, stale_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+            patch(
+                "litellm.proxy.db.prisma_client.get_database_auth_endpoint_from_env",
+                return_value=endpoint,
+            ),
+            patch(
+                "litellm.proxy.db.prisma_client.build_database_token_auth_url",
+                return_value="postgresql://litellm:token@db.example.rds.amazonaws.com:5432/litellm",
+            ),
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            run_server.main(
+                ["--local", "--skip_server_startup", "--iam_token_db_auth"],
+                standalone_mode=False,
+            )
+
+            assert os.environ["IAM_TOKEN_DB_AUTH"] == "True"
+            assert AZURE_POSTGRESQL_AUTH_MARKER_ENV not in os.environ
+
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
     def test_startup_fails_when_db_setup_fails(
         self,
         mock_should_update_schema,
