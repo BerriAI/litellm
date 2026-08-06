@@ -13,7 +13,10 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
+from redis.exceptions import DataError
 
+import litellm
+from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 
 
@@ -71,6 +74,162 @@ async def test_daily_spend_tracking_with_disabled_spend_logs():
         assert call_args["payload"]["spend"] == 0.1
         assert call_args["payload"]["model"] == "gpt-4"
         assert call_args["payload"]["custom_llm_provider"] == "openai"
+
+
+def _tool_call_response(*names: str) -> object:
+    from types import SimpleNamespace
+
+    tool_calls = [SimpleNamespace(function=SimpleNamespace(name=name)) for name in names]
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=tool_calls))])
+
+
+def _tool_usage_prisma() -> MagicMock:
+    prisma = MagicMock()
+    prisma.tool_usage_transactions = []
+    prisma._tool_usage_transactions_lock = asyncio.Lock()
+    prisma.spend_log_transactions = []
+    prisma._spend_log_transactions_lock = asyncio.Lock()
+    return prisma
+
+
+def _minimal_spend_payload() -> dict:
+    return {
+        "request_id": "req-tool-1",
+        "startTime": datetime(2026, 7, 25, 10, 0, tzinfo=timezone.utc),
+        "endTime": datetime(2026, 7, 25, 10, 0, 1, tzinfo=timezone.utc),
+        "spend": 0.0,
+        "total_tokens": 42,
+        "mcp_namespaced_tool_name": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_database_enqueues_tool_usage_for_invoked_tools():
+    db_writer = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _tool_usage_prisma()
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", False),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=_minimal_spend_payload(),
+        ),
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={"model": "gpt-4"},
+            completion_response=_tool_call_response("get_weather"),
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            response_cost=0.1,
+        )
+        await asyncio.sleep(0)
+
+    assert len(prisma.tool_usage_transactions) == 1
+    transaction = prisma.tool_usage_transactions[0]
+    assert transaction.request_id == "req-tool-1"
+    assert transaction.tool_names == ("get_weather",)
+    assert transaction.spend == 0.1
+    assert transaction.total_tokens == 42
+    assert transaction.date == "2026-07-25"
+
+
+@pytest.mark.asyncio
+async def test_update_database_enqueues_realtime_tool_usage():
+    db_writer = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _tool_usage_prisma()
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", False),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=_minimal_spend_payload(),
+        ),
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={
+                "model": "gpt-realtime",
+                "realtime_tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "rt_tool", "arguments": "{}"}}
+                ],
+            },
+            completion_response=None,
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            response_cost=0.2,
+        )
+        await asyncio.sleep(0)
+
+    assert len(prisma.tool_usage_transactions) == 1
+    assert prisma.tool_usage_transactions[0].tool_names == ("rt_tool",)
+
+
+def test_enqueue_tool_registry_upsert_reads_every_choice():
+    from types import SimpleNamespace as NS
+
+    db_writer = DBSpendUpdateWriter()
+    db_writer.tool_discovery_queue = MagicMock()
+    response = NS(
+        choices=[
+            NS(message=NS(tool_calls=[NS(function=NS(name="tool_alpha"))])),
+            NS(message=NS(tool_calls=[NS(function=NS(name="tool_beta"))])),
+        ]
+    )
+
+    db_writer._enqueue_tool_registry_upsert(kwargs={}, completion_response=response)
+
+    enqueued = [call.args[0]["tool_name"] for call in db_writer.tool_discovery_queue.add_update.call_args_list]
+    assert enqueued == ["tool_alpha", "tool_beta"]
+
+
+@pytest.mark.asyncio
+async def test_update_database_skips_tool_usage_when_spend_logs_disabled():
+    db_writer = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _tool_usage_prisma()
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", True),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=_minimal_spend_payload(),
+        ),
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={"model": "gpt-4"},
+            completion_response=_tool_call_response("get_weather"),
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            response_cost=0.1,
+        )
+        await asyncio.sleep(0)
+
+    assert prisma.tool_usage_transactions == []
 
 
 @pytest.mark.asyncio
@@ -147,6 +306,84 @@ async def test_update_daily_spend_with_null_entity_id():
     assert create_data["api_requests"] == 1
     assert create_data["successful_requests"] == 1
     assert create_data["failed_requests"] == 0
+
+
+def _daily_txn(user_id: str = "user1") -> dict:
+    return {
+        "user_id": user_id,
+        "date": "2024-01-01",
+        "api_key": "test-api-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "prompt_tokens": 10,
+        "completion_tokens": 20,
+        "spend": 0.1,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_daily_spend_does_not_retry_post_send_ambiguous_errors():
+    # Regression for the double-apply hazard: a ReadTimeout means the batch was
+    # sent and its outcome is unknown; the engine can leave the transaction open
+    # on the pooled connection, so retrying stacks a second set of increments
+    # into it and one commit applies both. Post-send failures must drop the
+    # batch (loudly), never retry it.
+    import httpx
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.batch_ = MagicMock(side_effect=httpx.ReadTimeout("ambiguous"))
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    with pytest.raises(httpx.ReadTimeout):
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=3,
+            prisma_client=mock_prisma_client,
+            proxy_logging_obj=proxy_logging,
+            daily_spend_transactions={"k1": _daily_txn()},
+            entity_type="user",
+            entity_id_field="user_id",
+            table_name="litellm_dailyuserspend",
+            unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+        )
+
+    mock_prisma_client.db.batch_.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_update_daily_spend_retries_connect_errors(monkeypatch):
+    # ConnectError proves the statements never reached the database, so it is
+    # the one failure the writer may retry.
+    import httpx
+
+    mock_batcher = MagicMock()
+    good_ctx = MagicMock()
+    good_ctx.__aenter__ = AsyncMock(return_value=mock_batcher)
+    good_ctx.__aexit__ = AsyncMock(return_value=None)
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.batch_ = MagicMock(side_effect=[httpx.ConnectError("down"), good_ctx])
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    async def fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("litellm.proxy.db.db_spend_update_writer.asyncio.sleep", fake_sleep)
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=3,
+        prisma_client=mock_prisma_client,
+        proxy_logging_obj=proxy_logging,
+        daily_spend_transactions={"k1": _daily_txn()},
+        entity_type="user",
+        entity_id_field="user_id",
+        table_name="litellm_dailyuserspend",
+        unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+    )
+
+    assert mock_prisma_client.db.batch_.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -1418,7 +1655,6 @@ async def test_batch_database_updates_isolation_on_failure():
         org_id="org1",
         end_user_id="eu1",
         prisma_client=MagicMock(),
-        user_api_key_cache=MagicMock(),
         litellm_proxy_budget_name="budget",
         payload={"key": "value"},
     )
@@ -1818,3 +2054,185 @@ async def test_update_database_does_not_deepcopy_on_request_path():
     fake_payload["nested"]["a"] = 999
     assert batch_payload["model"] == "gpt-4"
     assert batch_payload["nested"]["a"] == 1
+
+
+@pytest.mark.asyncio
+async def test_spend_update_path_never_queries_user_cache_with_none_user_id():
+    """
+    When user_id is None, the spend-update path must not perform a user-cache
+    lookup at all. With a Redis-backed auth cache (enable_redis_auth_cache),
+    a lookup with key=None raises redis.exceptions.DataError, which aborted
+    _update_user_db before any spend updates were enqueued.
+
+    This test fails on the old code twice over: the cache mock records the
+    forbidden lookup, and the DataError it raises kills the end-user spend
+    update that must survive.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    strict_redis_backed_cache = MagicMock()
+    strict_redis_backed_cache.async_get_cache = AsyncMock(
+        side_effect=DataError("Invalid input of type: 'NoneType'")
+    )
+
+    with (
+        patch.object(litellm, "max_budget", 0),
+        patch("litellm.proxy.proxy_server.disable_spend_logs", True),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", strict_redis_backed_cache),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "litellm-proxy-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value={
+                "startTime": "2024-01-01T00:00:00",
+                "endTime": "2024-01-01T00:01:00",
+                "model": "gpt-4",
+                "custom_llm_provider": "openai",
+                "spend": 0.0,
+            },
+        ),
+    ):
+        await db_writer.update_database(
+            token=None,
+            user_id=None,
+            end_user_id="end-user-1",
+            team_id=None,
+            org_id=None,
+            kwargs={"model": "gpt-4", "custom_llm_provider": "openai"},
+            completion_response=MagicMock(),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.1,
+        )
+        await asyncio.sleep(0)
+
+    strict_redis_backed_cache.async_get_cache.assert_not_called()
+
+    queued = await db_writer.spend_update_queue.flush_all_updates_from_in_memory_queue()
+    end_user_updates = [u for u in queued if u["entity_type"] == Litellm_EntityType.END_USER]
+    assert len(end_user_updates) == 1
+    assert end_user_updates[0]["entity_id"] == "end-user-1"
+    assert all(u["entity_type"] != Litellm_EntityType.USER for u in queued)
+
+
+@pytest.mark.asyncio
+async def test_update_user_db_enqueues_user_spend_without_cache_dependency():
+    """
+    _update_user_db needs no cache handle: it enqueues the user spend update
+    (and the end-user one) purely from the ids it is given.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    with patch.object(litellm, "max_budget", 0):
+        await db_writer._update_user_db(
+            response_cost=0.25,
+            user_id="user-123",
+            prisma_client=MagicMock(),
+            litellm_proxy_budget_name="litellm-proxy-budget",
+            end_user_id="end-user-9",
+        )
+
+    queued = await db_writer.spend_update_queue.flush_all_updates_from_in_memory_queue()
+    by_type = {u["entity_type"]: u["entity_id"] for u in queued}
+    assert by_type[Litellm_EntityType.USER] == "user-123"
+    assert by_type[Litellm_EntityType.END_USER] == "end-user-9"
+
+
+@pytest.mark.asyncio
+async def test_daily_transaction_carries_compression_saved_tokens():
+    """
+    The daily transaction built from a SpendLog payload must carry
+    compression_saved_tokens summed from both the native compression_savings
+    metadata key and Headroom guardrail entries, alongside the cache token
+    fields extracted from usage_object.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    metadata = {
+        "usage_object": {"cache_read_input_tokens": 40, "cache_creation_input_tokens": 15},
+        "compression_savings": {
+            "tokens_before": 12000,
+            "tokens_after": 5000,
+            "tokens_saved": 7000,
+            "source": "compression_interception",
+        },
+        "guardrail_information": [
+            {
+                "guardrail_name": "headroom-compressor",
+                "guardrail_provider": "headroom",
+                "guardrail_status": "success",
+                "guardrail_response": {"tokens_before": 1000, "tokens_after": 400, "tokens_saved": 600},
+            }
+        ],
+    }
+    payload = {
+        "request_id": "req-compression-1",
+        "user": "test-user",
+        "startTime": "2026-07-17T00:00:00",
+        "api_key": "test-key",
+        "model": "claude-sonnet-5",
+        "custom_llm_provider": "anthropic",
+        "model_group": "claude-sonnet-5",
+        "call_type": "anthropic_messages",
+        "prompt_tokens": 5000,
+        "completion_tokens": 10,
+        "spend": 0.05,
+        "metadata": json.dumps(metadata),
+    }
+
+    transaction = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+        type="user",
+    )
+
+    assert transaction is not None
+    assert transaction["compression_saved_tokens"] == 7600
+    assert transaction["cache_read_input_tokens"] == 40
+    assert transaction["cache_creation_input_tokens"] == 15
+
+    model_info = litellm.get_model_info(model="claude-sonnet-5", custom_llm_provider="anthropic")
+    input_cost = model_info["input_cost_per_token"] or 0.0
+    cache_read_cost = model_info.get("cache_read_input_token_cost") or input_cost
+    assert transaction["compression_savings_spend"] == pytest.approx(7600 * input_cost)
+    assert transaction["prompt_caching_savings_spend"] == pytest.approx(
+        40 * max(input_cost - cache_read_cost, 0.0)
+    )
+    assert transaction["compression_savings_spend"] > 0
+    assert transaction["prompt_caching_savings_spend"] > 0
+
+
+@pytest.mark.asyncio
+async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
+    """Requests without any compression metadata produce a zero count."""
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-no-compression",
+        "user": "test-user",
+        "startTime": "2026-07-17T00:00:00",
+        "api_key": "test-key",
+        "model": "claude-sonnet-5",
+        "custom_llm_provider": "anthropic",
+        "model_group": "claude-sonnet-5",
+        "call_type": "anthropic_messages",
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "spend": 0.01,
+        "metadata": json.dumps({"usage_object": {}}),
+    }
+
+    transaction = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+        type="user",
+    )
+
+    assert transaction is not None
+    assert transaction["compression_saved_tokens"] == 0
+    assert transaction["compression_savings_spend"] == 0
+    assert transaction["prompt_caching_savings_spend"] == 0

@@ -2,7 +2,7 @@
 MiniMax Anthropic transformation config - extends AnthropicConfig for MiniMax's Anthropic-compatible API
 """
 
-from typing import Optional
+from typing import Final
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -25,14 +25,14 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "minimax"
 
     def should_strip_billing_metadata(self) -> bool:
         return True
 
     @staticmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         """
         Get MiniMax API key from environment or parameters.
         """
@@ -40,7 +40,7 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
 
     @staticmethod
     def get_api_base(
-        api_base: Optional[str] = None,
+        api_base: str | None = None,
     ) -> str:
         """
         Get MiniMax API base URL.
@@ -51,19 +51,19 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for MiniMax API.
         Override to ensure we use MiniMax's endpoint, not Anthropic's.
         """
         # Get the base URL (either provided or default MiniMax endpoint)
-        base_url = self.get_api_base(api_base=api_base)
+        base_url: Final = self.get_api_base(api_base=api_base)
 
         # If the base URL already includes the full path, return it
         if base_url.endswith("/v1/messages"):

@@ -23,12 +23,12 @@ import pytest
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    RATE_LIMIT_DESCRIPTORS_KEY,
-    TPM_RESERVATION_RELEASED_KEY,
-    TPM_RESERVED_MODEL_KEY,
-    TPM_RESERVED_SCOPES_KEY,
-    TPM_RESERVED_TOKENS_KEY,
     _PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
+)
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    _request_stash,
+    get_or_create_request_stash,
+    get_request_stash,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.utils import ModelResponse, Usage
@@ -39,6 +39,13 @@ def rate_limiter():
     cache = DualCache()
     handler = RateLimitHandler(internal_usage_cache=InternalUsageCache(cache))
     return handler, cache
+
+
+@pytest.fixture(autouse=True)
+def _isolated_request_stash():
+    token = _request_stash.set(None)
+    yield
+    _request_stash.reset(token)
 
 
 @pytest.mark.asyncio
@@ -79,7 +86,7 @@ async def test_token_reservation_prevents_concurrent_bypass(rate_limiter):
             return {
                 "request_id": request_id,
                 "success": True,
-                "reserved_tokens": data.get(TPM_RESERVED_TOKENS_KEY, 0),
+                "reserved_tokens": get_request_stash().reserved_tokens,
             }
         except Exception as e:
             return {
@@ -167,12 +174,14 @@ async def test_token_adjustment_on_success(rate_limiter):
 
     api_key = hash_token("sk-test-adjust")
 
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_scopes = frozenset({("api_key", api_key)})
+
     mock_kwargs = {
         "standard_logging_object": {
             "metadata": {
                 "user_api_key_hash": api_key,
-                TPM_RESERVED_TOKENS_KEY: 100,
-                TPM_RESERVED_SCOPES_KEY: [["api_key", api_key]],
             }
         },
         "model": "gpt-3.5-turbo",
@@ -227,12 +236,14 @@ async def test_token_release_on_failure(rate_limiter):
 
     api_key = hash_token("sk-test-fail")
 
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_scopes = frozenset({("api_key", api_key)})
+
     mock_kwargs = {
         "standard_logging_object": {
             "metadata": {
                 "user_api_key_hash": api_key,
-                TPM_RESERVED_TOKENS_KEY: 100,
-                TPM_RESERVED_SCOPES_KEY: [["api_key", api_key]],
             }
         },
     }
@@ -285,6 +296,11 @@ async def test_model_scope_refund_targets_reserved_model(rate_limiter):
     team_id = "team-abc"
     reserved_model = "gpt-4o-mini"
 
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_model = reserved_model
+    stash.reserved_scopes = frozenset({("model_per_team", f"{team_id}:{reserved_model}")})
+
     mock_kwargs = {
         # NOTE: no litellm_params.metadata.model_group — get_model_group_from_litellm_kwargs
         # returns None on this kwargs dict.
@@ -292,11 +308,6 @@ async def test_model_scope_refund_targets_reserved_model(rate_limiter):
             "metadata": {
                 "user_api_key_hash": api_key,
                 "user_api_key_team_id": team_id,
-                TPM_RESERVED_TOKENS_KEY: 100,
-                TPM_RESERVED_MODEL_KEY: reserved_model,
-                TPM_RESERVED_SCOPES_KEY: [
-                    ["model_per_team", f"{team_id}:{reserved_model}"]
-                ],
             }
         },
     }
@@ -446,13 +457,15 @@ async def test_org_scope_refund_on_failure(rate_limiter):
     api_key = hash_token("sk-org-refund")
     org_id = "org-acme"
 
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_scopes = frozenset({("organization", org_id)})
+
     mock_kwargs = {
         "standard_logging_object": {
             "metadata": {
                 "user_api_key_hash": api_key,
                 "user_api_key_org_id": org_id,
-                TPM_RESERVED_TOKENS_KEY: 100,
-                TPM_RESERVED_SCOPES_KEY: [["organization", org_id]],
             }
         },
     }
@@ -498,13 +511,15 @@ async def test_org_scope_reconciled_on_success(rate_limiter):
     api_key = hash_token("sk-org-success")
     org_id = "org-acme"
 
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_scopes = frozenset({("organization", org_id)})
+
     mock_kwargs = {
         "standard_logging_object": {
             "metadata": {
                 "user_api_key_hash": api_key,
                 "user_api_key_org_id": org_id,
-                TPM_RESERVED_TOKENS_KEY: 100,
-                TPM_RESERVED_SCOPES_KEY: [["organization", org_id]],
             }
         },
         "model": "gpt-3.5-turbo",
@@ -607,9 +622,9 @@ async def test_contentless_request_reserves_minimum(rate_limiter):
             data=data,
             call_type="",
         )
-        assert (data.get("metadata") or {}).get(
-            TPM_RESERVED_TOKENS_KEY
-        ) == 1, "Contentless request should reserve the floor of 1 token"
+        assert (
+            get_request_stash().reserved_tokens == 1
+        ), "Contentless request should reserve the floor of 1 token"
 
     counter_after_two = int(
         await cache.async_get_cache(key=counter_key, local_only=True) or 0
@@ -702,7 +717,7 @@ async def test_reservation_released_on_proxy_rejection(rate_limiter):
         data=data,
         call_type="",
     )
-    reserved = (data.get("metadata") or {})[TPM_RESERVED_TOKENS_KEY]
+    reserved = get_request_stash().reserved_tokens
     assert reserved > 0
 
     counter_key = handler.create_rate_limit_keys(
@@ -727,8 +742,8 @@ async def test_reservation_released_on_proxy_rejection(rate_limiter):
         f"Reservation leaked: counter={counter_after_release} after "
         f"proxy-level rejection refund (expected 0)."
     )
-    assert (data.get("metadata") or {}).get(TPM_RESERVATION_RELEASED_KEY) is True, (
-        "Released marker must be stamped to prevent "
+    assert get_request_stash().reservation_released is True, (
+        "Released flag must be set to prevent "
         "async_log_failure_event from double-refunding."
     )
 
@@ -754,28 +769,15 @@ async def test_reservation_release_idempotent(rate_limiter):
         mock_increment
     )
 
-    # Shared metadata dict simulates the propagation between
-    # request_data["metadata"] and kwargs["litellm_params"]["metadata"] —
-    # the post-call-failure-hook stamps the released marker there, and the
-    # log-failure-event reads it.
-    shared_metadata = {
-        "user_api_key_hash": api_key,
-        TPM_RESERVED_TOKENS_KEY: 100,
-        RATE_LIMIT_DESCRIPTORS_KEY: [
-            {
-                "key": "api_key",
-                "value": api_key,
-                "rate_limit": {"tokens_per_unit": 10000, "window_size": 60},
-            }
-        ],
-    }
-
-    request_data = {
-        "metadata": shared_metadata,
-    }
+    # Both hooks read the same per-request ContextVar stash: the
+    # post-call-failure-hook flips reservation_released on it, and the
+    # log-failure-event observes the flip.
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_scopes = frozenset({("api_key", api_key)})
 
     await handler.async_post_call_failure_hook(
-        request_data=request_data,
+        request_data={},
         original_exception=Exception("rejected"),
         user_api_key_dict=UserAPIKeyAuth(api_key=api_key),
     )
@@ -784,11 +786,10 @@ async def test_reservation_release_idempotent(rate_limiter):
     assert first_refund_count > 0, "First refund should have applied"
 
     # Now simulate async_log_failure_event firing afterwards. It must see
-    # the released marker (via shared metadata) and not double-refund.
+    # the released flag on the stash and not double-refund.
     await handler.async_log_failure_event(
         kwargs={
-            "litellm_params": {"metadata": shared_metadata},
-            "standard_logging_object": {"metadata": shared_metadata},
+            "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
         },
         response_obj=None,
         start_time=datetime.now(),
@@ -818,13 +819,15 @@ async def test_unreserved_scopes_charged_actual_not_delta_on_success(rate_limite
     team_id = "team-no-tpm-limit"
 
     # Reservation ONLY hit api_key — team had no TPM limit configured.
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_scopes = frozenset({("api_key", api_key)})
+
     mock_kwargs = {
         "standard_logging_object": {
             "metadata": {
                 "user_api_key_hash": api_key,
                 "user_api_key_team_id": team_id,
-                TPM_RESERVED_TOKENS_KEY: 100,
-                TPM_RESERVED_SCOPES_KEY: [["api_key", api_key]],
             }
         },
         "model": "gpt-3.5-turbo",
@@ -888,13 +891,15 @@ async def test_unreserved_scopes_not_refunded_on_failure(rate_limiter):
     api_key = hash_token("sk-mixed-fail")
     team_id = "team-no-tpm"
 
+    stash = get_or_create_request_stash()
+    stash.reserved_tokens = 100
+    stash.reserved_scopes = frozenset({("api_key", api_key)})
+
     mock_kwargs = {
         "standard_logging_object": {
             "metadata": {
                 "user_api_key_hash": api_key,
                 "user_api_key_team_id": team_id,
-                TPM_RESERVED_TOKENS_KEY: 100,
-                TPM_RESERVED_SCOPES_KEY: [["api_key", api_key]],
             }
         },
     }
@@ -939,10 +944,10 @@ async def test_unreserved_scopes_not_refunded_on_failure(rate_limiter):
 async def test_token_rate_limit_headers_present_in_stored_response(rate_limiter):
     """
     With `skip_tpm_check=True` on the RPM sliding-window pass, token statuses
-    only come from `reserve_tpm_tokens`. They must be merged into
-    `data["litellm_proxy_rate_limit_response"]` so the post-call hook can
-    emit `x-ratelimit-{key}-remaining-tokens` / `-limit-tokens` headers to
-    the client.
+    only come from `reserve_tpm_tokens`. They must be merged into the stashed
+    rate-limit response so the post-call hook can emit
+    `x-ratelimit-{key}-remaining-tokens` / `-limit-tokens` headers to the
+    client.
     """
     handler, cache = rate_limiter
 
@@ -966,10 +971,10 @@ async def test_token_rate_limit_headers_present_in_stored_response(rate_limiter)
         call_type="",
     )
 
-    response = data.get("litellm_proxy_rate_limit_response")
+    response = get_request_stash().rate_limit_response
     assert isinstance(
         response, dict
-    ), "Expected litellm_proxy_rate_limit_response to be set after pre-call"
+    ), "Expected the stashed rate-limit response to be set after pre-call"
 
     statuses = response.get("statuses") or []
     token_statuses = [s for s in statuses if s.get("rate_limit_type") == "tokens"]
@@ -1080,8 +1085,8 @@ async def test_small_tpm_cap_admits_no_max_tokens_request(rate_limiter):
         call_type="",
     )
 
-    reserved = (data.get("metadata") or {}).get(TPM_RESERVED_TOKENS_KEY)
-    assert reserved is not None, "Reservation should have been stashed"
+    reserved = get_request_stash().reserved_tokens
+    assert reserved > 0, "Reservation should have been stashed"
     assert reserved <= 1000 // 2, (
         f"Capped floor must keep the reservation well under the 1000 TPM "
         f"cap; got {reserved}"

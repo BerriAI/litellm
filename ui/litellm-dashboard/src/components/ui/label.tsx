@@ -1,13 +1,13 @@
 "use client";
 
 import * as React from "react";
-import { Label as LabelPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/cva.config";
 
-function Label({ className, ...props }: React.ComponentProps<typeof LabelPrimitive.Root>) {
-  return (
-    <LabelPrimitive.Root
+const Label = React.forwardRef<HTMLLabelElement, React.ComponentPropsWithoutRef<"label">>(
+  ({ className, ...props }, ref) => (
+    <label
+      ref={ref}
       data-slot="label"
       className={cn(
         "flex items-center gap-2 text-sm leading-none font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
@@ -15,7 +15,8 @@ function Label({ className, ...props }: React.ComponentProps<typeof LabelPrimiti
       )}
       {...props}
     />
-  );
-}
+  ),
+);
+Label.displayName = "Label";
 
 export { Label };

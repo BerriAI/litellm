@@ -434,3 +434,73 @@ class TestRotateVirtualKeyInSecretManager:
 
         # Verify async_rotate_secret was NOT called
         mock_secret_manager.async_rotate_secret.assert_not_called()
+
+
+class TestKeyUpdatedAuditLogObjectId:
+    """Tests that /key/update audit logs never store the raw virtual key (issue #31620)."""
+
+    async def _run_updated_hook_and_capture_audit_log(self, request_key: str):
+        import asyncio
+
+        from litellm.proxy._types import (
+            LiteLLM_VerificationToken,
+            UpdateKeyRequest,
+            UserAPIKeyAuth,
+        )
+        from litellm.proxy.utils import hash_token
+
+        captured = []
+
+        async def capture_audit_log(request_data):
+            captured.append(request_data)
+
+        existing_key_row = LiteLLM_VerificationToken(
+            token=hash_token("sk-raw-test-key-31620"),
+            key_name="sk-...1620",
+        )
+
+        with (
+            patch("litellm.store_audit_logs", True),
+            patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new=capture_audit_log,
+            ),
+        ):
+            await KeyManagementEventHooks.async_key_updated_hook(
+                data=UpdateKeyRequest(key=request_key, max_budget=2000.0),
+                existing_key_row=existing_key_row,
+                response=MagicMock(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin-key", user_id="admin"),
+            )
+            for _ in range(100):
+                if captured:
+                    break
+                await asyncio.sleep(0.01)
+
+        assert len(captured) == 1
+        return captured[0]
+
+    @pytest.mark.asyncio
+    async def test_update_audit_log_hashes_raw_key_in_object_id(self):
+        """A raw sk- key sent to /key/update must be stored hashed in object_id."""
+        from litellm.proxy.utils import hash_token
+
+        raw_key = "sk-raw-test-key-31620"
+
+        audit_row = await self._run_updated_hook_and_capture_audit_log(request_key=raw_key)
+
+        assert audit_row.object_id == hash_token(raw_key)
+        assert raw_key not in audit_row.object_id
+        assert raw_key not in str(audit_row.updated_values)
+        assert raw_key not in str(audit_row.before_value)
+
+    @pytest.mark.asyncio
+    async def test_update_audit_log_passes_through_hashed_key(self):
+        """An already-hashed token sent to /key/update is stored unchanged."""
+        from litellm.proxy.utils import hash_token
+
+        hashed_key = hash_token("sk-raw-test-key-31620")
+
+        audit_row = await self._run_updated_hook_and_capture_audit_log(request_key=hashed_key)
+
+        assert audit_row.object_id == hashed_key

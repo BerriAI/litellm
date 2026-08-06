@@ -18,21 +18,68 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
   }
 };
 
+export const getAutoRouterClassifierDefaultPromptCall = async (
+  accessToken: string,
+  contextWindowSize: number,
+  tierLabels?: Record<string, string>,
+): Promise<string> => {
+  /**
+   * Get the built-in system prompt an auto-router's LLM classifier uses when none is configured,
+   * so the prompt editor prefills what the proxy actually sends rather than a frontend copy.
+   *
+   * tierLabels names the rubric's tier bullets, so a router that renamed its tiers prefills the
+   * rubric it sends rather than one using the canonical names.
+   */
+  try {
+    const response = await apiClient.get<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
+      accessToken,
+      query: {
+        context_window_size: contextWindowSize,
+        ...(tierLabels && Object.keys(tierLabels).length > 0 ? { tier_labels: JSON.stringify(tierLabels) } : {}),
+      },
+    });
+    return response.system_prompt;
+  } catch (error) {
+    console.error("Failed to get the default classifier prompt:", error);
+    throw error;
+  }
+};
+
 /**
  * Helper file for calls being made to proxy
  */
 import MessageManager from "@/components/molecules/message_manager";
-import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
+import { clearTokenCookies, getCookie, storeLoginToken } from "@/utils/cookieUtils";
+import { decodeToken } from "@/utils/jwtUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 import type { SkillRegisterRequest } from "./claude_code_plugins/types";
+import type { ObjectPermission } from "./object_permission_types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
+import type {
+  CoordinationRedisSettings,
+  CoordinationRedisSettingsResponse,
+  CoordinationRedisTestResponse,
+} from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
-import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
+import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
+import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
+import {
+  createApiClient,
+  deriveErrorMessage,
+  extractProxyErrorMessage,
+  unwrapProxyErrorMessage,
+} from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
+import {
+  registerAuthHeaderNameGetter,
+  registerAuthTokenGetter,
+  registerBaseUrlGetter,
+  registerErrorHandler,
+} from "@/lib/http/runtime";
 import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
 
 export { serverRootPath };
@@ -167,7 +214,7 @@ export interface PromptSpec {
 export interface PromptTemplateBase {
   litellm_prompt_id: string;
   content: string;
-  metadata?: Record<string, any> | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface PromptInfoResponse {
@@ -196,12 +243,7 @@ export interface Organization {
   teams: any[] | null;
   users: any[] | null;
   members: any[] | null;
-  object_permission?: {
-    object_permission_id: string;
-    mcp_servers: string[];
-    mcp_access_groups?: string[];
-    vector_stores: string[];
-  };
+  object_permission?: ObjectPermission | null;
 }
 
 export interface CredentialItem {
@@ -348,7 +390,6 @@ export const getAgentCreateMetadata = async (): Promise<AgentCreateInfo[]> => {
 
 // Global variable for the header name
 let globalLitellmHeaderName: string = "Authorization";
-const MCP_AUTH_HEADER: string = "x-mcp-auth";
 
 // Function to set the global header name
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
@@ -360,11 +401,16 @@ export function getGlobalLitellmHeaderName(): string {
   return globalLitellmHeaderName;
 }
 
-const apiClient = createApiClient({
+export const apiClient = createApiClient({
   getBaseUrl: getProxyBaseUrl,
   getAuthHeaderName: getGlobalLitellmHeaderName,
   onError: handleError,
 });
+
+registerBaseUrlGetter(getProxyBaseUrl);
+registerAuthHeaderNameGetter(getGlobalLitellmHeaderName);
+registerAuthTokenGetter(() => decodeToken(getCookie("token"))?.key ?? null);
+registerErrorHandler(handleError);
 
 export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;
@@ -980,6 +1026,7 @@ export interface UserInfoV2Response {
   updated_at: string | null;
   sso_user_id: string | null;
   teams: string[];
+  object_permission?: ObjectPermission | null;
 }
 
 /**
@@ -1158,35 +1205,6 @@ export const organizationInfoCall = async (accessToken: string, organizationID: 
     }
 
     const data = await response.json();
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const organizationCreateCall = async (
-  accessToken: string,
-  formValues: Record<string, any>, // Assuming formValues is an object
-) => {
-  try {
-    if (formValues.metadata) {
-      // if there's an exception JSON.parse, show it in the message
-      try {
-        formValues.metadata = JSON.parse(formValues.metadata);
-      } catch (error) {
-        console.error("Failed to parse metadata:", error);
-        throw new Error("Failed to parse metadata: " + error);
-      }
-    }
-
-    const data = await apiClient.post(`/organization/new`, {
-      accessToken,
-      body: {
-        ...formValues, // Include formValues in the request body
-      },
-    });
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -1586,6 +1604,7 @@ export const modelInfoCall = async (
   teamId?: string,
   sortBy?: string,
   sortOrder?: string,
+  excludeAutoRouters?: boolean,
 ) => {
   /**
    * Get all models on proxy
@@ -1610,6 +1629,9 @@ export const modelInfoCall = async (
     }
     if (sortOrder && sortOrder.trim()) {
       params.append("sortOrder", sortOrder.trim());
+    }
+    if (excludeAutoRouters) {
+      params.append("exclude_auto_routers", "true");
     }
     if (params.toString()) {
       url += `?${params.toString()}`;
@@ -1929,6 +1951,7 @@ interface UiSpendLogsParams {
   api_key?: string;
   team_id?: string;
   request_id?: string;
+  session_id?: string;
   user_id?: string;
   end_user?: string;
   status_filter?: string;
@@ -2109,42 +2132,6 @@ export const adminGlobalActivity = async (
   }
 };
 
-export const adminGlobalCacheActivity = async (
-  accessToken: string,
-  startTime: string | undefined,
-  endTime: string | undefined,
-) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity/cache_hits` : `/global/activity/cache_hits`;
-
-    if (startTime && endTime) {
-      url += `?start_date=${startTime}&end_date=${endTime}`;
-    }
-
-    const requestOptions = {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
-    };
-
-    const response = await fetch(url, requestOptions);
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch spend data:", error);
-    throw error;
-  }
-};
-
 export const adminGlobalActivityPerModel = async (
   accessToken: string,
   startTime: string | undefined,
@@ -2297,6 +2284,79 @@ export const testConnectionRequest = async (
   }
 };
 
+export type ModelGroupConnectionResult = { status: "success" } | { status: "error"; error: string };
+
+/**
+ * Test an existing model group by routing a minimal request through the proxy
+ * exactly as production would (by public model_group name). Unlike
+ * /health/test_connection, this needs no litellm_params resolution: the router
+ * resolves the group, credentials, and provider. Used by the auto-router Test
+ * Connection to probe each tier's model group and the embedding model.
+ */
+/**
+ * Build the minimal request that probes a model group by public name. No
+ * max_tokens: reasoning models (o1/o3/...) reject a tiny cap with "max_tokens
+ * reached" because reasoning tokens count against it, which would show a false
+ * failure for a reachable tier.
+ */
+export const buildModelGroupTestRequest = (
+  modelGroup: string,
+  mode: "chat" | "embedding",
+): { path: string; body: Record<string, unknown> } =>
+  mode === "embedding"
+    ? { path: "/v1/embeddings", body: { model: modelGroup, input: "test from litellm" } }
+    : {
+        path: "/v1/chat/completions",
+        body: { model: modelGroup, messages: [{ role: "user", content: "test from litellm" }] },
+      };
+
+export const testModelGroupConnection = async (
+  accessToken: string,
+  modelGroup: string,
+  mode: "chat" | "embedding",
+): Promise<ModelGroupConnectionResult> => {
+  const { path, body } = buildModelGroupTestRequest(modelGroup, mode);
+  try {
+    await apiClient.post(path, { accessToken, body });
+    return { status: "success" };
+  } catch (error) {
+    return { status: "error", error: error instanceof Error ? error.message : String(error) };
+  }
+};
+
+export interface AutoRouterRoutingTestRequest {
+  prompt: string;
+  complexity_router_config: ComplexityRouterConfigPayload;
+  default_model?: string;
+  router_name?: string;
+  team_id?: string;
+}
+
+export interface AutoRouterRoutingTestResult {
+  routed_model: string;
+  routed_model_configured: boolean;
+  routing_decision: RoutingDecision;
+}
+
+export type AutoRouterRoutingTestResponse =
+  | { status: "success"; result: AutoRouterRoutingTestResult }
+  | { status: "error"; error: string };
+
+export const testAutoRouterRouting = async (
+  accessToken: string,
+  request: AutoRouterRoutingTestRequest,
+): Promise<AutoRouterRoutingTestResponse> => {
+  try {
+    const result = await apiClient.post<AutoRouterRoutingTestResult>("/auto_router/test_routing", {
+      accessToken,
+      body: request,
+    });
+    return { status: "success", result };
+  } catch (error) {
+    return { status: "error", error: extractProxyErrorMessage(error) };
+  }
+};
+
 // ... existing code ...
 export const keyInfoV1Call = async (accessToken: string, key: string) => {
   try {
@@ -2433,6 +2493,31 @@ export const userDailyActivityAggregatedCall = async (
     });
   } catch (error) {
     console.error("Failed to fetch aggregated user daily activity:", error);
+    throw error;
+  }
+};
+
+export const gatewayDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date) => {
+  /**
+   * Get gateway request counts (SGR) recorded by the proxy middleware.
+   * Deployment-wide and admin-only; carries no per-key or per-user dimension.
+   */
+  try {
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+    return await apiClient.get(`/gateway/daily/activity`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch gateway daily activity:", error);
     throw error;
   }
 };
@@ -2649,7 +2734,7 @@ export const teamUpdateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      NotificationsManager.fromBackend("Failed to update team settings: " + errorData);
+      NotificationsManager.fromBackend("Failed to update team settings: " + unwrapProxyErrorMessage(errorData));
       throw new Error(errorData);
     }
     const data = (await response.json()) as { data: Team; team_id: string };
@@ -3191,6 +3276,47 @@ export const updateCacheSettingsCall = async (accessToken: string, cacheSettings
     return data;
   } catch (error) {
     console.error("Failed to update cache settings:", error);
+    throw error;
+  }
+};
+
+export const getCoordinationRedisSettingsCall = async (
+  accessToken: string,
+): Promise<CoordinationRedisSettingsResponse> => {
+  try {
+    return await apiClient.get<CoordinationRedisSettingsResponse>(`/coordination_redis/settings`, { accessToken });
+  } catch (error) {
+    console.error("Failed to get coordination redis settings:", error);
+    throw error;
+  }
+};
+
+export const testCoordinationRedisConnectionCall = async (
+  accessToken: string,
+  settings: CoordinationRedisSettings,
+): Promise<CoordinationRedisTestResponse> => {
+  try {
+    return await apiClient.post<CoordinationRedisTestResponse>(`/coordination_redis/settings/test`, {
+      accessToken,
+      body: { settings },
+    });
+  } catch (error) {
+    console.error("Failed to test coordination redis connection:", error);
+    throw error;
+  }
+};
+
+export const updateCoordinationRedisSettingsCall = async (
+  accessToken: string,
+  settings: CoordinationRedisSettings,
+): Promise<void> => {
+  try {
+    await apiClient.post(`/coordination_redis/settings`, {
+      accessToken,
+      body: { settings },
+    });
+  } catch (error) {
+    console.error("Failed to update coordination redis settings:", error);
     throw error;
   }
 };
@@ -4683,45 +4809,6 @@ export const uiSpendLogDetailsCall = async (accessToken: string, logId: string, 
   }
 };
 
-export const getInternalUserSettings = async (accessToken: string) => {
-  try {
-    const data = await apiClient.get(`/get/internal_user_settings`, { accessToken });
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch SSO settings:", error);
-    throw error;
-  }
-};
-
-export const updateInternalUserSettings = async (accessToken: string, settings: Record<string, any>) => {
-  try {
-    // Construct base URL
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/update/internal_user_settings` : `/update/internal_user_settings`;
-
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(settings),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error(errorData);
-    }
-
-    const data = await response.json();
-    NotificationsManager.success("Internal user settings updated successfully");
-    return data;
-  } catch (error) {
-    console.error("Failed to update internal user settings:", error);
-    throw error;
-  }
-};
-
 export const fetchOpenAPIRegistry = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/openapi-registry` : `/v1/mcp/openapi-registry`;
@@ -4755,9 +4842,12 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
   }
 };
 
-export const fetchMCPServers = async (accessToken: string, teamId?: string | null) => {
+export const fetchMCPServers = async (accessToken: string, teamId?: string | null, connectedAppView?: boolean) => {
   try {
-    return await apiClient.get(`/v1/mcp/server`, { accessToken, query: { team_id: teamId || undefined } });
+    return await apiClient.get(`/v1/mcp/server`, {
+      accessToken,
+      query: { team_id: teamId || undefined, connected_app_view: connectedAppView || undefined },
+    });
   } catch (error) {
     console.error("Failed to fetch MCP servers:", error);
     throw error;
@@ -6128,6 +6218,7 @@ export const applyGuardrail = async (
   text: string,
   language?: string | null,
   entities?: string[] | null,
+  metadata?: Record<string, unknown> | null,
 ) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/apply_guardrail` : `/guardrails/apply_guardrail`;
@@ -6143,6 +6234,10 @@ export const applyGuardrail = async (
 
     if (entities && entities.length > 0) {
       requestBody.entities = entities;
+    }
+
+    if (metadata != null) {
+      requestBody.metadata = metadata;
     }
 
     const response = await fetch(url, {
@@ -6551,6 +6646,9 @@ export const testMCPToolsListRequest = async (
     };
     if (accessToken) {
       headers["x-litellm-api-key"] = accessToken;
+      if (globalLitellmHeaderName.toLowerCase() !== "authorization") {
+        headers[globalLitellmHeaderName] = `Bearer ${accessToken}`;
+      }
     }
     if (oauthAccessToken) {
       headers["Authorization"] = `Bearer ${oauthAccessToken}`;
@@ -6630,6 +6728,7 @@ interface RegisterMcpOAuthClientPayload {
   grant_types?: string[];
   response_types?: string[];
   token_endpoint_auth_method?: string;
+  redirect_uris?: string[];
 }
 
 export const registerMcpOAuthClient = async (
@@ -6745,7 +6844,11 @@ export const exchangeMcpOAuthToken = async ({
 
   const data = await response.json();
   if (!response.ok) {
-    const errorMessage = deriveErrorMessage(data) || data?.detail || "OAuth token exchange failed";
+    const oauthErrorMessage =
+      typeof data?.error === "string" && typeof data?.error_description === "string"
+        ? `${data.error}: ${data.error_description}`
+        : undefined;
+    const errorMessage = oauthErrorMessage || deriveErrorMessage(data) || data?.detail || "OAuth token exchange failed";
     throw new Error(errorMessage);
   }
   return data;
@@ -7097,6 +7200,29 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   return data;
 };
 
+export type UserBannerSeverity = "info" | "warning" | "error";
+
+export interface UserBanner {
+  enabled: boolean;
+  message: string;
+  severity: UserBannerSeverity;
+  revision: string;
+}
+
+export type UserBannerUpdate = Omit<UserBanner, "revision">;
+
+export const getUserBanner = async (accessToken: string): Promise<UserBanner> => {
+  return await apiClient.get<UserBanner>("/get/user_banner", { accessToken });
+};
+
+export const updateUserBanner = async (accessToken: string, banner: UserBannerUpdate): Promise<UserBanner> => {
+  const data = await apiClient.patch<{ message: string; banner: UserBanner }>("/update/user_banner", {
+    accessToken,
+    body: banner,
+  });
+  return data.banner;
+};
+
 // Claude Code Marketplace Networking Functions
 
 /**
@@ -7201,7 +7327,8 @@ export const getClaudeCodePluginDetails = async (accessToken: string, pluginName
 };
 
 /**
- * Register or update a Claude Code plugin (admin only)
+ * Register a new Claude Code plugin (admin only). Create-only: the proxy returns
+ * 409 if a plugin with the same name already exists.
  * @param accessToken - Admin access token
  * @param pluginData - Plugin registration data
  */
@@ -7469,6 +7596,37 @@ export const fetchToolsList = async (accessToken: string): Promise<ToolRow[]> =>
   const data = await response.json();
   return data.tools ?? [];
 };
+
+export interface ToolSpendEntry {
+  tool_name: string;
+  spend: number;
+  call_count: number;
+  total_tokens: number;
+}
+
+export interface ToolSpendDailyEntry {
+  date: string;
+  tool_name: string;
+  spend: number;
+  call_count: number;
+}
+
+export interface ToolSpendResponse {
+  by_tool: ToolSpendEntry[];
+  daily: ToolSpendDailyEntry[];
+  start_date: string | null;
+  end_date: string | null;
+}
+
+export const getToolSpend = async (
+  accessToken: string,
+  startDate?: string,
+  endDate?: string,
+): Promise<ToolSpendResponse> =>
+  apiClient.get<ToolSpendResponse>(`/v1/tool/spend`, {
+    accessToken,
+    query: { start_date: startDate, end_date: endDate },
+  });
 
 export interface ToolPolicyOverrideRow {
   override_id: string;

@@ -1,11 +1,11 @@
+use litellm_core::CoreResult;
 use litellm_core::error::CoreError;
 use litellm_core::ocr::transformation::OcrResponseHandling;
-use litellm_core::CoreResult;
 use serde_json::Value;
 
-use super::client::http_client;
 use super::common_utils::{poll_document_intelligence, truncate_error_body};
 use super::types::ProviderOcrRequest;
+use crate::client::http_client;
 
 pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> CoreResult<Value> {
     let mut request_builder = http_client().post(&request.url).json(&request.body);

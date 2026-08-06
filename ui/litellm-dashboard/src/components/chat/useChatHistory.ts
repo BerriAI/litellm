@@ -52,6 +52,7 @@ export function useChatHistory(
 ): {
   conversations: Conversation[];
   activeConversation: Conversation | null;
+  currentActiveId: string | null;
   storageUnavailable: boolean;
   staleId: boolean;
   createConversation: (model: string) => string;
@@ -208,6 +209,7 @@ export function useChatHistory(
   return {
     conversations,
     activeConversation,
+    currentActiveId,
     storageUnavailable,
     staleId,
     createConversation,

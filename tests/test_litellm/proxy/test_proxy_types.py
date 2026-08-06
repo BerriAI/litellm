@@ -124,3 +124,38 @@ def test_proxy_exception_str_returns_message():
         "param": "key",
         "code": "401",
     }
+
+
+def test_key_request_router_settings_keeps_enable_tag_filtering():
+    """``router_settings`` on key requests validates through
+    ``UpdateRouterConfig``; a field missing from that model is silently
+    dropped at parse time, so a key's "Enable Tag Filtering" toggle would
+    never reach the DB even though the team path (plain dict) kept it."""
+    from litellm.proxy._types import GenerateKeyRequest
+
+    req = GenerateKeyRequest(router_settings={"enable_tag_filtering": True, "num_retries": 2})
+
+    assert req.router_settings is not None
+    dumped = req.router_settings.model_dump(exclude_none=True)
+    assert dumped["enable_tag_filtering"] is True
+    assert dumped["num_retries"] == 2
+
+
+def test_update_key_request_requires_key_or_key_alias():
+    """``/key/update`` can be addressed by ``key`` or by ``key_alias``;
+    a request with neither has no way to identify the target key and must
+    fail validation before hitting the endpoint."""
+    import pydantic
+
+    from litellm.proxy._types import UpdateKeyRequest
+
+    with pytest.raises(pydantic.ValidationError, match="either key or key_alias must be provided"):
+        UpdateKeyRequest(max_budget=10.0)
+
+    by_key = UpdateKeyRequest(key="sk-1234")
+    assert by_key.key == "sk-1234"
+    assert by_key.key_alias is None
+
+    by_alias = UpdateKeyRequest(key_alias="my-alias")
+    assert by_alias.key is None
+    assert by_alias.key_alias == "my-alias"

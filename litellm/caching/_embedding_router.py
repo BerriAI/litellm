@@ -12,7 +12,7 @@ This module is dependency-injected: callers pass the proxy ``llm_router`` and
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -26,7 +26,7 @@ def resolve_embedding_router(
     """Return ``llm_router`` iff it serves ``embedding_model`` as a deployment."""
     if llm_router is None:
         return None
-    router_model_names: list[str] = (
+    router_model_names: Final[list[str]] = (
         [m["model_name"] for m in llm_model_list if "model_name" in m] if llm_model_list is not None else []
     )
     if embedding_model in router_model_names:
@@ -38,6 +38,6 @@ def build_router_embedding_metadata(
     request_metadata: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Forward the caller's full metadata, flagged as a semantic-cache embedding."""
-    metadata: dict[str, Any] = dict(request_metadata or {})
+    metadata: Final[dict[str, Any]] = dict(request_metadata or {})
     metadata["semantic-cache-embedding"] = True
     return metadata

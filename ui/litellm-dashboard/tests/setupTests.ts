@@ -149,8 +149,30 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   }),
 }));
 
+const pendingRefWarnings: string[] = [];
+const consumePendingRefWarnings = (): string[] => pendingRefWarnings.splice(0, pendingRefWarnings.length);
+(globalThis as { __consumePendingRefWarnings?: () => string[] }).__consumePendingRefWarnings =
+  consumePendingRefWarnings;
+
+const originalConsoleError = console.error.bind(console);
+vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+  originalConsoleError(...args);
+  if (typeof args[0] === "string" && args[0].includes("Function components cannot be given refs")) {
+    pendingRefWarnings.push(args.map(String).join(" "));
+  }
+});
+
 afterEach(() => {
   cleanup();
+  const refWarnings = consumePendingRefWarnings();
+  if (refWarnings.length > 0) {
+    throw new Error(
+      "A ref was passed to a plain function component and silently dropped under React 18, which breaks " +
+        "ref-based composition (Base UI render triggers, tooltips, focus). Wrap the component in React.forwardRef. " +
+        "This tripwire lives in tests/setupTests.ts and can be removed after the React 19 upgrade.\n\n" +
+        refWarnings.join("\n\n"),
+    );
+  }
 });
 
 // Make toLocaleString deterministic in tests; individual tests can override
@@ -161,47 +183,80 @@ vi.spyOn(Date.prototype, "toLocaleString").mockImplementation(function (this: Da
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 });
 
-// Fixed matchMedia not found error in tests: https://github.com/vitest-dev/vitest/issues/821
-Object.defineProperty(window, "matchMedia", {
-  writable: true,
-  value: (query: string) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  }),
-});
+if (typeof window !== "undefined") {
+  // Fixed matchMedia not found error in tests: https://github.com/vitest-dev/vitest/issues/821
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }),
+  });
 
-// Silence jsdom "getComputedStyle with pseudo-elements" not implemented warnings
-// by ignoring the second argument and delegating to the native implementation.
-const realGetComputedStyle = window.getComputedStyle.bind(window);
-window.getComputedStyle = ((elt: Element) => realGetComputedStyle(elt)) as any;
+  // Silence jsdom "getComputedStyle with pseudo-elements" not implemented warnings
+  // by ignoring the second argument and delegating to the native implementation.
+  const realGetComputedStyle = window.getComputedStyle.bind(window);
+  window.getComputedStyle = ((elt: Element) => realGetComputedStyle(elt)) as any;
 
-// Avoid "navigation to another Document" warnings when clicking <a> with blob: URLs
-// used by download flows in tests.
-Object.defineProperty(HTMLAnchorElement.prototype, "click", {
-  configurable: true,
-  writable: true,
-  value: vi.fn(),
-});
+  // Avoid "navigation to another Document" warnings when clicking <a> with blob: URLs
+  // used by download flows in tests.
+  Object.defineProperty(HTMLAnchorElement.prototype, "click", {
+    configurable: true,
+    writable: true,
+    value: vi.fn(),
+  });
 
-if (!document.getAnimations) {
-  document.getAnimations = () => [];
+  if (!document.getAnimations) {
+    document.getAnimations = () => [];
+  }
+
+  // Stub URL.revokeObjectURL so vi.spyOn can intercept it in tests
+  if (!URL.revokeObjectURL) {
+    URL.revokeObjectURL = () => {};
+  }
+
+  // Mock ResizeObserver for components that use it (recharts, Tremor UI components).
+  // JSDOM has no layout, so for observers inside a shadcn ChartContainer ([data-slot="chart"])
+  // the mock immediately reports a fixed 800x400 box; recharts renders nothing until it
+  // observes a size. Scoped to chart subtrees only: firing for every observer re-enters
+  // React mid-effect for tremor/headlessui consumers whose tests assume the old no-op
+  // (chart text would duplicate getByText targets, popover clicks go stale). Widen or
+  // drop the scoping once tremor is gone.
+  const MOCK_RESIZE_BOX = { inlineSize: 800, blockSize: 400 };
+  const MOCK_RESIZE_RECT: DOMRectReadOnly = {
+    width: 800,
+    height: 400,
+    top: 0,
+    left: 0,
+    bottom: 400,
+    right: 800,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  };
+  global.ResizeObserver = class ResizeObserver {
+    private readonly callback: ResizeObserverCallback;
+    constructor(callback: ResizeObserverCallback) {
+      this.callback = callback;
+    }
+    observe(target: Element) {
+      if (!target.closest('[data-slot="chart"]')) return;
+      const entry: ResizeObserverEntry = {
+        target,
+        contentRect: MOCK_RESIZE_RECT,
+        borderBoxSize: [MOCK_RESIZE_BOX],
+        contentBoxSize: [MOCK_RESIZE_BOX],
+        devicePixelContentBoxSize: [MOCK_RESIZE_BOX],
+      };
+      this.callback([entry], this);
+    }
+    unobserve() {}
+    disconnect() {}
+  };
 }
-
-// Stub URL.revokeObjectURL so vi.spyOn can intercept it in tests
-if (!URL.revokeObjectURL) {
-  URL.revokeObjectURL = () => {};
-}
-
-// Mock ResizeObserver for components that use it (e.g., Tremor UI components)
-// This prevents "ResizeObserver is not defined" errors in JSDOM
-global.ResizeObserver = class ResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};

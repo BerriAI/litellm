@@ -2,11 +2,10 @@
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { Col, Grid } from "@tremor/react";
 import { jwtDecode } from "jwt-decode";
-import { useSearchParams } from "next/navigation";
 import React, { useEffect, useState } from "react";
-import Onboarding from "../app/onboarding/page";
 import { fetchTeams } from "./common_components/fetch_teams";
 import { KeyResponse, Team } from "./key_team_helpers/key_list";
+import { effectiveSessionRole } from "@/utils/roles";
 import {
   getProxyBaseUrl,
   getProxyUISettings,
@@ -76,12 +75,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(null);
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
 
-  // Assuming useSearchParams() hook exists and works in your setup
-  const searchParams = useSearchParams()!;
-
   const token = getCookie("token");
-
-  const invitation_id = searchParams.get("invitation_id");
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [teamSpend, setTeamSpend] = useState<number | null>(null);
@@ -104,32 +98,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, []);
 
-  function formatUserRole(userRole: string) {
-    if (!userRole) {
-      return "Undefined Role";
-    }
-    switch (userRole.toLowerCase()) {
-      case "app_owner":
-        return "App Owner";
-      case "demo_app_owner":
-        return "App Owner";
-      case "app_admin":
-        return "Admin";
-      case "proxy_admin":
-        return "Admin";
-      case "proxy_admin_viewer":
-        return "Admin Viewer";
-      case "app_user":
-        return "App User";
-      case "internal_user":
-        return "Internal User";
-      case "internal_user_viewer":
-        return "Internal Viewer";
-      default:
-        return "Unknown Role";
-    }
-  }
-
   // console.log(`selectedTeam: ${Object.entries(selectedTeam)}`);
   // Moved useEffect inside the component and used a condition to run fetch only if the params are available
   useEffect(() => {
@@ -143,8 +111,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
         // check if userRole is defined
         if (decoded.user_role) {
-          const formattedUserRole = formatUserRole(decoded.user_role);
-          setUserRole(formattedUserRole);
+          setUserRole(effectiveSessionRole(decoded.user_role));
         } else {
         }
 
@@ -232,10 +199,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     }
   }, [selectedTeam]);
 
-  if (invitation_id != null) {
-    return <Onboarding></Onboarding>;
-  }
-
   function gotoLogin() {
     // Clear token cookies using the utility function
     clearTokenCookies();
@@ -296,21 +259,24 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const canCreateKey = userRole !== "Admin Viewer" && userRole !== "proxy_admin_viewer";
 
   return (
-    <div className="w-full mx-4 h-[75vh]">
+    <div className="mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
-          {canCreateKey && (
-            <CreateKey
-              key={selectedTeam ? selectedTeam.team_id : null}
-              team={selectedTeam as Team | null}
-              teams={teams as Team[]}
-              data={keys}
-              addKey={addKey}
-              autoOpenCreate={autoOpenCreate}
-              prefillData={prefillData}
-            />
-          )}
-          <VirtualKeysTable />
+          <VirtualKeysTable
+            headerActions={
+              canCreateKey ? (
+                <CreateKey
+                  key={selectedTeam ? selectedTeam.team_id : null}
+                  team={selectedTeam as Team | null}
+                  teams={teams as Team[]}
+                  data={keys}
+                  addKey={addKey}
+                  autoOpenCreate={autoOpenCreate}
+                  prefillData={prefillData}
+                />
+              ) : undefined
+            }
+          />
         </Col>
       </Grid>
     </div>

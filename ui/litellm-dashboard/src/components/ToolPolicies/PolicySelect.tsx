@@ -1,17 +1,18 @@
 "use client";
 
 import React from "react";
-import { Select } from "antd";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { cn } from "@/lib/cva.config";
 
 export const INPUT_POLICY_OPTIONS = [
-  { value: "untrusted", label: "untrusted", color: "#92400e", bg: "#fef3c7", border: "#fcd34d" },
-  { value: "trusted", label: "trusted", color: "#065f46", bg: "#d1fae5", border: "#6ee7b7" },
-  { value: "blocked", label: "blocked", color: "#991b1b", bg: "#fee2e2", border: "#fca5a5" },
+  { value: "untrusted", label: "untrusted", dot: "bg-amber-500" },
+  { value: "trusted", label: "trusted", dot: "bg-green-500" },
+  { value: "blocked", label: "blocked", dot: "bg-red-500" },
 ] as const;
 
 export const OUTPUT_POLICY_OPTIONS = [
-  { value: "untrusted", label: "untrusted", color: "#92400e", bg: "#fef3c7", border: "#fcd34d" },
-  { value: "trusted", label: "trusted", color: "#065f46", bg: "#d1fae5", border: "#6ee7b7" },
+  { value: "untrusted", label: "untrusted", dot: "bg-amber-500" },
+  { value: "trusted", label: "trusted", dot: "bg-green-500" },
 ] as const;
 
 export const POLICY_OPTIONS = INPUT_POLICY_OPTIONS;
@@ -36,56 +37,30 @@ export const PolicySelect: React.FC<PolicySelectProps> = ({
   onChange,
   policyType = "input",
   size = "small",
-  minWidth = 110,
   stopPropagation = true,
 }) => {
   const options = policyType === "output" ? OUTPUT_POLICY_OPTIONS : INPUT_POLICY_OPTIONS;
-  const style = policyStyle(value);
+  const selected = policyStyle(value);
   return (
-    <Select
-      size={size}
-      value={value}
-      disabled={saving}
-      loading={saving}
-      onChange={(v) => onChange(toolName, v)}
-      onClick={(e) => stopPropagation && e.stopPropagation()}
-      style={{
-        minWidth,
-        fontWeight: 500,
-        backgroundColor: style.bg,
-        borderColor: style.border,
-        color: style.color,
-        borderRadius: 999,
-        fontSize: size === "small" ? 11 : 12,
-      }}
-      popupMatchSelectWidth={false}
-      options={options.map((o) => ({
-        value: o.value,
-        label: (
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              fontSize: 12,
-              fontWeight: 500,
-              color: o.color,
-            }}
-          >
-            <span
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                backgroundColor: o.color,
-                display: "inline-block",
-                flexShrink: 0,
-              }}
-            />
-            {o.label}
-          </span>
-        ),
-      }))}
-    />
+    <Select value={value} disabled={saving} onValueChange={(v: string | null) => v !== null && onChange(toolName, v)}>
+      <SelectTrigger
+        size={size === "small" ? "sm" : "default"}
+        className="w-auto min-w-28"
+        onClick={(e) => stopPropagation && e.stopPropagation()}
+      >
+        <span className={cn("size-2 shrink-0 rounded-full", selected.dot)} />
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            <span className="inline-flex items-center gap-1.5">
+              <span className={cn("size-2 shrink-0 rounded-full", o.dot)} />
+              {o.label}
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 };

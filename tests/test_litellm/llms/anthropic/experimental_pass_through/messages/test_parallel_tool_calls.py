@@ -134,13 +134,6 @@ def test_anthropic_stream_wrapper_single_tool_call():
     # Verify the expected sequence of chunk types
     expected_types = [
         "message_start",  # Initial message start
-        # TODO: for future contributors: if the initial content_block_start
-        # respects the upstream's starting chunk, the initial empty text block
-        # should be removed (and this test should be updated accordingly)
-        # ---------------------------------------------------------------------
-        "content_block_start",  # Initial empty text block start
-        "content_block_stop",  # End of empty text block
-        # ---------------------------------------------------------------------
         "content_block_start",  # Start of first tool_use content block
         "content_block_delta",  # {"city":
         "content_block_delta",  # "NY"}
@@ -196,13 +189,6 @@ def test_anthropic_stream_wrapper_back_to_back_tool_calls():
     # Verify the expected sequence of chunk types
     expected_types = [
         "message_start",  # Initial message start
-        # TODO: for future contributors: if the initial content_block_start
-        # respects the upstream's starting chunk, the initial empty text block
-        # should be removed (and this test should be updated accordingly)
-        # ---------------------------------------------------------------------
-        "content_block_start",  # Initial empty text block start
-        "content_block_stop",  # End of empty text block
-        # ---------------------------------------------------------------------
         "content_block_start",  # Start of first tool_use content block
         "content_block_delta",  # {"city":
         "content_block_delta",  # "NY"}
@@ -267,13 +253,6 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
     # Verify the expected sequence of chunk types
     expected_types = [
         "message_start",  # Initial message start
-        # TODO: for future contributors: if the initial content_block_start
-        # respects the upstream's starting chunk, the initial empty text block
-        # should be removed (and this test should be updated accordingly)
-        # ---------------------------------------------------------------------
-        "content_block_start",  # Initial empty text block start
-        "content_block_stop",  # End of empty text block
-        # ---------------------------------------------------------------------
         "content_block_start",  # Start of first tool_use content block
         "content_block_delta",  # {"city":
         "content_block_delta",  # "NY"}
