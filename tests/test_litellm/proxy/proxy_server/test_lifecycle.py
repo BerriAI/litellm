@@ -30,7 +30,6 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
-import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import (
     ProxyStartupEvent,
@@ -733,31 +732,25 @@ def test_otel_global_provider_published_after_callback_init():
     )
 
 
-def test_startup_warns_for_global_budget_without_database(monkeypatch, caplog):
-    monkeypatch.setattr(litellm, "max_budget", 100.0)
-
+def test_startup_warns_for_global_budget_without_database(caplog):
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        ProxyStartupEvent._warn_budget_without_db(prisma_client=None)
+        ProxyStartupEvent._warn_budget_without_db(max_budget=100.0, prisma_client=None)
 
     assert "litellm.max_budget=100.0" in caplog.text
     assert "will NOT be enforced" in caplog.text
     assert "requests will never be blocked" in caplog.text
 
 
-def test_startup_does_not_warn_for_global_budget_with_database(monkeypatch, caplog):
-    monkeypatch.setattr(litellm, "max_budget", 100.0)
-
+def test_startup_does_not_warn_for_global_budget_with_database(caplog):
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        ProxyStartupEvent._warn_budget_without_db(prisma_client=MagicMock())
+        ProxyStartupEvent._warn_budget_without_db(max_budget=100.0, prisma_client=MagicMock())
 
     assert "litellm.max_budget" not in caplog.text
 
 
 @pytest.mark.parametrize("max_budget", [0, None])
-def test_startup_does_not_warn_without_global_budget(monkeypatch, caplog, max_budget):
-    monkeypatch.setattr(litellm, "max_budget", max_budget)
-
+def test_startup_does_not_warn_without_global_budget(caplog, max_budget):
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        ProxyStartupEvent._warn_budget_without_db(prisma_client=None)
+        ProxyStartupEvent._warn_budget_without_db(max_budget=max_budget, prisma_client=None)
 
     assert "litellm.max_budget" not in caplog.text
