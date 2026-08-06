@@ -103,7 +103,7 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        api_key = api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")
+        api_key = api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")  # rebind-ok: fallback chain
         app_id = get_secret_str("BYTEPLUS_TTS_APP_ID")
         access_key = get_secret_str("BYTEPLUS_TTS_ACCESS_KEY")
         app_key = get_secret_str("BYTEPLUS_TTS_APP_KEY") or self.DEFAULT_APP_KEY

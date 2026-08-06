@@ -74,7 +74,7 @@ class BytePlusChatConfig(OpenAILikeChatConfig):
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict:
-        optional_params = super().map_openai_params(
+        optional_params = super().map_openai_params(  # rebind-ok: parameter transformation
             non_default_params,
             optional_params,
             model,

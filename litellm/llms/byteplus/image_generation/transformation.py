@@ -52,7 +52,7 @@ class BytePlusImageGenerationConfig(BaseImageGenerationConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        api_key = api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")
+        api_key = api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")  # rebind-ok: fallback chain
         if not api_key:
             raise ValueError("BytePlus API key is required. Set BYTEPLUS_API_KEY or ARK_API_KEY or pass api_key.")
         return get_byteplus_headers(api_key=api_key, extra_headers=headers)

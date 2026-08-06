@@ -28,9 +28,9 @@ class BytePlusResponsesAPIConfig(VolcEngineResponsesAPIConfig):
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         if litellm_params is None:
-            litellm_params = GenericLiteLLMParams()
+            litellm_params = GenericLiteLLMParams()  # rebind-ok: default params
         elif isinstance(litellm_params, dict):
-            litellm_params = GenericLiteLLMParams.model_validate(litellm_params)
+            litellm_params = GenericLiteLLMParams.model_validate(litellm_params)  # rebind-ok: validate model
 
         api_key = (
             litellm_params.api_key

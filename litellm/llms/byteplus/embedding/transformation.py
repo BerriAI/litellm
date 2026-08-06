@@ -109,7 +109,7 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
                 else:
                     formatted_input.append(item)
         else:
-            formatted_input = raw_input  # type: ignore[assignment]
+            formatted_input = raw_input  # pyright: ignore[reportAssignmentType]  # raw_input is checked list
 
         data: dict[str, Any] = {
             "model": model,
@@ -179,7 +179,7 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        api_key = api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")
+        api_key = api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")  # rebind-ok: fallback chain
         if not api_key:
             raise ValueError("BytePlus API key is required. Set BYTEPLUS_API_KEY or ARK_API_KEY or pass api_key.")
         return get_byteplus_headers(api_key=api_key, extra_headers=headers)
