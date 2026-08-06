@@ -497,6 +497,9 @@ class InMemoryGuardrailHandler:
                 "skip_tool_message_in_guardrail",
                 getattr(litellm_params, "skip_tool_message_in_guardrail", None),
             )
+            custom_guardrail_callback.unreachable_fallback = (
+                "fail_open" if getattr(litellm_params, "unreachable_fallback", None) == "fail_open" else "fail_closed"
+            )
             configured_run_in_parallel: Final = getattr(litellm_params, "run_in_parallel", None)
             if configured_run_in_parallel is not None:
                 custom_guardrail_callback.run_in_parallel = bool(configured_run_in_parallel)
