@@ -217,8 +217,8 @@ class TestResolveApiKeyHelper:
             resolve_api_key_helper("http://localhost:4000")
 
 
-def _make_ctx(base_url):
-    return click.Context(click.Command("test"), obj={"base_url": base_url})
+def _make_ctx(base_url, api_key=None):
+    return click.Context(click.Command("test"), obj={"base_url": base_url, "api_key": api_key})
 
 
 class TestEnsureFreshLogin:
@@ -314,6 +314,63 @@ class TestEnsureFreshLogin:
 
         with pytest.raises(UpError, match="lite login"):
             _ensure_fresh_login(_make_ctx("http://proxy-b:4000"))
+
+    def test_context_picks_up_the_key_produced_by_the_native_refresh(self, monkeypatch):
+        expired_native = {
+            "key": "sk-a",
+            "base_url": "http://proxy-a:4000",
+            "auth_type": "native_oidc",
+            "expires_at": time.time() - 60,
+            "refresh_token": "refresh-1",
+        }
+        monkeypatch.setattr(up_module, "load_token", lambda: expired_native)
+        monkeypatch.setattr(
+            auth_module,
+            "refresh_native_credential",
+            lambda token_data: {**token_data, "key": "sk-new", "expires_at": time.time() + 3600},
+        )
+        ctx = _make_ctx("http://proxy-a:4000", api_key="sk-a")
+
+        _ensure_fresh_login(ctx)
+
+        assert ctx.obj["api_key"] == "sk-new"
+
+    def test_context_picks_up_the_key_produced_by_an_interactive_login(self, monkeypatch):
+        monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: True)
+        tokens = iter(
+            [
+                {"key": "sk-old", "base_url": "http://proxy-a:4000"},
+                {"key": "sk-new", "base_url": "http://proxy-a:4000"},
+            ]
+        )
+        monkeypatch.setattr(up_module, "load_token", lambda: next(tokens))
+        monkeypatch.setattr(up_module, "is_cli_token_fresh", lambda token_data: token_data["key"] == "sk-new")
+        monkeypatch.setattr(up_module, "login", lambda: None)
+        ctx = _make_ctx("http://proxy-a:4000", api_key="sk-old")
+
+        _ensure_fresh_login(ctx)
+
+        assert ctx.obj["api_key"] == "sk-new"
+
+    def test_explicitly_supplied_key_survives_a_native_refresh(self, monkeypatch):
+        expired_native = {
+            "key": "sk-stored",
+            "base_url": "http://proxy-a:4000",
+            "auth_type": "native_oidc",
+            "expires_at": time.time() - 60,
+            "refresh_token": "refresh-1",
+        }
+        monkeypatch.setattr(up_module, "load_token", lambda: expired_native)
+        monkeypatch.setattr(
+            auth_module,
+            "refresh_native_credential",
+            lambda token_data: {**token_data, "key": "sk-new", "expires_at": time.time() + 3600},
+        )
+        ctx = _make_ctx("http://proxy-a:4000", api_key="sk-explicit")
+
+        _ensure_fresh_login(ctx)
+
+        assert ctx.obj["api_key"] == "sk-explicit"
 
 
 class TestUpCommand:
