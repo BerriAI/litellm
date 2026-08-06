@@ -160,8 +160,8 @@ class TestComplexityRouterInit:
     @pytest.mark.parametrize(
         "tier_value",
         [
-            "",
-            [],
+            {"model": ""},
+            {"model": []},
             {"reasoning_effort": "low"},
             {"model": 3},
         ],

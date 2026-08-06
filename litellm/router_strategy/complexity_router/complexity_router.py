@@ -47,6 +47,7 @@ from .config import (
     ComplexityRouterConfig,
     ComplexityTier,
     TierTarget,
+    _tier_pool,
 )
 
 if TYPE_CHECKING:
@@ -1152,7 +1153,9 @@ class ComplexityRouter(CustomLogger):
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
 
     @staticmethod
-    def _pick_from_tier_value(model: str | list[str] | TierTarget, tier_key: str) -> str:
+    def _pick_from_tier_value(
+        model: str | list[str] | TierTarget, tier_key: str
+    ) -> str:  # mutable-ok: legacy pool inputs remain lists
         if isinstance(model, TierTarget):
             model = model.model
         if isinstance(model, str):
@@ -1161,27 +1164,23 @@ class ComplexityRouter(CustomLogger):
             raise ValueError(f"Empty model pool for tier {tier_key}")
         return random.choice(model)
 
-    def _tier_pools(self) -> dict[str, list[str]]:
+    def _tier_pools(self) -> dict[str, list[str]]:  # mutable-ok: adaptive router consumes mutable pools
         return {  # mutable-ok: router consumers require mutable tier pool mappings
-            tier: (
-                (target.model if isinstance(target.model, list) else [target.model])
-                if isinstance(target, TierTarget)
-                else models
-                if isinstance(models, list)
-                else [models]
-            )
-            for tier, models in self.config.tiers.items()
-            for target in (models,)
+            tier: _tier_pool(target) for tier, target in self.config.tiers.items()
         }
 
-    def _tier_params(self, tier: ComplexityTier | str) -> dict[str, object]:
+    def _tier_params(
+        self, tier: ComplexityTier | str
+    ) -> dict[str, object] | None:  # mutable-ok: params are merged into request kwargs
         tier_key: Final = tier.value if isinstance(tier, ComplexityTier) else tier
         target: Final = self.config.tiers.get(tier_key)
-        return target.params if isinstance(target, TierTarget) else {}  # mutable-ok: response schema requires a dict
+        return target.params or None if isinstance(target, TierTarget) else None
 
-    def _params_for_model(self, model: str) -> dict[str, object]:
+    def _params_for_model(
+        self, model: str
+    ) -> dict[str, object] | None:  # mutable-ok: params are merged into request kwargs
         tier: Final = self._tier_for_model(model)
-        return self._tier_params(tier) if tier is not None else {}  # mutable-ok: response schema requires a dict
+        return self._tier_params(tier) if tier is not None else None
 
     async def _pick_model_for_tier(
         self,
@@ -1802,6 +1801,7 @@ class ComplexityRouter(CustomLogger):
                 # priority exactly (changing it would be a silent behavior change for
                 # every non-plugin user, not just a security fix).
                 routed_model = self.config.default_model
+                routed_params = None
             else:
                 # Plugins configured: default_model must never bypass them, so it's not
                 # checked here at all -- _pick_model_for_tier -> get_model_for_tier still
@@ -1809,12 +1809,11 @@ class ComplexityRouter(CustomLogger):
                 routed_model = await self._pick_model_for_tier(
                     ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs
                 )
+                routed_params = self._tier_params(ComplexityTier.MEDIUM)
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
-                params=self._tier_params(ComplexityTier.MEDIUM)
-                if not self.config.default_model or self.config.plugins
-                else {},  # mutable-ok: response schema requires a dict
+                params=routed_params,
                 routing_decision=self._build_routing_decision(
                     routed_model=routed_model,
                     cause="default_fallback",

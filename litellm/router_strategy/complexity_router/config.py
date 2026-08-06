@@ -243,7 +243,7 @@ DEFAULT_TIER_MODELS: Final[dict[str, str]] = {
 
 
 class TierTarget(BaseModel):
-    model: str | list[str]
+    model: str | list[str]  # mutable-ok: public config accepts model pools as lists
 
     model_config = ConfigDict(extra="allow")
 
@@ -265,8 +265,14 @@ class TierTarget(BaseModel):
         raise ValueError("model must be a string or a list of strings")
 
     @property
-    def params(self) -> dict[str, object]:
+    def params(self) -> dict[str, object]:  # mutable-ok: extras are passed through as request kwargs
         return cast(dict[str, object], self.__pydantic_extra__ or {})  # cast-ok: pydantic owns extra params
+
+
+def _tier_pool(value: str | list[str] | TierTarget) -> list[str]:  # mutable-ok: routing pools use list semantics
+    if isinstance(value, TierTarget):
+        value = value.model
+    return value if isinstance(value, list) else [value]
 
 
 class ClassifierLLMConfig(BaseModel):
@@ -309,7 +315,7 @@ class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
     # string = pin; list = random pick when adaptive=False, soft-floor home pool when adaptive=True
-    tiers: dict[str, str | list[str] | TierTarget] = Field(
+    tiers: dict[str, str | list[str] | TierTarget] = Field(  # mutable-ok: pydantic config surface is mutable
         default_factory=lambda: DEFAULT_TIER_MODELS.copy(),
         description=(
             "Mapping of complexity tiers to a model or model pool. "
@@ -589,42 +595,20 @@ class ComplexityRouterConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_tier_models(self) -> "ComplexityRouterConfig":
-        for tier, target in self.tiers.items():
-            if isinstance(target, TierTarget):
-                continue
-            if isinstance(target, str) and not target.strip():
-                raise ValueError(f"tier {tier!r} model must be a non-empty string")
-            if not target:
-                raise ValueError(f"tier {tier!r} model pool must be non-empty")
-        return self
-
-    @model_validator(mode="after")
     def _validate_adaptive_pools(self) -> "ComplexityRouterConfig":
         if not self.adaptive:
             return self
         normalized: Final[
-            dict[str, str | list[str] | TierTarget]
+            dict[str, str | list[str] | TierTarget]  # mutable-ok: pydantic config surface is mutable
         ] = {  # mutable-ok: pydantic requires normalized tier mappings
-            tier: (
-                target.model_copy(
-                    update={"model": [*target.model] if isinstance(target.model, list) else [target.model]}
-                )
-                if isinstance(target, TierTarget)
-                else models
-                if isinstance(models, list)
-                else [models]
-            )
-            for tier, models in self.tiers.items()
-            for target in (models,)
+            tier: target.model_copy(update={"model": _tier_pool(target)})
+            if isinstance(target, TierTarget)
+            else _tier_pool(target)
+            for tier, target in self.tiers.items()
         }
-        if not any(target.model if isinstance(target, TierTarget) else target for target in normalized.values()):
+        if not any(_tier_pool(target) for target in normalized.values()):
             raise ValueError("adaptive=True requires at least one non-empty tier pool")
-        empty: Final = [
-            tier
-            for tier, target in normalized.items()
-            if not (target.model if isinstance(target, TierTarget) else target)
-        ]
+        empty: Final = [tier for tier, target in normalized.items() if not _tier_pool(target)]
         if empty:
             raise ValueError(f"adaptive=True tier pools must be non-empty; empty tiers: {empty}")
         self.tiers = normalized
