@@ -2,21 +2,29 @@
 CRUD ENDPOINTS FOR SEARCH TOOLS
 """
 
-from collections.abc import Awaitable, Callable
+import asyncio
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Any, Final, TypeAlias
+from typing import Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.search_endpoints.search_tool_access import (
+    SessionTeamIdsLookup,
+    TeamObjectLookup,
+    can_view_search_tool,
+    resolve_allowlist_teams,
+    session_team_ids_from_db,
+    team_object_from_db,
+)
 from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
 from litellm.types.search import (
     ListSearchToolsResponse,
@@ -48,46 +56,26 @@ def _convert_datetime_to_str(value: datetime | str | None) -> str | None:
     return value
 
 
-TeamObjectLookup: TypeAlias = Callable[[str, UserAPIKeyAuth], Awaitable[LiteLLM_TeamTable]]
-
-
-async def _team_object_from_db(team_id: str, user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTable:
-    from litellm.proxy.auth.auth_checks import get_team_object
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
+async def _is_visible(
+    tool: SearchToolInfoResponse,
+    user_api_key_dict: UserAPIKeyAuth,
+    teams: Sequence[LiteLLM_TeamTable],
+) -> bool:
+    tool_name: Final = tool.get("search_tool_name")
+    if not tool_name:
+        return False
+    return await can_view_search_tool(
+        search_tool_name=tool_name,
+        user_api_key_dict=user_api_key_dict,
+        teams=teams,
     )
-
-    return await get_team_object(
-        team_id=team_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        parent_otel_span=user_api_key_dict.parent_otel_span,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-
-
-def _allowlist_team_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
-    """
-    The team whose object_permission allowlist scopes this caller, or None when there is none.
-
-    Every Admin UI session key is stamped with UI_SESSION_TOKEN_TEAM_ID, a reserved sentinel that
-    never has a row in LiteLLM_TeamTable (`/team/new` rejects it as a real team id), so looking it
-    up would raise 404 instead of resolving a team. It carries no allowlist of its own, so the
-    caller is scoped by its key-level allowlist alone. Any other team id is looked up for real and
-    a failed lookup still surfaces.
-    """
-    team_id: Final = user_api_key_dict.team_id
-    if not team_id or team_id == UI_SESSION_TOKEN_TEAM_ID:
-        return None
-    return team_id
 
 
 async def _filter_visible_search_tools(
     search_tools: list[SearchToolInfoResponse],
     user_api_key_dict: UserAPIKeyAuth,
-    lookup_team_object: TeamObjectLookup = _team_object_from_db,
+    lookup_team_object: TeamObjectLookup = team_object_from_db,
+    lookup_session_team_ids: SessionTeamIdsLookup = session_team_ids_from_db,
 ) -> list[SearchToolInfoResponse]:
     """
     Drop search tools the caller is not authorized to invoke, applying the same
@@ -99,23 +87,9 @@ async def _filter_visible_search_tools(
     ):
         return search_tools
 
-    from litellm.proxy.auth.auth_checks import can_user_view_search_tool
-
-    allowlist_team_id: Final = _allowlist_team_id(user_api_key_dict)
-    team_object: Final[LiteLLM_TeamTable | None] = (
-        await lookup_team_object(allowlist_team_id, user_api_key_dict) if allowlist_team_id else None
-    )
-
-    visible: Final[list[SearchToolInfoResponse]] = []
-    for tool in search_tools:
-        tool_name = tool.get("search_tool_name")
-        if tool_name and await can_user_view_search_tool(
-            search_tool_name=tool_name,
-            valid_token=user_api_key_dict,
-            team_object=team_object,
-        ):
-            visible.append(tool)
-    return visible
+    teams: Final = await resolve_allowlist_teams(user_api_key_dict, lookup_team_object, lookup_session_team_ids)
+    visible: Final = await asyncio.gather(*(_is_visible(tool, user_api_key_dict, teams) for tool in search_tools))
+    return [tool for tool, is_visible in zip(search_tools, visible) if is_visible]
 
 
 @router.get(
