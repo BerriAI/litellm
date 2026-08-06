@@ -7,7 +7,7 @@ from typing import Final
 import click
 import requests
 
-from .auth import get_stored_api_key, login
+from .auth import get_stored_api_key, login, refresh_stored_key_if_stale
 
 ANTHROPIC_BASE_URL_ENV: Final = "ANTHROPIC_BASE_URL"
 ANTHROPIC_AUTH_TOKEN_ENV: Final = "ANTHROPIC_AUTH_TOKEN"
@@ -217,7 +217,7 @@ def resolve_api_key(ctx: click.Context) -> str:
     base_url: Final = ctx.obj["base_url"]
     api_key = ctx.obj.get("api_key")
     if api_key:
-        return api_key
+        return refresh_stored_key_if_stale(api_key, base_url)
 
     if not _is_interactive():
         raise click.ClickException(

@@ -22,10 +22,11 @@ from litellm.proxy.client.cli.commands.auth import (
     login,
     logout,
     print_token,
+    refresh_stored_key_if_stale,
     save_token,
     whoami,
 )
-from litellm.proxy.client.cli.native_oidc.errors import NativeOIDCUnavailable
+from litellm.proxy.client.cli.native_oidc.errors import NativeOIDCError, NativeOIDCUnavailable
 
 
 @pytest.fixture(autouse=True)
@@ -937,6 +938,75 @@ class TestPrintTokenCommand:
         assert "sk-stale-key" not in result.output
         assert "lite login" in result.output
         mock_post.assert_not_called()
+
+
+def _expired_native_credential() -> dict[str, object]:
+    return {
+        "base_url": "http://localhost:4000",
+        "key": "sk-expired",
+        "auth_type": "native_oidc",
+        "expires_at": time.time() - 60,
+        "refresh_token": "refresh-1",
+    }
+
+
+class TestRefreshStoredKeyIfStale:
+    """Agent wrappers resolve a key once at launch, so an expired native credential has to be
+    renewed there or `lite claude` hands a dead token to the agent."""
+
+    def test_expired_native_credential_is_refreshed(self):
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_expired_native_credential()),
+            patch(
+                "litellm.proxy.client.cli.commands.auth.refresh_native_credential",
+                return_value={"key": "sk-refreshed"},
+            ),
+        ):
+            assert refresh_stored_key_if_stale("sk-expired", "http://localhost:4000/") == "sk-refreshed"
+
+    def test_a_still_valid_native_credential_is_left_alone(self):
+        credential = {**_expired_native_credential(), "expires_at": time.time() + 3600}
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=credential),
+            patch("litellm.proxy.client.cli.commands.auth.refresh_native_credential") as refresh,
+        ):
+            assert refresh_stored_key_if_stale("sk-expired", "http://localhost:4000") == "sk-expired"
+        refresh.assert_not_called()
+
+    def test_a_failed_refresh_leaves_the_caller_with_the_stored_key(self):
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_expired_native_credential()),
+            patch(
+                "litellm.proxy.client.cli.commands.auth.refresh_native_credential",
+                side_effect=NativeOIDCError("provider said no"),
+            ),
+        ):
+            assert refresh_stored_key_if_stale("sk-expired", "http://localhost:4000") == "sk-expired"
+
+    def test_a_caller_supplied_key_is_never_swapped_for_the_stored_one(self):
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_expired_native_credential()),
+            patch("litellm.proxy.client.cli.commands.auth.refresh_native_credential") as refresh,
+        ):
+            assert refresh_stored_key_if_stale("sk-explicit", "http://localhost:4000") == "sk-explicit"
+        refresh.assert_not_called()
+
+    def test_a_credential_stored_for_another_proxy_is_never_refreshed(self):
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_expired_native_credential()),
+            patch("litellm.proxy.client.cli.commands.auth.refresh_native_credential") as refresh,
+        ):
+            assert refresh_stored_key_if_stale("sk-expired", "http://other-proxy:4000") == "sk-expired"
+        refresh.assert_not_called()
+
+    def test_a_legacy_proxy_minted_credential_is_never_refreshed(self):
+        legacy = {"base_url": "http://localhost:4000", "key": "sk-legacy", "timestamp": 0}
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=legacy),
+            patch("litellm.proxy.client.cli.commands.auth.refresh_native_credential") as refresh,
+        ):
+            assert refresh_stored_key_if_stale("sk-legacy", "http://localhost:4000") == "sk-legacy"
+        refresh.assert_not_called()
 
 
 def _write_home_json(home: Path, filename: str, payload: dict[str, object]) -> None:

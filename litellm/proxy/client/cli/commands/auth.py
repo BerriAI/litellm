@@ -77,6 +77,40 @@ def get_stored_api_key(expected_base_url: str | None = None) -> str | None:
     return get_litellm_gateway_api_key(expected_base_url=expected_base_url)
 
 
+def try_refresh_native(token_data: Mapping[str, object]) -> Mapping[str, object] | None:
+    """Renew a native credential whose access token has expired.
+
+    Returns None when the credential is not native, is still fresh, or cannot be
+    refreshed -- callers that have an interactive login to fall back on treat all
+    three the same way.
+    """
+    if not is_native_credential(token_data) or not needs_refresh(token_data):
+        return None
+    try:
+        return refresh_native_credential(token_data)
+    except NativeOIDCError:
+        return None
+
+
+def refresh_stored_key_if_stale(api_key: str, expected_base_url: str) -> str:
+    """Return a usable key for `expected_base_url`, renewing an expired native one.
+
+    `api_key` comes back unchanged unless it is exactly the credential stored for
+    that proxy, so an explicit --api-key or LITELLM_PROXY_API_KEY is never swapped
+    out from under the caller.
+    """
+    token_data: Final = load_token()
+    if not token_data or token_data.get("key") != api_key:
+        return api_key
+    if token_data.get("base_url") != expected_base_url.rstrip("/"):
+        return api_key
+    refreshed: Final = try_refresh_native(token_data)
+    if refreshed is None:
+        return api_key
+    refreshed_key: Final = refreshed.get("key")
+    return refreshed_key if isinstance(refreshed_key, str) and refreshed_key else api_key
+
+
 # Team selection utilities
 def display_teams_table(teams: list[dict[str, Any]]) -> None:
     """Display teams in a formatted table"""

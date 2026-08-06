@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from unittest.mock import patch
 
 import click
@@ -345,6 +346,35 @@ class TestAgentCommands:
             "routing Claude Code through proxy at http://localhost:4000"
             in result.output
         )
+
+    def test_claude_launches_with_a_refreshed_native_key(self):
+        """The stored access token expires on the IdP's clock (often an hour), so launching an
+        agent with whatever is cached would hand it a token the proxy already rejects."""
+        expired_native = {
+            "base_url": "http://localhost:4000",
+            "key": "sk-expired",
+            "auth_type": "native_oidc",
+            "expires_at": time.time() - 60,
+            "refresh_token": "refresh-1",
+        }
+        captured = {}
+
+        with (
+            patch(f"{AGENTS_MODULE}.run_agent", side_effect=lambda b, k, c, **kw: captured.update(api_key=k)),
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=expired_native),
+            patch(
+                "litellm.proxy.client.cli.commands.auth.refresh_native_credential",
+                return_value={**expired_native, "key": "sk-refreshed", "expires_at": time.time() + 3600},
+            ),
+        ):
+            result = self.runner.invoke(
+                _agent_command("claude"),
+                [],
+                obj={"base_url": "http://localhost:4000", "api_key": "sk-expired"},
+            )
+
+        assert result.exit_code == 0, result.output
+        assert captured["api_key"] == "sk-refreshed"
 
     def test_codex_shows_friendly_name(self):
         captured = {}

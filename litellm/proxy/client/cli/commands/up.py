@@ -19,7 +19,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 
 from .agents import AgentRunError, resolve_api_key, verify_proxy_key
-from .auth import load_token, login
+from .auth import load_token, login, try_refresh_native
 
 ENV_KEY: Final = "env"
 API_KEY_HELPER_KEY: Final = "apiKeyHelper"
@@ -159,8 +159,13 @@ def resolve_api_key_helper(base_url: str) -> str:
 def _ensure_fresh_login(ctx: click.Context) -> None:
     base_url: Final = ctx.obj["base_url"].rstrip("/")
     token_data = load_token()
-    if token_data and token_data.get("base_url") == base_url and is_cli_token_fresh(token_data):
-        return
+    if token_data and token_data.get("base_url") == base_url:
+        if is_cli_token_fresh(token_data):
+            return
+        # A native credential carries a refresh token, so an expired one is no
+        # reason to make the user sit through a browser login again.
+        if try_refresh_native(token_data) is not None:
+            return
 
     if not sys.stdin.isatty():
         raise UpError(
