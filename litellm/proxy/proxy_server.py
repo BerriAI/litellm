@@ -3909,6 +3909,10 @@ class ProxyConfig:
         # whether an existing request predates the prices it just fetched, and re-serving one
         # costs a single fetch where skipping one leaves it priced wrong indefinitely
         self.model_cost_map_applied_revision: int = 0
+        # Keys explicitly set in the YAML config file. Used to give YAML
+        # precedence over stale DB-cached values for these specific keys
+        # during periodic config reloads (_update_general_settings).
+        self._yaml_general_settings_keys: set[str] = set()  # mutable-ok: populated once at startup, read-only thereafter  # fmt: skip
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -4839,6 +4843,11 @@ class ProxyConfig:
         _hc_staleness = None
         _hc_ignore_transient = False
         if general_settings:
+            # Record which keys were explicitly set in the YAML config file.
+            # These keys take precedence over DB-cached values during periodic
+            # reloads (see _update_general_settings).
+            self._yaml_general_settings_keys = set(general_settings.keys())  # mutable-ok: snapshot of YAML keys at load time  # fmt: skip
+
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings: Final = general_settings.get("key_management_settings", None)
             if key_management_settings is not None:
@@ -6049,7 +6058,15 @@ class ProxyConfig:
 
         ## STORE PROMPTS IN SPEND LOGS ##
         if "store_prompts_in_spend_logs" in _general_settings:
-            value = _general_settings["store_prompts_in_spend_logs"]
+            # If the YAML config explicitly set this key, prefer the YAML value
+            # over the DB-cached value. This ensures config changes deployed via
+            # CI/CD take effect without requiring a manual /config/update call.
+            # When YAML does not set this key, the DB value is used (preserving
+            # admin UI runtime changes).
+            if "store_prompts_in_spend_logs" in self._yaml_general_settings_keys:
+                value = general_settings.get("store_prompts_in_spend_logs")
+            else:
+                value = _general_settings["store_prompts_in_spend_logs"]
             # Normalize case: handle True/true/TRUE, False/false/FALSE, None/null
             if value is None:
                 general_settings["store_prompts_in_spend_logs"] = None
