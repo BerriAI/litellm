@@ -11,6 +11,9 @@ from typing import Any, Final, cast
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
+from litellm.llms.anthropic.experimental_pass_through.responses_adapters.usage import (
+    anthropic_usage_from_responses_usage,
+)
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
 )
@@ -27,7 +30,6 @@ from litellm.types.llms.anthropic import (
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
-    AnthropicUsage,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -386,8 +388,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             ResponseReasoningItem,
         )
 
-        from litellm.types.llms.openai import ResponseAPIUsage
-
         content: Final[list[dict[str, Any]]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
 
@@ -453,15 +453,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if response.status == "incomplete":
             stop_reason = "max_tokens"
 
-        # usage
-        raw_usage: Final[ResponseAPIUsage | None] = response.usage
-        input_tokens: Final = int(getattr(raw_usage, "input_tokens", 0) or 0)
-        output_tokens: Final = int(getattr(raw_usage, "output_tokens", 0) or 0)
-
-        anthropic_usage: Final = AnthropicUsage(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-        )
+        anthropic_usage: Final = anthropic_usage_from_responses_usage(response.usage)
 
         return AnthropicMessagesResponse(
             id=response.id,

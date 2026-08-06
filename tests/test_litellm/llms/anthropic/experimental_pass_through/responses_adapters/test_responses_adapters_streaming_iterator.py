@@ -130,3 +130,42 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
             ("content_block_start", 0),
             ("content_block_delta", 0),
         ]
+
+
+class TestResponseCompletedUsage:
+    """The Responses API reports cache hits in ``input_tokens_details.cached_tokens``
+    and counts them inside ``input_tokens``, while Anthropic clients read
+    ``cache_read_input_tokens`` from the ``message_delta`` usage and expect
+    ``input_tokens`` to exclude it."""
+
+    @staticmethod
+    def _message_delta_usage(usage: dict) -> dict:
+        chunks = _process_all([{"type": "response.completed", "response": {"status": "completed", "usage": usage}}])
+        return next(chunk["usage"] for chunk in chunks if chunk["type"] == "message_delta")
+
+    def test_cached_tokens_mapped_to_cache_read_input_tokens(self):
+        usage = self._message_delta_usage(
+            {
+                "input_tokens": 25616,
+                "input_tokens_details": {"cached_tokens": 25613},
+                "output_tokens": 5,
+            }
+        )
+        assert usage == {
+            "input_tokens": 3,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 25613,
+        }
+
+    def test_no_cache_hit_omits_cache_fields(self):
+        usage = self._message_delta_usage(
+            {
+                "input_tokens": 120,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 7,
+            }
+        )
+        assert usage == {"input_tokens": 120, "output_tokens": 7}
+
+    def test_missing_usage_yields_zeroes(self):
+        assert self._message_delta_usage({}) == {"input_tokens": 0, "output_tokens": 0}

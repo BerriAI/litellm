@@ -20,6 +20,7 @@ from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transfo
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.types.llms.anthropic import AnthropicMessagesRequest
+from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage
 
 
 def _make_request(**overrides) -> AnthropicMessagesRequest:
@@ -823,11 +824,15 @@ def _make_mock_response(
     model: str = "gpt-4o",
     input_tokens: int = 100,
     output_tokens: int = 50,
+    cached_tokens: int = 0,
 ) -> MagicMock:
     """Build a minimal mock ResponsesAPIResponse."""
-    usage = MagicMock()
-    usage.input_tokens = input_tokens
-    usage.output_tokens = output_tokens
+    usage = ResponseAPIUsage(
+        input_tokens=input_tokens,
+        input_tokens_details=InputTokensDetails(cached_tokens=cached_tokens),
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+    )
 
     resp = MagicMock()
     resp.id = response_id
@@ -960,6 +965,27 @@ class TestTranslateResponse:
         result: Any = _ADAPTER.translate_response(response)
         assert result["usage"]["input_tokens"] == 200
         assert result["usage"]["output_tokens"] == 75
+
+    def test_cached_tokens_mapped_to_cache_read_input_tokens(self):
+        """The Responses API reports cache hits in ``input_tokens_details.cached_tokens``
+        and counts them inside ``input_tokens``, while Anthropic clients read
+        ``cache_read_input_tokens`` and expect ``input_tokens`` to exclude it."""
+        response = _make_mock_response(
+            output=[_make_output_message(["OK"])],
+            input_tokens=25616,
+            output_tokens=5,
+            cached_tokens=25613,
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_read_input_tokens"] == 25613
+        assert result["usage"]["input_tokens"] == 3
+        assert result["usage"]["output_tokens"] == 5
+
+    def test_no_cache_hit_omits_cache_fields(self):
+        response = _make_mock_response(output=[_make_output_message(["OK"])], input_tokens=200, output_tokens=75)
+        result: Any = _ADAPTER.translate_response(response)
+        assert "cache_read_input_tokens" not in result["usage"]
+        assert "cache_creation_input_tokens" not in result["usage"]
 
     def test_model_and_id_preserved(self):
         """Model and response ID from the Responses API are forwarded."""
