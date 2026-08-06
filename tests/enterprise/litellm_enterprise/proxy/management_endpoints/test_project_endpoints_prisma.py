@@ -976,3 +976,66 @@ async def test_delete_project_invalidates_cached_project_object(monkeypatch):
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_update_project_succeeds_when_cache_eviction_fails(monkeypatch):
+    """
+    The DB write has already committed when eviction runs, so a cache backend
+    error must not turn a successful update into a 500; the stale entry is
+    bounded by the TTL instead.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    project_id = f"project-{uuid.uuid4()}"
+    failing_cache = MagicMock()
+    failing_cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+
+    existing_row = MagicMock(team_id=None, budget_id=None, object_permission_id=None)
+    updated_row = MagicMock()
+
+    mock_prisma = MagicMock()
+    mock_prisma.jsonify_object = lambda data: data
+    mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=existing_row)
+    mock_prisma.db.litellm_projecttable.update = AsyncMock(return_value=updated_row)
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", failing_cache)
+
+    response = await update_project(
+        data=UpdateProjectRequest(project_id=project_id, models=["gpt-oss-120b"]),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+
+    assert response is updated_row
+    failing_cache.async_delete_cache.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_project_eviction_publishes_cross_worker_invalidation(monkeypatch):
+    """
+    Single-worker eviction only fixes the handling worker; the broadcast is what
+    lets every other worker drop its in-memory copy instead of serving the stale
+    project until the TTL expires.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import delete_cached_project_object
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    project_id = f"project-{uuid.uuid4()}"
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        new=AsyncMock(),
+    ) as mock_publish:
+        await delete_cached_project_object(
+            project_id=project_id, user_api_key_cache=UserApiKeyCache()
+        )
+
+    mock_publish.assert_awaited_once_with(cache_key=f"project_id:{project_id}")

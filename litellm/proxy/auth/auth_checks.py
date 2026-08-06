@@ -4322,9 +4322,22 @@ async def delete_cached_project_object(
     Every endpoint that mutates litellm_projecttable must call this: get_project_object
     serves auth cache-first with no freshness check, so without invalidation a stale
     project (e.g. a pre-update empty model allowlist) keeps being enforced until the
-    TTL expires (LIT-3803).
+    TTL expires (LIT-3803). Best-effort on both steps: the DB write has already
+    committed, so a cache backend error must not fail the endpoint; the stale entry
+    then expires via TTL.
     """
-    await user_api_key_cache.async_delete_cache(key=_project_cache_key(project_id))
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
+
+    cache_key: Final = _project_cache_key(project_id)
+    try:
+        await user_api_key_cache.async_delete_cache(key=cache_key)
+    except Exception as e:  # noqa: BLE001  # best-effort eviction: any cache backend error must not fail the mutation
+        verbose_proxy_logger.warning(
+            "Failed to evict cached project entry %s; a stale project may be served until its TTL expires: %s",
+            cache_key,
+            e,
+        )
+    await publish_auth_cache_invalidation(cache_key=cache_key)
 
 
 async def _organization_max_budget_check(
