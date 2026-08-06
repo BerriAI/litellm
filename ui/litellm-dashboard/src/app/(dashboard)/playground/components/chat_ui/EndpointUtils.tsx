@@ -1,5 +1,7 @@
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
-import { EndpointType, getEndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
+import { EndpointType, getEndpointType, ModelMode } from "@/components/chat_ui/mode_endpoint_mapping";
+
+const KNOWN_MODEL_MODES = new Set<string>(Object.values(ModelMode));
 
 export const determineEndpointType = (selectedModel: string, modelInfo: ModelGroup[]): EndpointType => {
   const selectedModelInfo = modelInfo.find((option) => option.model_group === selectedModel);
@@ -14,6 +16,10 @@ export const determineEndpointType = (selectedModel: string, modelInfo: ModelGro
 export const isModelCompatibleWithEndpoint = (model: ModelGroup, endpointType: EndpointType): boolean => {
   if (!model.mode) {
     return true;
+  }
+
+  if (!KNOWN_MODEL_MODES.has(model.mode)) {
+    return false;
   }
 
   const optionEndpoint = getEndpointType(model.mode);
