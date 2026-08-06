@@ -714,6 +714,16 @@ class CustomGuardrail(CustomLogger):
 
         return result
 
+    def supports_scan_only_tool_results(self) -> bool:
+        """Whether this guardrail can scan tool-result content.
+
+        Guardrails whose own role filtering only ever scans human-authored
+        messages override this to return False, so configuring them with
+        ``scan_only_tool_results`` is rejected at initialization instead of
+        silently scanning nothing on every request.
+        """
+        return True
+
     def should_run_guardrail(
         self,
         data,

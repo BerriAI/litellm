@@ -1564,6 +1564,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         return scannable
 
+    def supports_scan_only_tool_results(self) -> bool:
+        return False
+
     @staticmethod
     def _get_scannable_text_indices(
         texts: list[str],

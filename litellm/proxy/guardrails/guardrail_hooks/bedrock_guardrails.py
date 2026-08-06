@@ -405,6 +405,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     grounding.append(block)
         return grounding
 
+    def supports_scan_only_tool_results(self) -> bool:
+        return self.experimental_use_latest_role_message_only is not True
+
     def _prepare_guardrail_messages_for_role(
         self,
         messages: list[AllMessageValues] | None,

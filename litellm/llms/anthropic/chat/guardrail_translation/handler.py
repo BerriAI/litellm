@@ -26,10 +26,12 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    anthropic_tool_name,
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
     merge_guardrailed_scoped_messages,
+    merge_returned_tools_into_request_tools,
     scoped_structured_message_indices,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
@@ -387,7 +389,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
-            if guardrailed_tools is not None and not scan_only_tool_results:
+            if guardrailed_tools is not None:
                 # Convert tools back from OpenAI format to Anthropic format
                 anthropic_config: Final = AnthropicConfig()
                 anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
@@ -396,7 +398,15 @@ class AnthropicMessagesHandler(BaseTranslation):
                     if converted_tool is not None:
                         anthropic_tools.append(converted_tool)
                     # Note: MCP servers are handled separately in the main transformation
-                data["tools"] = anthropic_tools
+                data["tools"] = (
+                    merge_returned_tools_into_request_tools(
+                        request_tools=data.get("tools"),
+                        returned_tools=anthropic_tools,
+                        tool_name=anthropic_tool_name,
+                    )
+                    if scan_only_tool_results
+                    else anthropic_tools
+                )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")
             if (
