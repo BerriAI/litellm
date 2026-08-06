@@ -34,11 +34,6 @@ def mock_prisma_client():
         mock.db.litellm_auditlog.find_many = AsyncMock()
         mock.db.litellm_auditlog.find_unique = AsyncMock()
         mock.db.litellm_auditlog.count = AsyncMock()
-        mock.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
-        mock.db.litellm_usertable.find_many = AsyncMock(return_value=[])
-        mock.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
-        mock.db.litellm_organizationtable.find_many = AsyncMock(return_value=[])
-        mock.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
         yield mock
 
 

@@ -7,7 +7,7 @@ GET - /audit/{id} - Get audit log by id
 GET - /audit - Get all audit logs
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Final, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Any, Dict, Optional
 
 #### AUDIT LOGGING ####
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,156 +16,10 @@ from litellm_enterprise.types.proxy.audit_logging_endpoints import (
     PaginatedAuditLogResponse,
 )
 
-from litellm.proxy._types import CommonProxyErrors, LitellmTableNames, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-if TYPE_CHECKING:
-    from litellm.proxy.utils import PrismaClient
-
 router = APIRouter()
-
-_KEY_TABLE: Final[str] = LitellmTableNames.KEY_TABLE_NAME.value
-_TEAM_TABLE: Final[str] = LitellmTableNames.TEAM_TABLE_NAME.value
-_USER_TABLE: Final[str] = LitellmTableNames.USER_TABLE_NAME.value
-_ORG_TABLE: Final[str] = "LiteLLM_OrganizationTable"
-_MODEL_TABLE: Final[str] = LitellmTableNames.PROXY_MODEL_TABLE_NAME.value
-
-_BLOB_ALIAS_KEYS: Final[Dict[str, Tuple[str, ...]]] = {
-    _KEY_TABLE: ("key_alias",),
-    _TEAM_TABLE: ("team_alias",),
-    _USER_TABLE: ("user_alias", "user_email"),
-    _ORG_TABLE: ("organization_alias",),
-    _MODEL_TABLE: ("model_name",),
-}
-
-
-class _AliasMaps(NamedTuple):
-    key_alias_by_token: Dict[str, str]
-    team_alias_by_id: Dict[str, str]
-    user_alias_by_id: Dict[str, str]
-    user_email_by_id: Dict[str, str]
-    org_alias_by_id: Dict[str, str]
-    model_name_by_id: Dict[str, str]
-
-
-def _object_ids_for_table(audit_logs: Sequence[AuditLogResponse], table_name: str) -> frozenset:
-    return frozenset(log.object_id for log in audit_logs if log.table_name == table_name and log.object_id)
-
-
-async def _fetch_alias_maps(prisma_client: "PrismaClient", audit_logs: Sequence[AuditLogResponse]) -> _AliasMaps:
-    tokens: Final = _object_ids_for_table(audit_logs, _KEY_TABLE) | frozenset(
-        log.changed_by_api_key for log in audit_logs if log.changed_by_api_key
-    )
-    user_ids: Final = _object_ids_for_table(audit_logs, _USER_TABLE) | frozenset(
-        log.changed_by for log in audit_logs if log.changed_by
-    )
-    team_ids: Final = _object_ids_for_table(audit_logs, _TEAM_TABLE)
-    org_ids: Final = _object_ids_for_table(audit_logs, _ORG_TABLE)
-    model_ids: Final = _object_ids_for_table(audit_logs, _MODEL_TABLE)
-
-    key_rows: Final = (
-        await prisma_client.db.litellm_verificationtoken.find_many(where={"token": {"in": list(tokens)}})
-        if tokens
-        else []
-    )
-    user_rows: Final = (
-        await prisma_client.db.litellm_usertable.find_many(where={"user_id": {"in": list(user_ids)}})
-        if user_ids
-        else []
-    )
-    team_rows: Final = (
-        await prisma_client.db.litellm_teamtable.find_many(where={"team_id": {"in": list(team_ids)}})
-        if team_ids
-        else []
-    )
-    org_rows: Final = (
-        await prisma_client.db.litellm_organizationtable.find_many(where={"organization_id": {"in": list(org_ids)}})
-        if org_ids
-        else []
-    )
-    model_rows: Final = (
-        await prisma_client.db.litellm_proxymodeltable.find_many(where={"model_id": {"in": list(model_ids)}})
-        if model_ids
-        else []
-    )
-
-    return _AliasMaps(
-        key_alias_by_token={row.token: row.key_alias for row in key_rows if row.key_alias},
-        team_alias_by_id={row.team_id: row.team_alias for row in team_rows if row.team_alias},
-        user_alias_by_id={row.user_id: row.user_alias for row in user_rows if row.user_alias},
-        user_email_by_id={row.user_id: row.user_email for row in user_rows if row.user_email},
-        org_alias_by_id={row.organization_id: row.organization_alias for row in org_rows if row.organization_alias},
-        model_name_by_id={row.model_id: row.model_name for row in model_rows if row.model_name},
-    )
-
-
-def _db_object_alias(log: AuditLogResponse, aliases: _AliasMaps) -> str | None:
-    if log.table_name == _KEY_TABLE:
-        return aliases.key_alias_by_token.get(log.object_id)
-    if log.table_name == _TEAM_TABLE:
-        return aliases.team_alias_by_id.get(log.object_id)
-    if log.table_name == _USER_TABLE:
-        return aliases.user_alias_by_id.get(log.object_id) or aliases.user_email_by_id.get(log.object_id)
-    if log.table_name == _ORG_TABLE:
-        return aliases.org_alias_by_id.get(log.object_id)
-    if log.table_name == _MODEL_TABLE:
-        return aliases.model_name_by_id.get(log.object_id)
-    return None
-
-
-def _alias_from_blobs(log: AuditLogResponse, blob_keys: Tuple[str, ...]) -> str | None:
-    for blob in (log.updated_values, log.before_value):
-        if not isinstance(blob, dict):
-            continue
-        for blob_key in blob_keys:
-            value = blob.get(blob_key)
-            if isinstance(value, str) and value:
-                return value
-    return None
-
-
-def _enrich_audit_log(log: AuditLogResponse, aliases: _AliasMaps) -> AuditLogResponse:
-    object_alias: Final = _db_object_alias(log, aliases) or _alias_from_blobs(
-        log, _BLOB_ALIAS_KEYS.get(log.table_name, ())
-    )
-    return log.model_copy(
-        update={
-            "object_alias": object_alias,
-            "changed_by_user_email": aliases.user_email_by_id.get(log.changed_by),
-            "changed_by_key_alias": aliases.key_alias_by_token.get(log.changed_by_api_key),
-        }
-    )
-
-
-async def _enrich_audit_logs(
-    prisma_client: "PrismaClient", audit_logs: Sequence[AuditLogResponse]
-) -> List[AuditLogResponse]:
-    if not audit_logs:
-        return []
-    aliases: Final = await _fetch_alias_maps(prisma_client, audit_logs)
-    return [_enrich_audit_log(log, aliases) for log in audit_logs]
-
-
-_TEAM_ALIAS_CANDIDATE_LIMIT: Final[int] = 100
-_TEAM_ALIAS_CANDIDATE_SQL: Final[str] = (
-    f'SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_alias LIKE $1 LIMIT {_TEAM_ALIAS_CANDIDATE_LIMIT}'
-)
-
-
-def _contains_like_pattern(value: str) -> str:
-    escaped: Final = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
-
-
-async def _build_object_team_condition(prisma_client: "PrismaClient", object_team: str) -> Dict[str, Any]:
-    team_rows: Final = await prisma_client.db.query_raw(_TEAM_ALIAS_CANDIDATE_SQL, _contains_like_pattern(object_team))
-    match_values: Final = dict.fromkeys([object_team, *(row["team_id"] for row in team_rows)])
-    return {
-        "OR": [
-            _build_json_field_or_condition("team_alias", object_team),
-            *(_build_json_field_or_condition("team_id", value) for value in match_values),
-        ]
-    }
 
 
 def _build_json_field_or_condition(json_key: str, value: str) -> Dict[str, Any]:
@@ -185,6 +39,15 @@ def _build_json_field_or_condition(json_key: str, value: str) -> Dict[str, Any]:
         "OR": [
             {"before_value": {"path": [json_key], "string_contains": value}},
             {"updated_values": {"path": [json_key], "string_contains": value}},
+        ]
+    }
+
+
+def _build_object_team_condition(object_team: str) -> Dict[str, Any]:
+    return {
+        "OR": [
+            {"object_team_id": object_team},
+            {"object_team_alias": {"contains": object_team}},
         ]
     }
 
@@ -213,8 +76,8 @@ async def get_audit_logs(
     object_team: str | None = Query(
         None,
         description=(
-            "Filter by team id or alias: matches team_id or team_alias present in before_value or "
-            "updated_values JSON, or teams whose team_alias contains this value (PostgreSQL only)"
+            "Filter by team: matches the row's object_team_id exactly "
+            "or rows whose object_team_alias contains this value"
         ),
     ),
     object_key_hash: Optional[str] = Query(
@@ -233,10 +96,9 @@ async def get_audit_logs(
 
     Returns a paginated response of audit logs matching the specified filters.
 
-    Note: object_team_id, object_team and object_key_hash use Prisma JSON path
-    filtering, which requires PostgreSQL. object_team matches a team_id or
-    team_alias in the audit blobs, or any team whose team_alias contains the
-    value.
+    Note: object_team_id and object_key_hash use Prisma JSON path filtering,
+    which requires PostgreSQL. object_team filters on the denormalized
+    object_team_id and object_team_alias columns instead.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -277,9 +139,7 @@ async def get_audit_logs(
             _build_json_field_or_condition("token", object_key_hash)
         ]
     if object_team:
-        where_conditions["AND"] = where_conditions.get("AND", []) + [
-            await _build_object_team_condition(prisma_client, object_team)
-        ]
+        where_conditions["AND"] = where_conditions.get("AND", []) + [_build_object_team_condition(object_team)]
 
     # Build sort conditions
     order_by: Dict[str, Any] = {}
@@ -300,14 +160,9 @@ async def get_audit_logs(
     total_count = await prisma_client.db.litellm_auditlog.count(where=where_conditions)
     total_pages = -(-total_count // page_size)  # Ceiling division
 
-    enriched_logs: Final = await _enrich_audit_logs(
-        prisma_client,
-        [AuditLogResponse(**audit_log.model_dump()) for audit_log in audit_logs] if audit_logs else [],
-    )
-
     # Return paginated response
     return PaginatedAuditLogResponse(
-        audit_logs=enriched_logs,
+        audit_logs=[AuditLogResponse(**audit_log.model_dump()) for audit_log in audit_logs] if audit_logs else [],
         total=total_count,
         page=page,
         page_size=page_size,
@@ -352,5 +207,5 @@ async def get_audit_log_by_id(id: str, user_api_key_dict: UserAPIKeyAuth = Depen
     if audit_log is None:
         raise HTTPException(status_code=404, detail={"message": f"Audit log with ID {id} not found"})
 
-    enriched_logs: Final = await _enrich_audit_logs(prisma_client, [AuditLogResponse(**audit_log.model_dump())])
-    return enriched_logs[0]
+    # Convert to response model
+    return AuditLogResponse(**audit_log.model_dump())
