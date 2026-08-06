@@ -2487,6 +2487,16 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "is active as a reminder that hard enforcement is relaxed."
         ),
     )
+    apply_user_budget_to_team_keys: bool | None = Field(
+        None,
+        description=(
+            "If True, a user's personal max_budget is enforced on every request they "
+            "make, including requests made with a team-scoped key. Defaults to False, "
+            "where a team-scoped key is governed only by the team and team-member "
+            "budgets and the key owner's personal max_budget does not apply "
+            "(see GitHub issue #12905)."
+        ),
+    )
     user_url_validation: bool | None = Field(
         None,
         description=(
