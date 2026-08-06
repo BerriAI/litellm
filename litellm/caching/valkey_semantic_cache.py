@@ -19,7 +19,7 @@ import hashlib
 import os
 import struct
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 from redis import Redis
 from redis.asyncio import Redis as AsyncRedis
@@ -85,12 +85,8 @@ class ValkeySemanticCache(RedisSemanticCache):
         resolved_url = None
         if sync_client is None or async_client is None:
             resolved_url = redis_url or self._build_valkey_url(host, port, password, ssl)
-        self.sync_client = (
-            sync_client if sync_client is not None else Redis.from_url(resolved_url)  # type: ignore[arg-type]
-        )
-        self.async_client = (
-            async_client if async_client is not None else AsyncRedis.from_url(resolved_url)  # type: ignore[arg-type]
-        )
+        self.sync_client = sync_client if sync_client is not None else Redis.from_url(resolved_url)
+        self.async_client = async_client if async_client is not None else AsyncRedis.from_url(resolved_url)
 
         print_verbose(f"Valkey semantic-cache initializing index - {self.index_name}")
 
@@ -106,8 +102,8 @@ class ValkeySemanticCache(RedisSemanticCache):
                 "(or VALKEY_HOST/VALKEY_PORT), or pass redis_url."
             )
 
-        credentials = f":{password}@" if password else ""
-        scheme = "rediss" if ssl else "redis"
+        credentials: Final = f":{password}@" if password else ""
+        scheme: Final = "rediss" if ssl else "redis"
         return f"{scheme}://{credentials}{host}:{port}"
 
     @classmethod
@@ -154,7 +150,7 @@ class ValkeySemanticCache(RedisSemanticCache):
         return None
 
     def _assert_dim_matches(self, info: dict, dim: int) -> None:
-        existing_dim = self._extract_index_dim(info)
+        existing_dim: Final = self._extract_index_dim(info)
         if existing_dim is not None and existing_dim != dim:
             raise ValueError(
                 f"Valkey semantic-cache index '{self.index_name}' already exists with "
@@ -186,7 +182,7 @@ class ValkeySemanticCache(RedisSemanticCache):
         except Exception as exc:
             if not self._is_index_exists_error(exc):
                 raise
-            info = await self.async_client.ft(self.index_name).info()
+            info: Final = await self.async_client.ft(self.index_name).info()
             self._assert_dim_matches(info, dim)
         self._index_dim = dim
 
@@ -202,8 +198,8 @@ class ValkeySemanticCache(RedisSemanticCache):
         }
 
     def _knn_query(self, key: str) -> Query:
-        scope = self._scope_tag(key)
-        query_string = (
+        scope: Final = self._scope_tag(key)
+        query_string: Final = (
             f"(@{self.CACHE_KEY_FIELD_NAME}:{{{scope}}})"
             f"=>[KNN 1 @{self.EMBEDDING_FIELD_NAME} $vec AS {self.DISTANCE_FIELD_NAME}]"
         )
@@ -211,10 +207,10 @@ class ValkeySemanticCache(RedisSemanticCache):
 
     @classmethod
     def _first_hit(cls, search_result: Any) -> _ValkeyCacheHit | None:
-        docs = getattr(search_result, "docs", [])
+        docs: Final = getattr(search_result, "docs", [])
         if not docs:
             return None
-        doc = docs[0]
+        doc: Final = docs[0]
         return _ValkeyCacheHit(
             response=str(getattr(doc, cls.RESPONSE_FIELD_NAME)),
             distance=float(getattr(doc, cls.DISTANCE_FIELD_NAME)),
@@ -225,7 +221,7 @@ class ValkeySemanticCache(RedisSemanticCache):
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
             return None
 
-        similarity = 1 - hit.distance
+        similarity: Final = 1 - hit.distance
         kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
 
         if similarity < self.similarity_threshold:
@@ -235,86 +231,86 @@ class ValkeySemanticCache(RedisSemanticCache):
     def set_cache(self, key: str, value: Any, **kwargs: Any) -> None:
         print_verbose(f"Valkey semantic-cache set_cache, kwargs: {kwargs}")
         try:
-            prompt = self._get_prompt_from_kwargs(**kwargs)
+            prompt: Final = self._get_prompt_from_kwargs(**kwargs)
             if prompt is None:
                 print_verbose("No prompt provided for semantic caching")
                 return
 
-            embedding = self._get_embedding(prompt)
+            embedding: Final = self._get_embedding(prompt)
             self._ensure_index_sync(len(embedding))
 
-            doc_key = self._doc_key(key)
+            doc_key: Final = self._doc_key(key)
             self.sync_client.hset(doc_key, mapping=self._doc_mapping(key, prompt, str(value), embedding))
-            ttl = self._get_ttl(**kwargs)
+            ttl: Final = self._get_ttl(**kwargs)
             if ttl is not None:
                 self.sync_client.expire(doc_key, ttl)
         except Exception as e:
-            print_verbose(f"Error in Valkey semantic-cache set_cache: {str(e)}")
+            print_verbose(f"Error in Valkey semantic-cache set_cache: {e}")
 
     def get_cache(self, key: str, **kwargs: Any) -> Any:
         print_verbose(f"Valkey semantic-cache get_cache, kwargs: {kwargs}")
         try:
-            prompt = self._get_prompt_from_kwargs(**kwargs)
+            prompt: Final = self._get_prompt_from_kwargs(**kwargs)
             if prompt is None:
                 kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
 
-            embedding = self._get_embedding(prompt)
+            embedding: Final = self._get_embedding(prompt)
             self._ensure_index_sync(len(embedding))
 
-            search_result = self.sync_client.ft(self.index_name).search(
+            search_result: Final = self.sync_client.ft(self.index_name).search(
                 self._knn_query(key),
                 query_params={"vec": self._embedding_to_bytes(embedding)},
             )
             return self._resolve_hit(self._first_hit(search_result), key, **kwargs)
         except Exception as e:
-            print_verbose(f"Error in Valkey semantic-cache get_cache: {str(e)}")
+            print_verbose(f"Error in Valkey semantic-cache get_cache: {e}")
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
 
     async def async_set_cache(self, key: str, value: Any, **kwargs: Any) -> None:
         print_verbose(f"Async Valkey semantic-cache set_cache, kwargs: {kwargs}")
         try:
-            prompt = self._get_prompt_from_kwargs(**kwargs)
+            prompt: Final = self._get_prompt_from_kwargs(**kwargs)
             if prompt is None:
                 print_verbose("No prompt provided for semantic caching")
                 return
 
-            embedding = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
+            embedding: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
             await self._ensure_index_async(len(embedding))
 
-            doc_key = self._doc_key(key)
+            doc_key: Final = self._doc_key(key)
             await self.async_client.hset(doc_key, mapping=self._doc_mapping(key, prompt, str(value), embedding))
-            ttl = self._get_ttl(**kwargs)
+            ttl: Final = self._get_ttl(**kwargs)
             if ttl is not None:
                 await self.async_client.expire(doc_key, ttl)
         except Exception as e:
-            print_verbose(f"Error in async Valkey semantic-cache set_cache: {str(e)}")
+            print_verbose(f"Error in async Valkey semantic-cache set_cache: {e}")
 
     async def async_get_cache(self, key: str, **kwargs: Any) -> Any:
         print_verbose(f"Async Valkey semantic-cache get_cache, kwargs: {kwargs}")
         try:
-            prompt = self._get_prompt_from_kwargs(**kwargs)
+            prompt: Final = self._get_prompt_from_kwargs(**kwargs)
             if prompt is None:
                 kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
 
-            embedding = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
+            embedding: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
             await self._ensure_index_async(len(embedding))
 
-            search_result = await self.async_client.ft(self.index_name).search(
+            search_result: Final = await self.async_client.ft(self.index_name).search(
                 self._knn_query(key),
                 query_params={"vec": self._embedding_to_bytes(embedding)},
             )
             return self._resolve_hit(self._first_hit(search_result), key, **kwargs)
         except Exception as e:
-            print_verbose(f"Error in async Valkey semantic-cache get_cache: {str(e)}")
+            print_verbose(f"Error in async Valkey semantic-cache get_cache: {e}")
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
 
     async def async_set_cache_pipeline(self, cache_list: list[tuple[str, Any]], **kwargs: Any) -> None:
         try:
             await asyncio.gather(*[self.async_set_cache(key, value, **kwargs) for key, value in cache_list])
         except Exception as e:
-            print_verbose(f"Error in Valkey semantic-cache async_set_cache_pipeline: {str(e)}")
+            print_verbose(f"Error in Valkey semantic-cache async_set_cache_pipeline: {e}")
 
     async def _index_info(self) -> dict:
         return await self.async_client.ft(self.index_name).info()

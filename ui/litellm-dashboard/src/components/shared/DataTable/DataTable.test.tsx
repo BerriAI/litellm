@@ -625,6 +625,44 @@ describe("DataTable layout", () => {
     const scroller = container.querySelector('[data-slot="table-container"]')?.parentElement as HTMLElement;
     expect(scroller.style.maxHeight).toBe("240px");
   });
+
+  it("caps fillHeight at the parent's height instead of stretching to it, so a short table stays short", () => {
+    const { container } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} fillHeight />);
+    const scroller = container.querySelector('[data-slot="table-container"]')?.parentElement as HTMLElement;
+    const frame = scroller.parentElement as HTMLElement;
+    const outer = frame.parentElement as HTMLElement;
+
+    // A ceiling, not a stretch: flex-1 here would hold the footer at the bottom on a two-row table.
+    expect(outer.className).toContain("max-h-full");
+    expect(outer.className).not.toContain("flex-1");
+    expect(frame.className).not.toContain("flex-1");
+    expect(scroller.className).not.toContain("flex-1");
+
+    expect(outer.className).toContain("flex-col");
+    expect(frame.className).toContain("flex-col");
+    expect(scroller.className).toContain("min-h-0");
+    expect(scroller.className).toContain("overflow-auto");
+    expect(scroller.style.maxHeight).toBe("");
+    // Without this the Table primitive's own overflow container captures the sticky header.
+    expect(scroller.className).toContain("[&_[data-slot=table-container]]:overflow-visible");
+
+    const thead = container.querySelector("thead") as HTMLElement;
+    expect(thead.className).toContain("sticky");
+    // Rows pass under the header, so the semi-transparent row tint alone would let them show through.
+    expect(thead.className).toContain("bg-background");
+  });
+
+  it("leaves the default layout untouched when neither height mode is set", () => {
+    const { container } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} />);
+    const scroller = container.querySelector('[data-slot="table-container"]')?.parentElement as HTMLElement;
+
+    expect(scroller.className).toContain("overflow-x-auto");
+    expect(scroller.className).not.toContain("min-h-0");
+    expect(scroller.style.maxHeight).toBe("");
+    expect((scroller.parentElement as HTMLElement).className).not.toContain("flex-col");
+    expect(container.querySelector("thead")?.className).not.toContain("sticky");
+    expect(container.querySelector("thead")?.className).not.toContain("bg-background");
+  });
 });
 
 describe("DataTable misconfiguration guards", () => {

@@ -211,7 +211,6 @@ export const useToolsOAuthFlow = ({
         {
           access_token: token.access_token,
           expires_in: token.expires_in,
-          refresh_token: token.refresh_token,
           token_type: token.token_type,
         },
         userId,

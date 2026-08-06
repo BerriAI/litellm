@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  effectiveSessionRole,
   isAdminRole,
   isProxyAdminRole,
   isUserTeamAdminForAnyTeam,
   isUserTeamAdminForSingleTeam,
+  isViewOnlySessionRole,
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
 } from "./roles";
@@ -170,6 +172,68 @@ describe("roles", () => {
       // Admin Viewer is added on top — the new set must be larger than
       // the write-only set, otherwise the constant has no purpose.
       expect(rolesAllowedToViewWriteScopedPages.length).toBeGreaterThan(rolesWithWriteAccess.length);
+    });
+  });
+
+  describe("effectiveSessionRole", () => {
+    it("normalizes proxy_admin_viewer to Admin", () => {
+      expect(effectiveSessionRole("proxy_admin_viewer")).toBe("Admin");
+    });
+
+    it("keeps proxy_admin as Admin", () => {
+      expect(effectiveSessionRole("proxy_admin")).toBe("Admin");
+    });
+
+    it("gives proxy_admin_viewer the same session role as proxy_admin", () => {
+      expect(effectiveSessionRole("proxy_admin_viewer")).toBe(effectiveSessionRole("proxy_admin"));
+    });
+
+    it("lets a normalized proxy_admin_viewer pass admin-tier role gates", () => {
+      expect(rolesWithWriteAccess).toContain(effectiveSessionRole("proxy_admin_viewer"));
+    });
+
+    it("does not collapse internal_user_viewer into an admin role", () => {
+      expect(effectiveSessionRole("internal_user_viewer")).toBe("Internal Viewer");
+      expect(rolesWithWriteAccess).not.toContain(effectiveSessionRole("internal_user_viewer"));
+    });
+
+    it("leaves other roles untouched", () => {
+      expect(effectiveSessionRole("internal_user")).toBe("Internal User");
+      expect(effectiveSessionRole("org_admin")).toBe("Org Admin");
+    });
+
+    it("returns Undefined Role for a missing role", () => {
+      expect(effectiveSessionRole(undefined)).toBe("Undefined Role");
+      expect(effectiveSessionRole("")).toBe("Undefined Role");
+    });
+  });
+
+  describe("isViewOnlySessionRole", () => {
+    it("returns true for proxy_admin_viewer", () => {
+      expect(isViewOnlySessionRole("proxy_admin_viewer")).toBe(true);
+    });
+
+    it("returns false for proxy_admin", () => {
+      expect(isViewOnlySessionRole("proxy_admin")).toBe(false);
+    });
+
+    it("returns true for internal_user_viewer", () => {
+      expect(isViewOnlySessionRole("internal_user_viewer")).toBe(true);
+    });
+
+    it("returns false for internal_user and org_admin", () => {
+      expect(isViewOnlySessionRole("internal_user")).toBe(false);
+      expect(isViewOnlySessionRole("org_admin")).toBe(false);
+    });
+
+    it("returns false for a missing role", () => {
+      expect(isViewOnlySessionRole(undefined)).toBe(false);
+      expect(isViewOnlySessionRole("")).toBe(false);
+    });
+
+    it("stays true for proxy_admin_viewer even though its session role reads as Admin", () => {
+      expect(effectiveSessionRole("proxy_admin_viewer")).toBe("Admin");
+      expect(isViewOnlySessionRole("proxy_admin_viewer")).toBe(true);
     });
   });
 });

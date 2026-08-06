@@ -24,8 +24,9 @@ The two wire shapes:
   ``Task`` result is a bare object without ``kind``.
 """
 
+from collections.abc import Callable
 from types import ModuleType
-from typing import Callable, Literal, Union
+from typing import Final, Literal
 
 from pydantic import BaseModel
 
@@ -33,11 +34,11 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.a2a.agent_card import normalize_protocol_version
 
 A2AVersion = Literal["0.3", "1.0"]
-RequestId = Union[str, int, None]
+RequestId = str | int | None
 JsonDict = dict[str, object]
 
-_V1_SEND_ENVELOPE_KEYS = frozenset({"message", "task"})
-_V1_STREAM_ENVELOPE_KEYS = frozenset({"message", "task", "statusUpdate", "artifactUpdate"})
+_V1_SEND_ENVELOPE_KEYS: Final = frozenset({"message", "task"})
+_V1_STREAM_ENVELOPE_KEYS: Final = frozenset({"message", "task", "statusUpdate", "artifactUpdate"})
 
 
 def _dump_03(model: BaseModel) -> JsonDict:
@@ -61,11 +62,11 @@ def normalize_jsonrpc_response(content: JsonDict, target: A2AVersion, *, method:
     """
     if content.get("error") is not None:
         return content
-    result = content.get("result")
+    result: Final = content.get("result")
     if not isinstance(result, dict):
         return content
 
-    converted = _convert_result(result, target, method=method, request_id=_as_request_id(content.get("id")))
+    converted: Final = _convert_result(result, target, method=method, request_id=_as_request_id(content.get("id")))
     if converted is result:
         return content
     return {**content, "result": converted}
@@ -75,11 +76,11 @@ def normalize_stream_event(event: JsonDict, target: A2AVersion, *, request_id: R
     """Convert a single streamed JSON-RPC event's ``result`` to ``target``."""
     if event.get("error") is not None:
         return event
-    result = event.get("result")
+    result: Final = event.get("result")
     if not isinstance(result, dict):
         return event
 
-    converted = _convert_stream_result(result, target, request_id=request_id)
+    converted: Final = _convert_stream_result(result, target, request_id=request_id)
     if converted is result:
         return event
     return {**event, "result": converted}
@@ -109,7 +110,7 @@ def _detect_card_version(card: JsonDict) -> A2AVersion:
     ``supportedInterfaces`` (a 1.0-only field) only when the explicit field is
     absent or unrecognized; cards carrying neither signal are treated as 0.3.
     """
-    normalized = normalize_protocol_version(card.get("protocolVersion"))
+    normalized: Final = normalize_protocol_version(card.get("protocolVersion"))
     if normalized is not None:
         return normalized
     return "1.0" if "supportedInterfaces" in card else "0.3"
@@ -124,7 +125,7 @@ def normalize_agent_card(card: JsonDict, target: A2AVersion) -> JsonDict:
     if not isinstance(card, dict):
         return card
 
-    current = _detect_card_version(card)
+    current: Final = _detect_card_version(card)
     if current == target and not (target == "0.3" and "supportedInterfaces" in card):
         return card
     return _best_effort(lambda: _convert_agent_card(card, target), card, label="agent card")
@@ -159,7 +160,7 @@ def _detect_send_version(result: JsonDict) -> A2AVersion | None:
 
 
 def _convert_send_result(result: JsonDict, target: A2AVersion, *, request_id: RequestId) -> JsonDict:
-    current = _detect_send_version(result)
+    current: Final = _detect_send_version(result)
     if current is None or current == target:
         return result
     return _best_effort(
@@ -180,8 +181,8 @@ def _send_result_to(result: JsonDict, target: A2AVersion, request_id: RequestId)
     )
 
     if target == "1.0":
-        compat_result = _validate_message_or_task(result, types_v03)
-        response = types_v03.SendMessageResponse(
+        compat_result: Final = _validate_message_or_task(result, types_v03)
+        response: Final = types_v03.SendMessageResponse(
             root=types_v03.SendMessageSuccessResponse(
                 id=str(request_id) if request_id is not None else "",
                 result=compat_result,  # pyright: ignore[reportArgumentType]
@@ -192,30 +193,30 @@ def _send_result_to(result: JsonDict, target: A2AVersion, request_id: RequestId)
             preserving_proto_field_name=False,
         )
 
-    pb = pb2_v10.SendMessageResponse()
+    pb: Final = pb2_v10.SendMessageResponse()
     ParseDict(result, pb, ignore_unknown_fields=True)
     return _dump_03(to_compat_send_message_response(pb, request_id).root.result)
 
 
 def _convert_task(result: JsonDict, target: A2AVersion) -> JsonDict:
-    current: A2AVersion = "0.3" if "kind" in result else "1.0"
+    current: Final[A2AVersion] = "0.3" if "kind" in result else "1.0"
     if current == target:
         return result
     return _best_effort(lambda: _task_to(result, target), result, label="task")
 
 
 def _detect_list_tasks_version(result: JsonDict) -> A2AVersion | None:
-    tasks = result.get("tasks")
+    tasks: Final = result.get("tasks")
     if not isinstance(tasks, list) or not tasks:
         return None
-    first = tasks[0]
+    first: Final = tasks[0]
     if not isinstance(first, dict):
         return None
     return "0.3" if "kind" in first else "1.0"
 
 
 def _convert_list_tasks_result(result: JsonDict, target: A2AVersion) -> JsonDict:
-    current = _detect_list_tasks_version(result)
+    current: Final = _detect_list_tasks_version(result)
     if current is None or current == target:
         return result
     return _best_effort(
@@ -226,7 +227,7 @@ def _convert_list_tasks_result(result: JsonDict, target: A2AVersion) -> JsonDict
 
 
 def _list_tasks_result_to(result: JsonDict, target: A2AVersion) -> JsonDict:
-    tasks = result.get("tasks")
+    tasks: Final = result.get("tasks")
     if not isinstance(tasks, list):
         return result
     return {
@@ -246,10 +247,10 @@ def _task_to(result: JsonDict, target: A2AVersion) -> JsonDict:
     )
 
     if target == "1.0":
-        core = to_core_task(types_v03.Task.model_validate(result))
+        core: Final = to_core_task(types_v03.Task.model_validate(result))
         return MessageToDict(core, preserving_proto_field_name=False)
 
-    pb = pb2_v10.Task()
+    pb: Final = pb2_v10.Task()
     ParseDict(result, pb, ignore_unknown_fields=True)
     return _dump_03(to_compat_task(pb))
 
@@ -263,7 +264,7 @@ def _detect_stream_version(result: JsonDict) -> A2AVersion | None:
 
 
 def _convert_stream_result(result: JsonDict, target: A2AVersion, *, request_id: RequestId) -> JsonDict:
-    current = _detect_stream_version(result)
+    current: Final = _detect_stream_version(result)
     if current is None or current == target:
         return result
     return _best_effort(
@@ -284,14 +285,14 @@ def _stream_result_to(result: JsonDict, target: A2AVersion, request_id: RequestI
     )
 
     if target == "1.0":
-        event = _validate_stream_event(result, types_v03)
-        wrapper = types_v03.SendStreamingMessageSuccessResponse(
+        event: Final = _validate_stream_event(result, types_v03)
+        wrapper: Final = types_v03.SendStreamingMessageSuccessResponse(
             id=str(request_id) if request_id is not None else "",
             result=event,  # pyright: ignore[reportArgumentType]
         )
         return MessageToDict(to_core_stream_response(wrapper), preserving_proto_field_name=False)
 
-    pb = pb2_v10.StreamResponse()
+    pb: Final = pb2_v10.StreamResponse()
     ParseDict(result, pb, ignore_unknown_fields=True)
     return _dump_03(to_compat_stream_response(pb, request_id).result)
 
@@ -307,13 +308,13 @@ def _convert_agent_card(card: JsonDict, target: A2AVersion) -> JsonDict:
     )
 
     if target == "0.3":
-        pb = pb2_v10.AgentCard()
+        pb: Final = pb2_v10.AgentCard()
         ParseDict(card, pb, ignore_unknown_fields=True)
-        lowered = _dump_03(to_compat_agent_card(pb))
+        lowered: Final = _dump_03(to_compat_agent_card(pb))
         lowered.pop("additionalInterfaces", None)
         return lowered
 
-    core = to_core_agent_card(types_v03.AgentCard.model_validate(card))
+    core: Final = to_core_agent_card(types_v03.AgentCard.model_validate(card))
     return MessageToDict(core, preserving_proto_field_name=False)
 
 
@@ -324,7 +325,7 @@ def _validate_message_or_task(result: JsonDict, types_v03: ModuleType) -> BaseMo
 
 
 def _validate_stream_event(result: JsonDict, types_v03: ModuleType) -> BaseModel:
-    kind = result.get("kind")
+    kind: Final = result.get("kind")
     if kind == "task":
         return types_v03.Task.model_validate(result)
     if kind == "status-update":
@@ -350,7 +351,7 @@ def _lower_request_params(params: JsonDict, *, method: str) -> JsonDict:
         to_compat_subscribe_to_task_request,
     )
 
-    lowerings: dict[str, Callable[[JsonDict], BaseModel]] = {
+    lowerings: Final[dict[str, Callable[[JsonDict], BaseModel]]] = {
         "tasks/get": lambda p: to_compat_get_task_request(_parse(ParseDict, p, pb2_v10.GetTaskRequest()), "").params,
         "tasks/cancel": lambda p: (
             to_compat_cancel_task_request(_parse(ParseDict, p, pb2_v10.CancelTaskRequest()), "").params
@@ -384,7 +385,7 @@ def _lower_request_params(params: JsonDict, *, method: str) -> JsonDict:
             ).params
         ),
     }
-    lower = lowerings.get(method)
+    lower: Final = lowerings.get(method)
     if lower is None:
         return params
     return _dump_03(lower(params))
@@ -398,12 +399,12 @@ def _lower_list_tasks_params(params: JsonDict) -> JsonDict:
         types_v03,
     )
 
-    proto = pb2_v10.ListTasksRequest()
+    proto: Final = pb2_v10.ListTasksRequest()
     _parse(ParseDict, params, proto)
-    lowered = MessageToDict(proto, preserving_proto_field_name=False)
-    status_name = str(pb2_v10.TaskState.Name(proto.status))
-    valid_0_3_values = frozenset(str(member.value) for member in types_v03.TaskState)
-    compat_status = _proto_task_state_name_to_0_3(status_name, valid_0_3_values)
+    lowered: Final = MessageToDict(proto, preserving_proto_field_name=False)
+    status_name: Final = str(pb2_v10.TaskState.Name(proto.status))
+    valid_0_3_values: Final = frozenset(str(member.value) for member in types_v03.TaskState)
+    compat_status: Final = _proto_task_state_name_to_0_3(status_name, valid_0_3_values)
     if compat_status is None:
         lowered.pop("status", None)
     else:
@@ -419,22 +420,22 @@ def _proto_task_state_name_to_0_3(name: str, valid_0_3_values: frozenset[str]) -
     needed. The result is validated against the 0.3 enum's own values; an unspecified
     or unrecognized state yields ``None`` so the status filter is dropped.
     """
-    base = name.removeprefix("TASK_STATE_")
+    base: Final = name.removeprefix("TASK_STATE_")
     if base == "UNSPECIFIED":
         return None
-    candidate = base.lower().replace("_", "-")
+    candidate: Final = base.lower().replace("_", "-")
     return candidate if candidate in valid_0_3_values else None
 
 
 def _flatten_create_push_notification_params(params: JsonDict) -> JsonDict:
     """Merge 1.x create envelope fields (parent/configId/config) into flat pb fields."""
-    flat = dict(params)
-    config = flat.pop("config", None)
-    push_config = flat.pop("pushNotificationConfig", None)
-    nested = config if config is not None else push_config
+    flat: Final = dict(params)
+    config: Final = flat.pop("config", None)
+    push_config: Final = flat.pop("pushNotificationConfig", None)
+    nested: Final = config if config is not None else push_config
     if not isinstance(nested, dict):
         return params
-    parent = flat.pop("parent", None)
+    parent: Final = flat.pop("parent", None)
     if isinstance(parent, str) and parent.startswith("tasks/") and "taskId" not in flat:
         flat["taskId"] = parent.removeprefix("tasks/").split("/")[0]
     if (config_id := flat.pop("configId", None)) and "id" not in nested:

@@ -59,9 +59,24 @@ def test_delete_cache_applies_namespace(namespace, monkeypatch, redis_no_ping):
 
 
 @pytest.mark.asyncio
-async def test_redis_client_init_with_socket_timeout(monkeypatch, redis_no_ping):
-    monkeypatch.setenv("REDIS_HOST", "my-fake-host")
-    redis_cache = RedisCache(socket_timeout=1.0)
+@pytest.mark.parametrize(
+    "redis_config",
+    [
+        pytest.param({"host": "my-fake-host"}, id="host_port"),
+        pytest.param({"url": "redis://my-fake-host:6379"}, id="url"),
+    ],
+)
+async def test_redis_client_init_with_socket_timeout(monkeypatch, redis_no_ping, redis_config):
+    """socket_timeout has to reach the connection however Redis was configured.
+
+    A url config used to drop every connection kwarg, so redis-py was left with
+    socket_timeout (and socket_connect_timeout, which falls back to it) unset. A
+    Redis host that drops packets instead of refusing them then blocks each caller
+    indefinitely, and the circuit breaker never trips because no call ever returns.
+    """
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("REDIS_HOST", raising=False)
+    redis_cache = RedisCache(socket_timeout=1.0, **redis_config)
     assert redis_cache.redis_kwargs["socket_timeout"] == 1.0
     client = redis_cache.init_async_client()
     assert client is not None
@@ -428,3 +443,168 @@ def test_delete_cache_namespaces_key(namespace, expected, monkeypatch, redis_no_
     redis_cache.redis_client = mock_client
     redis_cache.delete_cache(key="k")
     mock_client.delete.assert_called_once_with(expected)
+
+
+def _closed_port() -> int:
+    """A port with nothing listening, so Redis calls fail fast and deterministically."""
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_method",
+    [
+        pytest.param(lambda c: c.async_get_cache("lit4930"), id="async_get_cache"),
+        pytest.param(lambda c: c.async_batch_get_cache(["lit4930"]), id="async_batch_get_cache"),
+        pytest.param(lambda c: c.async_set_cache("lit4930", "v"), id="async_set_cache"),
+        pytest.param(lambda c: c.async_get_ttl("lit4930"), id="async_get_ttl"),
+    ],
+)
+async def test_circuit_breaker_opens_when_method_swallows_redis_failure(redis_no_ping, call_method):
+    """A guarded method that swallows its own Redis error must still count as a failure.
+
+    These methods catch connection errors and return a default so callers degrade instead
+    of failing, which is correct. But that returns cleanly through the circuit breaker
+    guard, and counting it as a success reset the failure streak on every call, so the
+    breaker could never open. An unreachable Redis then stayed in the pool and every
+    request kept paying the full socket timeout on it.
+    """
+    from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+
+    cache = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
+
+    for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
+        await call_method(cache)
+
+    with pytest.raises(Exception, match="circuit breaker is open"):
+        await call_method(cache)
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_success_still_resets_the_failure_streak(redis_no_ping):
+    """A reachable Redis must keep the breaker closed, however many earlier calls failed.
+
+    The guard now records success only when nothing failed while the method ran, so this
+    pins the other half of that contract: a call that genuinely reaches Redis has to clear
+    the streak, or a healthy Redis would eventually be evicted from the pool.
+    """
+    from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+
+    cache = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
+
+    for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD - 1):
+        await cache.async_get_cache("lit4930")
+    assert cache._circuit_breaker.is_open() is False
+
+    reachable_redis = AsyncMock()
+    reachable_redis.get.return_value = None
+    with patch.object(cache, "init_async_client", return_value=reachable_redis):
+        await cache.async_get_cache("lit4930")
+
+    for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD - 1):
+        await cache.async_get_cache("lit4930")
+
+    assert cache._circuit_breaker.is_open() is False, "one success must clear the streak"
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_covers_lua_script_execution(redis_no_ping):
+    """Lua script execution must feed the breaker like every other Redis call.
+
+    The v3 rate limiter issues all of its Redis traffic through async_register_script, so
+    leaving that path unguarded meant the coordination calls during an outage never
+    counted toward taking Redis out of the pool and kept paying a full socket timeout
+    each, which is the traffic the outage hurts most.
+    """
+    from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+
+    cache = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
+    run_script = cache.async_register_script("return 1")
+
+    for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
+        with pytest.raises(Exception):
+            await run_script(keys=["lit4930"], args=[1])
+
+    with pytest.raises(Exception, match="circuit breaker is open"):
+        await run_script(keys=["lit4930"], args=[1])
+
+
+@pytest.mark.asyncio
+async def test_concurrent_success_is_not_cancelled_by_another_calls_failure():
+    """One caller's failure must not discard a different caller's success.
+
+    A breaker is shared by every concurrent caller, so tracking "did this call fail" on the
+    breaker itself cannot tell my failure from someone else's. A Redis that is still
+    answering would then be evicted from the pool by unrelated in-flight failures, which is
+    the opposite of the outage this guard exists to handle.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        _record_swallowed_redis_failure,
+        _run_under_circuit_breaker,
+    )
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+
+    # The failure has to land after both calls are already in flight, which is the only
+    # ordering where a shared counter confuses the two. Failing before the healthy call
+    # starts would leave its snapshot correct and prove nothing.
+    async def swallows_a_failure():
+        await asyncio.sleep(0.02)
+        _record_swallowed_redis_failure(breaker, RedisConnectionError("redis unreachable"))
+        return None
+
+    async def succeeds_while_the_other_fails():
+        await asyncio.sleep(0.05)
+        return "ok"
+
+    rounds = breaker.failure_threshold + 1
+    for _ in range(rounds):
+        await asyncio.gather(
+            _run_under_circuit_breaker(breaker, "failing", swallows_a_failure),
+            _run_under_circuit_breaker(breaker, "healthy", succeeds_while_the_other_fails),
+        )
+
+    assert breaker._failure_count < breaker.failure_threshold, "the healthy call must clear the streak"
+    assert breaker.is_open() is False, "a Redis answering every round must stay in the pool"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error, opens_breaker",
+    [
+        pytest.param("ConnectionError", True, id="connection_refused_is_unhealthy"),
+        pytest.param("TimeoutError", True, id="timeout_is_unhealthy"),
+        pytest.param("BusyLoadingError", True, id="loading_is_unhealthy"),
+        pytest.param("ResponseError", False, id="wrong_type_command_is_not"),
+        pytest.param("DataError", False, id="bad_data_is_not"),
+    ],
+)
+async def test_only_connectivity_failures_open_the_breaker(error, opens_breaker):
+    """Command and data errors must not count against Redis health.
+
+    They say nothing about connectivity, and a caller able to provoke them (an INCR against
+    a non-numeric value, say) could otherwise trip the shared breaker on demand and drop
+    rate limiting to per-process counters, which spreading traffic across replicas outruns.
+    """
+    import redis.exceptions
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+    raised = getattr(redis.exceptions, error)("boom")
+
+    async def failing_call():
+        raise raised
+
+    for _ in range(breaker.failure_threshold + 1):
+        with pytest.raises(Exception):
+            await _run_under_circuit_breaker(breaker, "op", failing_call)
+
+    assert breaker.is_open() is opens_breaker

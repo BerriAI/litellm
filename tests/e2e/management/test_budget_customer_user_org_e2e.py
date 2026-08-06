@@ -19,10 +19,10 @@ import time
 from collections.abc import Callable
 
 import pytest
-from pydantic import BaseModel, RootModel
+from pydantic import BaseModel, Field, RootModel
 
 from e2e_config import unique_marker
-from e2e_http import NoBody, unwrap
+from e2e_http import NoBody, Success, UnauthorizedError, UnknownApiError, unwrap
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import KeyGenerateBody, OrgInfoParams, OrgNewBody, UserNewBody
@@ -44,9 +44,11 @@ def _poll[T](client: ManagementClient, attempt: Callable[[], T | None], failure:
 
 
 class BudgetNewBody(BaseModel):
-    max_budget: float
+    max_budget: float | None = None
     soft_budget: float | None = None
     budget_duration: str | None = None
+    budget_id: str | None = None
+    tpm_limit: int | None = None
 
 
 class BudgetNewResponse(BaseModel):
@@ -201,6 +203,164 @@ class TestBudgetManagement:
         )
         assert "proxy admin" in outcome.body.lower() or "not allowed" in outcome.body.lower(), (
             f"/budget/new denial body must name the admin-only gate, got: {outcome.body[:300]}"
+        )
+
+
+# ---------- /management/v1/budgets ----------
+
+_BUDGETS_V1 = "/management/v1/budgets"
+
+
+class BudgetPageParams(BaseModel):
+    """Query for GET /management/v1/budgets. The filter fields serialize to the
+    bracketed keys the route reads them under, so nothing here is a raw dict."""
+
+    q: str | None = None
+    sort: str | None = None
+    page: int | None = None
+    page_size: int | None = None
+    duration_in: str | None = Field(default=None, serialization_alias="filter[budget_duration][in]")
+    max_budget_is_null: bool | None = Field(default=None, serialization_alias="filter[max_budget][is_null]")
+    not_a_parameter: str | None = Field(default=None, serialization_alias="filter[budget_id][eq]")
+
+
+class BudgetPageMeta(BaseModel):
+    page: int
+    page_size: int
+    total_count: int
+    total_pages: int
+
+
+class BudgetPageLinks(BaseModel):
+    first: str
+    prev: str | None = None
+    next: str | None = None
+    last: str
+
+
+class BudgetPageRow(BaseModel):
+    budget_id: str
+    max_budget: float | None = None
+    tpm_limit: int | None = None
+    budget_duration: str | None = None
+
+
+class BudgetPageResponse(BaseModel):
+    data: list[BudgetPageRow]
+    meta: BudgetPageMeta
+    links: BudgetPageLinks
+
+
+def _list_budgets(client: ManagementClient, params: BudgetPageParams) -> BudgetPageResponse:
+    return unwrap(
+        client.proxy.transport.get(
+            _BUDGETS_V1,
+            headers=client.proxy.transport.master,
+            params=params,
+            response_type=BudgetPageResponse,
+        )
+    )
+
+
+def _list_budget_ids(client: ManagementClient, params: BudgetPageParams) -> tuple[str, ...]:
+    return tuple(row.budget_id for row in _list_budgets(client, params).data)
+
+
+def _list_status(client: ManagementClient, params: BudgetPageParams, key: str | None = None) -> int:
+    headers = client.proxy.transport.master if key is None else client.proxy.transport.bearer(key)
+    outcome = client.proxy.transport.get(
+        _BUDGETS_V1, headers=headers, params=params, response_type=BudgetPageResponse
+    )
+    match outcome:
+        case Success(status_code=status_code):
+            return status_code
+        case UnauthorizedError():
+            return 401
+        case UnknownApiError(status_code=status_code):
+            return status_code
+        case _:
+            raise AssertionError(outcome)
+
+
+class TestBudgetListV1:
+    """The paged, sorted, filtered budget list the Budgets page reads.
+
+    Every test tags its own budgets with a marker in the budget_id and searches on
+    it, so budgets left behind by other suites cannot move the assertions.
+    """
+
+    @pytest.mark.covers("mgmt.budget.list_v1.happy_path")
+    def test_sorts_pages_and_filters_the_budgets_it_created(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        marker = unique_marker()
+        small, medium, large = (f"{marker}-small", f"{marker}-medium", f"{marker}-large")
+        for budget_id, max_budget, duration in (
+            (small, 1.0, "7d"),
+            (medium, 2.0, "30d"),
+            (large, 3.0, "30d"),
+        ):
+            _create_budget(
+                client,
+                resources,
+                BudgetNewBody(
+                    budget_id=budget_id, max_budget=max_budget, budget_duration=duration, tpm_limit=60000
+                ),
+            )
+
+        mine = BudgetPageParams(q=marker, sort="-max_budget")
+        _ = _poll(
+            client,
+            lambda: mine if len(_list_budget_ids(client, mine)) == 3 else None,
+            f"{_BUDGETS_V1} never listed all three budgets tagged {marker}",
+        )
+
+        assert _list_budget_ids(client, mine) == (large, medium, small)
+
+        page_two = _list_budgets(client, BudgetPageParams(q=marker, sort="-max_budget", page=2, page_size=1))
+        assert [row.budget_id for row in page_two.data] == [medium]
+        assert page_two.meta.total_count == 3
+        assert page_two.meta.total_pages == 3
+        assert page_two.meta.page_size == 1
+        assert page_two.links.prev is not None and page_two.links.next is not None
+
+        assert set(_list_budget_ids(client, BudgetPageParams(q=marker, duration_in="30d"))) == {medium, large}
+
+        limits = _list_budgets(client, BudgetPageParams(q=marker, sort="budget_id")).data
+        assert [row.tpm_limit for row in limits] == [60000, 60000, 60000]
+
+    @pytest.mark.covers("mgmt.budget.list_v1.happy_path")
+    def test_is_null_finds_the_budget_left_uncapped(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        marker = unique_marker()
+        uncapped = _create_budget(client, resources, BudgetNewBody(budget_id=f"{marker}-uncapped"))
+        _ = _create_budget(client, resources, BudgetNewBody(budget_id=f"{marker}-capped", max_budget=4.0))
+
+        params = BudgetPageParams(q=marker, max_budget_is_null=True)
+        found = _poll(
+            client,
+            lambda: params if _list_budget_ids(client, params) == (uncapped,) else None,
+            f"{_BUDGETS_V1} never isolated the uncapped budget {uncapped}",
+        )
+
+        assert [row.max_budget for row in _list_budgets(client, found).data] == [None]
+
+    @pytest.mark.covers("mgmt.budget.list_v1.happy_path")
+    def test_refuses_a_sort_field_and_a_parameter_it_does_not_support(self, client: ManagementClient) -> None:
+        assert _list_status(client, BudgetPageParams(sort="budget_duration")) == 400
+        assert _list_status(client, BudgetPageParams(not_a_parameter="b-1")) == 400
+
+    @pytest.mark.covers("mgmt.budget.list_v1.admin_only")
+    def test_is_refused_for_a_non_admin_key(self, client: ManagementClient, resources: ResourceManager) -> None:
+        key = client.proxy.generate_key(KeyGenerateBody())
+        resources.defer(lambda: client.proxy.delete_key(key))
+
+        status = _list_status(client, BudgetPageParams(), key=key)
+
+        assert status in (401, 403), (
+            f"a non-admin key listing budgets must be refused 401/403, got {status}. Serving 200 with an "
+            f"empty page would read as 'this proxy has no budgets'"
         )
 
 
