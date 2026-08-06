@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cva.config";
 import ChatComposer from "./ChatComposer";
-import { OPEN_AI_REALTIME_VOICE_SELECT_OPTIONS, type OpenAIRealtimeVoice } from "./chatConstants";
+import { OPEN_AI_VOICE_SELECT_OPTIONS, type OpenAIVoice } from "./chatConstants";
 
 interface RealtimeMessage {
   role: "user" | "assistant" | "system" | "status";
@@ -23,51 +23,6 @@ interface RealtimePlaygroundProps {
   selectedGuardrails?: string[];
 }
 
-type SessionMode = "text" | "voice";
-
-export function extractCompletedAssistantText(response: {
-  output?: Array<{
-    type?: string;
-    content?: Array<{ type?: string; text?: string; transcript?: string }>;
-  }>;
-}): string {
-  const output = response.output || [];
-  const transcripts: string[] = [];
-  const texts: string[] = [];
-
-  for (const item of output) {
-    for (const part of item.content || []) {
-      const partType = part.type || "";
-      if (part.transcript || partType.includes("transcript")) {
-        if (part.transcript) {
-          transcripts.push(part.transcript);
-        } else if (part.text) {
-          transcripts.push(part.text);
-        }
-      } else if (part.text) {
-        texts.push(part.text);
-      }
-    }
-  }
-
-  if (transcripts.length > 0) {
-    return transcripts.join("");
-  }
-  return texts.join("");
-}
-
-export function updateLastAssistantMessage(prev: RealtimeMessage[], content: string): RealtimeMessage[] {
-  for (let i = prev.length - 1; i >= 0; i--) {
-    if (prev[i].role === "assistant") {
-      if (prev[i].content === content) {
-        return prev;
-      }
-      return [...prev.slice(0, i), { ...prev[i], content }, ...prev.slice(i + 1)];
-    }
-  }
-  return [...prev, { role: "assistant", content, timestamp: new Date() }];
-}
-
 const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   accessToken,
   selectedModel,
@@ -79,23 +34,14 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [isResponding, setIsResponding] = useState(false);
-  const [selectedVoice, setSelectedVoice] = useState<OpenAIRealtimeVoice>("alloy");
+  const [selectedVoice, setSelectedVoice] = useState<OpenAIVoice>("alloy");
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const nextPlayTimeRef = useRef(0);
-  const responseInProgressRef = useRef(false);
-  const activeResponseIdRef = useRef<string | null>(null);
-  const transcriptBufRef = useRef("");
-  const textBufRef = useRef("");
-  const pendingTextsRef = useRef<string[]>([]);
   const selectedVoiceRef = useRef(selectedVoice);
-  const sessionModeRef = useRef<SessionMode>("text");
-  const flushPendingTextRef = useRef<() => void>(() => {});
-  const cancelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     selectedVoiceRef.current = selectedVoice;
@@ -109,63 +55,19 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
-  const clearCancelTimeout = useCallback(() => {
-    if (cancelTimeoutRef.current) {
-      clearTimeout(cancelTimeoutRef.current);
-      cancelTimeoutRef.current = null;
-    }
-  }, []);
-
   const addMessage = useCallback((role: RealtimeMessage["role"], content: string) => {
     setMessages((prev) => [...prev, { role, content, timestamp: new Date() }]);
   }, []);
 
-  const resetAssistantBuffers = useCallback(() => {
-    transcriptBufRef.current = "";
-    textBufRef.current = "";
-  }, []);
-
-  const displayedAssistantDraft = useCallback(() => {
-    return transcriptBufRef.current || textBufRef.current;
-  }, []);
-
-  const markResponseStarted = useCallback(
-    (responseId?: string | null) => {
-      responseInProgressRef.current = true;
-      activeResponseIdRef.current = responseId ?? null;
-      resetAssistantBuffers();
-      setIsResponding(true);
-    },
-    [resetAssistantBuffers],
-  );
-
-  const markResponseFinished = useCallback(() => {
-    clearCancelTimeout();
-    responseInProgressRef.current = false;
-    activeResponseIdRef.current = null;
-    resetAssistantBuffers();
-    setIsResponding(false);
-  }, [clearCancelTimeout, resetAssistantBuffers]);
-
-  const publishAssistantDraft = useCallback(() => {
-    const content = displayedAssistantDraft();
-    if (!content) {
-      return;
-    }
-    setMessages((prev) => updateLastAssistantMessage(prev, content));
-  }, [displayedAssistantDraft]);
-
-  const appendAssistantText = useCallback(
-    (text: string, source: "audio_transcript" | "text") => {
-      if (source === "audio_transcript") {
-        transcriptBufRef.current += text;
-      } else {
-        textBufRef.current += text;
+  const appendAssistantText = useCallback((text: string) => {
+    setMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && last.role === "assistant") {
+        return [...prev.slice(0, -1), { ...last, content: last.content + text }];
       }
-      publishAssistantDraft();
-    },
-    [publishAssistantDraft],
-  );
+      return [...prev, { role: "assistant", content: text, timestamp: new Date() }];
+    });
+  }, []);
 
   const playAudioChunk = useCallback((base64Audio: string) => {
     const raw = atob(base64Audio);
@@ -198,105 +100,6 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     setIsRecording(false);
   }, []);
 
-  const applySessionConfig = useCallback((mode: SessionMode, voice: OpenAIRealtimeVoice) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    sessionModeRef.current = mode;
-    const session =
-      mode === "voice"
-        ? {
-            type: "realtime",
-            modalities: ["audio"],
-            voice,
-            input_audio_format: "pcm16",
-            output_audio_format: "pcm16",
-            input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
-            turn_detection: { type: "server_vad" },
-          }
-        : {
-            type: "realtime",
-            modalities: ["text"],
-            voice,
-            input_audio_format: "pcm16",
-            output_audio_format: "pcm16",
-            turn_detection: null,
-          };
-
-    wsRef.current.send(
-      JSON.stringify({
-        type: "session.update",
-        session,
-      }),
-    );
-  }, []);
-
-  const createResponse = useCallback(() => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      return false;
-    }
-    if (responseInProgressRef.current) {
-      return false;
-    }
-    wsRef.current.send(JSON.stringify({ type: "response.create" }));
-    return true;
-  }, []);
-
-  const cancelActiveResponse = useCallback(() => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    if (!responseInProgressRef.current && !activeResponseIdRef.current) {
-      return;
-    }
-    wsRef.current.send(JSON.stringify({ type: "response.cancel" }));
-  }, []);
-
-  const flushPendingText = useCallback(() => {
-    const pending = pendingTextsRef.current[0];
-    if (!pending || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    if (responseInProgressRef.current) {
-      return;
-    }
-
-    pendingTextsRef.current = pendingTextsRef.current.slice(1);
-    applySessionConfig("text", selectedVoiceRef.current);
-    addMessage("user", pending);
-    wsRef.current.send(
-      JSON.stringify({
-        type: "conversation.item.create",
-        item: {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: pending }],
-        },
-      }),
-    );
-    createResponse();
-  }, [addMessage, applySessionConfig, createResponse]);
-
-  useEffect(() => {
-    flushPendingTextRef.current = flushPendingText;
-  }, [flushPendingText]);
-
-  const finishResponseAndFlush = useCallback(
-    (completedText?: string) => {
-      if (completedText) {
-        setMessages((prev) => updateLastAssistantMessage(prev, completedText));
-      } else {
-        const draft = displayedAssistantDraft();
-        if (draft) {
-          setMessages((prev) => updateLastAssistantMessage(prev, draft));
-        }
-      }
-      markResponseFinished();
-      flushPendingTextRef.current();
-    },
-    [displayedAssistantDraft, markResponseFinished],
-  );
-
   const connect = useCallback(async () => {
     if (wsRef.current) return;
     if (!selectedModel) {
@@ -304,9 +107,6 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
       return;
     }
     setIsConnecting(true);
-    markResponseFinished();
-    pendingTextsRef.current = [];
-    sessionModeRef.current = "text";
 
     try {
       audioContextRef.current = new AudioContext({ sampleRate: 24000 });
@@ -338,62 +138,50 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
           const type = data.type as string;
 
           if (type === "session.created") {
-            applySessionConfig("text", selectedVoiceRef.current);
-          } else if (type === "response.created") {
-            const responseId =
-              typeof data.response?.id === "string"
-                ? data.response.id
-                : typeof data.response_id === "string"
-                  ? data.response_id
-                  : null;
-            markResponseStarted(responseId);
+            ws.send(
+              JSON.stringify({
+                type: "session.update",
+                session: {
+                  type: "realtime",
+                  modalities: ["text", "audio"],
+                  voice: selectedVoiceRef.current,
+                  input_audio_format: "pcm16",
+                  output_audio_format: "pcm16",
+                  input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
+                  turn_detection: null,
+                },
+              }),
+            );
           } else if (type === "response.output_audio.delta" || type === "response.audio.delta") {
             if (data.delta) playAudioChunk(data.delta);
-          } else if (type === "response.output_audio_transcript.delta" || type === "response.audio_transcript.delta") {
-            if (data.delta) appendAssistantText(data.delta, "audio_transcript");
-          } else if (type === "response.output_text.delta" || type === "response.text.delta") {
-            if (data.delta) appendAssistantText(data.delta, "text");
+          } else if (
+            type === "response.output_text.delta" ||
+            type === "response.output_audio_transcript.delta" ||
+            type === "response.audio_transcript.delta" ||
+            type === "response.text.delta"
+          ) {
+            if (data.delta) appendAssistantText(data.delta);
           } else if (type === "conversation.item.input_audio_transcription.completed") {
             if (data.transcript) addMessage("user", data.transcript);
-          } else if (type === "response.done" || type === "response.cancelled") {
-            const eventResponseId =
-              typeof data.response?.id === "string"
-                ? data.response.id
-                : typeof data.response_id === "string"
-                  ? data.response_id
-                  : null;
-            if (
-              eventResponseId &&
-              activeResponseIdRef.current &&
-              eventResponseId !== activeResponseIdRef.current
-            ) {
-              return;
-            }
-
-            if (type === "response.done") {
-              const completed = extractCompletedAssistantText(data.response || {});
-              const draft = displayedAssistantDraft();
-              const finalText =
-                completed.length >= draft.length ? completed : draft.length > 0 ? draft : completed;
-              finishResponseAndFlush(finalText || undefined);
-            } else {
-              finishResponseAndFlush();
-            }
+          } else if (type === "response.done") {
+            setMessages((prev) => {
+              const last = prev[prev.length - 1];
+              if (last && last.role === "assistant" && last.content) return prev;
+              const output = data.response?.output || [];
+              const texts: string[] = [];
+              for (const item of output) {
+                for (const part of item.content || []) {
+                  const t = part.text || part.transcript;
+                  if (t) texts.push(t);
+                }
+              }
+              if (texts.length > 0) {
+                return [...prev, { role: "assistant", content: texts.join(""), timestamp: new Date() }];
+              }
+              return prev;
+            });
           } else if (type === "error") {
-            const errorMessage = data.error?.message || JSON.stringify(data.error);
-            const activeResponseError =
-              typeof errorMessage === "string" && errorMessage.toLowerCase().includes("active response in progress");
-
-            if (activeResponseError) {
-              cancelActiveResponse();
-              clearCancelTimeout();
-              cancelTimeoutRef.current = setTimeout(() => {
-                finishResponseAndFlush();
-              }, 1200);
-            } else {
-              addMessage("status", `Error: ${errorMessage}`);
-              finishResponseAndFlush();
-            }
+            addMessage("status", `Error: ${data.error?.message || JSON.stringify(data.error)}`);
           }
         } catch {
         }
@@ -403,15 +191,12 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
         addMessage("status", "WebSocket error");
         setIsConnected(false);
         setIsConnecting(false);
-        markResponseFinished();
       };
 
       ws.onclose = () => {
         addMessage("status", "Disconnected");
         setIsConnected(false);
         setIsConnecting(false);
-        markResponseFinished();
-        pendingTextsRef.current = [];
         wsRef.current = null;
       };
 
@@ -420,45 +205,36 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
       const message = err instanceof Error ? err.message : "Unknown error";
       addMessage("status", `Connection failed: ${message}`);
       setIsConnecting(false);
-      markResponseFinished();
     }
-  }, [
-    accessToken,
-    selectedModel,
-    customProxyBaseUrl,
-    selectedGuardrails,
-    addMessage,
-    appendAssistantText,
-    applySessionConfig,
-    cancelActiveResponse,
-    clearCancelTimeout,
-    displayedAssistantDraft,
-    finishResponseAndFlush,
-    markResponseFinished,
-    markResponseStarted,
-    playAudioChunk,
-  ]);
+  }, [accessToken, selectedModel, customProxyBaseUrl, selectedGuardrails, addMessage, appendAssistantText, playAudioChunk]);
 
   const disconnect = useCallback(() => {
     stopRecording();
-    pendingTextsRef.current = [];
-    markResponseFinished();
     wsRef.current?.close();
     wsRef.current = null;
     audioContextRef.current?.close();
     audioContextRef.current = null;
     nextPlayTimeRef.current = 0;
     setIsConnected(false);
-  }, [stopRecording, markResponseFinished]);
+  }, [stopRecording]);
 
   const startRecording = useCallback(async () => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-    if (responseInProgressRef.current) {
-      addMessage("status", "Wait for the current response to finish before using the mic.");
-      return;
-    }
 
-    applySessionConfig("voice", selectedVoice);
+    wsRef.current.send(
+      JSON.stringify({
+        type: "session.update",
+        session: {
+          type: "realtime",
+          modalities: ["text", "audio"],
+          voice: selectedVoice,
+          input_audio_format: "pcm16",
+          output_audio_format: "pcm16",
+          input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
+          turn_detection: { type: "server_vad" },
+        },
+      }),
+    );
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -510,34 +286,33 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unknown error";
       addMessage("status", `Microphone error: ${message}`);
-      applySessionConfig("text", selectedVoice);
     }
-  }, [addMessage, applySessionConfig, selectedVoice]);
+  }, [addMessage, selectedVoice]);
 
   const sendTextMessage = useCallback(() => {
     if (!inputText.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
     stopRecording();
-    applySessionConfig("text", selectedVoiceRef.current);
 
     const text = inputText.trim();
+    addMessage("user", text);
     setInputText("");
 
-    if (responseInProgressRef.current) {
-      pendingTextsRef.current = [...pendingTextsRef.current, text];
-      cancelActiveResponse();
-      clearCancelTimeout();
-      cancelTimeoutRef.current = setTimeout(() => {
-        if (responseInProgressRef.current) {
-          finishResponseAndFlush();
-        } else {
-          flushPendingTextRef.current();
-        }
-      }, 1200);
-      return;
-    }
+    wsRef.current.send(
+      JSON.stringify({
+        type: "session.update",
+        session: {
+          type: "realtime",
+          modalities: ["text", "audio"],
+          voice: selectedVoiceRef.current,
+          input_audio_format: "pcm16",
+          output_audio_format: "pcm16",
+          input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
+          turn_detection: null,
+        },
+      }),
+    );
 
-    addMessage("user", text);
     wsRef.current.send(
       JSON.stringify({
         type: "conversation.item.create",
@@ -548,29 +323,19 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
         },
       }),
     );
-    createResponse();
-  }, [
-    inputText,
-    addMessage,
-    applySessionConfig,
-    stopRecording,
-    cancelActiveResponse,
-    clearCancelTimeout,
-    createResponse,
-    finishResponseAndFlush,
-  ]);
+    wsRef.current.send(JSON.stringify({ type: "response.create" }));
+  }, [inputText, addMessage, stopRecording]);
 
   useEffect(() => {
     return () => {
-      clearCancelTimeout();
       wsRef.current?.close();
       audioContextRef.current?.close();
       mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
     };
-  }, [clearCancelTimeout]);
+  }, []);
 
   const voiceLabel =
-    OPEN_AI_REALTIME_VOICE_SELECT_OPTIONS.find((voice) => voice.value === selectedVoice)?.label ?? selectedVoice;
+    OPEN_AI_VOICE_SELECT_OPTIONS.find((voice) => voice.value === selectedVoice)?.label ?? selectedVoice;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -581,19 +346,10 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
             <p className="font-semibold text-gray-800">Realtime Voice Chat</p>
             <div className="flex items-center gap-2 text-xs text-gray-500">
               <span
-                className={cn(
-                  "inline-block size-2 rounded-full",
-                  isConnected ? (isResponding ? "bg-amber-500" : "bg-green-500") : "bg-gray-300",
-                )}
+                className={cn("inline-block size-2 rounded-full", isConnected ? "bg-green-500" : "bg-gray-300")}
                 aria-hidden="true"
               />
-              {!isConnected
-                ? isConnecting
-                  ? "Connecting..."
-                  : "Disconnected"
-                : isResponding
-                  ? "AI responding..."
-                  : "Connected"}
+              {!isConnected ? (isConnecting ? "Connecting..." : "Disconnected") : "Connected"}
               {selectedModel ? <span className="truncate">· {selectedModel}</span> : null}
             </div>
           </div>
@@ -601,14 +357,14 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
         <div className="flex flex-wrap items-center gap-2">
           <Select
             value={selectedVoice}
-            onValueChange={(value) => setSelectedVoice(value as OpenAIRealtimeVoice)}
+            onValueChange={(value) => setSelectedVoice(value as OpenAIVoice)}
             disabled={isConnected || isConnecting}
           >
             <SelectTrigger className="w-[220px]" size="sm" aria-label="Realtime voice">
               <SelectValue>{voiceLabel}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              {OPEN_AI_REALTIME_VOICE_SELECT_OPTIONS.map((voice) => (
+              {OPEN_AI_VOICE_SELECT_OPTIONS.map((voice) => (
                 <SelectItem key={voice.value} value={voice.value}>
                   {voice.label}
                 </SelectItem>
@@ -676,21 +432,11 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
               Listening. Speak into your microphone. Server VAD will detect when you stop.
             </div>
           )}
-          {isResponding && (
-            <div className="mb-3 flex items-center gap-2 text-xs text-amber-600">
-              <Loader2 className="size-3 animate-spin" aria-hidden="true" />
-              AI is responding. New messages wait until this turn finishes.
-            </div>
-          )}
           <ChatComposer
             value={inputText}
             onChange={setInputText}
             onSubmit={sendTextMessage}
-            placeholder={
-              isResponding
-                ? "AI is responding... you can still type; send will queue"
-                : "Type a message or use the mic..."
-            }
+            placeholder="Type a message or use the mic..."
             submitDisabled={!inputText.trim()}
             tools={
               <Tooltip>
@@ -702,11 +448,9 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
                       size="icon-sm"
                       className={cn("size-8 rounded-lg border border-border/40", isRecording && "animate-pulse")}
                       aria-label={isRecording ? "Stop recording" : "Start recording"}
-                      disabled={isResponding && !isRecording}
                       onClick={() => {
                         if (isRecording) {
                           stopRecording();
-                          applySessionConfig("text", selectedVoice);
                         } else {
                           void startRecording();
                         }
@@ -716,13 +460,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
                 >
                   {isRecording ? <MicOff className="size-4" /> : <Mic className="size-4" />}
                 </TooltipTrigger>
-                <TooltipContent>
-                  {isResponding && !isRecording
-                    ? "Wait for the AI to finish before using the mic"
-                    : isRecording
-                      ? "Stop recording"
-                      : "Start recording"}
-                </TooltipContent>
+                <TooltipContent>{isRecording ? "Stop recording" : "Start recording"}</TooltipContent>
               </Tooltip>
             }
           />
