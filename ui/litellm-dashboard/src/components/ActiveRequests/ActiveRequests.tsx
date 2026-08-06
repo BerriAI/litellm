@@ -87,6 +87,7 @@ export default function ActiveRequests({ accessToken }: ActiveRequestsProps) {
   const [draftFilters, setDraftFilters] = useState<ActiveRequestFilters>(filtersFromUrl);
   const [filters, setFilters] = useState<ActiveRequestFilters>(filtersFromUrl);
   const [paused, setPaused] = useState(false);
+  const pausedRef = useRef(paused);
   const [selected, setSelected] = useState<ActiveRequest | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const requestControllerRef = useRef<AbortController | null>(null);
@@ -118,12 +119,16 @@ export default function ActiveRequests({ accessToken }: ActiveRequestsProps) {
   }, [accessToken, filters, page]);
 
   useEffect(() => {
+    pausedRef.current = paused;
+  }, [paused]);
+
+  useEffect(() => {
     const timeout = window.setTimeout(() => void loadRequests(), 0);
     const interval = window.setInterval(() => {
-      if (!paused && document.visibilityState === "visible") void loadRequests();
+      if (!pausedRef.current && document.visibilityState === "visible") void loadRequests();
     }, POLL_INTERVAL_MS);
     const handleVisibilityChange = () => {
-      if (!paused && document.visibilityState === "visible") void loadRequests();
+      if (!pausedRef.current && document.visibilityState === "visible") void loadRequests();
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
@@ -133,7 +138,7 @@ export default function ActiveRequests({ accessToken }: ActiveRequestsProps) {
       requestControllerRef.current?.abort();
       requestControllerRef.current = null;
     };
-  }, [loadRequests, paused]);
+  }, [loadRequests]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {

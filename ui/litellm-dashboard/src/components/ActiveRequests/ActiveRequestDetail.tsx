@@ -65,7 +65,11 @@ export default function ActiveRequestDetail({ request, now, onClose, onCancel, c
         </dl>
 
         <SheetFooter className="flex-row items-center justify-between gap-2">
-          <Button variant="outline" render={<Link href={`/ui/logs?request_id=${request.request_id}`} />}>
+          <Button
+            variant="outline"
+            nativeButton={false}
+            render={<Link href={`/ui/logs?request_id=${request.request_id}`} />}
+          >
             Open in Logs
           </Button>
           <Button variant="destructive" onClick={() => onCancel(request)} disabled={cancelling}>
