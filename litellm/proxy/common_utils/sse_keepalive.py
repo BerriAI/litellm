@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import math
 from collections.abc import AsyncGenerator
 from typing import Final
 
@@ -8,13 +9,26 @@ import anyio
 ANTHROPIC_PING_SSE_CHUNK: Final = 'event: ping\ndata: {"type": "ping"}\n\n'
 
 
+def _coerce_interval(ping_interval_seconds: float | str | None) -> float | None:
+    if ping_interval_seconds is None:
+        return None
+    try:
+        interval: Final = float(ping_interval_seconds)
+    except ValueError:
+        return None
+    if not math.isfinite(interval) or interval <= 0:
+        return None
+    return interval
+
+
 def wrap_sse_stream_with_keepalive_pings(
     stream: AsyncGenerator[str, None],
-    ping_interval_seconds: float,
+    ping_interval_seconds: float | str | None,
 ) -> AsyncGenerator[str, None]:
-    if ping_interval_seconds <= 0:
+    interval: Final = _coerce_interval(ping_interval_seconds)
+    if interval is None:
         return stream
-    return _keepalive_ping_stream(stream=stream, ping_interval_seconds=ping_interval_seconds)
+    return _keepalive_ping_stream(stream=stream, ping_interval_seconds=interval)
 
 
 async def _keepalive_ping_stream(

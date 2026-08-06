@@ -105,6 +105,30 @@ async def test_non_positive_interval_returns_stream_unwrapped():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bad_interval", [None, "abc", "", float("inf"), float("nan"), "-3"])
+async def test_invalid_config_interval_returns_stream_unwrapped(bad_interval: float | str | None):
+    async def any_stream() -> AsyncGenerator[str, None]:
+        yield MESSAGE_START_CHUNK
+
+    stream: Final = any_stream()
+    assert wrap_sse_stream_with_keepalive_pings(stream=stream, ping_interval_seconds=bad_interval) is stream
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_numeric_string_interval_from_yaml_config_enables_pings():
+    async def slow_start_stream() -> AsyncGenerator[str, None]:
+        await asyncio.sleep(0.2)
+        yield MESSAGE_START_CHUNK
+
+    wrapped: Final = wrap_sse_stream_with_keepalive_pings(stream=slow_start_stream(), ping_interval_seconds="0.05")
+    collected: Final = [chunk async for chunk in wrapped]
+
+    assert collected[0] == ANTHROPIC_PING_SSE_CHUNK
+    assert collected[-1] == MESSAGE_START_CHUNK
+
+
+@pytest.mark.asyncio
 async def test_create_response_streams_ping_first_for_slow_upstream():
     async def slow_start_stream() -> AsyncGenerator[str, None]:
         await asyncio.sleep(0.2)
