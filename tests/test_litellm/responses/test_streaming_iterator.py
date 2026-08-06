@@ -14,6 +14,7 @@ import pytest
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
+    BaseResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
 )
@@ -235,3 +236,66 @@ def test_sync_transport_error_before_completed_event_raises():
     with pytest.raises(httpx.ReadError):
         for _ in iterator:
             pass
+
+
+class _RecordingByteStream(httpx.AsyncByteStream):
+    """Upstream provider body that records whether the connection was released."""
+
+    def __init__(self, chunks: list[bytes]):
+        self.chunks = chunks
+        self.aclose_calls = 0
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            yield chunk
+
+    async def aclose(self) -> None:
+        self.aclose_calls += 1
+
+
+def _make_iterator_over_real_response(stream: _RecordingByteStream) -> ResponsesAPIStreamingIterator:
+    return ResponsesAPIStreamingIterator(
+        response=httpx.Response(200, stream=stream),
+        model="gpt-4o-mini",
+        responses_api_provider_config=_mock_config(),
+        logging_obj=_logging_obj_stub(),
+        litellm_metadata={},
+        custom_llm_provider="openai",
+    )
+
+
+@pytest.mark.asyncio
+async def test_aclose_releases_upstream_connection_on_abandoned_stream():
+    """A /v1/responses stream abandoned mid-flight (client disconnect) must release the
+    provider connection. httpx only auto-closes on natural exhaustion, so leaving the
+    response open keeps vLLM/sglang decoding into a socket nobody reads (#36123)."""
+    stream = _RecordingByteStream([_sse_event({"type": "response.output_text.delta", "delta": "hi"})])
+    iterator = _make_iterator_over_real_response(stream)
+
+    await iterator.__anext__()
+    assert iterator.response.is_closed is False
+
+    await iterator.aclose()
+
+    assert stream.aclose_calls == 1
+    assert iterator.response.is_closed is True
+
+
+@pytest.mark.asyncio
+async def test_aclose_is_idempotent():
+    stream = _RecordingByteStream([_sse_event({"type": "response.output_text.delta", "delta": "hi"})])
+    iterator = _make_iterator_over_real_response(stream)
+
+    await iterator.aclose()
+    await iterator.aclose()
+
+    assert stream.aclose_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_aclose_is_a_noop_for_iterators_that_hold_no_upstream_response():
+    """Subclasses serving synthetic events (router fallback wrapper, MCP) bypass
+    ``__init__``, so ``aclose`` must not blow up on a missing ``self.response``."""
+    iterator = BaseResponsesAPIStreamingIterator.__new__(BaseResponsesAPIStreamingIterator)
+
+    await iterator.aclose()
