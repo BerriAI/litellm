@@ -373,7 +373,7 @@ def get_team_provider_credentials(
     def _provider_credentials(model_id: str) -> dict | None:
         credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
         if credentials is not None and credentials.get("custom_llm_provider") == custom_llm_provider:
-            return credentials
+            return {key: value for key, value in credentials.items() if key != "model"}
         return None
 
     # 1. Prefer the team's own BYOK deployment, matched by model_info.team_id.
