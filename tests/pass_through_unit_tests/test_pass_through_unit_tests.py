@@ -652,3 +652,59 @@ def test_custom_pricing_used_in_cost_calculation():
 
     print(f"Cache-aware cost: {cache_cost}")
     print("✅ Custom pricing parameters are correctly used in cost calculation")
+
+
+def test_init_kwargs_client_metadata_cannot_spoof_authenticated_identity(
+    mock_request, mock_user_api_key_dict
+):
+    request = mock_request()
+    passthrough_payload = PassthroughStandardLoggingPayload(
+        url="https://test.com",
+        request_body={},
+    )
+    authenticated_key = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="test-team",
+        end_user_id="test-user",
+        key_alias="real-key",
+        team_alias="Real Team",
+        user_email="real@example.com",
+        org_id="real-org",
+    )
+
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=authenticated_key,
+        passthrough_logging_payload=passthrough_payload,
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+        _parsed_body={
+            "litellm_metadata": {
+                "user_api_key_org_id": "victim-org",
+                "user_api_key_end_user_id": "victim-end-user",
+                "user_api_key_user_id": "victim-user",
+                "user_api_key_team_id": "victim-team",
+                "user_api_key_team_alias": "Victim Team",
+                "user_api_key_alias": "victim-key",
+                "user_api_key_user_email": "victim@example.com",
+            }
+        },
+    )
+
+    metadata = result["litellm_params"]["metadata"]
+    assert metadata["user_api_key_user_id"] == "test-user"
+    assert metadata["user_api_key_team_id"] == "test-team"
+    assert metadata["user_api_key_team_alias"] == "Real Team"
+    assert metadata["user_api_key_alias"] == "real-key"
+    assert metadata["user_api_key_user_email"] == "real@example.com"
+    assert metadata["user_api_key_org_id"] == "real-org"
+    assert metadata["user_api_key_end_user_id"] == "test-user"
