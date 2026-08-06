@@ -498,6 +498,7 @@ class CheckBatchCost:
                 },
                 "metadata": {
                     "user_api_key_user_id": creator_user_id,
+                    "user_api_key_team_id": getattr(job, "team_id", None),
                     **user_info,
                 },
             },
