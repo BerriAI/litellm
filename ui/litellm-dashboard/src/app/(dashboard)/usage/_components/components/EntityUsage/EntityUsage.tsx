@@ -137,6 +137,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     isFetchingMore,
     progress,
     cancelled,
+    failed,
+    incomplete,
     cancel,
   } = usePaginatedDailyActivity({
     fetchFn,
@@ -151,6 +153,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     isFetchingMore: agentIsFetchingMore,
     progress: agentProgress,
     cancelled: agentCancelled,
+    failed: agentFailed,
     cancel: agentCancel,
   } = usePaginatedDailyActivity({
     fetchFn: agentDailyActivityCall,
@@ -651,10 +654,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           </AlertDescription>
         </Alert>
       )}
-      {cancelled && (
-        <Alert variant="info" className="mb-2">
+      {(cancelled || failed) && (
+        <Alert variant={failed ? "error" : "info"} className="mb-2">
           <AlertDescription className="text-inherit">
-            Showing partial data ({progress.currentPage}/{progress.totalPages} pages loaded)
+            {failed ? "Fetching spend data failed, so totals cover only part of the range" : "Showing partial data"} (
+            {progress.currentPage}/{progress.totalPages} pages loaded)
           </AlertDescription>
         </Alert>
       )}
@@ -677,10 +681,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           </AlertDescription>
         </Alert>
       )}
-      {agentCancelled && showAgentBreakdown && (
-        <Alert variant="info" className="mb-2">
+      {(agentCancelled || agentFailed) && showAgentBreakdown && (
+        <Alert variant={agentFailed ? "error" : "info"} className="mb-2">
           <AlertDescription className="text-inherit">
-            Showing partial agent data ({agentProgress.currentPage}/{agentProgress.totalPages} pages loaded)
+            {agentFailed
+              ? "Fetching agent data failed, so totals cover only part of the range"
+              : "Showing partial agent data"}{" "}
+            ({agentProgress.currentPage}/{agentProgress.totalPages} pages loaded)
           </AlertDescription>
         </Alert>
       )}
@@ -696,6 +703,12 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         onFiltersChange={setSelectedTags}
         filterOptions={getAllTags() || undefined}
         teams={teams || []}
+        exportDisabled={incomplete}
+        exportDisabledReason={
+          failed
+            ? "Spend data failed to load for the whole range, so an export would under-report. Reload the page first."
+            : "Spend data is still loading, so an export would under-report. Wait for it to finish."
+        }
       />
       <Tabs defaultValue={tabs[0].key}>
         <TabsList className="mt-1">

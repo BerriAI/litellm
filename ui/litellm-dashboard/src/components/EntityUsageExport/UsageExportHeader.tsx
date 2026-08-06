@@ -34,6 +34,9 @@ interface UsageExportHeaderProps {
   customTitle?: string;
   compactLayout?: boolean;
   teams?: Team[];
+  /** Blocks the export while the data on screen does not cover the whole requested range. */
+  exportDisabled?: boolean;
+  exportDisabledReason?: string;
 }
 
 const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
@@ -50,6 +53,8 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   customTitle,
   compactLayout = false,
   teams = [],
+  exportDisabled = false,
+  exportDisabledReason,
 }) => {
   const anchor = useComboboxAnchor();
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -112,10 +117,12 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
           )}
 
           <div className="justify-self-end">
-            <Button onClick={() => setIsExportModalOpen(true)}>
-              <Download />
-              Export Data
-            </Button>
+            <span title={exportDisabled ? exportDisabledReason : undefined}>
+              <Button disabled={exportDisabled} onClick={() => setIsExportModalOpen(true)}>
+                <Download />
+                Export Data
+              </Button>
+            </span>
           </div>
         </div>
       </div>
