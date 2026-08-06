@@ -729,7 +729,7 @@ class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total
 
 class ChatCompletionToolMessage(TypedDict):
     role: Literal["tool"]
-    content: Union[str, Iterable[Union[ChatCompletionTextObject, ChatCompletionImageObject]]]
+    content: str | Iterable[ChatCompletionTextObject | ChatCompletionImageObject]
     tool_call_id: str
 
 

@@ -8,7 +8,7 @@ import time
 import traceback
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
-from typing import Any, Final, NoReturn, TypedDict, TypeVar, Union, cast
+from typing import Any, Final, NoReturn, TypedDict, TypeVar, cast
 
 import anyio
 import httpx
