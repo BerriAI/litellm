@@ -74,7 +74,7 @@ class BytePlusChatConfig(OpenAILikeChatConfig):
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict:
-        optional_params = super().map_openai_params(  # rebind-ok: parameter transformation
+        mapped_params = super().map_openai_params(
             non_default_params,
             optional_params,
             model,
@@ -82,13 +82,12 @@ class BytePlusChatConfig(OpenAILikeChatConfig):
             replace_max_completion_tokens_with_max_tokens,
         )
 
-        if "thinking" in optional_params:
-            thinking_value = optional_params.pop("thinking")
-            if (
-                thinking_value is not None
-                and isinstance(thinking_value, dict)
-                and thinking_value.get("type", None) in ["enabled", "disabled", "auto"]
-            ):
-                optional_params.setdefault("extra_body", {})["thinking"] = thinking_value
+        if "thinking" in mapped_params:
+            thinking_val = mapped_params.pop("thinking", None)
+            if thinking_val is not None:
+                if isinstance(thinking_val, bool):
+                    mapped_params["extra_body"] = {"thinking": {"type": "enabled" if thinking_val else "disabled"}}
+                elif isinstance(thinking_val, dict):
+                    mapped_params["extra_body"] = {"thinking": thinking_val}
 
-        return optional_params
+        return mapped_params

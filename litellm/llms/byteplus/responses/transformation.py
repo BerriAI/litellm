@@ -1,3 +1,5 @@
+from typing import Final
+
 import httpx
 
 import litellm
@@ -27,16 +29,14 @@ class BytePlusResponsesAPIConfig(VolcEngineResponsesAPIConfig):
         )
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
-        if litellm_params is None:
-            litellm_params = GenericLiteLLMParams()  # rebind-ok: default params
-        elif isinstance(litellm_params, dict):
-            litellm_params = GenericLiteLLMParams.model_validate(litellm_params)  # rebind-ok: validate model
+        params: Final = (
+            GenericLiteLLMParams.model_validate(litellm_params)
+            if isinstance(litellm_params, dict)
+            else (litellm_params or GenericLiteLLMParams())
+        )
 
         api_key = (
-            litellm_params.api_key
-            or litellm.api_key
-            or get_secret_str("BYTEPLUS_API_KEY")
-            or get_secret_str("ARK_API_KEY")
+            params.api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")
         )
 
         if api_key is None:

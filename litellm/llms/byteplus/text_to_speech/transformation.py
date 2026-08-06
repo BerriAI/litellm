@@ -103,7 +103,9 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        api_key = api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")  # rebind-ok: fallback chain
+        resolved_api_key: Final = (
+            api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")
+        )
         app_id = get_secret_str("BYTEPLUS_TTS_APP_ID")
         access_key = get_secret_str("BYTEPLUS_TTS_ACCESS_KEY")
         app_key = get_secret_str("BYTEPLUS_TTS_APP_KEY") or self.DEFAULT_APP_KEY
@@ -118,8 +120,8 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
             "Connection": "keep-alive",
         }
 
-        if api_key:
-            req_headers["x-api-key"] = api_key.strip()
+        if resolved_api_key:
+            req_headers["x-api-key"] = resolved_api_key.strip()
         elif app_id and access_key:
             req_headers["X-Api-App-Id"] = app_id.strip()
             req_headers["X-Api-Access-Key"] = access_key.strip()
