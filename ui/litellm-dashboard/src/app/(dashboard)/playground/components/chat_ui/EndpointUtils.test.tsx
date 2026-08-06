@@ -246,4 +246,12 @@ describe("isModelCompatibleWithEndpoint / filterModelsForEndpoint", () => {
       "no-mode",
     ]);
   });
+
+  it("excludes unknown modes from conversational endpoints", () => {
+    const batchModel: ModelGroup = { model_group: "batch-job", mode: "batch" };
+    const rerankModel: ModelGroup = { model_group: "reranker", mode: "rerank" };
+    expect(isModelCompatibleWithEndpoint(batchModel, EndpointType.CHAT)).toBe(false);
+    expect(isModelCompatibleWithEndpoint(rerankModel, EndpointType.RESPONSES)).toBe(false);
+    expect(isModelCompatibleWithEndpoint(batchModel, EndpointType.REALTIME)).toBe(false);
+  });
 });
