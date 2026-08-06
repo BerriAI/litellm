@@ -1,12 +1,8 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import (
-    TYPE_CHECKING,
-    Protocol,
-    Union,
-)
+from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import HTTPException, status
 from typing_extensions import TypedDict
@@ -39,7 +35,7 @@ if TYPE_CHECKING:
     )
 
 # Mapping from Prisma accessor names to actual PostgreSQL table names.
-_PRISMA_TO_PG_TABLE: Mapping[str, str] = {
+_PRISMA_TO_PG_TABLE: Final[Mapping[str, str]] = {
     "litellm_dailyuserspend": "LiteLLM_DailyUserSpend",
     "litellm_dailyteamspend": "LiteLLM_DailyTeamSpend",
     "litellm_dailyorganizationspend": "LiteLLM_DailyOrganizationSpend",
@@ -96,6 +92,9 @@ class DailySpendRecord(Protocol):
     def prompt_caching_savings_spend(self) -> float: ...
 
     @property
+    def autorouter_savings_spend(self) -> float: ...
+
+    @property
     def api_requests(self) -> int: ...
 
     @property
@@ -110,7 +109,7 @@ class _KeyMetadataDict(TypedDict, total=False):
     team_id: str | None
 
 
-_WhereValue = Union[str, dict[str, object]]
+_WhereValue = str | dict[str, object]
 
 
 class _AggregatedSpendData(TypedDict):
@@ -135,6 +134,7 @@ class _GroupingSetsRow(SimpleNamespace):
     compression_saved_tokens: int | None
     compression_savings_spend: float | None
     prompt_caching_savings_spend: float | None
+    autorouter_savings_spend: float | None
     api_requests: int | None
     successful_requests: int | None
     failed_requests: int | None
@@ -147,8 +147,8 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     (e.g. a key with no spend), so coalesce to 0 before accumulating to avoid
     a TypeError. Mirrors the handling in ``_record_to_spend_metrics``.
     """
-    prompt_tokens = record.prompt_tokens or 0
-    completion_tokens = record.completion_tokens or 0
+    prompt_tokens: Final = record.prompt_tokens or 0
+    completion_tokens: Final = record.completion_tokens or 0
     existing_metrics.spend += record.spend or 0.0
     existing_metrics.prompt_tokens += prompt_tokens
     existing_metrics.completion_tokens += completion_tokens
@@ -158,6 +158,7 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     existing_metrics.compression_saved_tokens += record.compression_saved_tokens or 0
     existing_metrics.compression_savings_spend += record.compression_savings_spend or 0
     existing_metrics.prompt_caching_savings_spend += record.prompt_caching_savings_spend or 0
+    existing_metrics.autorouter_savings_spend += record.autorouter_savings_spend or 0
     existing_metrics.api_requests += record.api_requests or 0
     existing_metrics.successful_requests += record.successful_requests or 0
     existing_metrics.failed_requests += record.failed_requests or 0
@@ -168,7 +169,7 @@ def _is_user_agent_tag(tag: str | None) -> bool:
     """Determine whether a tag should be treated as a User-Agent tag."""
     if not tag:
         return False
-    normalized_tag = tag.strip().lower()
+    normalized_tag: Final = tag.strip().lower()
     return normalized_tag.startswith("user-agent:") or normalized_tag.startswith("user agent:")
 
 
@@ -178,7 +179,7 @@ def compute_tag_metadata_totals(records: Sequence[DailySpendRecord]) -> SpendMet
 
     Each unique request_id contributes at most one record (the tag with max spend) to metadata.
     """
-    deduped_records: dict[str, DailySpendRecord] = {}
+    deduped_records: Final[dict[str, DailySpendRecord]] = {}
     for record in records:
         request_id: str | None = getattr(record, "request_id", None)
         if not request_id:
@@ -192,7 +193,7 @@ def compute_tag_metadata_totals(records: Sequence[DailySpendRecord]) -> SpendMet
         if current_best is None or record.spend > current_best.spend:
             deduped_records[request_id] = record
 
-    metadata_metrics = SpendMetrics()
+    metadata_metrics: Final = SpendMetrics()
     for record in deduped_records.values():
         update_metrics(metadata_metrics, record)
     return metadata_metrics
@@ -233,7 +234,7 @@ def update_breakdown_metrics(
         )
 
     # Update model group breakdown
-    model_group_key = record.model_group or record.model
+    model_group_key: Final = record.model_group or record.model
     if model_group_key and model_group_key not in breakdown.model_groups:
         breakdown.model_groups[model_group_key] = MetricWithMetadata(
             metrics=SpendMetrics(),
@@ -288,7 +289,7 @@ def update_breakdown_metrics(
         )
 
     # Update provider breakdown
-    provider = record.custom_llm_provider or "unknown"
+    provider: Final = record.custom_llm_provider or "unknown"
     if provider not in breakdown.providers:
         breakdown.providers[provider] = MetricWithMetadata(
             metrics=SpendMetrics(),
@@ -386,15 +387,15 @@ async def get_api_key_metadata(
     key_records: list[PrismaVerificationToken] = await VerificationTokenRepository(prisma_client).table.find_many(
         where={"token": {"in": list(api_keys)}}
     )
-    result: dict[str, _KeyMetadataDict] = {
+    result: Final[dict[str, _KeyMetadataDict]] = {
         k.token: {"key_alias": k.key_alias, "team_id": k.team_id} for k in key_records
     }
 
     # For any keys not found in the active table, check the deleted keys table
-    missing_keys = api_keys - set(result.keys())
+    missing_keys: Final = api_keys - set(result.keys())
     if missing_keys:
         try:
-            deleted_key_records: list[PrismaDeletedVerificationToken] = await DeletedVerificationTokenRepository(
+            deleted_key_records: Final[list[PrismaDeletedVerificationToken]] = await DeletedVerificationTokenRepository(
                 prisma_client
             ).table.find_many(
                 where={"token": {"in": list(missing_keys)}},
@@ -421,26 +422,46 @@ def _adjust_dates_for_timezone(
     start_date: str,
     end_date: str,
     timezone_offset_minutes: int | None,
+    include_current_utc_day: bool = False,
+    utc_now: datetime | None = None,
 ) -> tuple[str, str]:
     """
-    Pass-through for the local date range; the timezone offset is intentionally ignored here.
+    Map a caller-local date range onto UTC bucket keys, extending only the live end.
 
     The aggregation table (e.g. LiteLLM_DailyUserSpend) stores spend in whole-UTC-day
-    buckets keyed on date as YYYY-MM-DD. Any conversion from a local date range to a
-    UTC date range using only date arithmetic must round to whole UTC days, allowing up
-    to 24h of slop at each boundary. The previous implementation expanded the SQL range
-    by an extra full UTC day on whichever side the offset pointed, which pulled in 24h
-    of unrelated bucket data per boundary and produced approximately 100% over-counting
-    on single-day queries (e.g. IST May 29 returning UTC May 28 + UTC May 29 in full).
+    buckets keyed on date as YYYY-MM-DD. Any conversion of an interior local-day
+    boundary using only date arithmetic must round to whole UTC days, allowing up to
+    24h of slop at each boundary. A previous implementation expanded the SQL range by
+    an extra full UTC day on whichever side the offset pointed, which pulled in 24h of
+    unrelated bucket data per boundary and produced approximately 100% over-counting on
+    single-day queries (e.g. IST May 29 returning UTC May 28 + UTC May 29 in full).
     Sums of single-day queries then exceeded the equivalent multi-day aggregate, which
-    is mathematically impossible.
+    is mathematically impossible. Historical dates therefore stay a pass-through: the
+    local date is the UTC bucket key, trading boundary slop for monotonic, additive
+    results. Hour-level buckets or pro-rata weighting would fix that properly; both
+    require data the current schema does not store.
 
-    Treating the local date as the UTC date trades a small one-time boundary slop for
-    correct, monotonic, additive results across single-day and multi-day queries. A
-    later fix can introduce hour-level buckets or pro-rata weighting on adjacent UTC
-    days; both require data the current schema does not store.
+    The end boundary is different when the range reaches the caller's current day. A
+    caller west of UTC asking for a range ending "today" is asking for data up to now,
+    but once UTC has rolled past their local midnight, everything they sent since then
+    sits in the next UTC bucket, which the pass-through excludes: a PT dashboard goes
+    stale every evening from 5pm until local midnight, showing $0 for anything that
+    only started accruing that evening. Extending such a range to today's UTC bucket
+    cannot over-count, because the only part of that bucket outside the caller's range
+    is the future, and the future is empty. ``timezone_offset_minutes`` follows the
+    JS ``Date.getTimezoneOffset`` convention: UTC minus local, positive west of UTC.
+
+    The extension is strictly opt-in via ``include_current_utc_day`` so a consumer
+    whose axis or reconciliation expects the range to stop at the requested end date
+    keeps today's byte-for-byte behaviour; the cost optimization dashboard opts in.
     """
-    return start_date, end_date
+    if not include_current_utc_day or timezone_offset_minutes is None:
+        return start_date, end_date
+    now: Final = utc_now if utc_now is not None else datetime.now(timezone.utc)
+    caller_local_today: Final = (now - timedelta(minutes=timezone_offset_minutes)).date().isoformat()
+    if end_date < caller_local_today:
+        return start_date, end_date
+    return start_date, max(end_date, now.date().isoformat())
 
 
 def _build_where_conditions(
@@ -453,12 +474,15 @@ def _build_where_conditions(
     api_key: str | list[str] | None,
     exclude_entity_ids: list[str] | None = None,
     timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
 ) -> dict[str, "_WhereValue"]:
     """Build prisma where clause for daily activity queries."""
     # Adjust dates for timezone if provided
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+        start_date, end_date, timezone_offset_minutes, include_current_utc_day
+    )
 
-    where_conditions: dict[str, _WhereValue] = {
+    where_conditions: Final[dict[str, _WhereValue]] = {
         "date": {
             "gte": adjusted_start,
             "lte": adjusted_end,
@@ -511,14 +535,14 @@ def _build_aggregated_sql_query(
     Returns:
         Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
     """
-    pg_table = _PRISMA_TO_PG_TABLE.get(table_name)
+    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
     if pg_table is None:
         raise ValueError(f"Unknown table name: {table_name}")
 
     adjusted_start, adjusted_end = _adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
 
-    sql_conditions: list[str] = []
-    sql_params: list[str] = []
+    sql_conditions: Final[list[str]] = []
+    sql_params: Final[list[str]] = []
     p = 1  # parameter index (1-based for PostgreSQL $N placeholders)
 
     # Date range (always present)
@@ -561,7 +585,7 @@ def _build_aggregated_sql_query(
         sql_params.append(api_key)
         p += 1
 
-    where_clause = " AND ".join(sql_conditions)
+    where_clause: Final = " AND ".join(sql_conditions)
 
     # Postgres computes every rollup level the response needs — per-date
     # totals, per-(date, model), per-(date, model, api_key), per-provider,
@@ -570,7 +594,12 @@ def _build_aggregated_sql_query(
     # straight into their buckets without re-summing. The leaf grouping
     # is omitted on purpose: nothing in the response shape needs it once
     # all the rollups are present.
-    sql_query = f"""
+    #
+    # TODO: drop the successful_requests/failed_requests aggregates (and the
+    # total_successful_requests metadata they feed) once the admin UI reads SGR
+    # only from LiteLLM_DailyGatewayRequests. The remaining spend, token and
+    # api_requests rollups are still served from here.
+    sql_query: Final = f"""
         SELECT
             date,
             api_key,
@@ -590,6 +619,7 @@ def _build_aggregated_sql_query(
             SUM(compression_saved_tokens)::bigint AS compression_saved_tokens,
             SUM(compression_savings_spend)::float AS compression_savings_spend,
             SUM(prompt_caching_savings_spend)::float AS prompt_caching_savings_spend,
+            SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
             SUM(failed_requests)::bigint AS failed_requests
@@ -622,12 +652,12 @@ def _aggregate_spend_records_sync(
     entity_id_field: str | None,
     entity_metadata_field: Mapping[str, dict[str, object]] | None,
 ) -> _AggregatedSpendData:
-    model_metadata: dict[str, dict[str, object]] = {}
-    provider_metadata: dict[str, dict[str, object]] = {}
+    model_metadata: Final[dict[str, dict[str, object]]] = {}
+    provider_metadata: Final[dict[str, dict[str, object]]] = {}
 
-    results: list[DailySpendData] = []
+    results: Final[list[DailySpendData]] = []
     total_metrics = SpendMetrics()
-    grouped_data: dict[str, GroupedData] = {}
+    grouped_data: Final[dict[str, GroupedData]] = {}
 
     for record in records:
         date_str = record.date
@@ -677,7 +707,7 @@ async def _aggregate_spend_records(
     The per-row loop is offloaded to a worker thread via asyncio.to_thread so
     a large result set doesn't peg the event loop.
     """
-    api_keys: set[str] = {record.api_key for record in records if record.api_key}
+    api_keys: Final[set[str]] = {record.api_key for record in records if record.api_key}
 
     api_key_metadata: dict[str, _KeyMetadataDict] = {}
     if api_keys:
@@ -699,19 +729,19 @@ async def _aggregate_spend_records(
 #   mcp_namespaced_tool_name, endpoint
 # A bit is 1 when the corresponding column is rolled up (i.e. NOT in the
 # current grouping set's key), 0 when the column is part of the key.
-_GROUP_GRAND_TOTAL = 127  # 0b1111111 — all rolled up
-_GROUP_DATE = 63  # 0b0111111 — only date kept
-_GROUP_DATE_API_KEY = 31  # 0b0011111
-_GROUP_DATE_MODEL = 47  # 0b0101111
-_GROUP_DATE_MODEL_API_KEY = 15  # 0b0001111
-_GROUP_DATE_MODEL_GROUP = 55  # 0b0110111
-_GROUP_DATE_MODEL_GROUP_API_KEY = 23  # 0b0010111
-_GROUP_DATE_PROVIDER = 59  # 0b0111011
-_GROUP_DATE_PROVIDER_API_KEY = 27  # 0b0011011
-_GROUP_DATE_MCP = 61  # 0b0111101
-_GROUP_DATE_MCP_API_KEY = 29  # 0b0011101
-_GROUP_DATE_ENDPOINT = 62  # 0b0111110
-_GROUP_DATE_ENDPOINT_API_KEY = 30  # 0b0011110
+_GROUP_GRAND_TOTAL: Final = 127  # 0b1111111 — all rolled up
+_GROUP_DATE: Final = 63  # 0b0111111 — only date kept
+_GROUP_DATE_API_KEY: Final = 31  # 0b0011111
+_GROUP_DATE_MODEL: Final = 47  # 0b0101111
+_GROUP_DATE_MODEL_API_KEY: Final = 15  # 0b0001111
+_GROUP_DATE_MODEL_GROUP: Final = 55  # 0b0110111
+_GROUP_DATE_MODEL_GROUP_API_KEY: Final = 23  # 0b0010111
+_GROUP_DATE_PROVIDER: Final = 59  # 0b0111011
+_GROUP_DATE_PROVIDER_API_KEY: Final = 27  # 0b0011011
+_GROUP_DATE_MCP: Final = 61  # 0b0111101
+_GROUP_DATE_MCP_API_KEY: Final = 29  # 0b0011101
+_GROUP_DATE_ENDPOINT: Final = 62  # 0b0111110
+_GROUP_DATE_ENDPOINT_API_KEY: Final = 30  # 0b0011110
 
 
 def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
@@ -720,8 +750,8 @@ def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
     SUM() over zero rows is SQL NULL, so rollup rows (notably the grand-total
     row, which Postgres emits even on an empty match) can carry None values.
     """
-    prompt_tokens = record.prompt_tokens or 0
-    completion_tokens = record.completion_tokens or 0
+    prompt_tokens: Final = record.prompt_tokens or 0
+    completion_tokens: Final = record.completion_tokens or 0
     return SpendMetrics(
         spend=record.spend or 0.0,
         prompt_tokens=prompt_tokens,
@@ -732,6 +762,7 @@ def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
         compression_saved_tokens=record.compression_saved_tokens or 0,
         compression_savings_spend=record.compression_savings_spend or 0,
         prompt_caching_savings_spend=record.prompt_caching_savings_spend or 0,
+        autorouter_savings_spend=record.autorouter_savings_spend or 0,
         api_requests=record.api_requests or 0,
         successful_requests=record.successful_requests or 0,
         failed_requests=record.failed_requests or 0,
@@ -739,7 +770,7 @@ def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
 
 
 def _key_metadata(api_key_metadata: Mapping[str, _KeyMetadataDict], api_key: str) -> KeyMetadata:
-    meta = api_key_metadata.get(api_key, {})
+    meta: Final = api_key_metadata.get(api_key, {})
     return KeyMetadata(key_alias=meta.get("key_alias"), team_id=meta.get("team_id"))
 
 
@@ -756,7 +787,7 @@ def _aggregate_grouping_sets_records_sync(
     summing in Python and no nested update_metrics calls.
     """
     total_metrics = SpendMetrics()
-    grouped_data: dict[str, GroupedData] = {}
+    grouped_data: Final[dict[str, GroupedData]] = {}
 
     def ensure_date(date_str: str) -> GroupedData:
         bucket: GroupedData | None = grouped_data.get(date_str)
@@ -766,7 +797,7 @@ def _aggregate_grouping_sets_records_sync(
         return bucket
 
     def assign_metric_with_metadata(target: dict[str, MetricWithMetadata], key: str, metrics: SpendMetrics) -> None:
-        existing = target.get(key)
+        existing: Final = target.get(key)
         if existing is None:
             target[key] = MetricWithMetadata(metrics=metrics, metadata={})
         else:
@@ -848,7 +879,7 @@ def _aggregate_grouping_sets_records_sync(
             if record.endpoint and record.api_key:
                 assign_api_key_breakdown(breakdown.endpoints, record.endpoint, record.api_key, metrics)
 
-    results = [
+    results: Final = [
         DailySpendData(
             date=datetime.strptime(date_str, "%Y-%m-%d").date(),
             metrics=data["metrics"],
@@ -867,7 +898,7 @@ async def _aggregate_grouping_sets_records(
     records: Sequence[_GroupingSetsRow],
 ) -> _AggregatedSpendData:
     """Async wrapper: fetch api_key_metadata, then dispatch on a worker thread."""
-    api_keys: set[str] = {r.api_key for r in records if r.api_key}
+    api_keys: Final[set[str]] = {r.api_key for r in records if r.api_key}
 
     api_key_metadata: dict[str, _KeyMetadataDict] = {}
     if api_keys:
@@ -895,6 +926,7 @@ async def get_daily_activity(
     exclude_entity_ids: list[str] | None = None,
     metadata_metrics_func: Callable[[Sequence[DailySpendRecord]], SpendMetrics] | None = None,
     timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
     resolve_entity_metadata: Callable[[Sequence[DailySpendRecord]], Awaitable[dict[str, dict[str, object]]]]
     | None = None,
 ) -> SpendAnalyticsPaginatedResponse:
@@ -919,7 +951,7 @@ async def get_daily_activity(
         )
 
     try:
-        where_conditions = _build_where_conditions(
+        where_conditions: Final = _build_where_conditions(
             entity_id_field=entity_id_field,
             entity_id=entity_id,
             start_date=start_date,
@@ -928,10 +960,11 @@ async def get_daily_activity(
             api_key=api_key,
             exclude_entity_ids=exclude_entity_ids,
             timezone_offset_minutes=timezone_offset_minutes,
+            include_current_utc_day=include_current_utc_day,
         )
 
         # Get total count for pagination
-        total_count: int = await getattr(prisma_client.db, table_name).count(where=where_conditions)
+        total_count: Final[int] = await getattr(prisma_client.db, table_name).count(where=where_conditions)
 
         # Fetch paginated results.
         # ``date`` alone is not a unique sort key -- a busy tenant has many
@@ -943,7 +976,7 @@ async def get_daily_activity(
         # total. Adding ``id`` (the row's UUID primary key, present on both
         # LiteLLM_DailyUserSpend and LiteLLM_DailyTeamSpend) as a tiebreaker
         # gives every page a stable cursor (#30164).
-        daily_spend_data: Sequence[DailySpendRecord] = await getattr(prisma_client.db, table_name).find_many(
+        daily_spend_data: Final[Sequence[DailySpendRecord]] = await getattr(prisma_client.db, table_name).find_many(
             where=where_conditions,
             order=[
                 {"date": "desc"},
@@ -960,7 +993,7 @@ async def get_daily_activity(
                 **(await resolve_entity_metadata(daily_spend_data)),
             }
 
-        aggregated = await _aggregate_spend_records(
+        aggregated: Final = await _aggregate_spend_records(
             prisma_client=prisma_client,
             records=daily_spend_data,
             entity_id_field=entity_id_field,
@@ -986,6 +1019,7 @@ async def get_daily_activity(
                 total_compression_saved_tokens=metadata_metrics.compression_saved_tokens,
                 total_compression_savings_spend=metadata_metrics.compression_savings_spend,
                 total_prompt_caching_savings_spend=metadata_metrics.prompt_caching_savings_spend,
+                total_autorouter_savings_spend=metadata_metrics.autorouter_savings_spend,
                 page=page,
                 total_pages=-(-total_count // page_size),  # Ceiling division
                 has_more=(page * page_size) < total_count,
@@ -993,10 +1027,10 @@ async def get_daily_activity(
         )
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error fetching daily activity: {e!s}")
+        verbose_proxy_logger.exception("Error fetching daily activity: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to fetch analytics: {e!s}"},
+            detail={"error": f"Failed to fetch analytics: {e}"},
         )
 
 
@@ -1051,11 +1085,11 @@ async def get_daily_activity_aggregated(
         if rows is None:
             rows = []
 
-        records = [_GroupingSetsRow(**row) for row in rows]
+        records: Final = [_GroupingSetsRow(**row) for row in rows]
 
         # The grouping-sets dispatcher places each row directly in its bucket
         # using the row's GROUPING() bitmask. No Python-side summing needed.
-        aggregated = await _aggregate_grouping_sets_records(
+        aggregated: Final = await _aggregate_grouping_sets_records(
             prisma_client=prisma_client,
             records=records,
         )
@@ -1075,6 +1109,7 @@ async def get_daily_activity_aggregated(
                 total_compression_saved_tokens=aggregated["totals"].compression_saved_tokens,
                 total_compression_savings_spend=aggregated["totals"].compression_savings_spend,
                 total_prompt_caching_savings_spend=aggregated["totals"].prompt_caching_savings_spend,
+                total_autorouter_savings_spend=aggregated["totals"].autorouter_savings_spend,
                 page=1,
                 total_pages=1,
                 has_more=False,
@@ -1082,8 +1117,8 @@ async def get_daily_activity_aggregated(
         )
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error fetching aggregated daily activity: {e!s}")
+        verbose_proxy_logger.exception("Error fetching aggregated daily activity: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to fetch analytics: {e!s}"},
+            detail={"error": f"Failed to fetch analytics: {e}"},
         )

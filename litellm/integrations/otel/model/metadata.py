@@ -38,7 +38,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.otel.model.semconv import resolve_operation
@@ -73,7 +73,7 @@ class RequestIdentity:
         so the identity carried into Baggage labels every span with the dispatched
         model, not just the user-facing one.
         """
-        raw_meta = cast(Mapping[str, object], payload.get("metadata") or {})
+        raw_meta: Final = cast(Mapping[str, object], payload.get("metadata") or {})
         metadata = {key: str(value) for key, value in raw_meta.items() if isinstance(value, (str, bool, int, float))}
         return cls(
             call_id=as_str(payload.get("litellm_call_id")) or as_str(payload.get("id")),
@@ -100,8 +100,8 @@ class RequestIdentity:
         ``user_api_key_*`` names that ``baggage.DEFAULT_BAGGAGE_METADATA_KEYS``
         promotes.
         """
-        get = lambda name: getattr(auth, name, None)  # noqa: E731
-        metadata = {
+        get: Final = lambda name: getattr(auth, name, None)  # noqa: E731
+        metadata: Final = {
             meta_key: str(value)
             for meta_key, attr in (
                 ("user_api_key_user_id", "user_id"),
@@ -146,11 +146,11 @@ class RequestContext:
 
     @classmethod
     def from_standard_logging_payload(cls, payload: StandardLoggingPayload) -> RequestContext:
-        raw_meta = cast(Mapping[str, object], payload.get("metadata") or {})
-        hidden = cast(Mapping[str, object], payload.get("hidden_params") or {})
-        raw_response = payload.get("response")
-        response = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
-        model_group = as_str(payload.get("model_group")) or as_str(raw_meta.get("model_group"))
+        raw_meta: Final = cast(Mapping[str, object], payload.get("metadata") or {})
+        hidden: Final = cast(Mapping[str, object], payload.get("hidden_params") or {})
+        raw_response: Final = payload.get("response")
+        response: Final = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
+        model_group: Final = as_str(payload.get("model_group")) or as_str(raw_meta.get("model_group"))
         return cls(
             # The user asked for the group; fall back to the call model on the SDK
             # path, which has no group. Empty string (never None) so the span name
@@ -206,10 +206,10 @@ class LLMCallEvent:
 
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, Any]) -> LLMCallEvent:
-        raw_payload = kwargs.get("standard_logging_object")
-        payload = cast("StandardLoggingPayload", raw_payload) if raw_payload else None
-        operation = resolve_operation(as_str(kwargs.get("call_type")))
-        model = as_str(kwargs.get("model")) or ""
+        raw_payload: Final = kwargs.get("standard_logging_object")
+        payload: Final = cast("StandardLoggingPayload", raw_payload) if raw_payload else None
+        operation: Final = resolve_operation(as_str(kwargs.get("call_type")))
+        model: Final = as_str(kwargs.get("model")) or ""
         return cls(
             call_id=_call_id(payload, kwargs),
             payload=payload,
@@ -225,11 +225,11 @@ def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
     to the first streamed chunk (``completion_start_time``); ``None`` for
     non-streaming calls, where ``completion_start_time`` is backfilled with the
     end time and would not measure first-chunk latency."""
-    optional_params = cast(Mapping[str, Any], kwargs.get("optional_params") or {})
+    optional_params: Final = cast(Mapping[str, Any], kwargs.get("optional_params") or {})
     if not optional_params.get("stream"):
         return None
-    api_call_start = to_seconds(kwargs.get("api_call_start_time"))
-    completion_start = to_seconds(kwargs.get("completion_start_time"))
+    api_call_start: Final = to_seconds(kwargs.get("api_call_start_time"))
+    completion_start: Final = to_seconds(kwargs.get("completion_start_time"))
     if api_call_start is None or completion_start is None:
         return None
     return completion_start - api_call_start
@@ -238,7 +238,7 @@ def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
 def _call_id(payload: StandardLoggingPayload | None, kwargs: Mapping[str, Any]) -> str | None:
     """The call id from the payload (when closed) or the bare kwargs (at pre_call)."""
     if payload is not None:
-        call_id = as_str(payload.get("litellm_call_id")) or as_str(payload.get("id"))
+        call_id: Final = as_str(payload.get("litellm_call_id")) or as_str(payload.get("id"))
         if call_id:
             return call_id
     return as_str(kwargs.get("litellm_call_id"))
@@ -263,8 +263,8 @@ def resolve_provider_model(payload: StandardLoggingPayload) -> str | None:
     ``reconstruct_model_name`` has already resolved to the deployment's
     provider-prefixed name. Returns ``None`` only when neither is present.
     """
-    raw_meta = cast(Mapping[str, object], payload.get("metadata") or {})
-    hidden = cast(Mapping[str, object], payload.get("hidden_params") or {})
+    raw_meta: Final = cast(Mapping[str, object], payload.get("metadata") or {})
+    hidden: Final = cast(Mapping[str, object], payload.get("hidden_params") or {})
     return (
         # ``deployment`` survives only on paths that don't strip it from metadata;
         # harmless (and most precise) to prefer it when present.

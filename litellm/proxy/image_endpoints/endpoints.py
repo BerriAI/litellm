@@ -16,9 +16,10 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.route_llm_request import route_request
 from litellm.types.llms.openai import ChatCompletionUserMessage
 
-router = APIRouter()
+router: Final = APIRouter()
 
 import io
+from typing import Final
 
 from fastapi import UploadFile
 
@@ -28,8 +29,8 @@ async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
     Read a FastAPI UploadFile into a BytesIO and set .name so OpenAI SDK
     infers filename/content-type correctly.
     """
-    data = await upload.read()
-    buffer = io.BytesIO(data)
+    data: Final = await upload.read()
+    buffer: Final = io.BytesIO(data)
     buffer.name = upload.filename
     return buffer
 
@@ -69,6 +70,7 @@ async def image_generation(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     model: str | None = None,
 ):
+    from litellm.proxy.litellm_pre_call_utils import reject_url_valued_destination
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
@@ -82,7 +84,7 @@ async def image_generation(
     data = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
-        body = await request.body()
+        body: Final = await request.body()
         data = orjson.loads(body)
 
         # Include original request and headers in the data
@@ -94,6 +96,9 @@ async def image_generation(
             version=version,
             proxy_config=proxy_config,
         )
+
+        if isinstance(model, str):
+            reject_url_valued_destination("model", model)
 
         data["model"] = (
             model
@@ -111,10 +116,10 @@ async def image_generation(
             data["model"] = litellm.model_alias_map[data["model"]]
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-        prompt_value = data.get("prompt")
+        prompt_value: Final = data.get("prompt")
         if prompt_value is not None:
             # Reformat the image prompt as a chat message so guardrails can process it.
-            user_message: ChatCompletionUserMessage = {
+            user_message: Final[ChatCompletionUserMessage] = {
                 "role": "user",
                 "content": prompt_value,
             }
@@ -123,13 +128,13 @@ async def image_generation(
             user_api_key_dict=user_api_key_dict, data=data, call_type="image_generation"
         )
 
-        messages = data.get("messages")
+        messages: Final = data.get("messages")
         if isinstance(messages, list) and messages:
             data["prompt"] = get_str_from_messages(messages)
         data.pop("messages", None)
 
         ## ROUTE TO CORRECT ENDPOINT ##
-        llm_call = await route_request(
+        llm_call: Final = await route_request(
             data=data,
             route_type="aimage_generation",
             llm_router=llm_router,
@@ -148,12 +153,12 @@ async def image_generation(
         )
 
         ### RESPONSE HEADERS ###
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
-        response_cost = hidden_params.get("response_cost", None) or ""
-        litellm_call_id = hidden_params.get("litellm_call_id", None) or ""
+        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+        model_id: Final = hidden_params.get("model_id", None) or ""
+        cache_key: Final = hidden_params.get("cache_key", None) or ""
+        api_base: Final = hidden_params.get("api_base", None) or ""
+        response_cost: Final = hidden_params.get("response_cost", None) or ""
+        litellm_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -171,7 +176,7 @@ async def image_generation(
         )
 
         # Call response headers hook (matches base_process_llm_request behavior)
-        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+        callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -185,7 +190,7 @@ async def image_generation(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.image_generation(): Exception occured - {e!s}")
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.image_generation(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -195,7 +200,7 @@ async def image_generation(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_msg = f"{e!s}"
+            error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
@@ -276,9 +281,9 @@ async def image_edit_api(
     #########################################################
     # Read request body and convert UploadFiles to BytesIO
     #########################################################
-    data = await _read_request_body(request=request)
-    image_files = await batch_to_bytesio(image)
-    mask_files = await batch_to_bytesio(mask)
+    data: Final = await _read_request_body(request=request)
+    image_files: Final = await batch_to_bytesio(image)
+    mask_files: Final = await batch_to_bytesio(mask)
     if image_files:
         data["image"] = image_files
     if mask_files:
@@ -305,7 +310,7 @@ async def image_edit_api(
     # Process request
     #########################################################
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,

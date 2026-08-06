@@ -4,7 +4,7 @@ Base repository class with common functionality.
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, Generic, Protocol, TypeVar, Union, runtime_checkable
+from typing import Any, Final, Generic, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -21,12 +21,7 @@ class SupportsDict(Protocol):
     def dict(self) -> dict[str, object]: ...
 
 
-DbRecord = Union[
-    Mapping[str, object],
-    SupportsModelDump,
-    SupportsDict,
-    Sequence[tuple[str, object]],
-]
+DbRecord = Mapping[str, object] | SupportsModelDump | SupportsDict | Sequence[tuple[str, object]]
 
 
 def record_to_dict(record: DbRecord) -> Mapping[str, object]:
@@ -76,7 +71,7 @@ class BaseRepository(ABC, Generic[T]):
 
     async def find_by_id(self, id_value: str, id_field: str = "id") -> T | None:
         """Find a record by its primary key."""
-        record = await self.table.find_unique(where={id_field: id_value})
+        record: Final = await self.table.find_unique(where={id_field: id_value})
         return self._to_model(record)
 
     async def find_many(
@@ -87,7 +82,7 @@ class BaseRepository(ABC, Generic[T]):
         order: dict[str, str] | None = None,
     ) -> list[T]:
         """Find multiple records matching the criteria."""
-        kwargs: dict[str, Any] = {}
+        kwargs: Final[dict[str, Any]] = {}
         if where:
             kwargs["where"] = where
         if skip is not None:
@@ -97,24 +92,24 @@ class BaseRepository(ABC, Generic[T]):
         if order:
             kwargs["order"] = order
 
-        records = await self.table.find_many(**kwargs)
+        records: Final = await self.table.find_many(**kwargs)
         return self._to_model_list(records)
 
     async def create(self, data: dict[str, Any]) -> T:
         """Create a new record."""
-        record = await self.table.create(data=data)
-        model = self._to_model(record)
+        record: Final = await self.table.create(data=data)
+        model: Final = self._to_model(record)
         assert model is not None
         return model
 
     async def update(self, id_value: str, data: dict[str, Any], id_field: str = "id") -> T | None:
         """Update an existing record."""
-        record = await self.table.update(where={id_field: id_value}, data=data)
+        record: Final = await self.table.update(where={id_field: id_value}, data=data)
         return self._to_model(record)
 
     async def delete(self, id_value: str, id_field: str = "id") -> T | None:
         """Delete a record by its primary key."""
-        record = await self.table.delete(where={id_field: id_value})
+        record: Final = await self.table.delete(where={id_field: id_value})
         return self._to_model(record)
 
     async def count(self, where: dict[str, Any] | None = None) -> int:
@@ -123,5 +118,5 @@ class BaseRepository(ABC, Generic[T]):
 
     async def exists(self, id_value: str, id_field: str = "id") -> bool:
         """Check if a record exists."""
-        record = await self.table.find_unique(where={id_field: id_value})
+        record: Final = await self.table.find_unique(where={id_field: id_value})
         return record is not None

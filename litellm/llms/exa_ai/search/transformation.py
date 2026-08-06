@@ -4,7 +4,7 @@ Calls Exa AI's /search endpoint to search the web.
 Exa AI API Reference: https://docs.exa.ai/reference/search
 """
 
-from typing import TypedDict
+from typing import Final, TypedDict
 
 import httpx
 
@@ -123,7 +123,7 @@ class ExaAISearchConfig(BaseSearchConfig):
             # Exa AI only supports single string queries, join with spaces
             query = " ".join(query)
 
-        request_data: ExaAISearchRequest = {
+        request_data: Final[ExaAISearchRequest] = {
             "query": query,
         }
 
@@ -138,7 +138,7 @@ class ExaAISearchConfig(BaseSearchConfig):
             request_data["userLocation"] = optional_params["country"]
 
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        result_data: Final = dict(request_data)
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
@@ -175,10 +175,10 @@ class ExaAISearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         # Transform results to SearchResult objects
-        results = []
+        results: Final = []
         for result in response_json.get("results", []):
             search_result = SearchResult(
                 title=result.get("title", ""),

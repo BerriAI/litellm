@@ -4,7 +4,7 @@ Wrapper around router cache. Meant to handle model cooldown logic
 
 import functools
 import time
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from typing_extensions import TypedDict
 
@@ -16,7 +16,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -45,11 +45,11 @@ class CooldownCache:
         self, model_id: str, original_exception, exception_status, cooldown_time: float
     ) -> tuple[str, CooldownCacheValue]:
         try:
-            current_time = time.time()
-            cooldown_key = CooldownCache.get_cooldown_cache_key(model_id)
+            current_time: Final = time.time()
+            cooldown_key: Final = CooldownCache.get_cooldown_cache_key(model_id)
 
             # Store the cooldown information for the deployment separately
-            cooldown_data = CooldownCacheValue(
+            cooldown_data: Final = CooldownCacheValue(
                 exception_received=self.exception_masker._mask_value(str(original_exception)),
                 status_code=str(exception_status),
                 timestamp=current_time,
@@ -58,7 +58,7 @@ class CooldownCache:
 
             return cooldown_key, cooldown_data
         except Exception as e:
-            verbose_logger.error(f"CooldownCache::_common_add_cooldown_logic - Exception occurred - {e!s}")
+            verbose_logger.error("CooldownCache::_common_add_cooldown_logic - Exception occurred - %s", e)
             raise e
 
     def add_deployment_to_cooldown(
@@ -92,7 +92,7 @@ class CooldownCache:
                 ttl=_cooldown_time,
             )
         except Exception as e:
-            verbose_logger.error(f"CooldownCache::add_deployment_to_cooldown - Exception occurred - {e!s}")
+            verbose_logger.error("CooldownCache::add_deployment_to_cooldown - Exception occurred - %s", e)
             raise e
 
     @staticmethod
@@ -104,15 +104,15 @@ class CooldownCache:
         self, model_ids: list[str], parent_otel_span: Span | None
     ) -> list[tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
-        keys = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
+        keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
 
         # Retrieve the values for the keys using mget
         ## more likely to be none if no models ratelimited. So just check redis every 1s
         ## each redis call adds ~100ms latency.
 
         ## check in memory cache first
-        results = await self.cache.async_batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
-        active_cooldowns: list[tuple[str, CooldownCacheValue]] = []
+        results: Final = await self.cache.async_batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
+        active_cooldowns: Final[list[tuple[str, CooldownCacheValue]]] = []
 
         if results is None or all(v is None for v in results):
             return active_cooldowns
@@ -120,7 +120,7 @@ class CooldownCache:
         # Process the results
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
-                cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
+                cooldown_cache_value = CooldownCacheValue(**result)
                 active_cooldowns.append((model_id, cooldown_cache_value))
 
         return active_cooldowns
@@ -129,15 +129,15 @@ class CooldownCache:
         self, model_ids: list[str], parent_otel_span: Span | None
     ) -> list[tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
-        keys = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
+        keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
         # Retrieve the values for the keys using mget
-        results = self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
+        results: Final = self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
 
-        active_cooldowns = []
+        active_cooldowns: Final = []
         # Process the results
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
-                cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
+                cooldown_cache_value = CooldownCacheValue(**result)
                 active_cooldowns.append((model_id, cooldown_cache_value))
 
         return active_cooldowns
@@ -146,16 +146,16 @@ class CooldownCache:
         """Return min cooldown time required for a group of model id's."""
 
         # Generate the keys for the deployments
-        keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
+        keys: Final = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
 
         # Retrieve the values for the keys using mget
-        results = self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
+        results: Final = self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
 
         min_cooldown_time: float | None = None
         # Process the results
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
-                cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
+                cooldown_cache_value = CooldownCacheValue(**result)
                 if min_cooldown_time is None or cooldown_cache_value["cooldown_time"] < min_cooldown_time:
                     min_cooldown_time = cooldown_cache_value["cooldown_time"]
 

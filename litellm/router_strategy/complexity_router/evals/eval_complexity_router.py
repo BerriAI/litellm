@@ -16,6 +16,8 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
+from typing import Final
+
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
 from litellm.router_strategy.complexity_router.config import ComplexityTier
 
@@ -34,7 +36,7 @@ class EvalCase:
 
 # ─── Evaluation Dataset ───
 
-EVAL_CASES: list[EvalCase] = [
+EVAL_CASES: Final[list[EvalCase]] = [
     # === SIMPLE tier cases ===
     EvalCase(
         prompt="Hello!",
@@ -237,15 +239,15 @@ def run_eval() -> tuple[int, int, list[dict]]:
         Tuple of (passed, total, failures)
     """
     # Create router with default config
-    mock_router = MagicMock()
-    router = ComplexityRouter(
+    mock_router: Final = MagicMock()
+    router: Final = ComplexityRouter(
         model_name="eval-router",
         litellm_router_instance=mock_router,
     )
 
     passed = 0
-    total = len(EVAL_CASES)
-    failures = []
+    total: Final = len(EVAL_CASES)
+    failures: Final = []
 
     print("=" * 70)
     print("COMPLEXITY ROUTER EVALUATION")
@@ -311,7 +313,7 @@ def main():
     passed, total, failures = run_eval()
 
     # Exit with error code if too many failures
-    pass_rate = passed / total
+    pass_rate: Final = passed / total
     if pass_rate < 0.80:
         print(f"\n❌ EVAL FAILED: Pass rate {pass_rate:.1%} is below 80% threshold")
         sys.exit(1)

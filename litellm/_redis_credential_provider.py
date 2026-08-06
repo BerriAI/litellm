@@ -1,21 +1,21 @@
 import asyncio
 import threading
 import time
-from typing import Any
+from typing import Any, Final
 
-from redis.credentials import CredentialProvider  # type: ignore[attr-defined]
+from redis.credentials import CredentialProvider
 
 # Azure AD scope for Redis Cache for Azure.
-AZURE_REDIS_SCOPE = "https://redis.azure.com/.default"
+AZURE_REDIS_SCOPE: Final = "https://redis.azure.com/.default"
 
 # GCP IAM tokens are valid for 1 hour. Cache for 55 minutes to refresh before expiry.
-_GCP_IAM_TOKEN_TTL_SECONDS = 3300
+_GCP_IAM_TOKEN_TTL_SECONDS: Final = 3300
 
 # Module-level cache shared across all GCPIAMCredentialProvider instances for the
 # same service account, so multiple Redis connections on the same pod share one token.
 # Keyed by service_account → (token, expiry_monotonic_timestamp).
-_token_cache: dict[str, tuple[str, float]] = {}
-_token_cache_lock = threading.Lock()
+_token_cache: Final[dict[str, tuple[str, float]]] = {}
+_token_cache_lock: Final = threading.Lock()
 
 
 def _generate_gcp_iam_access_token(service_account: str) -> str:
@@ -36,12 +36,12 @@ def _generate_gcp_iam_access_token(service_account: str) -> str:
             "Install it with: pip install google-cloud-iam"
         )
 
-    client = iam_credentials_v1.IAMCredentialsClient()
-    request = iam_credentials_v1.GenerateAccessTokenRequest(
+    client: Final = iam_credentials_v1.IAMCredentialsClient()
+    request: Final = iam_credentials_v1.GenerateAccessTokenRequest(
         name=service_account,
         scope=["https://www.googleapis.com/auth/cloud-platform"],
     )
-    response = client.generate_access_token(request=request)
+    response: Final = client.generate_access_token(request=request)
     return str(response.access_token)
 
 
@@ -96,11 +96,11 @@ class GCPIAMCredentialProvider(CredentialProvider):
         self._gcp_service_account = gcp_service_account
 
     def get_credentials(self) -> tuple[str]:
-        token = _get_cached_gcp_iam_token(self._gcp_service_account)
+        token: Final = _get_cached_gcp_iam_token(self._gcp_service_account)
         return (token,)
 
     async def get_credentials_async(self) -> tuple[str]:
-        token = await asyncio.to_thread(_get_cached_gcp_iam_token, self._gcp_service_account)
+        token: Final = await asyncio.to_thread(_get_cached_gcp_iam_token, self._gcp_service_account)
         return (token,)
 
 
@@ -120,13 +120,13 @@ class AzureADCredentialProvider(CredentialProvider):
         self._username = username
 
     def get_credentials(self) -> tuple[str] | tuple[str, str]:
-        token = self._credential.get_token(AZURE_REDIS_SCOPE).token
+        token: Final = self._credential.get_token(AZURE_REDIS_SCOPE).token
         if self._username:
             return (self._username, token)
         return (token,)
 
     async def get_credentials_async(self) -> tuple[str] | tuple[str, str]:
-        token_obj = await asyncio.to_thread(self._credential.get_token, AZURE_REDIS_SCOPE)
+        token_obj: Final = await asyncio.to_thread(self._credential.get_token, AZURE_REDIS_SCOPE)
         if self._username:
             return (self._username, token_obj.token)
         return (token_obj.token,)

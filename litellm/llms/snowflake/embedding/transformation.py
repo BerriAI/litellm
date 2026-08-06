@@ -1,3 +1,5 @@
+from typing import Final
+
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -47,11 +49,11 @@ class SnowflakeEmbeddingConfig(SnowflakeBaseConfig, BaseEmbeddingConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> EmbeddingResponse:
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
         # convert embeddings to 1d array
         for item in response_json["data"]:
             item["embedding"] = item["embedding"][0]
-        returned_response = EmbeddingResponse(**response_json)
+        returned_response: Final = EmbeddingResponse(**response_json)
 
         returned_response.model = "snowflake/" + (returned_response.model or "")
 

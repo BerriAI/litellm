@@ -2,7 +2,7 @@
 
 import inspect
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.anthropic import AppliedEdit
@@ -13,7 +13,7 @@ from .result import PolyfillResult
 
 EditorFn = Callable[..., Any]
 
-_EDITOR_REGISTRY: dict[str, EditorFn] = {
+_EDITOR_REGISTRY: Final[dict[str, EditorFn]] = {
     CLEAR_TOOL_USES_EDIT_TYPE: apply_clear_tool_uses_20250919,
     COMPACT_EDIT_TYPE: apply_compact_20260112,
 }
@@ -29,7 +29,7 @@ def _normalize_spec(
 
         spec = AnthropicConfig.map_openai_context_management_to_anthropic(spec)
 
-    edits = spec.get("edits") if isinstance(spec, dict) else None
+    edits: Final = spec.get("edits") if isinstance(spec, dict) else None
     if not edits or not isinstance(edits, list):
         return None
     return [edit for edit in edits if isinstance(edit, dict)]
@@ -72,13 +72,13 @@ async def apply_context_management(
     inline — ``inspect.iscoroutinefunction`` decides how each editor is
     invoked.
     """
-    edits = _normalize_spec(context_management_spec)
+    edits: Final = _normalize_spec(context_management_spec)
     if not edits:
         return PolyfillResult(messages=messages, system=system, applied_edits=[])
 
     current_messages = messages
     current_system = system
-    aggregated_applied: list[AppliedEdit] = []
+    aggregated_applied: Final[list[AppliedEdit]] = []
     aggregated_compaction_block = None
     aggregated_iterations_usage = None
 

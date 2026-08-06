@@ -5,6 +5,7 @@ Azure Anthropic handler - reuses AnthropicChatCompletion logic with Azure authen
 import copy
 import json
 from collections.abc import Callable
+from typing import Final
 
 import httpx
 
@@ -54,14 +55,14 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
         """
 
         optional_params = copy.deepcopy(optional_params)
-        stream = optional_params.pop("stream", None)
-        json_mode: bool = optional_params.pop("json_mode", False)
-        is_vertex_request: bool = optional_params.pop("is_vertex_request", False)
-        _is_function_call = False
+        stream: Final = optional_params.pop("stream", None)
+        json_mode: Final[bool] = optional_params.pop("json_mode", False)
+        is_vertex_request: Final[bool] = optional_params.pop("is_vertex_request", False)
+        _is_function_call: Final = False
         messages = copy.deepcopy(messages)
 
         # Use AzureAnthropicConfig for both azure_anthropic and azure_ai Claude models
-        config = AzureAnthropicConfig()
+        config: Final = AzureAnthropicConfig()
 
         headers = config.validate_environment(
             api_key=api_key,
@@ -72,7 +73,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
             litellm_params=litellm_params,
         )
 
-        data = config.transform_request(
+        data: Final = config.transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -153,7 +154,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
                 completion_stream, response_headers = make_sync_call(
                     client=client,
                     api_base=api_base,
-                    headers=headers,  # type: ignore
+                    headers=headers,
                     data=json.dumps(data),
                     model=model,
                     messages=messages,
@@ -182,7 +183,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
                     client = client
 
                 try:
-                    response = client.post(
+                    response: Final = client.post(
                         api_base,
                         headers=headers,
                         data=json.dumps(data),
@@ -191,10 +192,10 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
                 except Exception as e:
                     from litellm.llms.anthropic.common_utils import AnthropicError
 
-                    status_code = getattr(e, "status_code", 500)
+                    status_code: Final = getattr(e, "status_code", 500)
                     error_headers = getattr(e, "headers", None)
                     error_text = getattr(e, "text", str(e))
-                    error_response = getattr(e, "response", None)
+                    error_response: Final = getattr(e, "response", None)
                     if error_headers is None and error_response:
                         error_headers = getattr(error_response, "headers", None)
                     if error_response and hasattr(error_response, "text"):

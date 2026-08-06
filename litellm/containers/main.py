@@ -3,7 +3,7 @@ import contextvars
 import json
 from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Literal, overload
+from typing import Any, Final, Literal, overload
 
 import litellm
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
@@ -76,12 +76,12 @@ async def acreate_container(
     Returns:
     - `response` (ContainerObject): The created container object
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["async_call"] = True
 
-        func = partial(
+        func: Final = partial(
             create_container,
             name=name,
             expires_after=expires_after,
@@ -94,9 +94,9 @@ async def acreate_container(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -185,11 +185,11 @@ def create_container(
     print(response)
     ```
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id")
-        _is_async = kwargs.pop("async_call", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
         mock_response = kwargs.get("mock_response")
@@ -197,12 +197,12 @@ def create_container(
             if isinstance(mock_response, str):
                 mock_response = json.loads(mock_response)
 
-            response = ContainerObject(**mock_response)
+            response: Final = ContainerObject(**mock_response)
             return response
 
         # get llm provider logic
         # Pass credential params explicitly since they're named args, not in kwargs
-        litellm_params = GenericLiteLLMParams(
+        litellm_params: Final = GenericLiteLLMParams(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -218,12 +218,12 @@ def create_container(
 
         local_vars.update(kwargs)
         # Get ContainerCreateOptionalRequestParams with only valid parameters
-        container_create_optional_params: ContainerCreateOptionalRequestParams = (
+        container_create_optional_params: Final[ContainerCreateOptionalRequestParams] = (
             ContainerRequestUtils.get_requested_container_create_optional_param(local_vars)
         )
 
         # Get optional parameters for the container API
-        container_create_request_params: dict = ContainerRequestUtils.get_optional_params_container_create(
+        container_create_request_params: Final[dict] = ContainerRequestUtils.get_optional_params_container_create(
             container_provider_config=container_provider_config,
             container_create_optional_params=container_create_optional_params,
         )
@@ -306,12 +306,12 @@ async def alist_containers(
     Returns:
     - `response` (ContainerListResponse): The list of containers
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["async_call"] = True
 
-        func = partial(
+        func: Final = partial(
             list_containers,
             after=after,
             limit=limit,
@@ -324,9 +324,9 @@ async def alist_containers(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -403,11 +403,11 @@ def list_containers(
 
     Currently supports OpenAI
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id")
-        _is_async = kwargs.pop("async_call", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
         mock_response = kwargs.get("mock_response")
@@ -415,12 +415,12 @@ def list_containers(
             if isinstance(mock_response, str):
                 mock_response = json.loads(mock_response)
 
-            response = ContainerListResponse(**mock_response)
+            response: Final = ContainerListResponse(**mock_response)
             return response
 
         # get llm provider logic
         # Pass credential params explicitly since they're named args, not in kwargs
-        litellm_params = GenericLiteLLMParams(
+        litellm_params: Final = GenericLiteLLMParams(
             api_key=api_key,
             api_base=api_base,
             api_version=api_version,
@@ -435,7 +435,7 @@ def list_containers(
             raise ValueError(f"Container provider config not found for provider: {custom_llm_provider}")
 
         # Get container list request parameters
-        container_list_optional_params: ContainerListOptionalRequestParams = (
+        container_list_optional_params: Final[ContainerListOptionalRequestParams] = (
             ContainerRequestUtils.get_requested_container_list_optional_param(local_vars)
         )
 
@@ -504,12 +504,12 @@ async def aretrieve_container(
     Returns:
     - `response` (ContainerObject): The container object
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["async_call"] = True
 
-        func = partial(
+        func: Final = partial(
             retrieve_container,
             container_id=container_id,
             timeout=timeout,
@@ -520,9 +520,9 @@ async def aretrieve_container(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -593,12 +593,12 @@ def retrieve_container(
 
     Currently supports OpenAI
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id")
-        _is_async = kwargs.pop("async_call", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
         mock_response = kwargs.get("mock_response")
@@ -606,7 +606,7 @@ def retrieve_container(
             if isinstance(mock_response, str):
                 mock_response = json.loads(mock_response)
 
-            response = ContainerObject(**mock_response)
+            response: Final = ContainerObject(**mock_response)
             return response
 
         # get llm provider logic
@@ -625,7 +625,7 @@ def retrieve_container(
             litellm_params=litellm_params,
         )
         # True when input was a LiteLLM-managed ID (any length); needed to re-encode output for routing affinity
-        was_encoded = original_container_id != container_id
+        was_encoded: Final = original_container_id != container_id
 
         # get provider config
         container_provider_config: BaseContainerConfig | None = ProviderConfigManager.get_provider_container_config(
@@ -719,12 +719,12 @@ async def adelete_container(
     Returns:
     - `response` (DeleteContainerResult): The deletion result
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["async_call"] = True
 
-        func = partial(
+        func: Final = partial(
             delete_container,
             container_id=container_id,
             timeout=timeout,
@@ -735,9 +735,9 @@ async def adelete_container(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -808,12 +808,12 @@ def delete_container(
 
     Currently supports OpenAI
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id")
-        _is_async = kwargs.pop("async_call", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
         mock_response = kwargs.get("mock_response")
@@ -821,7 +821,7 @@ def delete_container(
             if isinstance(mock_response, str):
                 mock_response = json.loads(mock_response)
 
-            response = DeleteContainerResult(**mock_response)
+            response: Final = DeleteContainerResult(**mock_response)
             return response
 
         # get llm provider logic
@@ -840,7 +840,7 @@ def delete_container(
             litellm_params=litellm_params,
         )
         # True when input was a LiteLLM-managed ID (any length); needed to re-encode output for routing affinity
-        was_encoded = original_container_id != container_id
+        was_encoded: Final = original_container_id != container_id
 
         # get provider config
         container_provider_config: BaseContainerConfig | None = ProviderConfigManager.get_provider_container_config(
@@ -938,12 +938,12 @@ async def alist_container_files(
     Returns:
     - `response` (ContainerFileListResponse): The list of container files
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["async_call"] = True
 
-        func = partial(
+        func: Final = partial(
             list_container_files,
             container_id=container_id,
             after=after,
@@ -957,9 +957,9 @@ async def alist_container_files(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -1037,12 +1037,12 @@ def list_container_files(
 
     Currently supports OpenAI
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id")
-        _is_async = kwargs.pop("async_call", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
         mock_response = kwargs.get("mock_response")
@@ -1050,7 +1050,7 @@ def list_container_files(
             if isinstance(mock_response, str):
                 mock_response = json.loads(mock_response)
 
-            response = ContainerFileListResponse(**mock_response)
+            response: Final = ContainerFileListResponse(**mock_response)
             return response
 
         # get llm provider logic
@@ -1168,12 +1168,12 @@ async def aupload_container_file(
     print(response)
     ```
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["async_call"] = True
 
-        func = partial(
+        func: Final = partial(
             upload_container_file,
             container_id=container_id,
             file=file,
@@ -1185,9 +1185,9 @@ async def aupload_container_file(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -1288,12 +1288,12 @@ def upload_container_file(
     """
     from litellm.llms.custom_httpx.container_handler import generic_container_handler
 
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id")
-        _is_async = kwargs.pop("async_call", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
         mock_response = kwargs.get("mock_response")
@@ -1301,7 +1301,7 @@ def upload_container_file(
             if isinstance(mock_response, str):
                 mock_response = json.loads(mock_response)
 
-            response = ContainerFileObject(**mock_response)
+            response: Final = ContainerFileObject(**mock_response)
             return response
 
         # get llm provider logic

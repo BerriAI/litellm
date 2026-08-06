@@ -5,9 +5,9 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
-from typing import Any, Literal, TypedDict, Union, cast
+from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -29,6 +29,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.proxy.auth.auth_utils import (
+    _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.health_check import (
@@ -43,6 +46,10 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.router_utils.clientside_credential_handler import (
+    _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
+    clientside_credential_keys,
+)
 
 #### Health ENDPOINTS ####
 
@@ -57,8 +64,8 @@ def _reject_os_environ_references(params: dict) -> None:
     if not isinstance(params, dict):
         return
 
-    stack: list[object] = [params]
-    seen: set[int] = {id(params)}
+    stack: Final[list[object]] = [params]
+    seen: Final[set[int]] = {id(params)}
 
     while stack:
         src = stack.pop()
@@ -78,6 +85,45 @@ def _reject_os_environ_references(params: dict) -> None:
             if isinstance(value, (dict, list)) and id(value) not in seen:
                 seen.add(id(value))
                 stack.append(value)
+
+
+_CONFIG_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset(
+    (
+        *_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,
+        *clientside_credential_keys,
+        "litellm_credential_name",
+    )
+)
+
+
+def _config_base_for_health_check(
+    config_params: Mapping[str, object],
+    request_params: Mapping[str, object],
+    allow_client_side_credentials: bool = False,
+) -> dict[str, object]:
+    """Return the configured parameters to merge under a connection-test request.
+
+    A request that sets its own connection fields describes a connection of its
+    own, so the configuration's credentials are not carried into it: they belong
+    to the endpoint the configuration names. Anything the request does not set
+    still comes from the configuration, which is what lets a request name a
+    configured model and test it as configured.
+
+    ``litellm_credential_name`` is dropped alongside the literal credential
+    fields: it names a stored credential that ``load_credentials_from_list``
+    resolves into the same secrets further down the call, so leaving it in place
+    would reintroduce them by reference.
+
+    ``general_settings.allow_client_side_credentials`` is the existing proxy-wide
+    opt-in for callers supplying their own connection parameters. Where an admin
+    has enabled it, a request may pair its own endpoint with the configured
+    credentials, as it could before.
+    """
+    if allow_client_side_credentials:
+        return dict(config_params)
+    if not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS):
+        return dict(config_params)
+    return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
 
 
 def get_callback_identifier(callback):
@@ -101,7 +147,7 @@ def get_callback_identifier(callback):
     if hasattr(callback, "callback_name") and callback.callback_name:
         return callback.callback_name
     if hasattr(callback, "__class__"):
-        callback_strs = CustomLoggerRegistry.get_all_callback_strs_from_class_type(callback.__class__)
+        callback_strs: Final = CustomLoggerRegistry.get_all_callback_strs_from_class_type(callback.__class__)
         if hasattr(callback, "callback_name") and callback.callback_name in callback_strs:
             return callback.callback_name
         if callback_strs:
@@ -109,8 +155,8 @@ def get_callback_identifier(callback):
     return callback_name(callback)
 
 
-router = APIRouter()
-services = Union[
+router: Final = APIRouter()
+services = (
     Literal[
         "slack_budget_alerts",
         "langfuse",
@@ -127,9 +173,9 @@ services = Union[
         "galileo",
         "newrelic",
         "sqs",
-    ],
-    str,
-]
+    ]
+    | str
+)
 
 
 @router.get(
@@ -242,7 +288,7 @@ async def health_services_endpoint(
         elif service == "datadog":
             from litellm.integrations.datadog.datadog import DataDogLogger
 
-            datadog_logger = DataDogLogger()
+            datadog_logger: Final = DataDogLogger()
             response = await datadog_logger.async_health_check()
             return {
                 "status": response["status"],
@@ -270,7 +316,7 @@ async def health_services_endpoint(
         elif service == "arize":
             from litellm.integrations.arize.arize import ArizeLogger
 
-            arize_logger = ArizeLogger()
+            arize_logger: Final = ArizeLogger()
             response = await arize_logger.async_health_check()
             return {
                 "status": response["status"],
@@ -279,7 +325,7 @@ async def health_services_endpoint(
         elif service == "galileo":
             from litellm.integrations.galileo import GalileoObserve
 
-            galileo_logger = GalileoObserve()
+            galileo_logger: Final = GalileoObserve()
             response = await galileo_logger.async_health_check()
             return {
                 "status": response["status"],
@@ -288,7 +334,7 @@ async def health_services_endpoint(
         elif service == "langfuse":
             from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
-            langfuse_logger = LangFuseLogger()
+            langfuse_logger: Final = LangFuseLogger()
             langfuse_logger.Langfuse.auth_check()
             _ = litellm.completion(
                 model="openai/litellm-mock-response-model",
@@ -308,7 +354,7 @@ async def health_services_endpoint(
                 )
             from litellm.integrations.newrelic.newrelic import NewRelicLogger
 
-            newrelic_logger = NewRelicLogger()
+            newrelic_logger: Final = NewRelicLogger()
             response = await newrelic_logger.async_health_check()
             return {
                 "status": response["status"],
@@ -320,7 +366,7 @@ async def health_services_endpoint(
             }
 
         if service == "webhook":
-            user_info = CallInfo(
+            user_info: Final = CallInfo(
                 token=user_api_key_dict.token or "",
                 spend=1,
                 max_budget=0,
@@ -336,7 +382,7 @@ async def health_services_endpoint(
         elif service == "sqs":
             from litellm.integrations.sqs import SQSLogger
 
-            sqs_logger = SQSLogger()
+            sqs_logger: Final = SQSLogger()
             response = await sqs_logger.async_health_check()
             return {
                 "status": response["status"],
@@ -401,7 +447,7 @@ async def health_services_endpoint(
                     detail={"error": f'"{service}" not in proxy config: general_settings. Unable to test this.'},
                 )
         if service == "email":
-            webhook_event = WebhookEvent(
+            webhook_event: Final = WebhookEvent(
                 event="key_created",
                 event_group=Litellm_EntityType.KEY,
                 event_message="Test Email Alert",
@@ -425,11 +471,11 @@ async def health_services_endpoint(
             }
 
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - {e!s}")
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e!s})"),
+                message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -486,7 +532,7 @@ async def _save_health_check_to_db(
     """Helper function to save health check results to database"""
     try:
         # Extract error message from first unhealthy endpoint if available
-        error_message = (
+        error_message: Final = (
             str(unhealthy_endpoints[0]["error"])[:500]
             if unhealthy_endpoints and unhealthy_endpoints[0].get("error")
             else None
@@ -504,7 +550,7 @@ async def _save_health_check_to_db(
             checked_by=user_id,
         )
     except Exception as db_error:
-        verbose_proxy_logger.warning(f"Failed to save health check to database for model {model_name}: {db_error}")
+        verbose_proxy_logger.warning("Failed to save health check to database for model %s: %s", model_name, db_error)
         # Continue execution - don't let database save failure break health checks
 
 
@@ -520,7 +566,7 @@ def _build_model_param_to_info_mapping(model_list: list) -> dict:
     Returns:
         Dictionary mapping model parameter to list of model info dicts
     """
-    model_param_to_info: dict = {}
+    model_param_to_info: Final[dict] = {}
     for model in model_list:
         model_info = model.get("model_info", {})
         model_name = model.get("model_name")
@@ -558,7 +604,7 @@ def _aggregate_health_check_results(
     Returns:
         Dictionary mapping (model_id, model_name) to aggregated health check results
     """
-    model_results = {}
+    model_results: Final = {}
 
     # Process healthy endpoints
     for endpoint in healthy_endpoints:
@@ -681,18 +727,18 @@ async def _save_background_health_checks_to_db(
 
     try:
         # Step 1: Build mapping from model parameter to model info
-        model_param_to_info = _build_model_param_to_info_mapping(model_list)
+        model_param_to_info: Final = _build_model_param_to_info_mapping(model_list)
 
         # Step 2: Aggregate health check results per unique model
-        model_results = _aggregate_health_check_results(
+        model_results: Final = _aggregate_health_check_results(
             model_param_to_info,
             healthy_endpoints,
             unhealthy_endpoints,
         )
 
         # Step 3: Get latest health checks for all models in one query to compare status
-        latest_checks = await prisma_client.get_all_latest_health_checks()
-        latest_checks_map = {}
+        latest_checks: Final = await prisma_client.get_all_latest_health_checks()
+        latest_checks_map: Final = {}
         for check in latest_checks:
             # Use model_id as primary key, fallback to model_name
             key = check.model_id if check.model_id else check.model_name
@@ -708,11 +754,11 @@ async def _save_background_health_checks_to_db(
             checked_by,
         )
     except Exception as db_error:
-        verbose_proxy_logger.warning(f"Failed to save background health checks to database: {db_error}")
+        verbose_proxy_logger.warning("Failed to save background health checks to database: %s", db_error)
         # Continue execution - don't let database save failure break health checks
 
 
-_PROXY_ADMIN_ROLES = frozenset(
+_PROXY_ADMIN_ROLES: Final = frozenset(
     {
         LitellmUserRoles.PROXY_ADMIN.value,
         # View-only admins are operators (oncall, support); they need the
@@ -732,10 +778,10 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     string value depending on how the auth path constructed the object, so we
     compare against the raw value rather than the enum identity.
     """
-    role = user_api_key_dict.user_role
+    role: Final = user_api_key_dict.user_role
     if role is None:
         return False
-    role_value = role.value if hasattr(role, "value") else role
+    role_value: Final = role.value if hasattr(role, "value") else role
     return role_value in _PROXY_ADMIN_ROLES
 
 
@@ -747,8 +793,8 @@ def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     still showing them which deployments they own and whether each one is
     healthy. Proxy admins receive the unmodified result.
     """
-    out = dict(result)
-    drop = set(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)
+    out: Final = dict(result)
+    drop: Final = set(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)
     for key in ("healthy_endpoints", "unhealthy_endpoints"):
         eps = out.get(key)
         if isinstance(eps, list):
@@ -778,7 +824,7 @@ def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: s
     """
     if not model and not model_id:
         return None
-    target_ids: set = set()
+    target_ids: Final[set] = set()
     for m in model_list:
         deployment_id = (m.get("model_info") or {}).get("id")
         if not deployment_id:
@@ -807,7 +853,7 @@ def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: 
     cannot accidentally mutate the shared ``health_check_results`` cache.
     """
     healthy = [dict(ep) for ep in (results.get("healthy_endpoints") or []) if ep.get("model_id") in allowed_model_ids]
-    unhealthy = [
+    unhealthy: Final = [
         dict(ep) for ep in (results.get("unhealthy_endpoints") or []) if ep.get("model_id") in allowed_model_ids
     ]
     return {
@@ -844,7 +890,7 @@ async def _perform_health_check_and_save(
     # Optionally save health check result to database (non-blocking)
     if prisma_client is not None:
         # For CLI model, use cli_model name; for router models, use target_model
-        model_name_for_db = cli_model if cli_model is not None else target_model
+        model_name_for_db: Final = cli_model if cli_model is not None else target_model
         if model_name_for_db is not None:
             asyncio.create_task(
                 _save_health_check_to_db(
@@ -880,9 +926,9 @@ def _health_endpoint_resolve_target_model_name(
             detail={"error": f"Model with ID {model_id} not found"},
         )
     try:
-        deployment = llm_router.get_deployment(model_id=model_id)
+        deployment: Final = llm_router.get_deployment(model_id=model_id)
     except Exception as e:
-        verbose_proxy_logger.error(f"Error getting deployment for model_id {model_id}: {e}")
+        verbose_proxy_logger.error("Error getting deployment for model_id %s: %s", model_id, e)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": f"Model with ID {model_id} not found"},
@@ -936,13 +982,13 @@ async def health_endpoint(
         user_model,
     )
 
-    _hc_filter = health_check_filter_kwargs_from_general_settings(general_settings)
-    start_time = time.time()
+    _hc_filter: Final = health_check_filter_kwargs_from_general_settings(general_settings)
+    start_time: Final = time.time()
 
-    target_model = _health_endpoint_resolve_target_model_name(model, model_id, llm_router)
+    target_model: Final = _health_endpoint_resolve_target_model_name(model, model_id, llm_router)
 
-    is_admin = _is_proxy_admin(user_api_key_dict)
-    model_specific_request = bool(model or model_id)
+    is_admin: Final = _is_proxy_admin(user_api_key_dict)
+    model_specific_request: Final = bool(model or model_id)
 
     def _post_process(result: dict) -> dict:
         # api_base / api_version reveal which provider/region/internal host the
@@ -965,7 +1011,7 @@ async def health_endpoint(
         if llm_model_list is None:
             # if no router set, check if user set a model using litellm --model ollama/llama2
             if user_model is not None:
-                cli_result = await _perform_health_check_and_save(
+                cli_result: Final = await _perform_health_check_and_save(
                     model_list=[],
                     target_model=None,
                     cli_model=user_model,
@@ -1002,11 +1048,11 @@ async def health_endpoint(
         accessible_models = list(user_api_key_dict.models)
         if SpecialModelNames.all_team_models.value in accessible_models and user_api_key_dict.team_id is not None:
             accessible_models = list(user_api_key_dict.team_models)
-        restrict_to_allowed_models = (
+        restrict_to_allowed_models: Final = (
             len(accessible_models) > 0 and SpecialModelNames.all_proxy_models.value not in accessible_models
         )
         if restrict_to_allowed_models:
-            allowed_models = set(accessible_models)
+            allowed_models: Final = set(accessible_models)
             _llm_model_list = [m for m in _llm_model_list if m.get("model_name") in allowed_models]
         if use_background_health_checks:
             # The cached background result covers every model. When the
@@ -1015,9 +1061,9 @@ async def health_endpoint(
             # healthy_count, otherwise an unhealthy "foo" combined with any
             # other healthy model would still report healthy_count > 0 and
             # the targeted-503 path would never fire.
-            targeted_ids = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
+            targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
             if restrict_to_allowed_models:
-                allowed_model_ids = {
+                allowed_model_ids: Final = {
                     (m.get("model_info") or {}).get("id")
                     for m in _llm_model_list
                     if (m.get("model_info") or {}).get("id")
@@ -1025,8 +1071,8 @@ async def health_endpoint(
                 # _llm_model_list is already scoped to the caller's allowed
                 # model_names above, so targeted_ids is implicitly the
                 # intersection of "targeted" and "allowed."
-                filter_ids = targeted_ids if targeted_ids is not None else allowed_model_ids
-                filtered = _filter_health_check_results_by_model_ids(health_check_results, filter_ids)
+                filter_ids: Final = targeted_ids if targeted_ids is not None else allowed_model_ids
+                filtered: Final = _filter_health_check_results_by_model_ids(health_check_results, filter_ids)
                 if targeted_ids is None and not allowed_model_ids:
                     # Caller has accessible model_names but none of the
                     # matching deployments expose a model_info.id, so the
@@ -1055,7 +1101,7 @@ async def health_endpoint(
                 return _post_process(_filter_health_check_results_by_model_ids(health_check_results, targeted_ids))
             return _post_process(health_check_results)
         else:
-            router_result = await _perform_health_check_and_save(
+            router_result: Final = await _perform_health_check_and_save(
                 model_list=_llm_model_list,
                 target_model=target_model,
                 cli_model=None,
@@ -1069,7 +1115,7 @@ async def health_endpoint(
             )
             return _post_process(router_result)
     except Exception as e:
-        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.py::health_endpoint(): Exception occured - {e!s}")
+        verbose_proxy_logger.error("litellm.proxy.proxy_server.py::health_endpoint(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
 
@@ -1087,10 +1133,10 @@ async def health_check_history_endpoint(
 
     Returns historical health check data with optional filtering.
     """
-    prisma_client = _check_prisma_client()
+    prisma_client: Final = _check_prisma_client()
 
     try:
-        history = await prisma_client.get_health_check_history(
+        history: Final = await prisma_client.get_health_check_history(
             model_name=model,
             limit=limit,
             offset=offset,
@@ -1098,7 +1144,7 @@ async def health_check_history_endpoint(
         )
 
         # Convert to dict format for JSON response using helper function
-        history_data = [_convert_health_check_to_dict(check) for check in history]
+        history_data: Final = [_convert_health_check_to_dict(check) for check in history]
 
         return {
             "health_checks": history_data,
@@ -1107,10 +1153,10 @@ async def health_check_history_endpoint(
             "offset": offset,
         }
     except Exception as e:
-        verbose_proxy_logger.error(f"Error getting health check history: {e}")
+        verbose_proxy_logger.error("Error getting health check history: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to retrieve health check history: {e!s}"},
+            detail={"error": f"Failed to retrieve health check history: {e}"},
         )
 
 
@@ -1123,13 +1169,13 @@ async def latest_health_checks_endpoint(
 
     Returns the most recent health check result for each model.
     """
-    prisma_client = _check_prisma_client()
+    prisma_client: Final = _check_prisma_client()
 
     try:
-        latest_checks = await prisma_client.get_all_latest_health_checks()
+        latest_checks: Final = await prisma_client.get_all_latest_health_checks()
 
         # Convert to dict format for JSON response using helper function
-        checks_data = {
+        checks_data: Final = {
             (check.model_id if check.model_id else check.model_name): _convert_health_check_to_dict(check)
             for check in latest_checks
         }
@@ -1139,10 +1185,10 @@ async def latest_health_checks_endpoint(
             "total_models": len(checks_data),
         }
     except Exception as e:
-        verbose_proxy_logger.error(f"Error getting latest health checks: {e}")
+        verbose_proxy_logger.error("Error getting latest health checks: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to retrieve latest health checks: {e!s}"},
+            detail={"error": f"Failed to retrieve latest health checks: {e}"},
         )
 
 
@@ -1175,17 +1221,17 @@ async def shared_health_check_status_endpoint(
             SharedHealthCheckManager,
         )
 
-        shared_health_manager = SharedHealthCheckManager(
+        shared_health_manager: Final = SharedHealthCheckManager(
             redis_cache=redis_usage_cache,
         )
 
-        health_status = await shared_health_manager.get_health_check_status()
+        health_status: Final = await shared_health_manager.get_health_check_status()
         return {"shared_health_check_enabled": True, "status": health_status}
     except Exception as e:
-        verbose_proxy_logger.error(f"Error getting shared health check status: {e}")
+        verbose_proxy_logger.error("Error getting shared health check status: %s", e)
         raise HTTPException(
             status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to retrieve shared health check status: {e!s}"},
+            detail={"error": f"Failed to retrieve shared health check status: {e}"},
         )
 
 
@@ -1200,7 +1246,7 @@ def _read_license_data() -> dict[str, Any] | None:
         and getattr(_license_check, "public_key", None)
     ):
         try:
-            verification_result = _license_check.verify_license_without_api_request(
+            verification_result: Final = _license_check.verify_license_without_api_request(
                 public_key=_license_check.public_key,
                 license_key=_license_check.license_str,
             )
@@ -1215,7 +1261,7 @@ def _read_license_data() -> dict[str, Any] | None:
 
 
 def _read_allowed_features(license_data: dict[str, Any]) -> list:
-    raw_allowed_features = license_data.get("allowed_features")
+    raw_allowed_features: Final = license_data.get("allowed_features")
     if isinstance(raw_allowed_features, list):
         return list(raw_allowed_features)
     if raw_allowed_features is None:
@@ -1234,9 +1280,9 @@ async def health_license_endpoint(
     """Return metadata about the configured LiteLLM license without exposing the key."""
     from litellm.proxy.proxy_server import _license_check, premium_user
 
-    license_data = _read_license_data()
-    has_license = bool(getattr(_license_check, "license_str", None))
-    license_type = "enterprise" if premium_user else "community"
+    license_data: Final = _read_license_data()
+    has_license: Final = bool(getattr(_license_check, "license_str", None))
+    license_type: Final = "enterprise" if premium_user else "community"
 
     if license_data is None:
         return {
@@ -1250,9 +1296,9 @@ async def health_license_endpoint(
             },
         }
 
-    expiration_date = license_data.get("expiration_date")
-    max_users = license_data.get("max_users")
-    max_teams = license_data.get("max_teams")
+    expiration_date: Final = license_data.get("expiration_date")
+    max_users: Final = license_data.get("max_users")
+    max_teams: Final = license_data.get("max_teams")
 
     return {
         "has_license": has_license,
@@ -1280,7 +1326,7 @@ async def _db_health_readiness_check():
     global db_health_cache
 
     try:
-        time_diff = datetime.now() - db_health_cache["last_updated"]
+        time_diff: Final = datetime.now() - db_health_cache["last_updated"]
         if db_health_cache["status"] == "connected" and time_diff < timedelta(seconds=15):
             return db_health_cache
 
@@ -1346,18 +1392,18 @@ async def active_callbacks():
 
     from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
-    _alerting = str(general_settings.get("alerting"))
+    _alerting: Final = str(general_settings.get("alerting"))
     # get success callbacks
 
-    litellm_callbacks = [str(x) for x in litellm.callbacks]
-    litellm_input_callbacks = [str(x) for x in litellm.input_callback]
-    litellm_failure_callbacks = [str(x) for x in litellm.failure_callback]
-    litellm_success_callbacks = [str(x) for x in litellm.success_callback]
-    litellm_async_success_callbacks = [str(x) for x in litellm._async_success_callback]
-    litellm_async_failure_callbacks = [str(x) for x in litellm._async_failure_callback]
-    litellm_async_input_callbacks = [str(x) for x in litellm._async_input_callback]
+    litellm_callbacks: Final = [str(x) for x in litellm.callbacks]
+    litellm_input_callbacks: Final = [str(x) for x in litellm.input_callback]
+    litellm_failure_callbacks: Final = [str(x) for x in litellm.failure_callback]
+    litellm_success_callbacks: Final = [str(x) for x in litellm.success_callback]
+    litellm_async_success_callbacks: Final = [str(x) for x in litellm._async_success_callback]
+    litellm_async_failure_callbacks: Final = [str(x) for x in litellm._async_failure_callback]
+    litellm_async_input_callbacks: Final = [str(x) for x in litellm._async_input_callback]
 
-    all_litellm_callbacks = (
+    all_litellm_callbacks: Final = (
         litellm_callbacks
         + litellm_input_callbacks
         + litellm_failure_callbacks
@@ -1367,7 +1413,7 @@ async def active_callbacks():
         + litellm_async_input_callbacks
     )
 
-    alerting = proxy_logging_obj.alerting
+    alerting: Final = proxy_logging_obj.alerting
     _num_alerting = 0
     if alerting and isinstance(alerting, list):
         _num_alerting = len(alerting)
@@ -1435,16 +1481,16 @@ async def _get_health_readiness_details(
                 try:
                     index_info = await litellm.cache.cache._index_info()
                 except Exception as e:
-                    index_info = "index does not exist - error: " + str(e)  # type: ignore[assignment]
-                cache_type = {"type": cache_type, "index_info": index_info}  # type: ignore[assignment]
+                    index_info = "index does not exist - error: " + str(e)
+                cache_type = {"type": cache_type, "index_info": index_info}
 
         # check log level
-        log_level_name = logging.getLevelName(verbose_logger.getEffectiveLevel())
-        is_detailed_debug = verbose_logger.isEnabledFor(logging.DEBUG)
+        log_level_name: Final = logging.getLevelName(verbose_logger.getEffectiveLevel())
+        is_detailed_debug: Final = verbose_logger.isEnabledFor(logging.DEBUG)
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
-            db_health_status = await _db_health_readiness_check()
+            db_health_status: Final = await _db_health_readiness_check()
             # A configured DB that is not reachable means the worker cannot
             # serve requests that depend on persisted state (keys, budgets,
             # spend logs). Return 503 so orchestrators take this pod out of
@@ -1473,7 +1519,7 @@ async def _get_health_readiness_details(
                 "is_detailed_debug": is_detailed_debug,
             }
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Service Unhealthy ({e!s})")
+        raise HTTPException(status_code=503, detail=f"Service Unhealthy ({e})")
 
 
 def _allow_public_health_readiness_details() -> bool:
@@ -1498,10 +1544,10 @@ def _drain_endpoint_token() -> str | None:
     """
     from litellm.proxy.proxy_server import general_settings
 
-    token = general_settings.get("drain_endpoint_token")
+    token: Final = general_settings.get("drain_endpoint_token")
     if isinstance(token, str) and token:
         return token
-    env_token = os.getenv("DRAIN_ENDPOINT_TOKEN")
+    env_token: Final = os.getenv("DRAIN_ENDPOINT_TOKEN")
     if env_token:
         return env_token
     return None
@@ -1515,10 +1561,10 @@ def _authorize_drain_request(request: Request) -> None:
     (the ``enable_drain_endpoint`` flag is the only gate). Comparison uses
     ``secrets.compare_digest`` to avoid timing leaks.
     """
-    expected = _drain_endpoint_token()
+    expected: Final = _drain_endpoint_token()
     if expected is None:
         return
-    supplied = request.headers.get("x-drain-token") or ""
+    supplied: Final = request.headers.get("x-drain-token") or ""
     if not secrets.compare_digest(supplied, expected):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1537,7 +1583,7 @@ async def _resolve_public_readiness_db(response: Response) -> str:
     if prisma_client is None:
         return "Not connected"
 
-    db_health_status = await _db_health_readiness_check()
+    db_health_status: Final = await _db_health_readiness_check()
     if db_health_status["status"] != "connected":
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return db_health_status["status"]
@@ -1562,7 +1608,7 @@ async def health_readiness(response: Response):
     if _allow_public_health_readiness_details():
         return await _get_health_readiness_details(response=response)
 
-    db_status = await _resolve_public_readiness_db(response=response)
+    db_status: Final = await _resolve_public_readiness_db(response=response)
     return {"status": "healthy", "db": db_status}
 
 
@@ -1639,7 +1685,7 @@ async def health_drain(request: Request):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
     _authorize_drain_request(request)
     GracefulShutdownManager.start_shutdown()
-    drained = await GracefulShutdownManager.wait_for_drain(exclude_self=True)
+    drained: Final = await GracefulShutdownManager.wait_for_drain(exclude_self=True)
     return {"status": "drained", "drained_requests": drained}
 
 
@@ -1672,7 +1718,7 @@ async def health_readiness_options():
     """
     Options endpoint for health/readiness check.
     """
-    response_headers = {
+    response_headers: Final = {
         "Allow": "GET, OPTIONS",
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "*",
@@ -1692,7 +1738,7 @@ async def health_liveliness_options():
     """
     Options endpoint for health/liveliness check.
     """
-    response_headers = {
+    response_headers: Final = {
         "Allow": "GET, OPTIONS",
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "*",
@@ -1785,7 +1831,12 @@ async def test_model_connection(
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
     )
-    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        premium_user,
+        prisma_client,
+    )
     from litellm.types.router import Deployment, LiteLLM_Params
 
     try:
@@ -1796,12 +1847,12 @@ async def test_model_connection(
             )
 
         # Get model name from litellm_params
-        request_litellm_params = litellm_params or {}
+        request_litellm_params: Final = litellm_params or {}
         # Reject request-supplied os.environ/ references. Config values are
         # already resolved before reaching this endpoint; any remaining
         # reference must have come from the request body.
         _reject_os_environ_references(request_litellm_params)
-        model_name = request_litellm_params.get("model")
+        model_name: Final = request_litellm_params.get("model")
 
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
@@ -1816,8 +1867,8 @@ async def test_model_connection(
             # row's id is the only thing that uniquely identifies which
             # deployment to probe. Without this, all duplicates collapse
             # onto `deployments[0]`.
-            request_model_info = model_info or {}
-            request_model_id = request_model_info.get("id")
+            request_model_info: Final = model_info or {}
+            request_model_id: Final = request_model_info.get("id")
             try:
                 deployment_by_id = None
                 if request_model_id:
@@ -1835,7 +1886,7 @@ async def test_model_connection(
                     # If not found, try to find by litellm model name
                     # (e.g., "azure/gpt-4o")
                     if not deployments or len(deployments) == 0:
-                        all_deployments = llm_router.get_model_list(model_name=None)
+                        all_deployments: Final = llm_router.get_model_list(model_name=None)
                         if all_deployments:
                             for deployment in all_deployments:
                                 if deployment.get("litellm_params", {}).get("model") == model_name:
@@ -1850,15 +1901,21 @@ async def test_model_connection(
                         loaded_model_info = dict(deployments[0].get("model_info") or {})
             except Exception as e:
                 verbose_proxy_logger.debug(
-                    f"Could not find model {model_name} in router: {e}. Proceeding with request params only."
+                    "Could not find model %s in router: %s. Proceeding with request params only.", model_name, e
                 )
 
         # Merge: config params (from proxy config) as base, request params override
-        # This allows users to override specific params while using config for credentials
-        litellm_params = {**config_litellm_params, **request_litellm_params}
+        litellm_params = {
+            **_config_base_for_health_check(
+                config_litellm_params,
+                request_litellm_params,
+                allow_client_side_credentials=general_settings.get("allow_client_side_credentials") is True,
+            ),
+            **request_litellm_params,
+        }
 
         ## Auth check
-        auth_model_info = loaded_model_info if loaded_model_info is not None else model_info
+        auth_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(
                 model_name="test_model",
@@ -1876,7 +1933,7 @@ async def test_model_connection(
         )
         mode = mode or litellm_params.pop("mode", None)
 
-        result = await run_with_timeout(
+        result: Final = await run_with_timeout(
             litellm.ahealth_check(
                 model_params=litellm_params,
                 mode=mode,
@@ -1887,7 +1944,7 @@ async def test_model_connection(
         )
 
         # Clean the result for display
-        cleaned_result = _clean_endpoint_data({**litellm_params, **result}, details=True)
+        cleaned_result: Final = _clean_endpoint_data({**litellm_params, **result}, details=True)
 
         return {
             "status": "error" if "error" in result else "success",
@@ -1897,10 +1954,8 @@ async def test_model_connection(
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"litellm.proxy.health_endpoints.test_model_connection(): Exception occurred - {e!s}"
-        )
+        verbose_proxy_logger.debug("litellm.proxy.health_endpoints.test_model_connection(): Exception occurred - %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to test connection: {e!s}"},
+            detail={"error": f"Failed to test connection: {e}"},
         )

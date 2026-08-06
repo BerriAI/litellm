@@ -36,7 +36,6 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
   const [isEditing, setIsEditing] = useState<boolean>(editVectorStore);
   const [metadataString, setMetadataString] = useState<string>("{}");
   const [credentials, setCredentials] = useState<CredentialItem[]>([]);
-  const [activeTab, setActiveTab] = useState<string>(editVectorStore ? "details" : "details");
 
   const fetchVectorStoreDetails = async () => {
     if (!accessToken) return;

@@ -14,18 +14,23 @@ GET    /v1/workflows/runs/{run_id}/messages     - Fetch conversation history
 """
 
 import json
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 try:
     from prisma.errors import UniqueViolationError
 except ImportError:
-    UniqueViolationError = None  # type: ignore
+    UniqueViolationError = None
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    CommonProxyErrors,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+    user_api_key_has_admin_view,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.table_repositories import (
     WorkflowEventRepository,
@@ -33,9 +38,9 @@ from litellm.repositories.table_repositories import (
     WorkflowRunRepository,
 )
 
-router = APIRouter()
+router: Final = APIRouter()
 
-_MAX_SEQUENCE_RETRIES = 5
+_MAX_SEQUENCE_RETRIES: Final = 5
 
 
 def _json(value: Any) -> str:
@@ -47,13 +52,17 @@ def _is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
 
+def _read_scope_caller(user_api_key_dict: UserAPIKeyAuth) -> UserAPIKeyAuth | None:
+    return None if user_api_key_has_admin_view(user_api_key_dict) else user_api_key_dict
+
+
 def _caller_key(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     """Return the hashed key token that identifies this caller, or None for master key."""
     return user_api_key_dict.token
 
 
 # Status transitions driven by event_type
-_EVENT_STATUS_MAP: dict[str, str] = {
+_EVENT_STATUS_MAP: Final[dict[str, str]] = {
     "step.started": "running",
     "step.failed": "failed",
     "hook.waiting": "paused",
@@ -121,11 +130,11 @@ async def _require_run(
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ) -> Any:
     """Return the run or raise 404. For non-admin callers, also enforce key ownership."""
-    run = await WorkflowRunRepository(prisma_client).table.find_unique(where={"run_id": run_id})
+    run: Final = await WorkflowRunRepository(prisma_client).table.find_unique(where={"run_id": run_id})
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
     if user_api_key_dict is not None and not _is_admin(user_api_key_dict):
-        caller = _caller_key(user_api_key_dict)
+        caller: Final = _caller_key(user_api_key_dict)
         if not caller or run.created_by != caller:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
     return run
@@ -156,7 +165,7 @@ async def create_workflow_run(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
-        create_data: dict[str, Any] = {
+        create_data: Final[dict[str, Any]] = {
             "workflow_type": data.workflow_type,
             "created_by": _caller_key(user_api_key_dict),
         }
@@ -164,7 +173,7 @@ async def create_workflow_run(
             create_data["input"] = _json(data.input)
         if data.metadata is not None:
             create_data["metadata"] = _json(data.metadata)
-        run = await WorkflowRunRepository(prisma_client).table.create(data=create_data)
+        run: Final = await WorkflowRunRepository(prisma_client).table.create(data=create_data)
         return run
     except Exception as e:
         verbose_proxy_logger.exception("Error creating workflow run: %s", e)
@@ -191,21 +200,21 @@ async def list_workflow_runs(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    where: dict[str, Any] = {}
+    where: Final[dict[str, Any]] = {}
     if workflow_type:
         where["workflow_type"] = workflow_type
     if status:
-        statuses = [s.strip() for s in status.split(",")]
+        statuses: Final = [s.strip() for s in status.split(",")]
         where["status"] = {"in": statuses} if len(statuses) > 1 else statuses[0]
 
     # Non-admin callers are scoped to their own key.
-    if not _is_admin(user_api_key_dict):
-        caller = _caller_key(user_api_key_dict)
+    if not user_api_key_has_admin_view(user_api_key_dict):
+        caller: Final = _caller_key(user_api_key_dict)
         if caller:
             where["created_by"] = caller
 
     try:
-        runs = await WorkflowRunRepository(prisma_client).table.find_many(
+        runs: Final = await WorkflowRunRepository(prisma_client).table.find_many(
             where=where,
             order={"created_at": "desc"},
             take=limit,
@@ -232,14 +241,14 @@ async def get_workflow_run(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
-        run = await WorkflowRunRepository(prisma_client).table.find_unique(
+        run: Final = await WorkflowRunRepository(prisma_client).table.find_unique(
             where={"run_id": run_id},
             include={"events": {"order_by": {"sequence_number": "desc"}, "take": 1}},
         )
         if run is None:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
-        if not _is_admin(user_api_key_dict):
-            caller = _caller_key(user_api_key_dict)
+        if not user_api_key_has_admin_view(user_api_key_dict):
+            caller: Final = _caller_key(user_api_key_dict)
             if not caller or run.created_by != caller:
                 raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
         return run
@@ -266,7 +275,7 @@ async def update_workflow_run(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    update: dict[str, Any] = {}
+    update: Final[dict[str, Any]] = {}
     if data.status is not None:
         update["status"] = data.status
     if data.output is not None:
@@ -281,7 +290,7 @@ async def update_workflow_run(
     await _require_run(prisma_client, run_id, user_api_key_dict)
 
     try:
-        run = await WorkflowRunRepository(prisma_client).table.update(
+        run: Final = await WorkflowRunRepository(prisma_client).table.update(
             where={"run_id": run_id},
             data=update,
         )
@@ -318,7 +327,7 @@ async def append_workflow_event(
 
     await _require_run(prisma_client, run_id, user_api_key_dict)
 
-    new_status = _EVENT_STATUS_MAP.get(data.event_type)
+    new_status: Final = _EVENT_STATUS_MAP.get(data.event_type)
 
     for attempt in range(_MAX_SEQUENCE_RETRIES):
         try:
@@ -377,10 +386,10 @@ async def list_workflow_events(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    await _require_run(prisma_client, run_id, user_api_key_dict)
+    await _require_run(prisma_client, run_id, _read_scope_caller(user_api_key_dict))
 
     try:
-        events = await WorkflowEventRepository(prisma_client).table.find_many(
+        events: Final = await WorkflowEventRepository(prisma_client).table.find_many(
             where={"run_id": run_id},
             order={"sequence_number": "asc"},
             take=limit,
@@ -461,10 +470,10 @@ async def list_workflow_messages(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    await _require_run(prisma_client, run_id, user_api_key_dict)
+    await _require_run(prisma_client, run_id, _read_scope_caller(user_api_key_dict))
 
     try:
-        messages = await WorkflowMessageRepository(prisma_client).table.find_many(
+        messages: Final = await WorkflowMessageRepository(prisma_client).table.find_many(
             where={"run_id": run_id},
             order={"sequence_number": "asc"},
             take=limit,
