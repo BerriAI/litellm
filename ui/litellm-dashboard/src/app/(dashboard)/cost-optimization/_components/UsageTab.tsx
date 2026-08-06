@@ -5,7 +5,7 @@ import { Info } from "lucide-react";
 
 import { AreaChart, BarChart, CustomLegend, DonutChart, SEQUENTIAL_COLOR_RAMP } from "@/components/shared/charts";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getToolSpend, ToolSpendResponse } from "@/components/networking";
@@ -16,6 +16,8 @@ import {
   formatRangeLabel,
   localIsoDay,
   MAX_POINTS_WITH_DOTS,
+  SAVINGS_COLORS,
+  SAVINGS_DRIVERS,
   SAVINGS_SERIES,
   SavingsAccumulation,
   SavingsPoint,
@@ -38,8 +40,6 @@ const EMPTY_TOOL_SPEND: ToolSpendResponse = {
   end_date: null,
 };
 
-const SAVINGS_COLORS = ["emerald", "blue"] as const;
-
 const shortDate = (iso: string): string =>
   new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
@@ -47,6 +47,7 @@ const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
 
 const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?? 0;
 const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
+const autorouterOf = (m: SpendMetrics): number => m.autorouter_savings_spend ?? 0;
 const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
 
 const SummaryCard = ({ label, value, hint, info }: { label: string; value: string; hint?: string; info?: string }) => (
@@ -105,8 +106,9 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
 
   const compressionTotal = useMemo(() => results.reduce((sum, d) => sum + compressionOf(d.metrics), 0), [results]);
   const cachingTotal = useMemo(() => results.reduce((sum, d) => sum + cachingOf(d.metrics), 0), [results]);
+  const autorouterTotal = useMemo(() => results.reduce((sum, d) => sum + autorouterOf(d.metrics), 0), [results]);
   const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
-  const totalSaved = compressionTotal + cachingTotal;
+  const totalSaved = compressionTotal + cachingTotal + autorouterTotal;
 
   const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
 
@@ -122,6 +124,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
           date: shortDate(d.date),
           Compression: compressionOf(d.metrics),
           "Prompt caching": cachingOf(d.metrics),
+          "Auto-router": autorouterOf(d.metrics),
         })),
     [results],
   );
@@ -138,19 +141,24 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const rangeLabel = formatRangeLabel(startTime ?? undefined, endTime ?? undefined);
   const savingsSubtitle = [
     accumulation === "cumulative" ? "Running total saved" : `Saved ${intervalLabel.toLowerCase()}`,
-    rangeLabel,
+    rangeLabel && `${rangeLabel} (UTC)`,
   ]
     .filter(Boolean)
     .join(" \u00b7 ");
 
+  // A driver can come out negative (auto-router pays a cold-cache write on every
+  // model switch), and a negative slice has no meaning in a donut, so only drivers
+  // that actually saved are plotted; the range total keeps the signed truth.
   const byDriver = useMemo(
     () =>
-      [
-        { driver: "Compression", usd: compressionTotal },
-        { driver: "Prompt caching", usd: cachingTotal },
-      ].filter((d) => d.usd > 0),
-    [compressionTotal, cachingTotal],
+      SAVINGS_DRIVERS.map(({ name, color }) => ({
+        driver: name,
+        color,
+        usd: { Compression: compressionTotal, "Prompt caching": cachingTotal, "Auto-router": autorouterTotal }[name],
+      })).filter((d) => d.usd > 0),
+    [compressionTotal, cachingTotal, autorouterTotal],
   );
+  const plottedDriverTotal = useMemo(() => byDriver.reduce((sum, d) => sum + d.usd, 0), [byDriver]);
 
   const topTools = useMemo(() => topToolsBySpend(toolSpend?.by_tool ?? []), [toolSpend]);
   const topToolNames = useMemo(() => topTools.map((t) => t.tool_name), [topTools]);
@@ -171,14 +179,15 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   return (
     <div className="w-full space-y-6">
       <div className="flex flex-wrap items-center justify-end gap-4">
+        <span className="text-sm text-muted-foreground">Spend is bucketed by UTC day</span>
         <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
         <SummaryCard
           label="Total saved"
           value={usd(totalSaved)}
-          hint={loading || isFetchingMore ? "Loading..." : "Compression + prompt caching"}
+          hint={loading || isFetchingMore ? "Loading..." : "Compression + prompt caching + auto-router"}
         />
         <SummaryCard
           label="Compression savings"
@@ -192,26 +201,32 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
           hint="Cache read discount"
           info="Tokens the provider served from cache, priced at the discount between the input and cache-read rates."
         />
+        <SummaryCard
+          label="Auto-router savings"
+          value={usd(autorouterTotal)}
+          hint="vs. the priciest model it could pick"
+          info="What this traffic would have cost had every request gone to the most expensive model the auto-router can route to, minus what it actually cost. Switching leaves the new model with a cold cache, so it pays to write the prompt again while the baseline is priced as already warm; a route that thrashes the cache can total below zero, and a genuine first turn, where neither side had anything cached, is undercounted."
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
+          {/* CardHeader's own slots rather than hand-rolled rows: the action column is
+              sized to its content and the title column takes the rest, so the subtitle
+              never competes with the controls for width and neither moves when it grows.
+              The controls wrap within their column instead of pushing past the card */}
           <CardHeader>
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <CardTitle>Savings</CardTitle>
-                <p className="text-sm text-muted-foreground">{savingsSubtitle}</p>
-              </div>
-              <div className="flex items-center gap-4">
-                <CustomLegend categories={SAVINGS_SERIES} colors={SAVINGS_COLORS} />
-                <Tabs value={accumulation} onValueChange={(value) => setAccumulation(value as SavingsAccumulation)}>
-                  <TabsList>
-                    <TabsTrigger value="cumulative">Cumulative</TabsTrigger>
-                    <TabsTrigger value="per-interval">{intervalLabel}</TabsTrigger>
-                  </TabsList>
-                </Tabs>
-              </div>
-            </div>
+            <CardTitle>Savings</CardTitle>
+            <CardDescription>{savingsSubtitle}</CardDescription>
+            <CardAction className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+              <CustomLegend categories={SAVINGS_SERIES} colors={SAVINGS_COLORS} />
+              <Tabs value={accumulation} onValueChange={(value) => setAccumulation(value as SavingsAccumulation)}>
+                <TabsList>
+                  <TabsTrigger value="cumulative">Cumulative</TabsTrigger>
+                  <TabsTrigger value="per-interval">{intervalLabel}</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </CardAction>
           </CardHeader>
           <CardContent>
             {accumulation === "cumulative" ? (
@@ -225,12 +240,14 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
                 showDots={overTime.length <= MAX_POINTS_WITH_DOTS}
               />
             ) : (
+              // Not stacked: a driver can be negative once a model switch is charged
+              // for its cold cache, and stacking would draw that segment below the axis
+              // while the remaining bar still read as the day's total
               <BarChart
                 data={overTime}
                 index="date"
                 categories={SAVINGS_SERIES}
                 colors={SAVINGS_COLORS}
-                stack
                 valueFormatter={usd}
                 showLegend={false}
               />
@@ -247,10 +264,10 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
               data={byDriver}
               index="driver"
               category="usd"
-              colors={["emerald", "blue"]}
+              colors={byDriver.map((d) => d.color)}
               valueFormatter={usd}
               showLabel
-              label={usd(totalSaved)}
+              label={usd(plottedDriverTotal)}
             />
           </CardContent>
         </Card>

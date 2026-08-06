@@ -6,8 +6,8 @@ import { Alert, Tabs } from "antd";
 
 import UsageTab from "./UsageTab";
 import PromptCompressionTab from "./PromptCompressionTab";
-import AutorouterTab from "./AutorouterTab";
 import PromptCachingTab from "./PromptCachingTab";
+import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
 import { useDailyActivityRange } from "./useDailyActivityRange";
 
 interface CostOptimizationViewProps {
@@ -22,7 +22,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
   const items = [
     {
       key: "usage",
-      label: "Usage",
+      label: "Overall",
       children: <UsageTab accessToken={accessToken} activity={activity} />,
     },
     {
@@ -31,14 +31,14 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
       children: <PromptCompressionTab accessToken={accessToken} />,
     },
     {
-      key: "autorouter",
-      label: "Autorouter",
-      children: <AutorouterTab accessToken={accessToken} userId={userId} userRole={userRole} />,
-    },
-    {
       key: "caching",
       label: "Prompt Caching",
       children: <PromptCachingTab accessToken={accessToken} activity={activity} />,
+    },
+    {
+      key: "autorouter-usage",
+      label: "Auto-Router",
+      children: <AutoRouterBenchmarksTab accessToken={accessToken} />,
     },
   ];
 
@@ -50,7 +50,8 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
           <h1 className="text-xl font-semibold text-foreground">Cost Optimization</h1>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          Track and configure the mechanisms that save you money: prompt compression, prompt caching, and auto routing
+          Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers
+          live under Models + Endpoints, on the Auto-Routers tab
         </p>
       </div>
 
@@ -62,7 +63,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
           <span>
             Have feedback? Join the discussion{" "}
             <a
-              href="https://github.com/BerriAI/litellm/discussions/32172"
+              href="https://github.com/BerriAI/litellm/discussions/32168"
               target="_blank"
               rel="noopener noreferrer"
               className="text-blue-600 underline"
