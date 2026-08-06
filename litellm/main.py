@@ -8262,7 +8262,7 @@ def speech(
             )
 
         dispatch_config: Final = cast(BaseTextToSpeechConfig, text_to_speech_provider_config)
-        response = dispatch_config.dispatch_text_to_speech(
+        response = dispatch_config.dispatch_text_to_speech(  # rebind-ok: same pattern as other TTS provider blocks
             model=model,
             input=input,
             voice=voice,
