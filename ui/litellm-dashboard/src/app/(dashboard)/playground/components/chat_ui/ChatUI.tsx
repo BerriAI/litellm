@@ -456,7 +456,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     if (!simplified) {
       void loadModels();
     }
-    void loadMCPServers(userApiKey);
+    void loadMCPServers();
 
     return () => {
       cancelled = true;
@@ -764,7 +764,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
-    const effectiveApiKey = simplified ? accessToken : apiKeySource === "session" ? accessToken : apiKey;
+    const effectiveApiKey =
+      simplified || apiKeySource === "session" ? accessToken : debouncedCustomApiKey || apiKey.trim();
 
     if (!effectiveApiKey) {
       NotificationsManager.fromBackend("Please provide a Virtual Key or select Current UI Session");
