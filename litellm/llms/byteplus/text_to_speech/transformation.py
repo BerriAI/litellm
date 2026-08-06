@@ -292,12 +292,12 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
         extra_headers: dict[str, Any] | None,
-        base_llm_http_handler: Any,  # noqa: ANN401  # required for type signature compatibility
+        base_llm_http_handler: object,
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
-        **kwargs: Any,  # noqa: ANN401  # required for type signature compatibility
-    ) -> Any:  # noqa: ANN401  # required for type signature compatibility
+        **kwargs: object,
+    ) -> object:
         safe_extra_headers: Final[dict[str, Any] | None] = (
             {k: v for k, v in extra_headers.items() if k.lower() not in _BYTEPLUS_TTS_AUTH_HEADERS}
             if extra_headers

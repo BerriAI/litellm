@@ -129,7 +129,7 @@ class BytePlusImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,  # noqa: ANN401  # required for type signature compatibility
+        encoding: object = None,
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
