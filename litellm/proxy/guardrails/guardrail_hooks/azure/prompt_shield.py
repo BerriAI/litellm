@@ -76,6 +76,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             AzurePromptShieldGuardrailResponse,
         )
 
+        self.raise_if_text_too_long(user_prompt)
         chunks = self.split_text_by_words(user_prompt, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
 
         last_response: Optional[AzurePromptShieldGuardrailResponse] = None
@@ -115,7 +116,9 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         # ad-hoc /apply_guardrail endpoint may pass input_type="response".
         # The Azure text:shieldPrompt API accepts any text, so we scan
         # regardless of direction rather than silently skipping.
-        for text in inputs.get("texts") or []:
+        texts = inputs.get("texts") or []
+        self.raise_if_too_many_texts(texts)
+        for text in texts:
             if text:
                 await self.async_make_request(user_prompt=text)
         return inputs

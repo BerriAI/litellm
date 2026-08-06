@@ -116,6 +116,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             AzureTextModerationGuardrailResponse,
         )
 
+        self.raise_if_text_too_long(text)
         chunks = self.split_text_by_words(text, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
 
         last_response: Optional[AzureTextModerationGuardrailResponse] = None
@@ -155,7 +156,9 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        for text in inputs.get("texts") or []:
+        texts = inputs.get("texts") or []
+        self.raise_if_too_many_texts(texts)
+        for text in texts:
             if text:
                 await self.async_make_request(text=text)
         return inputs

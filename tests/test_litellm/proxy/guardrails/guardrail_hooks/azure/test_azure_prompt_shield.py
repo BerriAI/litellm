@@ -288,6 +288,100 @@ async def test_apply_guardrail_empty_texts_makes_no_request():
     mock_post.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_apply_guardrail_too_many_texts_rejected():
+    """A texts list larger than the per-call cap must be rejected before any
+    Azure API call is made, so a caller cannot force unbounded fan-out by
+    submitting many texts in a single apply_guardrail call."""
+    from litellm.proxy.guardrails.guardrail_hooks.azure.base import (
+        AZURE_CONTENT_SAFETY_MAX_TEXTS_PER_CALL,
+    )
+
+    guardrail = _make_prompt_shield_guardrail()
+    texts = ["safe text"] * (AZURE_CONTENT_SAFETY_MAX_TEXTS_PER_CALL + 1)
+
+    with patch.object(guardrail.async_handler, "post") as mock_post:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": texts},
+                request_data={},
+                input_type="request",
+            )
+
+    assert exc_info.value.status_code == 413
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_max_texts_per_call_allowed():
+    """Exactly the per-call cap must still be scanned normally."""
+    from litellm.proxy.guardrails.guardrail_hooks.azure.base import (
+        AZURE_CONTENT_SAFETY_MAX_TEXTS_PER_CALL,
+    )
+
+    guardrail = _make_prompt_shield_guardrail()
+    texts = ["safe text"] * AZURE_CONTENT_SAFETY_MAX_TEXTS_PER_CALL
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        return_value=_mock_shield_response(False),
+    ) as mock_post:
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": texts},
+            request_data={},
+            input_type="request",
+        )
+
+    assert result == {"texts": texts}
+    assert mock_post.call_count == AZURE_CONTENT_SAFETY_MAX_TEXTS_PER_CALL
+
+
+@pytest.mark.asyncio
+async def test_async_make_request_text_too_long_rejected():
+    """A single text large enough to require more Azure calls than the
+    per-text chunk cap must be rejected before any request is made, so a
+    caller cannot force unbounded fan-out with one oversized prompt."""
+    from litellm.proxy.guardrails.guardrail_hooks.azure.base import (
+        AZURE_CONTENT_SAFETY_MAX_CHUNKS_PER_TEXT,
+        AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH,
+    )
+
+    guardrail = _make_prompt_shield_guardrail()
+    max_length = AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH * AZURE_CONTENT_SAFETY_MAX_CHUNKS_PER_TEXT
+    oversized_text = "a" * (max_length + 1)
+
+    with patch.object(guardrail.async_handler, "post") as mock_post:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_make_request(user_prompt=oversized_text)
+
+    assert exc_info.value.status_code == 413
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_make_request_max_text_length_allowed():
+    """Text exactly at the max length must still be scanned, split into the
+    expected number of chunks."""
+    from litellm.proxy.guardrails.guardrail_hooks.azure.base import (
+        AZURE_CONTENT_SAFETY_MAX_CHUNKS_PER_TEXT,
+        AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH,
+    )
+
+    guardrail = _make_prompt_shield_guardrail()
+    max_length = AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH * AZURE_CONTENT_SAFETY_MAX_CHUNKS_PER_TEXT
+    text_at_limit = "a" * max_length
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        return_value=_mock_shield_response(False),
+    ) as mock_post:
+        await guardrail.async_make_request(user_prompt=text_at_limit)
+
+    assert mock_post.call_count == AZURE_CONTENT_SAFETY_MAX_CHUNKS_PER_TEXT
+
+
 def test_split_text_by_words():
     """Test the word-based text splitting functionality."""
     guardrail = AzureContentSafetyPromptShieldGuardrail(
