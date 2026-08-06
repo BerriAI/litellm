@@ -231,7 +231,7 @@ class LiteLLMCompletionResponsesConfig:
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
                 responses_api_request.get("tool_choice")
             ),
-            "tools": tools,
+            "tools": tools or None,
             "top_p": responses_api_request.get("top_p"),
             "user": responses_api_request.get("user"),
             "temperature": responses_api_request.get("temperature"),
