@@ -1231,6 +1231,28 @@ class TestIncrementalScanRespectsSkipFlags:
             assert scanned == ["It is sunny in Paris.", "And tomorrow?"]
 
 
+class StructuredRedactionGuardrail(CustomGuardrail):
+    """Captures inputs and returns a new structured_messages list with a canary redacted."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="structured-redaction")
+        self.captured_inputs: Optional[GenericGuardrailAPIInputs] = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.captured_inputs = inputs
+        structured = inputs.get("structured_messages") or []
+        inputs["structured_messages"] = [
+            {**m, "content": str(m.get("content", "")).replace("POISON", "[BLOCKED]")} for m in structured
+        ]
+        return inputs
+
+
 class TestScanOnlyToolResults:
     def _bedrock_guardrail(self):
         from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
@@ -1297,3 +1319,62 @@ class TestScanOnlyToolResults:
             assert scanned == ["USER-PROMPT", "TOOL-RESULT"], (
                 "anything but an explicit True must leave the whole request in scope"
             )
+
+    @pytest.mark.parametrize("scan_only_tool_results", [True, False])
+    @pytest.mark.asyncio
+    async def test_function_definitions_are_scoped_out_with_the_tool_results_flag(self, scan_only_tool_results):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = StructuredRedactionGuardrail()
+        guardrail.scan_only_tool_results = scan_only_tool_results
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "read_file", "parameters": {"type": "object", "properties": {}}},
+            }
+        ]
+        data = {
+            "messages": [
+                {"role": "user", "content": "read the report"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT"},
+            ],
+            "tools": tools,
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.captured_inputs is not None
+        expected_tools = None if scan_only_tool_results else tools
+        assert guardrail.captured_inputs.get("tools") == expected_tools, (
+            "function definitions must stay out of a tool-results-only scan"
+        )
+
+    @pytest.mark.asyncio
+    async def test_structured_write_back_keeps_out_of_scope_messages(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = StructuredRedactionGuardrail()
+        guardrail.scan_only_tool_results = True
+        data = {
+            "messages": [
+                {"role": "system", "content": "SYSTEM-PROMPT"},
+                {"role": "user", "content": "fetch the page"},
+                {
+                    "role": "assistant",
+                    "content": "fetching",
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "fetch", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "page says POISON here"},
+                {"role": "user", "content": "and then?"},
+            ]
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [m["role"] for m in data["messages"]] == ["system", "user", "assistant", "tool", "user"], (
+            "a redacting guardrail must not strip out-of-scope messages from the request"
+        )
+        assert data["messages"][0]["content"] == "SYSTEM-PROMPT"
+        assert data["messages"][3]["content"] == "page says [BLOCKED] here"
+        assert data["messages"][3]["tool_call_id"] == "call_1"
+        assert data["messages"][4]["content"] == "and then?"

@@ -26,8 +26,9 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
-    filtered_structured_messages,
+    merge_guardrailed_scoped_messages,
     role_out_of_guardrail_scope,
+    scoped_structured_message_indices,
 )
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -114,18 +115,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check
             structured_messages: Final = self.get_structured_messages(data)
+            scoped_message_indices: Final = scoped_structured_message_indices(
+                structured_messages or [],
+                scan_only_tool_results=scan_only_tool_results,
+                skip_system=skip_system,
+                skip_tool=skip_tool,
+            )
             if structured_messages:
-                inputs["structured_messages"] = list(
-                    filtered_structured_messages(
-                        structured_messages,
-                        scan_only_tool_results=scan_only_tool_results,
-                        skip_system=skip_system,
-                        skip_tool=skip_tool,
-                    )
-                )
+                inputs["structured_messages"] = [structured_messages[index] for index in scoped_message_indices]
             # Pass tools (function definitions) to the guardrail
             tools: Final = data.get("tools")
-            if tools:
+            if tools and not scan_only_tool_results:
                 inputs["tools"] = tools
             # Include model information if available
             model: Final = data.get("model")
@@ -151,7 +151,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 guardrailed_structured_messages is not None
                 and guardrailed_structured_messages is not original_structured_messages
             ):
-                data["messages"] = guardrailed_structured_messages
+                data["messages"] = merge_guardrailed_scoped_messages(
+                    full_messages=structured_messages or [],
+                    scoped_indices=scoped_message_indices,
+                    guardrailed_scoped=guardrailed_structured_messages,
+                )
             else:
                 # Step 3: Map guardrail responses back to original message structure
                 if guardrailed_texts and texts_to_check:

@@ -5,6 +5,7 @@ Tests the handler's ability to process streaming output for Anthropic Messages A
 with guardrail transformations, specifically testing edge cases with empty choices.
 """
 
+import json
 import os
 import sys
 from typing import Any, Literal, Optional
@@ -778,11 +779,64 @@ class InputsRecordingGuardrail(MockMaskingGuardrail):
         return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
 
 
+class StructuredMessagesRewritingGuardrail(CustomGuardrail):
+    """Returns a new structured_messages list with a canary redacted, like redaction guardrails do."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="structured-rewrite")
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        structured = inputs.get("structured_messages") or []
+        inputs["structured_messages"] = [
+            json.loads(json.dumps(message).replace("POISON", "[BLOCKED]")) for message in structured
+        ]
+        return inputs
+
+
 class TestAnthropicMessagesScanOnlyToolResults:
     def _guardrail(self):
         guardrail = InputsRecordingGuardrail()
         guardrail.scan_only_tool_results = True
         return guardrail
+
+    @pytest.mark.asyncio
+    async def test_structured_write_back_merges_into_the_full_conversation(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = StructuredMessagesRewritingGuardrail()
+        guardrail.scan_only_tool_results = True
+        data = {
+            "model": "claude-sonnet-4-5",
+            "system": "You are a careful agent harness.",
+            "messages": [
+                {"role": "user", "content": "fetch the page"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "tu1", "name": "Bash", "input": {"cmd": "curl"}}],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "tu1", "content": "fetched POISON page"}],
+                },
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["system"] == "You are a careful agent harness."
+        assert [m["role"] for m in data["messages"]] == ["user", "assistant", "user"], (
+            "a redacting guardrail must not strip out-of-scope turns from the request"
+        )
+        serialized = json.dumps(data["messages"])
+        assert "fetch the page" in serialized
+        assert "tool_use" in serialized
+        assert "fetched [BLOCKED] page" in serialized
+        assert "POISON" not in serialized
 
     @pytest.mark.asyncio
     async def test_scan_narrows_to_tool_results_and_write_back_stays_aligned(self):
