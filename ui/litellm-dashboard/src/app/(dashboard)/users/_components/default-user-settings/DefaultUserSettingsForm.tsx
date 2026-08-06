@@ -133,7 +133,7 @@ const TeamsField = ({ control }: { control: SettingsControl }) => {
 
             <FormField control={control} name={`teams.${index}.max_budget_in_team`} label="Max Budget in Team (USD)">
               {({ ref, ...budgetField }) => (
-                <Input {...budgetField} ref={ref} type="number" step={0.01} min={0} placeholder="Optional" />
+                <Input {...budgetField} ref={ref} type="number" step="any" min={0} placeholder="Optional" />
               )}
             </FormField>
 
@@ -249,7 +249,7 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
   const onSubmit = form.handleSubmit((values) => mutation.mutate(values));
 
   return (
-    <form onSubmit={onSubmit}>
+    <form onSubmit={onSubmit} noValidate>
       <FieldGroup>
         <FormField
           control={form.control}
@@ -286,7 +286,7 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
           label="Max Budget (USD)"
           description="Default maximum budget for new users"
         >
-          {({ ref, ...field }) => <Input {...field} ref={ref} type="number" step={0.01} min={0} />}
+          {({ ref, ...field }) => <Input {...field} ref={ref} type="number" step="any" min={0} />}
         </FormField>
 
         <FormField

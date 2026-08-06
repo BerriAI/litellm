@@ -1,5 +1,7 @@
 import logging
+import logging.config
 import sys
+from collections.abc import Callable
 from io import StringIO
 from unittest.mock import patch
 
@@ -249,9 +251,7 @@ def test_module_level_provider_key_redaction_catches_proxy_log_format():
     for secret_line, secret in cases:
         result = redact_string(secret_line)
         assert secret not in result
-        assert (
-            "REDACTED" in result
-        ), f"Module-level key redaction missed: {secret_line!r}"
+        assert "REDACTED" in result, f"Module-level key redaction missed: {secret_line!r}"
 
     safe = "cache_key=cache-value-123456"
     assert redact_string(safe) == safe
@@ -295,9 +295,7 @@ def test_key_name_redaction_in_general_settings_dict():
             "enable_jwt_auth": True,
             "store_model_in_db": True,
         }
-        verbose_proxy_logger.debug(
-            f"param_name=general_settings, param_value={general_settings}"
-        )
+        verbose_proxy_logger.debug(f"param_name=general_settings, param_value={general_settings}")
 
     output = _capture_logger_output(log_messages)
     assert "my-random-secret-key-1234" not in output
@@ -381,3 +379,119 @@ def test_non_pem_private_key_value_redacted():
 def test_normal_vertex_log_not_redacted():
     msg = "Vertex: Loading vertex credentials, is_file_path=True, current dir /app"
     assert redact_string(msg) == msg
+
+
+THIRD_PARTY_LOGGERS = (
+    "apscheduler.executors.default",
+    "apscheduler.scheduler",
+    "asyncio",
+    "backoff",
+    "httpx",
+    "uvicorn.error",
+)
+
+
+def _capture_from_logger(logger_name: str, emit: Callable[[logging.Logger], None]) -> str:
+    """Emit via `logger_name` and return only that logger's output as seen by a root handler.
+
+    A handler on the root logger stands in for a log-shipping sink litellm does not own.
+    The name predicate keeps the assertion scoped to the logger under test, so records
+    from any other logger cannot decide the result.
+
+    This idiom only reaches root when nothing between the logger and root stops
+    propagation. `callHandlers` re-checks `propagate` at every level as it walks up, so
+    an ANCESTOR with `propagate = False` ends the walk early and this returns an empty
+    string no matter what was emitted; forcing it on the logger under test, as done
+    below, is not enough. For a logger whose ancestors are configured that way, attach
+    the capture handler to the logger itself and assert on that instead, and always
+    assert the captured output is non-empty so a silent miss cannot pass.
+    """
+    buf = StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.addFilter(lambda record: record.name == logger_name)
+    lg = logging.getLogger(logger_name)
+    saved = (lg.level, lg.propagate, logging.root.level)
+    lg.setLevel(logging.DEBUG)
+    lg.propagate = True
+    logging.root.setLevel(logging.DEBUG)
+    logging.root.addHandler(handler)
+    try:
+        emit(lg)
+        return buf.getvalue()
+    finally:
+        logging.root.removeHandler(handler)
+        lg.setLevel(saved[0])
+        lg.propagate = saved[1]
+        logging.root.setLevel(saved[2])
+
+
+def test_third_party_logger_messages_are_redacted():
+    for logger_name in THIRD_PARTY_LOGGERS:
+        output = _capture_from_logger(logger_name, lambda lg: lg.error("value %s", SECRET))
+
+        assert output.strip(), f"no record captured for {logger_name}"
+        assert SECRET not in output, f"{logger_name} leaked a secret"
+        assert "REDACTED" in output, f"{logger_name} was not redacted"
+
+
+def test_third_party_logger_tracebacks_are_redacted():
+    def emit(lg: logging.Logger) -> None:
+        try:
+            raise ValueError("value " + SECRET)
+        except ValueError:
+            lg.error("call failed", exc_info=True)
+
+    for logger_name in THIRD_PARTY_LOGGERS:
+        output = _capture_from_logger(logger_name, emit)
+
+        assert output.strip(), f"no record captured for {logger_name}"
+        assert SECRET not in output, f"{logger_name} leaked a secret in a traceback"
+        assert "REDACTED" in output, f"{logger_name} traceback was not redacted"
+
+
+UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
+
+
+def test_redaction_survives_uvicorn_logging_reconfiguration():
+    """Proxy startup hands uvicorn a logging config, and `dictConfig` replaces the handlers
+    of every logger it names. Redaction is attached to the logger rather than to a handler
+    so that it outlives that; moving it onto a handler would fail here.
+
+    The config below is written out rather than imported from the one litellm ships on
+    purpose. What is under test is `dictConfig` semantics, so any config that names the
+    loggers exercises it; importing the real one would add coupling without adding
+    coverage. The capture reads the reconfigured logger's own handler because the config
+    sets `propagate = False`, which is where uvicorn's handler sits in a running proxy.
+    """
+    saved = tuple(
+        (logging.getLogger(name), logging.getLogger(name).handlers[:], logging.getLogger(name).level)
+        for name in UVICORN_LOGGERS
+    )
+    uvicorn_shaped_config: dict[str, object] = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "handlers": {"default": {"class": "logging.StreamHandler"}},
+        "loggers": {name: {"handlers": ["default"], "level": "INFO", "propagate": False} for name in UVICORN_LOGGERS},
+    }
+    try:
+        logging.config.dictConfig(uvicorn_shaped_config)
+
+        for logger_name in THIRD_PARTY_LOGGERS:
+            filters = logging.getLogger(logger_name).filters
+            assert _secret_filter in filters, f"{logger_name} lost redaction across reconfiguration"
+
+        buf = StringIO()
+        reconfigured = logging.getLogger("uvicorn.error")
+        reconfigured.addHandler(logging.StreamHandler(buf))
+        reconfigured.setLevel(logging.DEBUG)
+        reconfigured.error("value %s", SECRET)
+        output = buf.getvalue()
+
+        assert output.strip(), "no record captured for uvicorn.error"
+        assert SECRET not in output, "uvicorn.error leaked a secret after reconfiguration"
+        assert "REDACTED" in output, "uvicorn.error was not redacted after reconfiguration"
+    finally:
+        for lg, handlers, level in saved:
+            lg.handlers[:] = handlers
+            lg.setLevel(level)
+            lg.propagate = True

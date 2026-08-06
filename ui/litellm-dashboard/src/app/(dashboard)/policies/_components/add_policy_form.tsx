@@ -8,7 +8,6 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 const { Text } = Typography;
-const { Option } = Select;
 
 interface AddPolicyFormProps {
   visible: boolean;
@@ -162,7 +161,6 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [resolvedGuardrails, setResolvedGuardrails] = useState<string[]>([]);
-  const [isLoadingResolved, setIsLoadingResolved] = useState(false);
   const [modelConditionType, setModelConditionType] = useState<"model" | "regex">("model");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [step, setStep] = useState<"pick_mode" | "simple_form">("pick_mode");
@@ -231,14 +229,11 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
   const loadResolvedGuardrails = async (policyId: string) => {
     if (!accessToken) return;
-    setIsLoadingResolved(true);
     try {
       const data = await getResolvedGuardrails(accessToken, policyId);
       setResolvedGuardrails(data.resolved_guardrails || []);
     } catch (error) {
       console.error("Failed to load resolved guardrails:", error);
-    } finally {
-      setIsLoadingResolved(false);
     }
   };
 

@@ -186,21 +186,23 @@ locals {
   gateway_uvicorn_args = "--host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"
   backend_uvicorn_args = "--host 0.0.0.0 --port 4001"
 
+  gateway_launch_cmd = "if [ \"$USE_DDTRACE\" = \"true\" ]; then export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn gateway.main:app ${local.gateway_uvicorn_args}; else exec uvicorn gateway.main:app ${local.gateway_uvicorn_args}; fi"
+  backend_launch_cmd = "if [ \"$USE_DDTRACE\" = \"true\" ]; then export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn backend.main:app ${local.backend_uvicorn_args}; else exec uvicorn backend.main:app ${local.backend_uvicorn_args}; fi"
+
   gateway_proxy_overrides = local.proxy_config_enabled ? {
     entryPoint = ["sh", "-c"]
     command = [
-      "${local.proxy_config_fetch_cmd} && exec uvicorn gateway.main:app ${local.gateway_uvicorn_args}"
+      "${local.proxy_config_fetch_cmd} && ${local.gateway_launch_cmd}"
     ]
     } : {
-    # Mirror the image's ENTRYPOINT so we can append --workers via command.
-    entryPoint = ["uvicorn", "gateway.main:app"]
-    command    = split(" ", local.gateway_uvicorn_args)
+    entryPoint = ["sh", "-c"]
+    command    = [local.gateway_launch_cmd]
   }
 
   backend_proxy_overrides = local.proxy_config_enabled ? {
     entryPoint = ["sh", "-c"]
     command = [
-      "${local.proxy_config_fetch_cmd} && exec uvicorn backend.main:app ${local.backend_uvicorn_args}"
+      "${local.proxy_config_fetch_cmd} && ${local.backend_launch_cmd}"
     ]
   } : {}
 }

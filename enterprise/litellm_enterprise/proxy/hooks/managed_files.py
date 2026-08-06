@@ -4,7 +4,8 @@
 import base64
 import json
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Final, List, Literal, Optional, Union, cast
+from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import HTTPException
 
@@ -33,8 +34,8 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_batch_id_from_unified_batch_id,
     get_content_type_from_file_object,
     get_model_id_from_unified_batch_id,
-    get_models_from_unified_file_id,
     normalize_mime_type_for_provider,
+    resolve_managed_output_file_model_name,
 )
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
@@ -215,7 +216,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
 
         if result:
-            return LiteLLM_ManagedFileTable(**result)
+            return LiteLLM_ManagedFileTable.model_validate(result)
 
         ## CHECK DB
         db_object = await self.prisma_client.db.litellm_managedfiletable.find_first(
@@ -223,7 +224,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
 
         if db_object:
-            return LiteLLM_ManagedFileTable(**db_object.model_dump())
+            return LiteLLM_ManagedFileTable.model_validate(db_object.model_dump())
         return None
 
     async def delete_unified_file_id(
@@ -349,7 +350,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     if isinstance(batch.file_object, str)
                     else batch.file_object
                 )
-                batch_obj = LiteLLMBatch(**batch_data)
+                batch_obj = LiteLLMBatch.model_validate(batch_data)
                 batch_obj.id = batch.unified_object_id
                 batch_objects.append(batch_obj)
 
@@ -382,7 +383,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "flat_model_file_ids": {"hasSome": model_object_ids},
             }
         )
-        return [OpenAIFileObject(**file_object.file_object) for file_object in file_ids]
+        return [
+            OpenAIFileObject.model_validate(row.file_object).model_copy(
+                update={"id": row.unified_file_id}
+            )
+            for row in file_ids
+            if row.file_object is not None
+        ]
 
     async def check_managed_file_id_access(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth
@@ -1055,10 +1062,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     def get_unified_output_file_id(
         self, output_file_id: str, model_id: str, model_name: Optional[str]
     ) -> str:
+        deterministic_uuid: Final = uuid5(
+            uuid5(NAMESPACE_URL, model_id), output_file_id
+        )
         unified_output_file_id = (
             SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
                 "application/json",
-                str(uuid.uuid4()),
+                str(deterministic_uuid),
                 model_name or "",
                 output_file_id,
                 model_id,
@@ -1094,21 +1104,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )  # managed batch id
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
             model_name = cast(Optional[str], response._hidden_params.get("model_name"))
-            resolved_model_name = model_name
 
-            # Some providers (e.g. Vertex batch retrieve) do not set model_name on
-            # the response. In that case, recover target_model_names from the input
-            # managed file metadata so unified output IDs preserve routing metadata.
-            if not resolved_model_name and isinstance(unified_file_id, str):
-                decoded_unified_file_id = (
-                    _is_base64_encoded_unified_file_id(unified_file_id)
-                    or unified_file_id
-                )
-                target_model_names = get_models_from_unified_file_id(
-                    decoded_unified_file_id
-                )
-                if target_model_names:
-                    resolved_model_name = ",".join(target_model_names)
+            resolved_model_name = resolve_managed_output_file_model_name(
+                unified_input_file_id=unified_file_id
+                if isinstance(unified_file_id, str)
+                else response.input_file_id,
+                fallback_model_name=model_name,
+            )
             original_response_id = response.id
 
             if (unified_batch_id or unified_file_id) and model_id:

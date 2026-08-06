@@ -26,14 +26,14 @@ import signal
 import sys
 import threading
 import time
-from typing import Optional
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 
-QUERY_ENGINE_COMM_PREFIX = "query-engine"
-REAPER_SCAN_INTERVAL_SECONDS = 5.0
-SIGTERM_GRACE_SECONDS = 10.0
-PR_SET_CHILD_SUBREAPER = 36
+QUERY_ENGINE_COMM_PREFIX: Final = "query-engine"
+REAPER_SCAN_INTERVAL_SECONDS: Final = 5.0
+SIGTERM_GRACE_SECONDS: Final = 10.0
+PR_SET_CHILD_SUBREAPER: Final = 36
 
 
 def set_child_subreaper() -> bool:
@@ -44,7 +44,7 @@ def set_child_subreaper() -> bool:
     if not sys.platform.startswith("linux"):
         return False
     try:
-        libc = ctypes.CDLL(None, use_errno=True)
+        libc: Final = ctypes.CDLL(None, use_errno=True)
         result: int = libc.prctl(  # pyright: ignore[reportAny]  # ctypes types foreign calls as Any; default restype is c_int
             PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0
         )
@@ -53,22 +53,22 @@ def set_child_subreaper() -> bool:
         return False
 
 
-def _read_comm_and_ppid(pid: int, proc_root: str) -> Optional[tuple[str, int]]:
+def _read_comm_and_ppid(pid: int, proc_root: str) -> tuple[str, int] | None:
     try:
         with open(f"{proc_root}/{pid}/stat", encoding="ascii", errors="replace") as stat_file:
-            data = stat_file.read()
+            data: Final = stat_file.read()
     except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
         return None
-    lparen = data.find("(")
-    rparen = data.rfind(")")
+    lparen: Final = data.find("(")
+    rparen: Final = data.rfind(")")
     if lparen == -1 or rparen == -1 or rparen < lparen:
         return None
-    comm = data[lparen + 1 : rparen]
-    fields = data[rparen + 2 :].split()
+    comm: Final = data[lparen + 1 : rparen]
+    fields: Final = data[rparen + 2 :].split()
     if len(fields) < 2:
         return None
     try:
-        ppid = int(fields[1])
+        ppid: Final = int(fields[1])
     except ValueError:
         return None
     return comm, ppid
@@ -80,10 +80,10 @@ def list_orphaned_engine_pids(parent_pid: int, proc_root: str = "/proc") -> tupl
     adopted orphans: live engines are children of workers, not of the
     supervisor."""
     try:
-        entries = os.listdir(proc_root)
+        entries: Final = os.listdir(proc_root)
     except (FileNotFoundError, OSError):
         return ()
-    candidate_pids = (int(entry) for entry in entries if entry.isdigit())
+    candidate_pids: Final = (int(entry) for entry in entries if entry.isdigit())
     return tuple(
         pid
         for pid in candidate_pids
@@ -113,7 +113,7 @@ def _send_signal(pid: int, signum: int) -> None:
 def _await_reaped(pids: tuple[int, ...], timeout_seconds: float) -> tuple[int, ...]:
     """Poll until every PID is reaped or the shared deadline passes.
     Returns the PIDs still alive at the deadline."""
-    deadline = time.monotonic() + timeout_seconds
+    deadline: Final = time.monotonic() + timeout_seconds
     remaining = pids
     while remaining and time.monotonic() < deadline:
         remaining = tuple(pid for pid in remaining if not _try_reap(pid))
@@ -142,7 +142,7 @@ def terminate_and_reap_all(
             pid,
         )
         _send_signal(pid, signal.SIGTERM)
-    survivors = _await_reaped(pids, grace_seconds)
+    survivors: Final = _await_reaped(pids, grace_seconds)
     if not survivors:
         return
     for pid in survivors:
@@ -152,7 +152,7 @@ def terminate_and_reap_all(
             grace_seconds,
         )
         _send_signal(pid, signal.SIGKILL)
-    unkillable = _await_reaped(survivors, 5.0)
+    unkillable: Final = _await_reaped(survivors, 5.0)
     for pid in unkillable:
         verbose_proxy_logger.error(
             "Orphaned prisma query-engine PID %s survived SIGKILL; will retry on the next scan.",
@@ -162,7 +162,7 @@ def terminate_and_reap_all(
 
 def reap_orphaned_engines(parent_pid: int, proc_root: str = "/proc") -> tuple[int, ...]:
     """One scan-and-reap pass. Returns the PIDs it acted on."""
-    orphaned_pids = list_orphaned_engine_pids(parent_pid, proc_root=proc_root)
+    orphaned_pids: Final = list_orphaned_engine_pids(parent_pid, proc_root=proc_root)
     if orphaned_pids:
         terminate_and_reap_all(orphaned_pids)
     return orphaned_pids
@@ -177,10 +177,10 @@ def _reaper_loop(parent_pid: int) -> None:
         time.sleep(REAPER_SCAN_INTERVAL_SECONDS)
 
 
-REAPER_THREAD_NAME = "litellm-orphan-query-engine-reaper"
+REAPER_THREAD_NAME: Final = "litellm-orphan-query-engine-reaper"
 
 
-def start_query_engine_reaper() -> Optional[threading.Thread]:
+def start_query_engine_reaper() -> threading.Thread | None:
     """Start the reaper daemon thread in the supervisor process.
 
     Must only be called from a process that never hosts the proxy app
@@ -191,14 +191,14 @@ def start_query_engine_reaper() -> Optional[threading.Thread]:
     """
     if not sys.platform.startswith("linux"):
         return None
-    existing = next(
+    existing: Final = next(
         (thread for thread in threading.enumerate() if thread.name == REAPER_THREAD_NAME),
         None,
     )
     if existing is not None:
         return existing
     set_child_subreaper()
-    reaper_thread = threading.Thread(
+    reaper_thread: Final = threading.Thread(
         target=_reaper_loop,
         args=(os.getpid(),),
         daemon=True,
