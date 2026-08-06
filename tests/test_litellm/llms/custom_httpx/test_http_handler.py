@@ -533,6 +533,92 @@ async def test_get_async_httpx_client_without_shared_session():
 
 
 @pytest.mark.asyncio
+async def test_get_async_httpx_client_with_transport_bypasses_cache():
+    """
+    When a caller-supplied transport is provided, the factory must bypass its
+    cache (each transport is a one-off) and the returned handler must wrap the
+    transport. Used by integrations that need to talk over a Unix domain
+    socket (e.g. Datadog LLM Observability against the agent's apm.socket).
+    """
+    from litellm.llms.custom_httpx.http_handler import (
+        get_async_httpx_client,
+        AsyncHTTPHandler as AsyncHTTPHandlerReload,
+    )
+    from litellm.types.utils import LlmProviders
+
+    transport_a = httpx.AsyncHTTPTransport(uds="/tmp/litellm-test-a.sock")
+    transport_b = httpx.AsyncHTTPTransport(uds="/tmp/litellm-test-b.sock")
+
+    client_a = get_async_httpx_client(
+        llm_provider=LlmProviders.ANTHROPIC, transport=transport_a
+    )
+    client_b = get_async_httpx_client(
+        llm_provider=LlmProviders.ANTHROPIC, transport=transport_b
+    )
+
+    # Cache bypassed: same provider key but different transports give distinct
+    # handlers (the default cached path would return the same instance).
+    assert client_a is not client_b
+    assert isinstance(client_a, AsyncHTTPHandlerReload)
+    assert isinstance(client_b, AsyncHTTPHandlerReload)
+    # Each handler's underlying httpx client wraps the supplied transport.
+    assert client_a.client._transport is transport_a
+    assert client_b.client._transport is transport_b
+
+
+@pytest.mark.asyncio
+async def test_get_async_httpx_client_with_transport_and_params():
+    """
+    The transport-bypass path also accepts `params` (forwarded to
+    AsyncHTTPHandler.__init__ alongside the transport). Covers the
+    `if params is not None` branch of the bypass section.
+    """
+    from litellm.llms.custom_httpx.http_handler import (
+        get_async_httpx_client,
+        AsyncHTTPHandler as AsyncHTTPHandlerReload,
+    )
+    from litellm.types.utils import LlmProviders
+
+    transport = httpx.AsyncHTTPTransport(uds="/tmp/litellm-test.sock")
+    custom_timeout = httpx.Timeout(7.5)
+
+    client = get_async_httpx_client(
+        llm_provider=LlmProviders.ANTHROPIC,
+        params={"timeout": custom_timeout},
+        transport=transport,
+    )
+
+    assert isinstance(client, AsyncHTTPHandlerReload)
+    assert client.client._transport is transport
+    # `params["timeout"]` flows through to the handler constructor.
+    assert client.timeout == custom_timeout
+
+
+@pytest.mark.asyncio
+async def test_get_async_httpx_client_with_transport_skips_ssl_config():
+    """
+    A caller-supplied transport (e.g. UDS) bypasses all SSL plumbing — SSL is
+    irrelevant to a unix-socket connection, and reading SSL_CERT_FILE /
+    SSL_SECURITY_LEVEL / SSL_ECDH_CURVE / SSL_CERTIFICATE would otherwise fail
+    client creation if any of those env vars are misconfigured in the UDS
+    environment.
+    """
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    transport = httpx.AsyncHTTPTransport(uds="/tmp/litellm-test.sock")
+
+    # Make get_ssl_configuration explode if it's ever called on the UDS path —
+    # confirms the SSL plumbing is fully short-circuited.
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.get_ssl_configuration",
+        side_effect=AssertionError("get_ssl_configuration should be skipped"),
+    ):
+        handler = AsyncHTTPHandler(transport=transport)
+
+    assert handler.client._transport is transport
+
+
+@pytest.mark.asyncio
 async def test_session_reuse_chain():
     """Test that session is properly passed through the entire call chain"""
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
