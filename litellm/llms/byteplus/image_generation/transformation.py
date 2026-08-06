@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Final  # noqa: TID251  # required for type signature compatibility
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -98,7 +98,7 @@ class BytePlusImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        body: dict[str, Any] = {
+        body: dict = {
             "model": model,
             "prompt": prompt,
         }

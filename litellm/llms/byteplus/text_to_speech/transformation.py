@@ -1,6 +1,6 @@
 import base64
 import json
-from typing import TYPE_CHECKING, Any, ClassVar, Final  # noqa: TID251  # required for type signature compatibility
+from typing import TYPE_CHECKING, ClassVar, Final
 
 import httpx
 from httpx import Headers
@@ -65,7 +65,7 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
         optional_params: dict,
         voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: dict[str, Any] | None = None,
+        kwargs: dict | None = None,
     ) -> tuple[str | None, dict]:
         mapped_voice: str | None = None
 
@@ -181,7 +181,7 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
         sample_rate = extra_body.get("sample_rate") or self.DEFAULT_SAMPLE_RATE
         speed = params.get("speed")
 
-        additions_dict: dict[str, Any] = {
+        additions_dict: dict = {
             "disable_markdown_filter": True,
             "enable_language_detector": True,
             "enable_latex_tn": True,
@@ -203,7 +203,7 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
 
         user_id = extra_body.get("uid") or litellm_params.get("user") or "litellm-user"
 
-        audio_params: dict[str, Any] = {
+        audio_params: dict = {
             "format": audio_format,
             "sample_rate": sample_rate,
         }
@@ -293,14 +293,14 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
         litellm_params_dict: dict,
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
-        extra_headers: dict[str, Any] | None,
+        extra_headers: dict | None,
         base_llm_http_handler: object,
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
         **kwargs: object,
     ) -> object:
-        safe_extra_headers: Final[dict[str, Any] | None] = (
+        safe_extra_headers: Final[dict | None] = (
             {k: v for k, v in extra_headers.items() if k.lower() not in _BYTEPLUS_TTS_AUTH_HEADERS}
             if extra_headers
             else None

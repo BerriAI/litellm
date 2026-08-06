@@ -1,5 +1,5 @@
 import json
-from typing import TYPE_CHECKING, Any, Final  # noqa: TID251  # required for type signature compatibility
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -80,11 +80,11 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict[str, Any],
-        optional_params: dict[str, Any],
+        non_default_params: dict,
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict[str, Any]:
+    ) -> dict:
         supported = self.get_supported_openai_params(model)
         optional_params.update({k: v for k, v in non_default_params.items() if k in supported})
         return optional_params
@@ -101,7 +101,7 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
         )
 
         raw_input = input if isinstance(input, list) else [input]
-        formatted_input: list[Any] = []
+        formatted_input: list = []
         if is_multimodal:
             for item in raw_input:
                 if isinstance(item, str):
@@ -111,7 +111,7 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
         else:
             formatted_input = list(raw_input)
 
-        data: dict[str, Any] = {
+        data: dict = {
             "model": model,
             "input": formatted_input,
         }
@@ -144,7 +144,7 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
         data_raw = response_json.get("data", [])
 
         if isinstance(data_raw, dict):
-            embedding_item: dict[str, Any] = {
+            embedding_item: dict = {
                 "object": data_raw.get("object", "embedding"),
                 "embedding": data_raw.get("embedding", []),
                 "index": 0,
