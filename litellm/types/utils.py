@@ -2801,6 +2801,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     matched_keyword: str
     escalation_keyword: str
     classifier_model: str
+    classifier_cost: float
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
     conversation_continuing: bool
@@ -2824,6 +2825,7 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "request_type",
         "score",
         "classifier_model",
+        "classifier_cost",
         "escalated",
         "tier_boundaries",
         "conversation_continuing",

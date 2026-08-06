@@ -1,11 +1,9 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { keyDeleteCall, keyUpdateCall } from "../networking";
 import { QueryClient } from "@tanstack/react-query";
