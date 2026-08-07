@@ -40,27 +40,28 @@ def gh(*args: str) -> str:
 
 
 def fetch_open_issues(repo: str | None) -> list[dict]:
-    """Fetch all open issues (excluding PRs) via gh api --paginate."""
+    """Fetch all open issues (excluding PRs) via gh api --paginate.
+
+    Uses ``--jq '.[]'`` so each issue is emitted as a single compact JSON
+    object per line. Splitting on newlines is unsafe on the raw array output
+    because issue ``body`` fields can contain literal newlines that confuse
+    line-based JSON parsing.
+    """
     if repo:
         endpoint = (
             f"repos/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
         )
     else:
         endpoint = "repos/{owner}/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
-    cmd = ["api", "--paginate", endpoint]
+    cmd = ["api", "--paginate", "--jq", ".[]", endpoint]
 
     raw = gh(*cmd)
-    # gh --paginate concatenates JSON arrays, so we may get multiple arrays
     issues = []
-    for line in raw.strip().splitlines():
+    for line in raw.splitlines():
         line = line.strip()
         if not line:
             continue
-        parsed = json.loads(line)
-        if isinstance(parsed, list):
-            issues.extend(parsed)
-        else:
-            issues.append(parsed)
+        issues.append(json.loads(line))
 
     # Filter out pull requests (they also appear in the issues endpoint)
     return [i for i in issues if "pull_request" not in i]
