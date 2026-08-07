@@ -810,6 +810,18 @@ class TestFunctionCallTransformation:
 
         assert result["extra_headers"] == {"X-Test-Header": "test-value"}
 
+    def test_drops_tool_choice_when_no_tools(self):
+        """Chat completions providers reject tool_choice when no tools are present."""
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="azure_ai/grok-4.3",
+            input="who are you?",
+            responses_api_request={"tool_choice": "auto", "tools": []},
+            custom_llm_provider="azure_ai",
+        )
+
+        assert "tool_choice" not in result
+        assert "tools" not in result
+
     def test_function_call_without_call_id_fallback_to_id(self):
         """Test that function_call items can use 'id' field when 'call_id' is missing"""
         function_call_item = {
