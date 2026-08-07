@@ -2686,7 +2686,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "scx-ai/MiniMax-M2.7"
+    "default_model_placeholder": "scx-ai/GLM-5.2"
   },
   {
     "provider": "Snowflake",
