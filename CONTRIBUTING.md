@@ -222,6 +222,16 @@ Our automated quality checks include:
 
 All checks must pass before your PR can be merged.
 
+### No `_v2` module forks
+
+Do not rewrite a module by copying it to a `_v2` sibling (`s3.py` -> `s3_v2.py`, `foo_v2.py`, `FooV2`, and so on)
+Every fork doubles the surface a bug fix has to land on and silently diverges, so a fix in one copy leaves the other broken
+Change the existing module in place instead; if the new behavior has to be opt-in, gate it behind a flag or inject a
+different strategy, and delete the old path once the new one is the default
+
+An exception is a provider or protocol whose upstream API is genuinely versioned (for example a vendor's own `v1` and `v2`
+endpoints living side by side); the ban is on forking our own implementation
+
 ## Common Issues and Solutions
 
 ### 1. Linting Failures

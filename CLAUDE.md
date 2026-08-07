@@ -79,6 +79,7 @@ Follow these coding conventions for new/updated code (a three-line fix in a lega
 - Use tagged unions + match
 - No monster files or god objects
 - No file sprawl: deliberate file and folder structure
+- No `_v2` forks of our own modules (`s3.py` -> `s3_v2.py`, `FooV2`, etc). Rewrite in place and gate new behavior behind a flag or an injected strategy, then delete the old path; a fork means every bug has to be fixed twice and it never is. Genuinely versioned upstream APIs are the only exception
 - Standard over hand-rolled: use the official SDK or a library where one exists; where none does, follow industry standards instead of inventing local conventions
 - API-fragmentation-aware: when logic must branch on which API surface produced or consumes data (e.g. chat completions vs Anthropic Messages vs Responses API shapes), proactively look for an existing shared helper (e.g. `litellm_core_utils/prompt_templates/factory.py`) before writing per-surface parsing in the new module; if none exists, add one there instead of duplicating the same format-detection logic in every new guardrail/integration
 
