@@ -1054,6 +1054,11 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/models-and-endpoints/panels/AddAdeptRouterPanel.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/models-and-endpoints/panels/AddModelPanel.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -2489,6 +2494,11 @@
       "count": 1
     }
   },
+  "src/components/add_model/AddAdeptRouterTab.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
   "src/components/add_model/AddModelForm.test.tsx": {
     "no-restricted-imports": {
       "count": 2
@@ -2516,6 +2526,11 @@
     }
   },
   "src/components/add_model/EscalationKeywords.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/components/add_model/HandleAddAdeptRouterSubmit.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -3019,6 +3034,11 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/components/edit_adept_router/EditAdeptRouterModal.tsx": {
+    "no-restricted-imports": {
       "count": 1
     }
   },

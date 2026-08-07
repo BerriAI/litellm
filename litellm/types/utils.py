@@ -3523,6 +3523,18 @@ all_litellm_params = (
         "adaptive_router_default_model",
         "quality_router_config",
         "quality_router_default_model",
+        "adept_router",
+        "adept_router_default_model",
+        "adept_router_pg_host",
+        "adept_router_pg_port",
+        "adept_router_pg_user",
+        "adept_router_pg_password",
+        "adept_router_pg_database",
+        "adept_router_tag_prefix",
+        "adept_router_conversations_threshold",
+        "adept_router_trainer_url",
+        "adept_router_seed_config",
+        "adept_routed_to_slm",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
