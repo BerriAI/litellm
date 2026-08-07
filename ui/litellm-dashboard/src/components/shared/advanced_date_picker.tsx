@@ -2,6 +2,7 @@ import { CalendarOutlined, ClockCircleOutlined } from "@ant-design/icons";
 import { Button, DateRangePickerValue, Text } from "@tremor/react";
 import moment from "moment";
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { getMatchingRelativeOption, RelativeTimeOption, relativeTimeOptions } from "@/components/shared/date_range_presets";
 
 interface AdvancedDatePickerProps {
   value: DateRangePickerValue;
@@ -10,55 +11,6 @@ interface AdvancedDatePickerProps {
   className?: string;
   showTimeRange?: boolean;
 }
-
-interface RelativeTimeOption {
-  label: string;
-  shortLabel: string;
-  getValue: () => { from: Date; to: Date };
-}
-
-const relativeTimeOptions: RelativeTimeOption[] = [
-  {
-    label: "Today",
-    shortLabel: "today",
-    getValue: () => ({
-      from: moment().startOf("day").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
-  {
-    label: "Last 7 days",
-    shortLabel: "7d",
-    getValue: () => ({
-      from: moment().subtract(7, "days").startOf("day").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
-  {
-    label: "Last 30 days",
-    shortLabel: "30d",
-    getValue: () => ({
-      from: moment().subtract(30, "days").startOf("day").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
-  {
-    label: "Month to date",
-    shortLabel: "MTD",
-    getValue: () => ({
-      from: moment().startOf("month").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
-  {
-    label: "Year to date",
-    shortLabel: "YTD",
-    getValue: () => ({
-      from: moment().startOf("year").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
-];
 
 /**
  * Advanced Date Range Picker with dropdown, relative times, and custom inputs
@@ -80,23 +32,10 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Function to check if current value matches a relative time option
-  const getMatchingOption = useCallback((currentValue: DateRangePickerValue): string | null => {
-    if (!currentValue.from || !currentValue.to) return null;
-
-    for (const option of relativeTimeOptions) {
-      const optionRange = option.getValue();
-
-      // Compare dates with some tolerance (to account for time differences)
-      const fromMatches = moment(currentValue.from).isSame(moment(optionRange.from), "day");
-      const toMatches = moment(currentValue.to).isSame(moment(optionRange.to), "day");
-
-      if (fromMatches && toMatches) {
-        return option.shortLabel;
-      }
-    }
-
-    return null;
-  }, []);
+  const getMatchingOption = useCallback(
+    (currentValue: DateRangePickerValue): string | null => getMatchingRelativeOption(currentValue),
+    [],
+  );
 
   // Update selected option when value changes
   useEffect(() => {
