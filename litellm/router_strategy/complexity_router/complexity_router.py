@@ -46,6 +46,8 @@ from .config import (
     TIER_SEVERITY_ORDER,
     ComplexityRouterConfig,
     ComplexityTier,
+    TierTarget,
+    tier_pool,
 )
 
 if TYPE_CHECKING:
@@ -1174,15 +1176,23 @@ class ComplexityRouter(CustomLogger):
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
 
     @staticmethod
-    def _pick_from_tier_value(model: str | list[str], tier_key: str) -> str:
-        if isinstance(model, str):
-            return model
-        if not model:
+    def _pick_from_tier_value(model: str | list[str] | TierTarget, tier_key: str) -> str:
+        pool: Final = tier_pool(model)
+        if not pool:
             raise ValueError(f"Empty model pool for tier {tier_key}")
-        return random.choice(model)
+        return random.choice(list(pool))
 
-    def _tier_pools(self) -> dict[str, list[str]]:
-        return {tier: (models if isinstance(models, list) else [models]) for tier, models in self.config.tiers.items()}
+    def _tier_pools(self) -> Mapping[str, tuple[str, ...]]:
+        return MappingProxyType({tier: tier_pool(target) for tier, target in self.config.tiers.items()})
+
+    def _tier_params(self, tier: ComplexityTier | str) -> Mapping[str, object] | None:
+        tier_key: Final = tier.value if isinstance(tier, ComplexityTier) else tier
+        target: Final = self.config.tiers.get(tier_key)
+        return target.params or None if isinstance(target, TierTarget) else None
+
+    def _params_for_model(self, model: str) -> Mapping[str, object] | None:
+        tier: Final = self._tier_for_model(model)
+        return self._tier_params(tier) if tier is not None else None
 
     async def _pick_model_for_tier(
         self,
@@ -1727,6 +1737,7 @@ class ComplexityRouter(CustomLogger):
                     return PreRoutingHookResponse(
                         model=routed_model,
                         messages=messages if has_original_messages else None,
+                        params=self._params_for_model(routed_model),
                         routing_decision=self._build_routing_decision(
                             routed_model=routed_model,
                             cause=cause,
@@ -1802,6 +1813,7 @@ class ComplexityRouter(CustomLogger):
                 # priority exactly (changing it would be a silent behavior change for
                 # every non-plugin user, not just a security fix).
                 routed_model = self.config.default_model
+                routed_params = None
             else:
                 # Plugins configured: default_model must never bypass them, so it's not
                 # checked here at all -- _pick_model_for_tier -> get_model_for_tier still
@@ -1809,9 +1821,11 @@ class ComplexityRouter(CustomLogger):
                 routed_model = await self._pick_model_for_tier(
                     ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs
                 )
+                routed_params = self._tier_params(ComplexityTier.MEDIUM)
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
+                params=routed_params,
                 routing_decision=self._build_routing_decision(
                     routed_model=routed_model,
                     cause="default_fallback",
@@ -1840,6 +1854,7 @@ class ComplexityRouter(CustomLogger):
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
+                params=self._tier_params(routed_tier),
                 routing_decision=self._build_routing_decision(
                     routed_model=routed_model,
                     conversation_continuing=conversation_continuing,
@@ -1880,6 +1895,7 @@ class ComplexityRouter(CustomLogger):
             return PreRoutingHookResponse(
                 model=fallback_model,
                 messages=messages if has_original_messages else None,
+                params=None,
                 routing_decision=self._build_routing_decision(
                     routed_model=fallback_model,
                     conversation_continuing=conversation_continuing,
@@ -1933,6 +1949,7 @@ class ComplexityRouter(CustomLogger):
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages if has_original_messages else None,
+            params=self._params_for_model(routed_model) if self.config.adaptive else self._tier_params(tier),
             routing_decision=self._build_routing_decision(
                 routed_model=routed_model,
                 conversation_continuing=conversation_continuing,

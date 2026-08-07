@@ -11212,6 +11212,11 @@ class Router:
         # actual outbound LLM call downstream by litellm.types.utils.all_litellm_params,
         # not here.
         if pre_routing_hook_response is not None:
+            tier_params: Final = pre_routing_hook_response.params
+            if tier_params is not None:
+                for key, value in tier_params.items():
+                    if value is not None:
+                        request_kwargs.setdefault(key, value)
             alias_index: Final = self.model_name_to_deployment_indices.get(model, [])
             if alias_index:
                 alias_litellm_params: Final = self.model_list[alias_index[0]].get("litellm_params", {})

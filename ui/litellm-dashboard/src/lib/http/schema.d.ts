@@ -21222,6 +21222,18 @@ export interface components {
             /** Index Permissions */
             index_permissions: ("read" | "write")[];
         };
+        /** AnthropicThinkingParam */
+        AnthropicThinkingParam: {
+            /** Budget Tokens */
+            budget_tokens?: number;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type?: "enabled" | "adaptive";
+        } & {
+            [key: string]: unknown;
+        };
         /** ApplyGuardrailRequest */
         ApplyGuardrailRequest: {
             /** Entities */
@@ -31767,7 +31779,7 @@ export interface components {
              * @description Mapping of complexity tiers to a model or model pool. A list is randomly picked from when adaptive=False, and used as a soft-floor home pool when adaptive=True
              */
             tiers?: {
-                [key: string]: string | string[];
+                [key: string]: string | string[] | components["schemas"]["TierTarget"];
             };
             /**
              * Token Thresholds
@@ -33288,6 +33300,16 @@ export interface components {
             litellm_params: {
                 [key: string]: unknown;
             };
+        };
+        /** TierTarget */
+        TierTarget: {
+            /** Model */
+            model: string | string[];
+            /** Reasoning Effort */
+            reasoning_effort?: string | null;
+            thinking?: components["schemas"]["AnthropicThinkingParam"] | null;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * TokenCountDetailsResponse

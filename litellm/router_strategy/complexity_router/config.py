@@ -5,12 +5,18 @@ Contains default keyword lists, weights, tier boundaries, and configuration clas
 All values are configurable via proxy config.yaml.
 """
 
+from collections.abc import Mapping
 from enum import Enum
-from typing import Final, Literal
+from types import MappingProxyType
+from typing import Final, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from litellm._logging import verbose_router_logger
+from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
+from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.router import AdaptiveRouterWeights, RoutingPlugin
+from litellm.types.utils import all_litellm_params
 
 
 class ComplexityTier(str, Enum):
@@ -28,6 +34,8 @@ TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
     ComplexityTier.COMPLEX,
     ComplexityTier.REASONING,
 )
+
+TIER_STRUCTURAL_KEYS: Final[frozenset[str]] = frozenset({"messages", "input", "stream", "metadata", "litellm_metadata"})
 
 DEFAULT_TIER_DISTANCE_PENALTY: Final[float] = 0.5
 
@@ -263,6 +271,42 @@ DEFAULT_TIER_MODELS: Final[dict[str, str]] = {
 }
 
 
+class TierTarget(BaseModel):
+    model: str | list[str]  # mutable-ok: pydantic accepts list-valued model pools
+    reasoning_effort: str | None = None
+    thinking: AnthropicThinkingParam | None = None
+
+    model_config = ConfigDict(extra="allow")
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def _validate_model(cls, value: object) -> object:
+        if isinstance(value, str):
+            if not value.strip():
+                raise ValueError("model must be a non-empty string")
+            return value
+        if isinstance(value, list):
+            if not value:
+                raise ValueError("model pool must be non-empty")
+            if any(not isinstance(item, str) for item in value):
+                raise ValueError("model pool entries must be strings")
+            if any(not item.strip() for item in value):
+                raise ValueError("model pool entries must be non-empty strings")
+            return value
+        raise ValueError("model must be a string or a list of strings")
+
+    @property
+    def params(self) -> Mapping[str, object]:
+        return MappingProxyType(self.model_dump(exclude={"model"}, exclude_none=True))
+
+
+def tier_pool(value: str | list[str] | TierTarget) -> tuple[str, ...]:
+    if isinstance(value, TierTarget):
+        target_model: Final = value.model
+        return (target_model,) if isinstance(target_model, str) else tuple(target_model)
+    return (value,) if isinstance(value, str) else tuple(value)
+
+
 class ClassifierLLMConfig(BaseModel):
     """Configuration for the LLM-based complexity classifier."""
 
@@ -303,7 +347,7 @@ class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
     # string = pin; list = random pick when adaptive=False, soft-floor home pool when adaptive=True
-    tiers: dict[str, str | list[str]] = Field(
+    tiers: dict[str, str | list[str] | TierTarget] = Field(  # mutable-ok: pydantic config surface is mutable
         default_factory=lambda: DEFAULT_TIER_MODELS.copy(),
         description=(
             "Mapping of complexity tiers to a model or model pool. "
@@ -541,14 +585,21 @@ class ComplexityRouterConfig(BaseModel):
     def _coerce_tier_values(cls, value: object) -> object:
         if not isinstance(value, dict):
             return value
-        coerced: Final[dict[str, object]] = {}
-        for key, item in value.items():
-            if isinstance(item, str):
-                coerced[key] = item
-            elif isinstance(item, (list, tuple)):
-                coerced[key] = list(item)
-            else:
-                coerced[key] = item
+        coerced: Final[dict[str, object]] = {  # mutable-ok: pydantic requires a mutable input mapping
+            key: list(item)
+            if isinstance(item, tuple)
+            else TierTarget.model_validate(item)
+            if isinstance(item, dict)
+            else item
+            for key, item in cast(dict[str, object], value).items()  # cast-ok: validator narrowed the mapping
+        }
+        invalid: Final = next(
+            ((key, item) for key, item in coerced.items() if not isinstance(item, (str, list, TierTarget))),
+            None,
+        )
+        if invalid is not None:
+            key, _ = invalid
+            raise ValueError(f"tier {key!r} must be a string, list of strings, or object with a model")
         return coerced
 
     @field_validator("escalation_keywords")
@@ -565,13 +616,47 @@ class ComplexityRouterConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_tier_params(self) -> "ComplexityRouterConfig":
+        known: Final = frozenset(OPENAI_CHAT_COMPLETION_PARAMS) | frozenset(all_litellm_params)
+        for tier, target in self.tiers.items():
+            if isinstance(target, TierTarget):
+                for key in target.params:
+                    if key in TIER_STRUCTURAL_KEYS:
+                        raise ValueError(
+                            f"ComplexityRouter tier {tier} cannot configure structural request key {key!r}"
+                        )
+                    if key == "thinking_budget":
+                        verbose_router_logger.warning(
+                            "ComplexityRouter tier %s uses thinking_budget; use "
+                            "thinking: {type: enabled, budget_tokens: N} instead",
+                            tier,
+                        )
+                        continue
+                    if key not in known:
+                        verbose_router_logger.warning(
+                            "ComplexityRouter tier %s has an unrecognized parameter key: %s",
+                            tier,
+                            key,
+                        )
+        return self
+
+    @model_validator(mode="after")
     def _validate_adaptive_pools(self) -> "ComplexityRouterConfig":
         if not self.adaptive:
             return self
-        normalized = {tier: (models if isinstance(models, list) else [models]) for tier, models in self.tiers.items()}
-        if not any(normalized.values()):
+        normalized: Final[
+            dict[str, str | list[str] | TierTarget]
+        ] = {  # mutable-ok: pydantic requires normalized mapping
+            tier: target.model_copy(
+                update={"model": list(tier_pool(target))}
+            )  # mutable-ok: pydantic stores pools as lists
+            if isinstance(target, TierTarget)
+            else list(tier_pool(target))  # mutable-ok: pydantic stores pools as lists
+            for tier, target in self.tiers.items()
+        }
+        if not any(tier_pool(target) for target in normalized.values()):
             raise ValueError("adaptive=True requires at least one non-empty tier pool")
-        empty: Final = [tier for tier, models in normalized.items() if not models]
+        empty: Final = [tier for tier, target in normalized.items() if not tier_pool(target)]
         if empty:
             raise ValueError(f"adaptive=True tier pools must be non-empty; empty tiers: {empty}")
         self.tiers = normalized
