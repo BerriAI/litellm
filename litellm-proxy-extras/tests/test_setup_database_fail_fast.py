@@ -12,6 +12,7 @@ import pytest
 
 from litellm_proxy_extras.utils import (
     ProxyExtrasDBManager,
+    _get_prisma_env,
     _max_migration_timestamp,
     _migration_timestamp,
 )
@@ -27,6 +28,12 @@ def _fake_migrate_deploy_failure(returncode: int, stderr: str):
         )
 
     return _run
+
+
+def test_prisma_offline_mode_uses_cached_binary_engine(monkeypatch):
+    monkeypatch.setenv("PRISMA_OFFLINE_MODE", "true")
+
+    assert _get_prisma_env()["PRISMA_CLI_QUERY_ENGINE_TYPE"] == "binary"
 
 
 def test_v2_p3018_permission_error_raises_runtime_error(monkeypatch, tmp_path):
