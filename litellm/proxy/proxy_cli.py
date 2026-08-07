@@ -168,7 +168,7 @@ def _clear_prisma_module_cache() -> None:
 
 def _is_prisma_client_generated() -> bool:
     try:
-        prisma_module = importlib.import_module("prisma")
+        prisma_module: Final = importlib.import_module("prisma")
     except Exception:
         _clear_prisma_module_cache()
         return False
@@ -1255,7 +1255,7 @@ def run_server(
                         flush=True,
                     )
                     sys.exit(1)
-            prisma_not_runnable_message = (
+            prisma_not_runnable_message = (  # rebind-ok: generation failures replace the default install guidance
                 "Unable to connect to DB. DATABASE_URL found in environment, "
                 "but the prisma package was not found. Install database "
                 "dependencies with `pip install 'litellm[extra_proxy]'` or "
@@ -1296,7 +1296,7 @@ def run_server(
                     os.environ["DIRECT_URL"] = modified_url
                 subprocess.run(["prisma"], capture_output=True)
                 if not _is_prisma_client_generated():
-                    prisma_schema_path = Path(__file__).parent / "schema.prisma"
+                    prisma_schema_path: Final = Path(__file__).parent / "schema.prisma"
                     subprocess.run(
                         ("prisma", "generate", "--schema", str(prisma_schema_path)),
                         capture_output=True,
@@ -1307,8 +1307,8 @@ def run_server(
             except FileNotFoundError:
                 is_prisma_runnable = False
             except subprocess.CalledProcessError:
-                is_prisma_runnable = False
-                prisma_not_runnable_message = (
+                is_prisma_runnable = False  # rebind-ok: generation failure makes the existing availability flag false
+                prisma_not_runnable_message = (  # rebind-ok: show generation guidance instead of install guidance
                     "Unable to connect to DB. DATABASE_URL found in environment, "
                     "but `prisma generate` failed. Please run "
                     "`prisma generate --schema litellm/proxy/schema.prisma` "
