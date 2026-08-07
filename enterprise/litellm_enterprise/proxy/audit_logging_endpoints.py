@@ -7,7 +7,7 @@ GET - /audit/{id} - Get audit log by id
 GET - /audit - Get all audit logs
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 #### AUDIT LOGGING ####
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -43,6 +43,15 @@ def _build_json_field_or_condition(json_key: str, value: str) -> Dict[str, Any]:
     }
 
 
+def _build_object_team_condition(object_team: str) -> Dict[str, Any]:
+    return {
+        "OR": [
+            {"object_team_id": object_team},
+            {"object_team_alias": {"contains": object_team}},
+        ]
+    }
+
+
 @router.get(
     "/audit",
     tags=["Audit Logging"],
@@ -53,26 +62,23 @@ async def get_audit_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     # Filter parameters
-    changed_by: Optional[str] = Query(
-        None, description="Filter by user or system that performed the action"
-    ),
-    changed_by_api_key: Optional[str] = Query(
-        None, description="Filter by API key hash that performed the action"
-    ),
-    action: Optional[str] = Query(
-        None, description="Filter by action type (create, update, delete)"
-    ),
-    table_name: Optional[str] = Query(
-        None, description="Filter by table name that was modified"
-    ),
-    object_id: Optional[str] = Query(
-        None, description="Filter by ID of the object that was modified"
-    ),
+    changed_by: Optional[str] = Query(None, description="Filter by user or system that performed the action"),
+    changed_by_api_key: Optional[str] = Query(None, description="Filter by API key hash that performed the action"),
+    action: Optional[str] = Query(None, description="Filter by action type (create, update, delete)"),
+    table_name: Optional[str] = Query(None, description="Filter by table name that was modified"),
+    object_id: Optional[str] = Query(None, description="Filter by ID of the object that was modified"),
     start_date: Optional[str] = Query(None, description="Filter logs after this date"),
     end_date: Optional[str] = Query(None, description="Filter logs before this date"),
     object_team_id: Optional[str] = Query(
         None,
         description="Filter by team_id present in before_value or updated_values JSON (PostgreSQL only)",
+    ),
+    object_team: str | None = Query(
+        None,
+        description=(
+            "Filter by team: matches the row's object_team_id exactly "
+            "or rows whose object_team_alias contains this value"
+        ),
     ),
     object_key_hash: Optional[str] = Query(
         None,
@@ -91,7 +97,8 @@ async def get_audit_logs(
     Returns a paginated response of audit logs matching the specified filters.
 
     Note: object_team_id and object_key_hash use Prisma JSON path filtering,
-    which requires PostgreSQL.
+    which requires PostgreSQL. object_team filters on the denormalized
+    object_team_id and object_team_alias columns instead.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -131,6 +138,8 @@ async def get_audit_logs(
         where_conditions["AND"] = where_conditions.get("AND", []) + [
             _build_json_field_or_condition("token", object_key_hash)
         ]
+    if object_team:
+        where_conditions["AND"] = where_conditions.get("AND", []) + [_build_object_team_condition(object_team)]
 
     # Build sort conditions
     order_by: Dict[str, Any] = {}
@@ -153,11 +162,7 @@ async def get_audit_logs(
 
     # Return paginated response
     return PaginatedAuditLogResponse(
-        audit_logs=[
-            AuditLogResponse(**audit_log.model_dump()) for audit_log in audit_logs
-        ]
-        if audit_logs
-        else [],
+        audit_logs=[AuditLogResponse(**audit_log.model_dump()) for audit_log in audit_logs] if audit_logs else [],
         total=total_count,
         page=page,
         page_size=page_size,
@@ -175,9 +180,7 @@ async def get_audit_logs(
         500: {"description": "Database connection error"},
     },
 )
-async def get_audit_log_by_id(
-    id: str, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
-):
+async def get_audit_log_by_id(id: str, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
     """
     Get detailed information about a specific audit log entry by its ID.
 
@@ -202,9 +205,7 @@ async def get_audit_log_by_id(
     audit_log = await prisma_client.db.litellm_auditlog.find_unique(where={"id": id})
 
     if audit_log is None:
-        raise HTTPException(
-            status_code=404, detail={"message": f"Audit log with ID {id} not found"}
-        )
+        raise HTTPException(status_code=404, detail={"message": f"Audit log with ID {id} not found"})
 
     # Convert to response model
     return AuditLogResponse(**audit_log.model_dump())

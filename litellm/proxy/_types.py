@@ -3033,6 +3033,11 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     object_id: str
     before_value: Json | None = None
     updated_values: Json | None = None
+    object_alias: str | None = None
+    object_team_id: str | None = None
+    object_team_alias: str | None = None
+    changed_by_user_email: str | None = None
+    changed_by_key_alias: str | None = None
 
     @model_validator(mode="before")
     @classmethod
