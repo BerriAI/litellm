@@ -1730,6 +1730,7 @@ class ComplexityRouter(CustomLogger):
                         routing_decision=self._build_routing_decision(
                             routed_model=routed_model,
                             cause=cause,
+                            tier=self._tier_for_model(routed_model),
                             escalation_keyword=pin_escalation_keyword,
                             escalated=escalated,
                             conversation_continuing=conversation_continuing,
@@ -1797,6 +1798,7 @@ class ComplexityRouter(CustomLogger):
 
         if user_message is None:
             verbose_router_logger.debug("ComplexityRouter: No user message found, routing to default model")
+            fallback_tier: ComplexityTier | None = None
             if not self.config.plugins and self.config.default_model:
                 # No plugins configured: preserve the pre-existing default_model-first
                 # priority exactly (changing it would be a silent behavior change for
@@ -1809,12 +1811,15 @@ class ComplexityRouter(CustomLogger):
                 routed_model = await self._pick_model_for_tier(
                     ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs
                 )
+                if ComplexityTier.MEDIUM.value in self.config.tiers:
+                    fallback_tier = ComplexityTier.MEDIUM
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
                 routing_decision=self._build_routing_decision(
                     routed_model=routed_model,
                     cause="default_fallback",
+                    tier=fallback_tier,
                     conversation_continuing=conversation_continuing,
                 ),
             )

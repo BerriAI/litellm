@@ -4362,7 +4362,7 @@ class TestRoutingDecisionContents:
         assert decision is not None
         assert decision["cause"] == "default_fallback"
         assert decision["routed_model"] == response.model
-        assert "tier" not in decision
+        assert decision.get("tier") == "MEDIUM"
 
     @pytest.mark.asyncio
     async def test_session_pin_decision(self, mock_router_instance, basic_config):
@@ -5907,11 +5907,21 @@ class TestConversationShapeDiscriminator:
         )
         builds = source.split("self._build_routing_decision(")[1:]
         assert builds
-        missing = [
-            i
-            for i, block in enumerate(builds)
-            if "conversation_continuing=conversation_continuing" not in block.split("),")[0]
-        ]
+        missing = []
+        for i, block in enumerate(builds):
+            depth = 0
+            end = 0
+            for j, char in enumerate(block):
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth < 0:
+                        end = j
+                        break
+            extracted = block[:end]
+            if "conversation_continuing=conversation_continuing" not in extracted:
+                missing.append(i)
         assert not missing, f"routing decisions {missing} do not carry the conversation shape"
 
 
