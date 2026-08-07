@@ -14,6 +14,7 @@ sys.path.insert(
 
 import litellm
 from litellm import completion
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.minimax.chat.transformation import MinimaxChatConfig
 
 
@@ -202,9 +203,37 @@ def test_minimax_chat_completion_streaming():
     assert len(chunks) > 0
 
 
+class TestMiniMaxM3InputCapabilities:
+    """Tests that minimax/MiniMax-M3 advertises the input modalities
+    documented by MiniMax, including the video-input capability that was
+    previously missing from the model cost map."""
+
+    @pytest.fixture(autouse=True)
+    def model_cost_map(self):
+        """Load directly from the bundled backup so tests don't depend on remote fetch."""
+        return GetModelCostMap.load_local_model_cost_map()
+
+    def test_minimax_m3_in_model_cost_map(self, model_cost_map):
+        """minimax/MiniMax-M3 should be present in the model cost map."""
+        assert "minimax/MiniMax-M3" in model_cost_map
+
+    def test_minimax_m3_supports_vision(self, model_cost_map):
+        """minimax/MiniMax-M3 should advertise image input via supports_vision."""
+        model_info = model_cost_map["minimax/MiniMax-M3"]
+        assert model_info.get("supports_vision") is True
+
+    def test_minimax_m3_supports_video_input(self, model_cost_map):
+        """minimax/MiniMax-M3 should advertise video input via supports_video_input."""
+        model_info = model_cost_map["minimax/MiniMax-M3"]
+        assert model_info.get("supports_video_input") is True
+
+    def test_minimax_m3_provider(self, model_cost_map):
+        """minimax/MiniMax-M3 should be assigned to the minimax provider."""
+        model_info = model_cost_map["minimax/MiniMax-M3"]
+        assert model_info["litellm_provider"] == "minimax"
+
+
 if __name__ == "__main__":
-    # Run basic tests that don't require API key
-    print("Testing MiniMax Chat Config...")
     test_minimax_chat_config()
     print("✓ Config test passed")
 
