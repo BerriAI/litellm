@@ -1,0 +1,114 @@
+# Example LiteLLM Proxy configuration with Alice WonderFence guardrail
+#
+# Start the proxy with:
+#   litellm --config example_config.yaml
+#
+# Environment variables:
+#   ALICE_API_KEY                  - Default WonderFence API key (overridable per request)
+#   ALICE_MAX_CACHED_CLIENTS       - Optional: max cached V2 SDK clients (default 10)
+#   ALICE_CONNECTION_POOL_LIMIT    - Optional: HTTP pool size per client
+#   ALICE_MAX_SCAN_CHARS           - Optional: total-work cap, max scan chars (default 1000000)
+#   ALICE_MAX_SCAN_SEGMENTS        - Optional: total-work cap, max scan segments (default 1000)
+#   OPENAI_API_KEY                 - API key for OpenAI
+#
+# Per-key / per-team metadata keys (admin-controlled):
+#   alice_wonderfence_api_key  - overrides default API key (optional)
+#   alice_wonderfence_app_id   - REQUIRED — must be set on key or team
+#
+# Per-request metadata keys (caller-controlled, OFF by default):
+#   metadata.alice_wonderfence_api_key / metadata.alice_wonderfence_app_id are
+#   ignored unless allow_request_metadata_override is True on the guardrail.
+#   Even when enabled, key/team metadata still wins — request metadata is a
+#   last-resort source only.
+
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+
+  # Combined pre + post with advanced knobs
+  - guardrail_name: "alice-wonderfence"
+    litellm_params:
+      guardrail: alice_wonderfence
+      mode: ["pre_call", "post_call"]
+      api_key: os.environ/ALICE_API_KEY
+      api_timeout: 10.0
+      platform: "aws"
+      default_on: false
+      debug: false
+      fail_open: false
+      max_cached_clients: 10
+      block_message: "Content violates our policies and has been blocked by Alice WonderFence"
+
+      # Every remaining message segment is evaluated (user, assistant, tool),
+      # not just the last user turn, so disallowed content placed in an earlier
+      # turn or an assistant prefill cannot slip past. System prompts are
+      # admin-controlled and excluded by default to avoid false positives;
+      # set this to false to scan them too. skip_tool_message_in_guardrail is
+      # the matching knob for tool messages.
+      skip_system_message_in_guardrail: true
+
+      # Fail-closed total-work cap (DoS backstop). WonderFence has no batch API,
+      # so the request side joins all scan pieces into one document and scans it
+      # in ~1 call (chunked only past the size limit); these bounds reject an
+      # abusive request before any provider call and are never fail-open.
+      # max_scan_chars: 1000000
+      # max_scan_segments: 1000
+
+      # connection_pool_limit: 20
+
+      # Enable only for trusted-gateway deployments that need to forward a
+      # per-tenant app_id/api_key from the request body. Even with this on,
+      # admin-pinned key/team metadata still wins; request metadata is a
+      # last-resort source only. Default is False — leave it off unless your
+      # callers are themselves trusted infrastructure.
+      allow_request_metadata_override: true
+
+# Example usage
+#
+# 1. Per-API-key app_id (set at key creation — recommended default):
+#
+#    curl -X POST http://localhost:4000/key/generate \
+#      -H "Authorization: Bearer sk-admin" \
+#      -H "Content-Type: application/json" \
+#      -d '{
+#        "metadata": {
+#          "alice_wonderfence_app_id": "tenant-A-app",
+#          "alice_wonderfence_api_key": "wf-key-for-tenant-A"
+#        }
+#      }'
+#
+# 2. Per-team app_id (set at team creation):
+#
+#    curl -X POST http://localhost:4000/team/new \
+#      -H "Authorization: Bearer sk-admin" \
+#      -H "Content-Type: application/json" \
+#      -d '{
+#        "team_alias": "team-billing",
+#        "metadata": {
+#          "alice_wonderfence_app_id": "team-billing-app"
+#        }
+#      }'
+#
+# 3. Request-level app_id (only when allow_request_metadata_override: true on
+#    the guardrail config — and even then, key/team metadata still wins):
+#
+#    curl -X POST http://localhost:4000/chat/completions \
+#      -H "Authorization: Bearer sk-xxx" \
+#      -H "Content-Type: application/json" \
+#      -d '{
+#        "model": "gpt-4",
+#        "messages": [{"role": "user", "content": "Hello"}],
+#        "metadata": {
+#          "alice_wonderfence_app_id": "my-app-123",
+#          "session_id": "session-1"
+#        }
+#      }'
+#
+# Resolution priority (highest first): key metadata > team metadata >
+# request metadata (only if allow_request_metadata_override=true) >
+# config default. api_key falls back to config / ALICE_API_KEY env;
+# app_id has NO default.

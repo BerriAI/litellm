@@ -62,6 +62,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
 from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
     XecGuardConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.alice_wonderfence import (
+    WonderFenceGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -133,6 +136,7 @@ class SupportedGuardrailIntegrations(Enum):
     HEADROOM = "headroom"
     COMPRESR = "compresr"
     STRAIKER = "straiker"
+    ALICE_WONDERFENCE = "alice_wonderfence"
 
 
 class Role(Enum):
@@ -986,6 +990,7 @@ class LitellmParams(
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
     SingulrGuardrailConfigModel,
+    WonderFenceGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: str | list[str] | Mode = Field(
