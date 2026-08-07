@@ -68,13 +68,17 @@ export function LogViewer({
   const filters: Array<"all" | "blocked" | "flagged" | "passed"> = ["all", "blocked", "flagged", "passed"];
 
   const startTime = startDate
-    ? moment(startDate).utc().format("YYYY-MM-DD HH:mm:ss")
+    ? moment(startDate).startOf("day").utc().format("YYYY-MM-DD HH:mm:ss")
     : moment().subtract(24, "hours").utc().format("YYYY-MM-DD HH:mm:ss");
   const endTime = endDate
-    ? moment(endDate).utc().endOf("day").format("YYYY-MM-DD HH:mm:ss")
+    ? moment(endDate).endOf("day").utc().format("YYYY-MM-DD HH:mm:ss")
     : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
-  const { data: fullLogResponse } = useQuery({
+  const {
+    data: fullLogResponse,
+    isFetching: isFetchingFullLog,
+    isError: isFullLogError,
+  } = useQuery({
     queryKey: ["spend-log-by-request", selectedRequestId, startTime, endTime],
     queryFn: async () => {
       if (!accessToken || !selectedRequestId) return null;
@@ -197,6 +201,8 @@ export function LogViewer({
         open={drawerOpen}
         onClose={handleCloseDrawer}
         logEntry={selectedLog}
+        logEntryLoading={isFetchingFullLog}
+        logEntryError={isFullLogError}
         accessToken={accessToken}
         allLogs={selectedLog ? [selectedLog] : []}
         startTime={startTime}

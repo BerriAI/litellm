@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Drawer, Segmented } from "antd";
+import { Button, Drawer, Segmented, Spin } from "antd";
 import { CheckOutlined, CopyOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
 import { Bot, Sparkles, Wrench } from "lucide-react";
 import { LogEntry } from "../columns";
@@ -21,6 +21,8 @@ export interface LogDetailsDrawerProps {
   open: boolean;
   onClose: () => void;
   logEntry: LogEntry | null;
+  logEntryLoading?: boolean;
+  logEntryError?: boolean;
   sessionId?: string | null;
   accessToken?: string | null;
   allLogs?: LogEntry[];
@@ -114,6 +116,8 @@ export function LogDetailsDrawer({
   open,
   onClose,
   logEntry,
+  logEntryLoading = false,
+  logEntryError = false,
   sessionId,
   accessToken,
   allLogs = [],
@@ -126,7 +130,11 @@ export function LogDetailsDrawer({
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
 
-  const { data: sessionData } = useQuery({
+  const {
+    data: sessionData,
+    isFetching: isFetchingSession,
+    isError: isSessionError,
+  } = useQuery({
     queryKey: ["sessionLogs", sessionId],
     queryFn: async () => {
       if (!sessionId || !accessToken) return { logs: [] as LogEntry[], total: 0 };
@@ -294,7 +302,38 @@ export function LogDetailsDrawer({
     }
   };
 
-  if (!currentLog || !enrichedLog) return null;
+  if (!currentLog || !enrichedLog) {
+    if (!open) return null;
+
+    const isResolvingLog = isSessionMode ? isFetchingSession : logEntryLoading;
+    const lookupFailed = isSessionMode ? isSessionError : logEntryError;
+
+    return (
+      <Drawer
+        title={null}
+        placement="right"
+        onClose={onClose}
+        open={open}
+        width={DRAWER_WIDTH}
+        closable={false}
+        mask={true}
+        maskClosable={true}
+        styles={{ header: { display: "none" } }}
+      >
+        <div className="h-full flex items-center justify-center">
+          {isResolvingLog ? (
+            <Spin />
+          ) : (
+            <p className="text-sm text-slate-500 text-center px-6">
+              {lookupFailed
+                ? "Loading the details for this request failed. Check the proxy is reachable and try again."
+                : "Log details are unavailable for this request. It may have been purged from the spend logs, or it falls outside the selected date range."}
+            </p>
+          )}
+        </div>
+      </Drawer>
+    );
+  }
 
   return (
     <Drawer
