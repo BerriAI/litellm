@@ -1336,6 +1336,7 @@ _MODEL_ROUTING_ROUTE_MARKERS: Final = (
 _MODEL_ROUTING_HEADER_OR_QUERY_ROUTE_MARKERS: Final = (
     "/files",
     "/batches",
+    "/vector_stores",
     "/skills",
     "/evals",
 )

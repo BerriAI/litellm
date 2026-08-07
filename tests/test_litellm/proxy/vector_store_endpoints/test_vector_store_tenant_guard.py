@@ -56,6 +56,157 @@ async def test_vector_store_search_forces_path_id_over_body_id():
 
 
 @pytest.mark.asyncio
+async def test_vector_store_retrieve_uses_query_model_for_routing():
+    from litellm.proxy.vector_store_endpoints.endpoints import vector_store_retrieve
+
+    captured_data = {}
+
+    async def fake_base_process(self, **kwargs):
+        captured_data.update(self.data)
+        return {"ok": True}
+
+    request = _mock_request()
+    request.method = "GET"
+    request.query_params = {"model": "gpt-5.2"}
+    request.headers = {"x-litellm-model": "header-model"}
+
+    with (
+        patch(
+            "litellm.proxy.vector_store_endpoints.endpoints.get_litellm_managed_vector_store",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.vector_store_endpoints.endpoints.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+            new=fake_base_process,
+        ),
+    ):
+        response = await vector_store_retrieve(
+            request=request,
+            vector_store_id="vs_plain_openai",
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(team_id="team-a"),
+        )
+
+    assert response == {"ok": True}
+    assert captured_data["vector_store_id"] == "vs_plain_openai"
+    assert captured_data["model"] == "gpt-5.2"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_delete_uses_header_model_for_routing():
+    from litellm.proxy.vector_store_endpoints.endpoints import vector_store_delete
+
+    captured_data = {}
+
+    async def fake_base_process(self, **kwargs):
+        captured_data.update(self.data)
+        return {"ok": True}
+
+    request = _mock_request()
+    request.method = "DELETE"
+    request.headers = {"x-litellm-model": "gpt-5.2"}
+
+    with (
+        patch(
+            "litellm.proxy.vector_store_endpoints.endpoints.get_litellm_managed_vector_store",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.vector_store_endpoints.endpoints.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+            new=fake_base_process,
+        ),
+    ):
+        response = await vector_store_delete(
+            request=request,
+            vector_store_id="vs_plain_openai",
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(team_id="team-a"),
+        )
+
+    assert response == {"ok": True}
+    assert captured_data["vector_store_id"] == "vs_plain_openai"
+    assert captured_data["model"] == "gpt-5.2"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_delete_uses_query_model_for_routing():
+    from litellm.proxy.vector_store_endpoints.endpoints import vector_store_delete
+
+    captured_data = {}
+
+    async def fake_base_process(self, **kwargs):
+        captured_data.update(self.data)
+        return {"ok": True}
+
+    request = _mock_request()
+    request.method = "DELETE"
+    request.query_params = {"model": "gpt-5.2"}
+    request.headers = {"x-litellm-model": "header-model"}
+
+    with (
+        patch(
+            "litellm.proxy.vector_store_endpoints.endpoints.get_litellm_managed_vector_store",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.vector_store_endpoints.endpoints.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+            new=fake_base_process,
+        ),
+    ):
+        response = await vector_store_delete(
+            request=request,
+            vector_store_id="vs_plain_openai",
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(team_id="team-a"),
+        )
+
+    assert response == {"ok": True}
+    assert captured_data["vector_store_id"] == "vs_plain_openai"
+    assert captured_data["model"] == "gpt-5.2"
+
+
+def test_vector_store_model_from_request_preserves_existing_model():
+    from litellm.proxy.vector_store_endpoints.endpoints import (
+        _update_request_data_with_model_from_request,
+    )
+
+    request = _mock_request()
+    request.query_params = {"model": "query-model"}
+    request.headers = {"x-litellm-model": "header-model"}
+    data = {"model": "registry-model"}
+
+    updated_data = _update_request_data_with_model_from_request(
+        data=data, request=request
+    )
+
+    assert updated_data is data
+    assert updated_data["model"] == "registry-model"
+
+
+def test_vector_store_model_from_request_preserves_registry_routing():
+    from litellm.proxy.vector_store_endpoints.endpoints import (
+        _update_request_data_with_model_from_request,
+    )
+
+    request = _mock_request()
+    request.query_params = {"model": "query-model"}
+    request.headers = {"x-litellm-model": "header-model"}
+    data = {
+        "custom_llm_provider": "openai",
+        "litellm_credential_name": "vector-store-credential",
+    }
+
+    updated_data = _update_request_data_with_model_from_request(
+        data=data, request=request
+    )
+
+    assert updated_data is data
+    assert "model" not in updated_data
+    assert updated_data["custom_llm_provider"] == "openai"
+    assert updated_data["litellm_credential_name"] == "vector-store-credential"
+
+
+@pytest.mark.asyncio
 async def test_vector_store_file_create_forces_path_id_over_body_id():
     from litellm.proxy.vector_store_files_endpoints.endpoints import (
         vector_store_file_create,
