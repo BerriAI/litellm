@@ -72,12 +72,10 @@ class AgentRequestHandler:
                 case (UnrestrictedAgentAccess(), UnrestrictedAgentAccess()):
                     return UnrestrictedAgentAccess()
                 case (UnrestrictedAgentAccess(), RestrictedAgentAccess(team_ids)):
-                    # Key has no agent permissions - inherit from team
                     return RestrictedAgentAccess(_to_stable_ids(team_ids))
                 case (RestrictedAgentAccess(key_ids), UnrestrictedAgentAccess()):
                     return RestrictedAgentAccess(_to_stable_ids(key_ids))
                 case (RestrictedAgentAccess(key_ids), RestrictedAgentAccess(team_ids)):
-                    # Both restricted - most restrictive wins
                     return RestrictedAgentAccess(_to_stable_ids(key_ids) & _to_stable_ids(team_ids))
         except Exception as e:
             verbose_logger.warning("Failed to get allowed agents: %s", e)
@@ -185,7 +183,7 @@ class AgentRequestHandler:
             declared_access_groups: Final = tuple(
                 key_object_permission.agent_access_groups or () if key_object_permission is not None else ()
             )
-            # 2. Fallback: agent IDs from key's access_group_ids (unified access groups)
+            # 2. Fallback: get agent IDs from key's access_group_ids (unified access groups)
             key_access_group_ids: Final = tuple(user_api_key_auth.access_group_ids or ())
 
             if not direct_agents and not declared_access_groups and not key_access_group_ids:

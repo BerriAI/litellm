@@ -1070,8 +1070,7 @@ async def get_agent_daily_activity(
     where_condition: Final[dict[str, object]] = {}
     if not _user_has_admin_view(user_api_key_dict):
         permitted_agent_ids: list[str] = []
-        # A caller whose key and team carry no agent grants is unrestricted for
-        # invocation, but for activity scoping that's not "see everything" — fall
+        # An unrestricted caller is not "see everything" for activity scoping. Fall
         # back to the agents the caller created so they cannot enumerate other
         # tenants' agents.
         # Guard against `user_id is None`: a literal None in Prisma
