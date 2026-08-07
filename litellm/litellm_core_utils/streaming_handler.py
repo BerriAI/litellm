@@ -1450,7 +1450,11 @@ class CustomStreamWrapper:
 
                 self.tool_call = True
 
-            if hasattr(chunk, "usage") and chunk.usage is not None:
+            # OpenAI-compatible chunks may expose an SDK-specific usage model.
+            # The branch above already normalizes that model to LiteLLM's Usage;
+            # do not overwrite it with the raw object, or streaming aggregation
+            # cannot read nested prompt-token details such as cached_tokens.
+            if hasattr(chunk, "usage") and chunk.usage is not None and getattr(model_response, "usage", None) is None:
                 model_response.usage = chunk.usage
 
             ## RETURN ARG
