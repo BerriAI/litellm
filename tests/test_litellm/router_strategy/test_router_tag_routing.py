@@ -1958,3 +1958,166 @@ async def test_allow_fail_open_still_fires_when_every_requested_tag_is_known():
             mock_response="hi",
         )
         assert response._hidden_params["model_id"] == "openai-default"
+
+
+# --- required-AND, allow_fail_open, and the unknown-tag denial across fallback
+# chains spanning multiple model groups ---
+
+
+@pytest.mark.asyncio()
+async def test_required_and_exhausts_primary_group_falls_through_to_fallback_group():
+    # &reasoning_type:high matches nothing on "primary" (raises internally, same as
+    # negation's own fallback-chain behavior), so the router advances to "fallback"
+    # where the tag is satisfiable. No allow_fail_open involved; this is the plain
+    # fallback-chain mechanics already established for "!" extended to "&".
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:low"],
+                },
+                "model_info": {"id": "primary-low-reasoning"},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:high"],
+                },
+                "model_info": {"id": "fallback-high-reasoning"},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        enable_tag_filtering=True,
+    )
+
+    response = await router.acompletion(
+        model="primary",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["&reasoning_type:high"]},
+        mock_response="hi",
+    )
+    assert response._hidden_params["model_id"] == "fallback-high-reasoning"
+
+
+@pytest.mark.asyncio()
+async def test_required_and_negation_and_allow_fail_open_combine_across_three_model_groups():
+    # A single request routes through three independent model groups via two
+    # fallback hops, exercising "!", "&", and allow_fail_open together at each hop:
+    # - "primary" is banned outright by "!provider:anthropic" -> raises, advances.
+    # - "secondary" satisfies the negation but not &reasoning_type:high, and has no
+    #   allow_fail_open -> raises exactly as today, advances.
+    # - "tertiary" also can't satisfy &reasoning_type:high, but opted into
+    #   allow_fail_open, and reasoning_type:high is a real tag elsewhere in this
+    #   group (not invented), so it falls back to its own default deployment.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic", "reasoning_type:high"],
+                },
+                "model_info": {"id": "primary-anthropic"},
+            },
+            {
+                "model_name": "secondary",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:openai", "reasoning_type:low"],
+                },
+                "model_info": {"id": "secondary-openai"},
+            },
+            {
+                "model_name": "tertiary",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:openai", "reasoning_type:high", "region:eu"],
+                },
+                "model_info": {"id": "tertiary-eu-high-reasoning"},
+            },
+            {
+                "model_name": "tertiary",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default", "provider:openai", "reasoning_type:low"],
+                },
+                "model_info": {"id": "tertiary-default", "allow_fail_open": True},
+            },
+        ],
+        fallbacks=[{"primary": ["secondary"]}, {"secondary": ["tertiary"]}],
+        enable_tag_filtering=True,
+    )
+
+    response = await router.acompletion(
+        model="primary",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["!provider:anthropic", "&reasoning_type:high"]},
+        mock_response="hi",
+    )
+    assert response._hidden_params["model_id"] == "tertiary-default"
+
+
+@pytest.mark.asyncio()
+async def test_unknown_tag_denial_is_scoped_per_hop_not_leaked_across_fallback_groups():
+    # The invented tag is unknown to "primary" (denies fail-open, raises, advances)
+    # and happens to be known to "fallback" only because a *different* deployment in
+    # that group carries it verbatim. Each hop must independently discover what its
+    # own group knows; the security check must not remember or leak state from a
+    # prior hop's group.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["region:us-east"],
+                },
+                "model_info": {"id": "primary-us-east", "allow_fail_open": True},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["region:us-east", "tag-that-is-real-only-here"],
+                },
+                "model_info": {"id": "fallback-us-east"},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default", "region:eu"],
+                },
+                "model_info": {"id": "fallback-default", "allow_fail_open": True},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        enable_tag_filtering=True,
+    )
+
+    # On "primary": region:us-east is real and satisfiable there, but the invented
+    # tag is unknown to "primary" specifically -> denies fail-open -> raises ->
+    # advances to "fallback".
+    # On "fallback": both tags are real there (tag-that-is-real-only-here is carried
+    # by fallback-us-east), so &region:us-east,&tag-that-is-real-only-here is a
+    # genuinely unsatisfiable-in-combination-but-fully-recognized ask -> falls open
+    # to fallback-default.
+    response = await router.acompletion(
+        model="primary",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["&region:us-east", "&tag-that-is-real-only-here"]},
+        mock_response="hi",
+    )
+    assert response._hidden_params["model_id"] == "fallback-default"
