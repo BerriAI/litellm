@@ -177,9 +177,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         # Check both so either shape is picked up.
         raw_meta: Final = response.get("meta") or {}
         usage_data: Final = response.get("usage", {})
-        total_tokens: Final = raw_meta.get("billed_units", {}).get("total_tokens") or usage_data.get(
-            "total_tokens", 0
-        )
+        total_tokens: Final = raw_meta.get("billed_units", {}).get("total_tokens") or usage_data.get("total_tokens", 0)
         input_tokens: Final = raw_meta.get("tokens", {}).get("input_tokens") or usage_data.get("total_tokens", 0)
         _billed_units: Final = RerankBilledUnits(total_tokens=total_tokens)
         _tokens: Final = RerankTokens(input_tokens=input_tokens)
