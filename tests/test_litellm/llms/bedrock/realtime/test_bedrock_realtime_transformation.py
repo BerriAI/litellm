@@ -1090,6 +1090,162 @@ class TestBedrockRealtimeSessionEvents:
         assert event["session"]["modalities"] == ["text", "audio"]
 
 
+class TestBedrockRealtimeContentBlockLifecycle:
+    """
+    Bedrock streams discrete content blocks. Session state must follow block
+    boundaries so text/audio/tool blocks cannot leak into each other.
+    """
+
+    def _state(self, **overrides):
+        base = {
+            "session_configuration_request": json.dumps({"configured": True}),
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": "conv_1",
+            "current_delta_chunks": None,
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        }
+        base.update(overrides)
+        return base
+
+    def _apply(self, config, logging_obj, state, message):
+        result = config.transform_realtime_response(
+            json.dumps(message),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        state.update(
+            {
+                "current_output_item_id": result["current_output_item_id"],
+                "current_response_id": result["current_response_id"],
+                "current_conversation_id": result["current_conversation_id"],
+                "current_delta_chunks": result["current_delta_chunks"],
+                "current_item_chunks": result["current_item_chunks"],
+                "current_delta_type": result["current_delta_type"],
+            }
+        )
+        return result
+
+    def test_tool_block_does_not_leak_prior_text_into_next_assistant_turn(self):
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+        state = self._state()
+
+        self._apply(config, logging_obj, state, {"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}})
+        first_response_id = state["current_response_id"]
+        self._apply(
+            config,
+            logging_obj,
+            state,
+            {"event": {"textOutput": {"content": "I will check the weather."}}},
+        )
+        assert state["current_delta_chunks"] is not None
+        assert len(state["current_delta_chunks"]) == 1
+
+        self._apply(
+            config,
+            logging_obj,
+            state,
+            {"event": {"contentEnd": {"stopReason": "PARTIAL_TURN", "type": "TEXT"}}},
+        )
+        assert state["current_delta_chunks"] is None
+        assert state["current_delta_type"] is None
+        assert state["current_output_item_id"] is None
+        assert state["current_response_id"] == first_response_id
+
+        self._apply(config, logging_obj, state, {"event": {"contentStart": {"role": "TOOL", "type": "TOOL"}}})
+        assert state["current_delta_chunks"] is None
+        assert state["current_response_id"] == first_response_id
+
+        tool_result = self._apply(
+            config,
+            logging_obj,
+            state,
+            {
+                "event": {
+                    "toolUse": {
+                        "toolUseId": "tool_1",
+                        "toolName": "get_weather",
+                        "content": json.dumps({"location": "Seattle"}),
+                    }
+                }
+            },
+        )
+        assert tool_result["response"][0]["type"] == "response.function_call_arguments.done"
+        assert state["current_delta_chunks"] is None
+        assert state["current_delta_type"] is None
+
+        self._apply(
+            config,
+            logging_obj,
+            state,
+            {"event": {"contentEnd": {"stopReason": "TOOL_USE", "type": "TOOL"}}},
+        )
+        assert state["current_response_id"] is None
+        assert state["current_output_item_id"] is None
+        assert state["current_delta_chunks"] is None
+        assert state["current_delta_type"] is None
+
+        post_tool = self._apply(
+            config,
+            logging_obj,
+            state,
+            {"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}},
+        )
+        assert state["current_response_id"] != first_response_id
+        assert state["current_delta_chunks"] is None
+        assert [msg["type"] for msg in post_tool["response"]].count("response.created") == 1
+
+        self._apply(
+            config,
+            logging_obj,
+            state,
+            {"event": {"textOutput": {"content": "It is sunny in Seattle."}}},
+        )
+        done = self._apply(
+            config,
+            logging_obj,
+            state,
+            {"event": {"contentEnd": {"stopReason": "END_TURN", "type": "TEXT"}}},
+        )
+        text_done = [msg for msg in done["response"] if msg["type"] == "response.text.done"][0]
+        assert text_done["text"] == "It is sunny in Seattle."
+        assert "I will check the weather." not in text_done["text"]
+        assert any(msg["type"] == "response.done" for msg in done["response"])
+        assert state["current_response_id"] is None
+        assert state["current_delta_chunks"] is None
+
+    def test_second_assistant_content_block_reuses_response_not_item(self):
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+        state = self._state()
+
+        first = self._apply(
+            config, logging_obj, state, {"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}}
+        )
+        response_id = state["current_response_id"]
+        first_item = state["current_output_item_id"]
+        assert sum(1 for msg in first["response"] if msg["type"] == "response.created") == 1
+
+        self._apply(
+            config,
+            logging_obj,
+            state,
+            {"event": {"contentEnd": {"stopReason": "PARTIAL_TURN", "type": "TEXT"}}},
+        )
+        second = self._apply(
+            config, logging_obj, state, {"event": {"contentStart": {"role": "ASSISTANT", "type": "AUDIO"}}}
+        )
+        assert state["current_response_id"] == response_id
+        assert state["current_output_item_id"] != first_item
+        assert sum(1 for msg in second["response"] if msg["type"] == "response.created") == 0
+        assert sum(1 for msg in second["response"] if msg["type"] == "response.output_item.added") == 1
+
+
 class TestBedrockRealtimeUsageAccounting:
     def _usage_event(
         self,
