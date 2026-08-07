@@ -25,6 +25,7 @@ from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import 
 )
 from litellm.proxy.proxy_server import app
 from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIFileObject
+from litellm.types.utils import CallTypes
 
 client = TestClient(app)
 from litellm.caching.caching import DualCache
@@ -3051,3 +3052,25 @@ def test_list_files_key_allowed_openai_model_still_resolves_team_credentials(
         mocker, monkeypatch, _team_openai_plus_global_anthropic_router(), ["team-gpt"]
     )
     assert captured_kwargs.get("api_key") == "team-openai-key"
+
+
+def test_list_files_is_logged_as_a_file_list_not_a_fine_tuning_jobs_list(
+    mocker: MockerFixture, monkeypatch
+):
+    """GET /v1/files must reach the logging object as ``afile_list``.
+
+    The handler passed ``route_type=CallTypes.alist_fine_tuning_jobs.value`` while its
+    three siblings passed the matching ``afile_*`` string, and ``route_type`` becomes the
+    logging object's ``call_type`` (it is handed to ``function_setup`` as
+    ``original_function``). So every file listing was recorded as a fine-tuning jobs
+    list: wrong ``call_type`` on its SpendLogs row, wrong operation on its callbacks,
+    and a fine-tuning surface that looked busier than it was.
+    """
+    captured_kwargs = _list_files_captured_kwargs(
+        mocker, monkeypatch, _team_openai_plus_global_anthropic_router(), ["team-gpt"]
+    )
+
+    logging_obj = captured_kwargs.get("litellm_logging_obj")
+    assert logging_obj is not None, "handler did not pass a logging object downstream"
+    assert logging_obj.call_type == CallTypes.afile_list.value
+    assert logging_obj.model_call_details["call_type"] == CallTypes.afile_list.value
