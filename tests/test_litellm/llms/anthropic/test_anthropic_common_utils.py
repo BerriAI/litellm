@@ -12,6 +12,7 @@ Verifies that:
 
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -1501,6 +1502,48 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert "URL: https://github.com/BerriAI/litellm/releases" in flattened
         assert "Snippet: Latest release v1.95.0" in flattened
         assert msgs[1]["content"][0]["type"] == "server_tool_use"
+
+    @pytest.mark.parametrize("results", [[], None], ids=["empty_list", "search_raised"])
+    def test_flatten_unencrypted_web_search_results_flattens_a_resultless_search(self, results):
+        """A search that found nothing, or that raised, still has to be flattened.
+
+        Both cases reach the client as ``content: []``, and leaving that block in
+        place ships an unsupported tag to Bedrock on the next turn just as surely
+        as a populated one does.
+        """
+        from litellm.integrations.websearch_interception.transformation import (
+            WebSearchTransformation,
+        )
+        from litellm.llms.anthropic.common_utils import (
+            flatten_unencrypted_web_search_results_in_anthropic_messages,
+        )
+
+        block = WebSearchTransformation.build_web_search_tool_result_block(
+            tool_use_id="srvtoolu_1",
+            search_response=None if results is None else SimpleNamespace(results=results),
+        )
+        assert block["content"] == [], "fixture drifted from what the interceptor emits"
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_1",
+                        "name": "web_search",
+                        "input": {"query": "who won"},
+                    },
+                    block,
+                    {"type": "text", "text": "I could not find that."},
+                ],
+            }
+        ]
+
+        out = flatten_unencrypted_web_search_results_in_anthropic_messages(msgs)
+
+        assert [b["type"] for b in out[0]["content"]] == ["text", "text"]
+        assert out[0]["content"][0]["text"] == ("Web search results for 'who won':\n\nNo results were returned.")
 
     def test_flatten_unencrypted_web_search_results_preserves_real_anthropic_blocks(self):
         from litellm.llms.anthropic.common_utils import (
