@@ -62,6 +62,22 @@ class TestMoonshotConfig:
 
         # Should NOT include functions (not supported by Moonshot AI)
         assert "functions" not in supported_params
+        assert "reasoning_effort" not in supported_params
+
+    @pytest.mark.parametrize(
+        "model",
+        ["kimi-k3", "moonshot/kimi-k3"],
+    )
+    def test_kimi_k3_reasoning_effort(self, model: str):
+        config = MoonshotChatConfig()
+
+        assert "reasoning_effort" in config.get_supported_openai_params(model)
+        assert config.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        ) == {"reasoning_effort": "high"}
 
     def test_map_openai_params_excludes_functions(self):
         """Test that functions parameter is not mapped"""
