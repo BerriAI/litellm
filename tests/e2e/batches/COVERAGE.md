@@ -72,6 +72,7 @@ File delete asserts `object=="file"` and `deleted==True`.
 | `capabilities.py` | the provider x scenario matrix + per-provider /model/new params + id-shape classifiers + per-provider raw-id assertion |
 | `conftest.py` | session-scoped batch deployment registration and teardown |
 | `test_batches_e2e.py` | parametrized lifecycle with per-endpoint output assertions, file upload/delete outputs, key-model-access denial |
+| `test_large_batch_upload_e2e.py` | large-file upload per provider round-trips through /v1/files and is usable to create a batch (opt-in 500MB via `LITELLM_E2E_LARGE_UPLOAD_MB=500`); team-key rpm limit rejects a batch whose input JSONL exceeds the limit |
 
 ## Out of scope (intentionally)
 
