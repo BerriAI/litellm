@@ -15464,11 +15464,7 @@ async def test_delete_verification_tokens_broadcasts_key_eviction(monkeypatch):
 
     monkeypatch.setattr(
         "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
-        lambda token: token,
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.hash_token",
-        lambda token: token,
+        lambda token: "hashed-token-1",
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr(
@@ -15477,7 +15473,7 @@ async def test_delete_verification_tokens_broadcasts_key_eviction(monkeypatch):
     )
 
     await delete_verification_tokens(
-        tokens=["hashed-token-1"],
+        tokens=["sk-token-1"],
         user_api_key_cache=MagicMock(),
         user_api_key_dict=UserAPIKeyAuth(
             user_id="admin-user",
