@@ -13,6 +13,7 @@ import asyncio
 import math
 import re
 import time
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
 from fastapi import HTTPException, Request, status
@@ -2834,7 +2835,7 @@ async def get_org_object(
 
 
 async def _get_resources_from_access_groups(
-    access_group_ids: list[str],
+    access_group_ids: Sequence[str],
     resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],
     prisma_client: PrismaClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
@@ -2893,7 +2894,7 @@ async def _get_resources_from_access_groups(
 
 
 async def _get_models_from_access_groups(
-    access_group_ids: list[str],
+    access_group_ids: Sequence[str],
     prisma_client: PrismaClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
@@ -2908,6 +2909,47 @@ async def _get_models_from_access_groups(
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def get_team_access_group_models_for_model_list(
+    team_id: str | None,
+    team_object: LiteLLM_TeamTable | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache | None,
+    proxy_logging_obj: ProxyLogging | None,
+) -> tuple[str, ...]:
+    if team_id is None or prisma_client is None or user_api_key_cache is None:
+        return ()
+
+    resolved_team_object: Final = (
+        team_object
+        if team_object is not None
+        else await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    )
+    team_models: Final = tuple(resolved_team_object.models or ())
+    unrestricted_team_models: Final = frozenset(
+        (
+            "*",
+            SpecialModelNames.all_proxy_models.value,
+            SpecialModelNames.all_team_models.value,
+        )
+    )
+    if not team_models or unrestricted_team_models.intersection(team_models):
+        return ()
+
+    return tuple(
+        await _get_models_from_access_groups(
+            access_group_ids=resolved_team_object.access_group_ids or (),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
     )
 
 

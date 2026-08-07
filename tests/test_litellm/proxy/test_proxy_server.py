@@ -4821,6 +4821,46 @@ async def test_add_router_settings_shallow_merge_behavior():
     assert merged_settings["top_level"] == "db_top"
 
 
+def test_get_v1_model_info_allowed_names_includes_inherited_team_access_group_models():
+    from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+
+    router = MagicMock()
+    router.get_model_names.return_value = ["model-a"]
+    router.get_model_access_groups.return_value = {}
+    result = proxy_server_module._get_v1_model_info_allowed_model_names(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test",
+            models=[SpecialModelNames.all_team_models.value],
+            team_id="team-1",
+            team_models=[SpecialModelNames.no_default_models.value],
+        ),
+        llm_router=router,
+        team_access_group_models=("model-a",),
+    )
+
+    assert result == {"model-a"}
+
+
+def test_get_v1_model_info_allowed_names_does_not_broaden_empty_access_group():
+    from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+
+    router = MagicMock()
+    router.get_model_names.return_value = ["model-a"]
+    router.get_model_access_groups.return_value = {}
+
+    result = proxy_server_module._get_v1_model_info_allowed_model_names(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test",
+            models=[SpecialModelNames.all_team_models.value],
+            team_id="team-1",
+            team_models=[SpecialModelNames.no_default_models.value],
+        ),
+        llm_router=router,
+    )
+
+    assert result == set()
+
+
 @pytest.mark.asyncio
 async def test_model_info_v1_oci_secrets_not_leaked():
     """

@@ -5401,6 +5401,68 @@ async def test_get_access_object_db_fetch_returns_validated_access_group():
 
 
 @pytest.mark.asyncio
+async def test_get_team_access_group_models_for_model_list_uses_cached_access_group_resolver():
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import get_team_access_group_models_for_model_list
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-1",
+        models=[SpecialModelNames.no_default_models.value],
+        access_group_ids=["ag-1"],
+    )
+    prisma_client = MagicMock()
+    user_api_key_cache = MagicMock()
+    access_group_models = AsyncMock(return_value=["model-a"])
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        access_group_models,
+    ):
+        result = await get_team_access_group_models_for_model_list(
+            team_id="team-1",
+            team_object=team_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=None,
+        )
+
+    assert result == ("model-a",)
+    access_group_models.assert_awaited_once_with(
+        access_group_ids=["ag-1"],
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_team_access_group_models_for_model_list_does_not_narrow_unrestricted_team():
+    from litellm.proxy.auth.auth_checks import get_team_access_group_models_for_model_list
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-1",
+        models=[],
+        access_group_ids=["ag-1"],
+    )
+    access_group_models = AsyncMock(return_value=["model-a"])
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        access_group_models,
+    ):
+        result = await get_team_access_group_models_for_model_list(
+            team_id="team-1",
+            team_object=team_object,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=None,
+        )
+
+    assert result == ()
+    access_group_models.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_get_team_object_by_alias_db_fetch_returns_cached_obj():
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
     from litellm.proxy.auth.auth_checks import get_team_object_by_alias

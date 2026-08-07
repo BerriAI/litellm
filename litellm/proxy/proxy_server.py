@@ -15,7 +15,7 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence, Set
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, UnionType
 from typing import (
@@ -264,6 +264,7 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import (
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     can_key_call_resolved_model,
+    get_team_access_group_models_for_model_list,
     get_team_object,
     log_db_metrics,
 )
@@ -281,6 +282,9 @@ from litellm.proxy.auth.model_checks import (
     get_key_models,
     get_mcp_server_ids,
     get_team_models,
+    has_no_default_model_restriction,
+    merge_team_access_group_models,
+    should_resolve_team_access_group_models,
 )
 from litellm.proxy.auth.user_api_key_auth import (
     _fetch_global_spend_with_event_coordination,
@@ -13030,7 +13034,7 @@ async def model_metrics_exceptions(
     return {"data": response, "exception_types": list(exception_types)}
 
 
-def _deployment_matches_allowed_model_names(model: dict[str, Any], allowed_model_names: set[str]) -> bool:
+def _deployment_matches_allowed_model_names(model: dict[str, Any], allowed_model_names: Set[str]) -> bool:
     """Match a router deployment against allowed public model names.
 
     Team-scoped rows store an internal routing key in ``model_name``; callers
@@ -13046,32 +13050,78 @@ def _deployment_matches_allowed_model_names(model: dict[str, Any], allowed_model
     return isinstance(team_public_model_name, str) and team_public_model_name in allowed_model_names
 
 
+async def _get_v1_model_info_team_access_group_models(
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache | None,
+    proxy_logging_obj: ProxyLogging | None,
+) -> tuple[str, ...]:
+    configured_key_models: Final = tuple(user_api_key_dict.models or ())
+    raw_team_models: Final = tuple(user_api_key_dict.team_models or ())
+    if not should_resolve_team_access_group_models(raw_team_models):
+        return ()
+    if configured_key_models and SpecialModelNames.all_team_models.value not in configured_key_models:
+        return ()
+    try:
+        return await get_team_access_group_models_for_model_list(
+            team_id=user_api_key_dict.team_id,
+            team_object=None,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception:  # noqa: BLE001  # access-group enrichment is best-effort; DB/cache errors must not fail listing
+        verbose_proxy_logger.debug(
+            "Could not resolve team access group models for /v1/model/info",
+            exc_info=True,
+        )
+        return ()
+
+
 def _get_v1_model_info_allowed_model_names(
     user_api_key_dict: UserAPIKeyAuth,
     llm_router: Router,
-) -> set[str] | None:
+    team_access_group_models: Sequence[str] = (),
+) -> frozenset[str] | None:
     """Return key/team allowlisted public model names, or None if unrestricted."""
     model_access_groups: Final = llm_router.get_model_access_groups()
     proxy_model_list: Final = llm_router.get_model_names()
-    key_models: Final = get_key_models(
-        user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
+    configured_key_models: Final = tuple(user_api_key_dict.models or ())
+    key_models: Final = tuple(
+        get_key_models(
+            user_api_key_dict=user_api_key_dict,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+        )
     )
+    raw_team_models: Final = tuple(user_api_key_dict.team_models or ())
+    restrict_empty_model_list: Final = has_no_default_model_restriction(
+        key_models=key_models,
+        team_models=raw_team_models,
+    )
+    resolved_models: Final = merge_team_access_group_models(
+        key_models=key_models,
+        team_models=raw_team_models,
+        configured_key_models=configured_key_models,
+        access_group_models=team_access_group_models,
+    )
+    resolved_key_models: Final = resolved_models[0]
+    resolved_team_models: Final = resolved_models[1]
     team_models: Final = get_team_models(
-        team_models=user_api_key_dict.team_models,
+        team_models=resolved_team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
     )
-    if not key_models and not team_models:
+    if not resolved_key_models and not team_models and not restrict_empty_model_list:
         return None
-    return set(
+    return frozenset(
         get_complete_model_list(
-            key_models=key_models,
+            key_models=resolved_key_models,
             team_models=team_models,
             proxy_model_list=proxy_model_list,
             user_model=user_model,
             infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+            fallback_to_proxy_models=not restrict_empty_model_list,
             llm_router=llm_router,
             return_wildcard_routes=False,
         )
@@ -13080,7 +13130,7 @@ def _get_v1_model_info_allowed_model_names(
 
 def _filter_v1_model_info_deployments(
     all_models: list[dict],
-    allowed_model_names: set[str] | None,
+    allowed_model_names: Set[str] | None,
 ) -> list[dict]:
     if allowed_model_names is None:
         return all_models
@@ -13301,9 +13351,16 @@ async def model_info_v1(
 
     all_models = expand_wildcard_deployments_for_model_info(all_models)
 
+    team_access_group_models: Final = await _get_v1_model_info_team_access_group_models(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
     allowed_model_names: Final = _get_v1_model_info_allowed_model_names(
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,
+        team_access_group_models=team_access_group_models,
     )
 
     all_models = _filter_v1_model_info_deployments(

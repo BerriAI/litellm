@@ -98,6 +98,7 @@ from litellm.proxy._types import (
     CallInfo,
     LiteLLM_VerificationTokenView,
     Member,
+    SpecialModelNames,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -6450,11 +6451,17 @@ async def get_available_models_for_user(
     Returns:
         List of model names available to the user
     """
-    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.auth.auth_checks import (
+        get_team_access_group_models_for_model_list,
+        get_team_object,
+    )
     from litellm.proxy.auth.model_checks import (
         get_complete_model_list,
         get_key_models,
         get_team_models,
+        has_no_default_model_restriction,
+        merge_team_access_group_models,
+        should_resolve_team_access_group_models,
     )
     from litellm.proxy.management_endpoints.team_endpoints import validate_membership
 
@@ -6466,45 +6473,76 @@ async def get_available_models_for_user(
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
 
-    # Get key models
-    key_models = get_key_models(
-        user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-        include_model_access_groups=include_model_access_groups,
-    )
-
-    # Get team models
-    team_models: list[str] = user_api_key_dict.team_models
-
-    # If specific team_id is provided, validate and get team models
-    if team_id and prisma_client and proxy_logging_obj and user_api_key_cache:
-        key_models = []
-        team_object: Final = await get_team_object(
+    selected_team_object: Final = (
+        await get_team_object(
             team_id=team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
-        await validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
-        team_models = team_object.models
+        if team_id and prisma_client and user_api_key_cache
+        else None
+    )
+    if selected_team_object is not None:
+        await validate_membership(user_api_key_dict=user_api_key_dict, team_table=selected_team_object)
 
-    team_models = get_team_models(
-        team_models=team_models,
+    configured_key_models: Final = () if selected_team_object is not None else tuple(user_api_key_dict.models or ())
+    key_models: Final = (
+        ()
+        if selected_team_object is not None
+        else tuple(
+            get_key_models(
+                user_api_key_dict=user_api_key_dict,
+                proxy_model_list=proxy_model_list,
+                model_access_groups=model_access_groups,
+                include_model_access_groups=include_model_access_groups,
+            )
+        )
+    )
+    raw_team_models_source: Final = (
+        selected_team_object.models if selected_team_object is not None else user_api_key_dict.team_models
+    )
+    raw_team_models: Final = tuple(raw_team_models_source or ())
+    restrict_empty_model_list: Final = has_no_default_model_restriction(
+        key_models=key_models,
+        team_models=raw_team_models,
+    )
+    effective_team_id: Final = team_id or user_api_key_dict.team_id
+    team_access_group_models: Final = (
+        await get_team_access_group_models_for_model_list(
+            team_id=effective_team_id,
+            team_object=selected_team_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if should_resolve_team_access_group_models(raw_team_models)
+        and (not configured_key_models or SpecialModelNames.all_team_models.value in configured_key_models)
+        else ()
+    )
+    resolved_models: Final = merge_team_access_group_models(
+        key_models=key_models,
+        team_models=raw_team_models,
+        configured_key_models=configured_key_models,
+        access_group_models=team_access_group_models,
+    )
+    resolved_key_models: Final = resolved_models[0]
+    resolved_team_models: Final = resolved_models[1]
+    team_models: Final = get_team_models(
+        team_models=resolved_team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
         include_model_access_groups=include_model_access_groups,
     )
 
-    effective_team_id: Final = team_id or user_api_key_dict.team_id
-
     # Get complete model list
     all_models: Final = get_complete_model_list(
-        key_models=key_models,
+        key_models=resolved_key_models,
         team_models=team_models,
         proxy_model_list=proxy_model_list,
         user_model=user_model,
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+        fallback_to_proxy_models=not restrict_empty_model_list,
         return_wildcard_routes=return_wildcard_routes,
         llm_router=llm_router,
         model_access_groups=model_access_groups,

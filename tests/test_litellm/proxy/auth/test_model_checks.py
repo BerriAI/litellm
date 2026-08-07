@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -543,6 +543,159 @@ async def test_get_available_models_for_user_expands_query_team_wildcard(
     )
 
     assert "openai/gpt-4o-mini" in result
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_includes_inherited_team_access_group_models():
+    from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+    from litellm.proxy.utils import get_available_models_for_user
+
+    router = MagicMock()
+    router.get_model_names.return_value = ["model-a"]
+    router.get_model_access_groups.return_value = {}
+    access_group_models = AsyncMock(return_value=["model-a"])
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_team_access_group_models_for_model_list",
+        access_group_models,
+    ):
+        result = await get_available_models_for_user(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="sk-test",
+                models=[SpecialModelNames.all_team_models.value],
+                team_id="team-1",
+                team_models=[SpecialModelNames.no_default_models.value],
+            ),
+            llm_router=router,
+            general_settings={},
+            user_model=None,
+        )
+
+    assert result == ["model-a"]
+    access_group_models.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_does_not_broaden_empty_access_group():
+    from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+    from litellm.proxy.utils import get_available_models_for_user
+
+    router = MagicMock()
+    router.get_model_names.return_value = ["model-a"]
+    router.get_model_access_groups.return_value = {}
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_team_access_group_models_for_model_list",
+        AsyncMock(return_value=[]),
+    ):
+        result = await get_available_models_for_user(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="sk-test",
+                models=[SpecialModelNames.all_team_models.value],
+                team_id="team-1",
+                team_models=[SpecialModelNames.no_default_models.value],
+            ),
+            llm_router=router,
+            general_settings={},
+            user_model=None,
+        )
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_does_not_broaden_explicit_key_models():
+    from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+    from litellm.proxy.utils import get_available_models_for_user
+
+    router = MagicMock()
+    router.get_model_names.return_value = ["model-a", "model-b"]
+    router.get_model_access_groups.return_value = {}
+    access_group_models = AsyncMock(return_value=["model-b"])
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_team_access_group_models_for_model_list",
+        access_group_models,
+    ):
+        result = await get_available_models_for_user(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="sk-test",
+                models=["model-a"],
+                team_id="team-1",
+                team_models=[SpecialModelNames.no_default_models.value],
+            ),
+            llm_router=router,
+            general_settings={},
+            user_model=None,
+        )
+
+    assert result == ["model-a"]
+    access_group_models.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_uses_selected_team_access_groups():
+    from litellm.proxy._types import LiteLLM_TeamTable, SpecialModelNames, UserAPIKeyAuth
+    from litellm.proxy.utils import get_available_models_for_user
+
+    router = MagicMock()
+    router.get_model_names.return_value = ["model-a"]
+    router.get_model_access_groups.return_value = {}
+    selected_team = LiteLLM_TeamTable(
+        team_id="selected-team",
+        models=[SpecialModelNames.no_default_models.value],
+        access_group_ids=["ag-1"],
+    )
+    get_team_object = AsyncMock(return_value=selected_team)
+    access_group_models = AsyncMock(return_value=["model-a"])
+    validate_membership = AsyncMock()
+    prisma_client = MagicMock()
+    user_api_key_cache = MagicMock()
+
+    with (
+        patch("litellm.proxy.auth.auth_checks.get_team_object", get_team_object),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_access_group_models_for_model_list",
+            access_group_models,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.validate_membership",
+            validate_membership,
+        ),
+    ):
+        result = await get_available_models_for_user(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="sk-test",
+                models=["model-b"],
+                team_id="token-team",
+                team_models=["model-b"],
+            ),
+            llm_router=router,
+            general_settings={},
+            user_model=None,
+            prisma_client=prisma_client,
+            team_id="selected-team",
+            user_api_key_cache=user_api_key_cache,
+        )
+
+    assert result == ["model-a"]
+    get_team_object.assert_awaited_once_with(
+        team_id="selected-team",
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=None,
+    )
+    validate_membership.assert_awaited_once_with(
+        user_api_key_dict=ANY,
+        team_table=selected_team,
+    )
+    access_group_models.assert_awaited_once_with(
+        team_id="selected-team",
+        team_object=selected_team,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=None,
+    )
 
 
 def test_get_key_models_all_team_models_recursive_team():
