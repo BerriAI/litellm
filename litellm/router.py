@@ -342,6 +342,19 @@ def _replay_live_router_model_cost() -> None:
 
 set_live_deployment_replay(_replay_live_router_model_cost)
 
+_EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+@lru_cache(maxsize=512)
+def _warn_model_group_strategy_once(model: str, kind: str, fingerprint: str, message: str) -> None:
+    """
+    Reports a model-group strategy misconfiguration once per
+    (model, problem kind, offending config): distinct problem kinds warn
+    independently, a changed config re-warns, and lru_cache makes the
+    check-and-record atomic under concurrent dispatch.
+    """
+    verbose_router_logger.warning("%s (model_group=%s, kind=%s, config=%s)", message, model, kind, fingerprint)
+
 
 class Router:
     model_names: set = set()
@@ -715,7 +728,6 @@ class Router:
         self._init_routing_groups(self._routing_groups_input)
         self._override_selectors: dict[str, Any] = {}
         self._override_selectors_lock = threading.Lock()
-        self._warned_model_group_strategy_keys: set[tuple[str, str, str]] = set()  # mutable-ok: warn-once registry
         self.access_groups = None
         ## USAGE TRACKING ##
         if isinstance(litellm._async_success_callback, list):
@@ -1127,20 +1139,6 @@ class Router:
                 )
             return self._override_selectors[strategy]
 
-    _EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
-
-    def _warn_model_group_strategy_once(self, model: str, kind: str, fingerprint: str, message: str) -> None:
-        """
-        Reports a model-group strategy misconfiguration once per
-        (model, problem kind, offending config). Distinct problem kinds warn
-        independently, and a changed config re-warns.
-        """
-        warn_key: Final = (model, kind, fingerprint)
-        if warn_key in self._warned_model_group_strategy_keys:
-            return
-        self._warned_model_group_strategy_keys.add(warn_key)
-        verbose_router_logger.warning("%s", message)
-
     def _deployment_strategy_entry(self, idx: int) -> tuple[str | None, Mapping[str, object]] | None:
         """
         The (normalized strategy, args) a deployment declares via
@@ -1148,12 +1146,12 @@ class Router:
         counts as unset, so a PATCH (which cannot delete a model_info key) can
         still clear the field.
         """
-        info: Final = self.model_list[idx].get("model_info") or self._EMPTY_MAPPING
+        info: Final = self.model_list[idx].get("model_info") or _EMPTY_MAPPING
         raw: Final = info.get("routing_strategy")
         if not raw:
             return None
         normalized: Final = self._normalize_strategy(raw) if isinstance(raw, (str, RoutingStrategy)) else None
-        return normalized, info.get("routing_strategy_args") or self._EMPTY_MAPPING
+        return normalized, info.get("routing_strategy_args") or _EMPTY_MAPPING
 
     def _get_model_group_strategy_config(self, model: str) -> tuple[str, Mapping[str, object]] | None:
         """
@@ -1170,7 +1168,7 @@ class Router:
             return None
         ordered: Final = sorted(
             indices,
-            key=lambda idx: str((self.model_list[idx].get("model_info") or self._EMPTY_MAPPING).get("id") or ""),
+            key=lambda idx: str((self.model_list[idx].get("model_info") or _EMPTY_MAPPING).get("id") or ""),
         )
         configured: Final = tuple(
             entry for idx in ordered if (entry := self._deployment_strategy_entry(idx)) is not None
@@ -1185,7 +1183,7 @@ class Router:
         has_invalid: Final = len(valid) < len(configured)
         has_conflict: Final = len(frozenset(strategy for strategy, _ in valid)) > 1
         if has_invalid or has_conflict:
-            self._warn_model_group_strategy_once(
+            _warn_model_group_strategy_once(
                 model,
                 "config",
                 ",".join(str(strategy) for strategy, _ in configured),
@@ -1251,7 +1249,7 @@ class Router:
         self._evict_stale_model_group_selectors()
         built: Final = self._build_model_group_selector(strategy, args)
         if built is None:
-            self._warn_model_group_strategy_once(
+            _warn_model_group_strategy_once(
                 model,
                 "args",
                 selector_key,

@@ -442,8 +442,10 @@ export default function ModelInfoView({
         }
         if (values.routing_strategy_args !== undefined) {
           const parsedArgs = values.routing_strategy_args ? JSON.parse(values.routing_strategy_args) : {};
-          const storedArgs = localModelData.model_info?.routing_strategy_args ?? {};
-          if (JSON.stringify(parsedArgs) !== JSON.stringify(storedArgs)) {
+          if (
+            hasRoutingStrategyArgs(parsedArgs) ||
+            hasRoutingStrategyArgs(localModelData.model_info?.routing_strategy_args)
+          ) {
             updatedModelInfo = {
               ...updatedModelInfo,
               routing_strategy_args: parsedArgs,

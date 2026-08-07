@@ -16,8 +16,16 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import Router
+from litellm.router import _warn_model_group_strategy_once
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
+
+
+@pytest.fixture(autouse=True)
+def _clear_warn_once_cache():
+    _warn_model_group_strategy_once.cache_clear()
+    yield
+    _warn_model_group_strategy_once.cache_clear()
 
 
 def _deployment(model_name, model, deployment_id, model_info=None):
@@ -240,7 +248,7 @@ def test_config_and_args_warnings_fire_independently(caplog):
     assert len(args_warnings) == 1
 
 
-def test_changed_bad_args_warn_again():
+def test_changed_bad_args_warn_again(caplog):
     router = _build_router(
         [
             _deployment(
@@ -251,13 +259,15 @@ def test_changed_bad_args_warn_again():
             )
         ]
     )
-    router._get_routing_context("quality")
-    assert len(router._warned_model_group_strategy_keys) == 1
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        router._get_routing_context("quality")
+        router._get_routing_context("quality")
 
-    for idx in router.model_name_to_deployment_indices["quality"]:
-        router.model_list[idx]["model_info"]["routing_strategy_args"] = {"ttl": "still-bogus"}
-    router._get_routing_context("quality")
-    assert len(router._warned_model_group_strategy_keys) == 2
+        for idx in router.model_name_to_deployment_indices["quality"]:
+            router.model_list[idx]["model_info"]["routing_strategy_args"] = {"ttl": "still-bogus"}
+        router._get_routing_context("quality")
+    args_warnings = [r for r in caplog.records if "cannot initialize strategy" in r.getMessage()]
+    assert len(args_warnings) == 2
 
 
 def test_simple_shuffle_with_args_keeps_shuffle_semantics(caplog):
