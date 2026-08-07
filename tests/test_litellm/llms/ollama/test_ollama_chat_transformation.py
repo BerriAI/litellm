@@ -906,3 +906,62 @@ class TestOllamaToolCallTransformation:
         assert tool_msg["content"] == "Sunny, 72°F"
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
+
+
+class TestOllamaReasoningEffortMapping:
+    """
+    Issue: https://github.com/BerriAI/litellm/issues/34574
+    """
+
+    def test_dict_reasoning_effort_does_not_crash(self):
+        optional_params = get_optional_params(
+            model="ollama_chat/qwen3:14b",
+            reasoning_effort={"effort": "medium", "summary": "auto"},
+            custom_llm_provider="ollama_chat",
+        )
+
+        assert optional_params["think"] is True
+
+    def test_dict_reasoning_effort_without_effort_key_is_ignored(self):
+        optional_params = get_optional_params(
+            model="ollama_chat/qwen3:14b",
+            reasoning_effort={"summary": "auto"},
+            custom_llm_provider="ollama_chat",
+        )
+
+        assert "think" not in optional_params
+
+    def test_unsupported_effort_does_not_force_thinking(self):
+        optional_params = get_optional_params(
+            model="ollama_chat/qwen3-coder:30b",
+            reasoning_effort="none",
+            custom_llm_provider="ollama_chat",
+        )
+
+        assert "think" not in optional_params
+
+    def test_gpt_oss_forwards_effort_level(self):
+        config = OllamaChatConfig()
+
+        assert config.map_openai_params(
+            non_default_params={"reasoning_effort": {"effort": "high"}},
+            optional_params={},
+            model="gpt-oss:20b",
+            drop_params=False,
+        ) == {"think": "high"}
+
+        assert config.map_openai_params(
+            non_default_params={"reasoning_effort": "low"},
+            optional_params={},
+            model="gpt-oss:20b",
+            drop_params=False,
+        ) == {"think": "low"}
+
+    def test_string_effort_enables_thinking(self):
+        optional_params = get_optional_params(
+            model="ollama_chat/qwen3:14b",
+            reasoning_effort="high",
+            custom_llm_provider="ollama_chat",
+        )
+
+        assert optional_params["think"] is True
