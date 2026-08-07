@@ -35283,6 +35283,8 @@ export interface components {
         };
         /** ModelInfo */
         litellm__types__router__ModelInfo: {
+            /** Allow Fail Open */
+            allow_fail_open?: boolean | null;
             /** Base Model */
             base_model?: string | null;
             /** Blocked */

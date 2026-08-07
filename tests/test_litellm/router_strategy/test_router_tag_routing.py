@@ -1567,3 +1567,151 @@ async def test_allow_fail_open_per_hop_across_fallback_chain():
         mock_response="hi",
     )
     assert response._hidden_params["model_id"] == "fallback-model"
+
+
+# --- allow_fail_open must also gate "!" exhaustion combined with a plain positive tag ---
+
+
+@pytest.mark.asyncio()
+async def test_negation_combined_with_positive_unmatched_raises_by_default():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic", "paid"],
+                },
+                "model_info": {"id": "anthropic-paid"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["!provider:anthropic", "paid"]},
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_negation_combined_with_positive_unmatched_falls_open_when_allowed():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic", "paid", "default"],
+                },
+                "model_info": {"id": "anthropic-paid", "allow_fail_open": True},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["!provider:anthropic", "paid"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "anthropic-paid"
+
+
+# --- a required-AND-only request must not be diluted by incidental regex/header preference ---
+
+
+@pytest.mark.asyncio()
+async def test_required_and_only_returns_every_matching_deployment_despite_regex_header():
+    # Deployment A satisfies &reasoning_type:high and also happens to carry a tag_regex
+    # that matches the caller's User-Agent. Deployment B also satisfies the required tag
+    # but has no tag_regex at all. A required-AND-only request (no plain positive tags)
+    # must be free to route to either survivor, not be narrowed down to only the one
+    # that happens to match the incidental regex/header preference.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:high"],
+                    "tag_regex": ["^User-Agent: claude-code\\/"],
+                },
+                "model_info": {"id": "high-reasoning-with-regex"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:high"],
+                },
+                "model_info": {"id": "high-reasoning-no-regex"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    seen_ids = set()
+    for _ in range(30):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&reasoning_type:high"], "user_agent": "claude-code/1.2.3"},
+            mock_response="hi",
+        )
+        seen_ids.add(response._hidden_params["model_id"])
+
+    assert seen_ids == {"high-reasoning-with-regex", "high-reasoning-no-regex"}
+
+
+@pytest.mark.asyncio()
+async def test_required_and_only_excludes_regex_deployment_missing_the_required_tag():
+    # The tag_regex deployment matches the caller's User-Agent but does NOT carry the
+    # required tag; a required-AND-only request must not let it through on the strength
+    # of the regex/header match alone.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:low"],
+                    "tag_regex": ["^User-Agent: claude-code\\/"],
+                },
+                "model_info": {"id": "low-reasoning-with-regex"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:high"],
+                },
+                "model_info": {"id": "high-reasoning-no-regex"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&reasoning_type:high"], "user_agent": "claude-code/1.2.3"},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "high-reasoning-no-regex"
