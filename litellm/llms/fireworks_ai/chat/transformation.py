@@ -347,7 +347,16 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             *self._translate_chat_template_kwargs(extra_body, optional_params, model),
             *self._translate_guided_params(extra_body, optional_params),
         )
-        remaining: Final = tuple((k, v) for k, v in extra_body.items() if k not in _EXTRA_BODY_CONSUMED_PARAMS)
+        if "response_format" in extra_body and "response_format" in optional_params:
+            verbose_logger.debug(
+                "fireworks_ai dropping extra_body.response_format; the top-level response_format takes precedence."
+            )
+        remaining: Final = tuple(
+            (k, v)
+            for k, v in extra_body.items()
+            if k not in _EXTRA_BODY_CONSUMED_PARAMS
+            and (k != "response_format" or "response_format" not in optional_params)
+        )
         base: Final = {k: v for k, v in optional_params.items() if k != "extra_body"}  # mutable-ok: JSON request body
         return {  # mutable-ok: JSON request body
             **base,

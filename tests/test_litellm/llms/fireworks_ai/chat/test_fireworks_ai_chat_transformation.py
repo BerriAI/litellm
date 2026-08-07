@@ -1497,6 +1497,26 @@ def test_map_extra_body_params_guided_native_response_format_wins():
     assert nested == {"extra_body": {"response_format": nested_format}}
 
 
+def test_map_extra_body_params_top_level_response_format_beats_nested():
+    """
+    With response_format set both top-level and inside extra_body, the http
+    handler merges extra_body last, so the nested copy would silently clobber
+    the explicit top-level one. The nested copy must be dropped instead.
+    """
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {
+            "response_format": {"type": "json_object"},
+            "extra_body": {
+                "guided_json": {"type": "object"},
+                "response_format": {"type": "json_schema", "json_schema": {"schema": {}}},
+            },
+        },
+        _REASONING_MODEL,
+    )
+    assert result == {"response_format": {"type": "json_object"}}
+
+
 def test_map_extra_body_params_multiple_guided_params_priority_order():
     config = FireworksAIConfig()
     result = config.map_extra_body_params(
