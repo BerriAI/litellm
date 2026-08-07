@@ -44,7 +44,7 @@ jobs:
   # every test file being explicitly assigned; this guard prevents a new
   # file from silently dropping out of CI.
   assert-shard-coverage:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 2
     permissions:
       contents: read

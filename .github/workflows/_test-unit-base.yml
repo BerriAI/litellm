@@ -43,7 +43,7 @@ permissions:
 jobs:
   run:
     name: Run tests
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       decision: ${{ steps.changes.outputs.decision }}
@@ -61,6 +61,9 @@ jobs:
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
+
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust-toolchain
 
       - name: Set up uv
         uses: ./.github/actions/setup-uv-with-retries
@@ -134,7 +137,7 @@ jobs:
     name: Upload coverage to Codecov
     needs: run
     if: always() && needs.run.outputs.decision != 'skip'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       id-token: write

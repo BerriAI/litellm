@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   validate-model-prices-json:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -22,6 +22,9 @@ jobs:
       - name: Validate model_prices_and_context_window.json
         run: |
           jq empty model_prices_and_context_window.json
+
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust-toolchain
 
       - name: Set up uv
         uses: ./.github/actions/setup-uv-with-retries

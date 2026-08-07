@@ -12,6 +12,7 @@ on:
       - "uv.lock"
       - ".github/workflows/codspeed.yml"
       - ".github/actions/setup-uv-with-retries/**"
+      - ".github/actions/setup-rust-toolchain/**"
   pull_request:
     branches:
       - main
@@ -23,6 +24,7 @@ on:
       - "uv.lock"
       - ".github/workflows/codspeed.yml"
       - ".github/actions/setup-uv-with-retries/**"
+      - ".github/actions/setup-rust-toolchain/**"
   # Allow CodSpeed to trigger backtest performance analysis
   # in order to generate initial data
   workflow_dispatch:
@@ -37,7 +39,7 @@ concurrency:
 
 jobs:
   benchmarks:
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 60
 
     steps:
@@ -49,6 +51,9 @@ jobs:
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
+
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust-toolchain
 
       - name: Set up uv
         uses: ./.github/actions/setup-uv-with-retries

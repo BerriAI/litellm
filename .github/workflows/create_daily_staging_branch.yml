@@ -8,7 +8,7 @@ on:
 jobs:
   create-staging-branch:
     if: github.repository == 'BerriAI/litellm'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
 
@@ -29,7 +29,7 @@ jobs:
 
   create-internal-dev-branch:
     if: github.repository == 'BerriAI/litellm'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
 

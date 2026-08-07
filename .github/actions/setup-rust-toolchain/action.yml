@@ -1,0 +1,17 @@
+name: "Set up Rust toolchain"
+description: >-
+  Install the latest stable Rust toolchain and make it the default. Installing
+  the litellm package builds litellm-rust through maturin, and the crates
+  pinned in litellm-rust/Cargo.lock require a newer rustc than some runner
+  images ship by default, which fails the build with "rustc <version> is not
+  supported by the following packages". Pull stable explicitly instead of
+  relying on whatever rustc the image happens to default to.
+
+runs:
+  using: composite
+  steps:
+    - name: Install stable Rust toolchain
+      shell: bash
+      run: |
+        rustup toolchain install stable --profile minimal
+        rustup default stable
