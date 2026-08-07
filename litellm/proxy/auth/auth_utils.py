@@ -1159,8 +1159,8 @@ def _has_user_setup_sso() -> bool:
         microsoft_client_id is not None
         or google_client_id is not None
         or generic_client_id is not None
-        or saml_idp_metadata_url is not None
-        or saml_idp_metadata_xml is not None
+        or bool(saml_idp_metadata_url)
+        or bool(saml_idp_metadata_xml)
     )
 
 
