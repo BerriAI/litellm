@@ -46,7 +46,11 @@ from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
-from litellm.proxy.common_utils.sse_keepalive import wrap_sse_stream_with_keepalive_pings
+from litellm.proxy.common_utils.sse_keepalive import (
+    ANTHROPIC_PING_SSE_CHUNK,
+    SSE_COMMENT_PING_CHUNK,
+    wrap_sse_stream_with_keepalive_pings,
+)
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
@@ -1984,6 +1988,7 @@ class ProxyBaseLLMRequestProcessing:
                             generator=wrap_sse_stream_with_keepalive_pings(
                                 stream=selected_data_generator,
                                 ping_interval_seconds=litellm.anthropic_sse_ping_interval_seconds,
+                                ping_chunk=ANTHROPIC_PING_SSE_CHUNK,
                             ),
                             media_type="text/event-stream",
                             headers=custom_headers,
@@ -2015,7 +2020,11 @@ class ProxyBaseLLMRequestProcessing:
                             )
                         )
                     return await create_response(
-                        generator=selected_data_generator,
+                        generator=wrap_sse_stream_with_keepalive_pings(
+                            stream=selected_data_generator,
+                            ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
+                            ping_chunk=SSE_COMMENT_PING_CHUNK,
+                        ),
                         media_type="text/event-stream",
                         headers=custom_headers,
                         request=request,

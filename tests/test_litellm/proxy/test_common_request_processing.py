@@ -34,10 +34,12 @@ from litellm.proxy.common_request_processing import (
     _UpstreamClosingStreamingResponse,
     create_response,
 )
+from litellm.proxy.common_utils.sse_keepalive import SSE_COMMENT_PING_CHUNK
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy._types import ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.utils import ModelResponseStream
 
 
 class TestProxyBaseLLMRequestProcessing:
@@ -5746,3 +5748,82 @@ class TestPerRequestModelGroupAlias:
         )
 
         assert merged_for == ["group-b"]
+
+
+class TestOpenAISseKeepalivePings:
+    """
+    Regression for a streaming request dying at an ingress idle read timeout
+    (e.g. nginx `proxy-read-timeout`) when time-to-first-token exceeds it: the
+    OpenAI-shaped SSE routes must emit a keepalive comment while the upstream is
+    silent, once `litellm.sse_keepalive_ping_interval_seconds` is configured.
+    """
+
+    async def _run(self, monkeypatch, first_chunk_delay: float):
+        import litellm.proxy.common_request_processing as crp
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-keepalive"
+        logging_obj.cost_breakdown = None
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-4o", "stream": True, "litellm_logging_obj": logging_obj}
+        )
+
+        async def upstream():
+            await asyncio.sleep(first_chunk_delay)
+            yield ModelResponseStream()
+
+        async def fake_route_request(**kwargs):
+            async def _llm_call():
+                return upstream()
+
+            return _llm_call()
+
+        monkeypatch.setattr(crp, "route_request", fake_route_request)
+
+        def select_data_generator(response, user_api_key_dict, request_data, request):
+            async def _gen():
+                async for _ in response:
+                    yield 'data: {"choices": []}\n\n'
+
+            return _gen()
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_success_hook = AsyncMock()
+
+        return await processing_obj.base_process_llm_request(
+            request=MagicMock(spec=Request, headers={}),
+            fastapi_response=Response(),
+            user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=select_data_generator,
+            llm_router=None,
+            skip_pre_call_logic=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_ping_precedes_slow_first_chunk_on_chat_completions(self, monkeypatch):
+        monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 0.05)
+
+        result = await self._run(monkeypatch, first_chunk_delay=0.3)
+
+        assert isinstance(result, StreamingResponse)
+        streamed = [chunk async for chunk in result.body_iterator]
+        assert streamed[0] == SSE_COMMENT_PING_CHUNK
+        assert streamed[-1] == 'data: {"choices": []}\n\n'
+
+    @pytest.mark.asyncio
+    async def test_no_pings_emitted_when_interval_unset(self, monkeypatch):
+        monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", None)
+
+        result = await self._run(monkeypatch, first_chunk_delay=0.3)
+
+        assert isinstance(result, StreamingResponse)
+        streamed = [chunk async for chunk in result.body_iterator]
+        assert streamed == ['data: {"choices": []}\n\n']
