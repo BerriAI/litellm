@@ -242,6 +242,36 @@ class TestOpenRouterImageEditTransformation:
         # Files should be empty (JSON mode)
         assert list(files) == []
 
+    def test_transform_image_edit_request_drops_openrouter_routing_controls(self):
+        """Routing/control fields must not be forwarded into the chat body.
+
+        They can arrive via forwarded non-default params; copying OpenRouter
+        routing controls (models/route/provider/transforms) into the upstream
+        request would let a caller of an allowed image-edit model redirect the
+        call to other models/providers, bypassing LiteLLM's model-authorization
+        and budget checks. The intended image param (image_config) must still
+        pass through.
+        """
+        data, _ = self.config.transform_image_edit_request(
+            model=self.model,
+            prompt="Edit this",
+            image=self.sample_image_bytes,
+            image_edit_optional_request_params={
+                "image_config": {"aspect_ratio": "16:9"},
+                "models": ["openai/gpt-5", "anthropic/claude"],
+                "route": "fallback",
+                "provider": {"order": ["openai"]},
+                "transforms": ["middle-out"],
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        for routing_key in ("models", "route", "provider", "transforms"):
+            assert routing_key not in data
+
+        assert data["image_config"] == {"aspect_ratio": "16:9"}
+
     def test_transform_image_edit_request_with_bytesio(self):
         """Test request transformation with BytesIO image input."""
         image = BytesIO(self.sample_image_bytes)
