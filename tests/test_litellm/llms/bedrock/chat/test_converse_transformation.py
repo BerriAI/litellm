@@ -14,6 +14,9 @@ from unittest.mock import MagicMock, patch
 import litellm
 from litellm import ModelResponse, RateLimitError, completion
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+from litellm.llms.bedrock.cost_calculation import (
+    cost_per_token as bedrock_cost_per_token,
+)
 from litellm.types.llms.bedrock import ConverseTokenUsageBlock
 
 
@@ -49,6 +52,45 @@ def test_transform_usage():
     assert openai_usage.completion_tokens_details is not None
     assert openai_usage.completion_tokens_details.reasoning_tokens == 0
     assert openai_usage.completion_tokens_details.text_tokens == usage["outputTokens"]
+
+
+def test_converse_cache_tokens_are_billed():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/29145
+
+    Cache creation and cache read tokens on bedrock_converse responses must be
+    billed at their respective rates, not silently dropped to $0. The token
+    counts from the converse usage block have to survive into prompt_tokens_details
+    so the cost calculator can price them.
+    """
+    usage = ConverseTokenUsageBlock(
+        **{
+            "inputTokens": 1,
+            "cacheReadInputTokens": 32634,
+            "cacheWriteInputTokens": 1190,
+            "outputTokens": 672,
+            "totalTokens": 1 + 32634 + 1190 + 672,
+        }
+    )
+    model = "eu.anthropic.claude-sonnet-4-6"
+    transformed_usage = AmazonConverseConfig()._transform_usage(usage)
+
+    model_info = litellm.get_model_info(model=model, custom_llm_provider="bedrock")
+    expected_cache_creation_cost = 1190 * model_info["cache_creation_input_token_cost"]
+    expected_cache_read_cost = 32634 * model_info["cache_read_input_token_cost"]
+    expected_text_cost = 1 * model_info["input_cost_per_token"]
+    expected_completion_cost = 672 * model_info["output_cost_per_token"]
+
+    prompt_cost, completion_cost = bedrock_cost_per_token(
+        model=model, usage=transformed_usage
+    )
+
+    assert expected_cache_creation_cost > 0
+    assert expected_cache_read_cost > 0
+    assert prompt_cost == pytest.approx(
+        expected_text_cost + expected_cache_creation_cost + expected_cache_read_cost
+    )
+    assert completion_cost == pytest.approx(expected_completion_cost)
 
 
 def test_transform_usage_with_reasoning_content():
