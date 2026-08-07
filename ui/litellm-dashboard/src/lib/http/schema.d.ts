@@ -35385,6 +35385,8 @@ export interface components {
              * @default false
              */
             db_model: boolean;
+            /** Enable Tag Filtering */
+            enable_tag_filtering?: boolean | null;
             /** Id */
             id: string | null;
             /** Input Cost Per Character */

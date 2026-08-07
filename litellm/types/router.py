@@ -176,6 +176,14 @@ class ModelInfo(MirroredPricingParams):
     # existing "!" negation behavior is unchanged unless explicitly opted in.
     allow_fail_open: bool | None = None
 
+    # per-model-group override for router_settings.enable_tag_filtering; unset
+    # defers to the router-wide default. Checked against any deployment in the
+    # group, so set it consistently across every deployment sharing this
+    # model_name. A request-level enable_tag_filtering=True (from key/team
+    # settings) still wins over this, exactly as it already does over the
+    # router-wide default.
+    enable_tag_filtering: bool | None = None
+
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
