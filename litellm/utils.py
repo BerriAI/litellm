@@ -6834,6 +6834,16 @@ def shorten_message_to_fit_limit(message, tokens_needed, model: str | None, rais
     return message
 
 
+def _extract_system_message_content(content: Union[str, list, Any]) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
+
 # LiteLLM token trimmer
 # this code is borrowed from https://github.com/KillianLucas/tokentrim/blob/main/tokentrim/tokentrim.py
 # Credits for this code go to Killian Lucas
@@ -6879,7 +6889,7 @@ def trim_messages(
         for message in messages:
             if message["role"] == "system":
                 system_message += "\n" if system_message else ""
-                system_message += message["content"]
+                system_message += _extract_system_message_content(message.get("content", ""))
 
         ## Handle Tool Call ## - check if last message is a tool response, return as is - https://github.com/BerriAI/litellm/issues/4931
         tool_messages: Final = []
