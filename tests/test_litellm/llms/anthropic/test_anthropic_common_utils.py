@@ -1457,6 +1457,112 @@ class TestAnthropicThinkingSignatureSelfHeal:
         out = strip_empty_text_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
 
+    def test_flatten_unencrypted_web_search_results_keeps_snippet_evidence(self):
+        from litellm.llms.anthropic.common_utils import (
+            flatten_unencrypted_web_search_results_in_anthropic_messages,
+        )
+
+        msgs = [
+            {"role": "user", "content": "latest litellm version?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_1",
+                        "name": "web_search",
+                        "input": {"query": "latest litellm version"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_1",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://github.com/BerriAI/litellm/releases",
+                                "title": "Releases",
+                                "page_age": None,
+                                "encrypted_content": "",
+                                "snippet": "Latest release v1.95.0",
+                            }
+                        ],
+                    },
+                    {"type": "text", "text": "v1.95.0"},
+                ],
+            },
+        ]
+
+        out = flatten_unencrypted_web_search_results_in_anthropic_messages(msgs)
+
+        assert out[0] is msgs[0]
+        assert [b["type"] for b in out[1]["content"]] == ["text", "text"]
+        flattened = out[1]["content"][0]["text"]
+        assert "Web search results for 'latest litellm version':" in flattened
+        assert "URL: https://github.com/BerriAI/litellm/releases" in flattened
+        assert "Snippet: Latest release v1.95.0" in flattened
+        assert msgs[1]["content"][0]["type"] == "server_tool_use"
+
+    def test_flatten_unencrypted_web_search_results_preserves_real_anthropic_blocks(self):
+        from litellm.llms.anthropic.common_utils import (
+            flatten_unencrypted_web_search_results_in_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_1",
+                        "name": "web_search",
+                        "input": {"query": "q"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_1",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://example.com",
+                                "title": "Example",
+                                "page_age": None,
+                                "encrypted_content": "EqgfCioIARgBIiQ4",
+                            }
+                        ],
+                    },
+                ],
+            }
+        ]
+
+        out = flatten_unencrypted_web_search_results_in_anthropic_messages(msgs)
+
+        assert out[0] is msgs[0]
+
+    def test_flatten_unencrypted_web_search_results_leaves_error_blocks_alone(self):
+        from litellm.llms.anthropic.common_utils import (
+            flatten_unencrypted_web_search_results_in_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_1",
+                        "content": {
+                            "type": "web_search_tool_result_error",
+                            "error_code": "max_uses_exceeded",
+                        },
+                    }
+                ],
+            }
+        ]
+
+        out = flatten_unencrypted_web_search_results_in_anthropic_messages(msgs)
+
+        assert out[0] is msgs[0]
+
     def test_sanitize_tool_use_ids_in_anthropic_messages(self):
         from litellm.llms.anthropic.common_utils import (
             sanitize_tool_use_ids_in_anthropic_messages,
