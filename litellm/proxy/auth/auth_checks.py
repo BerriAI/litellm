@@ -4562,6 +4562,9 @@ def _model_custom_llm_provider_matches_wildcard_pattern(model: str, allowed_mode
     `{provider}/{model}` would produce `bedrock/bedrockz/...` and slip an
     unrecognized namespace through a `bedrock/*` key.
     """
+    if "/" in model:
+        return False
+
     try:
         stripped_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
     except Exception:
