@@ -1450,8 +1450,9 @@ class CustomStreamWrapper:
 
                 self.tool_call = True
 
-            if hasattr(chunk, "usage") and chunk.usage is not None:
-                model_response.usage = chunk.usage
+            chunk_usage: Final = getattr(chunk, "usage", None)
+            if chunk_usage is not None:
+                model_response.usage = _normalize_usage(chunk_usage)
 
             ## RETURN ARG
             result: Final = self.return_processed_chunk_logic(
@@ -2241,6 +2242,19 @@ def _coerce_token_details(
     if isinstance(raw, details_type):
         return raw
     return details_type(**(raw if isinstance(raw, dict) else raw.model_dump()))
+
+
+def _normalize_usage(usage: Usage | BaseModel | dict[str, Any]) -> Usage:
+    """
+    Upstream usage can arrive as a provider SDK model (e.g. openai's CompletionUsage) or a raw
+    dict. Only litellm's Usage supports the `key in usage` membership checks the stream
+    aggregators rely on, so anything else silently reads as empty and the usage is dropped.
+    """
+    if isinstance(usage, Usage):
+        return usage
+    if isinstance(usage, BaseModel):
+        return Usage(**usage.model_dump())
+    return Usage(**usage)
 
 
 def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
