@@ -3912,14 +3912,14 @@ def test_bin_pack_bedrock_content_oversized_single_item_becomes_its_own_batch():
 
     batches = BedrockGuardrail._bin_pack_bedrock_content(items, budget=100)
 
-    assert batches == [[small_item], [oversized_item], [small_item]]
+    assert batches == ((small_item,), (oversized_item,), (small_item,))
 
 
 def test_bin_pack_bedrock_content_empty_content_makes_exactly_one_empty_batch():
     """Empty content must still pack into exactly one (empty) batch, matching
     pre-bin-packing behavior of sending the content list as-is in one call --
     bin-packing must not turn an empty request into zero ApplyGuardrail calls."""
-    assert BedrockGuardrail._bin_pack_bedrock_content([], budget=100) == [[]]
+    assert BedrockGuardrail._bin_pack_bedrock_content([], budget=100) == ((),)
 
 
 @pytest.mark.asyncio

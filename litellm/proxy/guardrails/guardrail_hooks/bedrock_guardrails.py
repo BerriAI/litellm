@@ -14,7 +14,7 @@ import copy
 import json
 import re
 import sys
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import accumulate, groupby
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, cast
@@ -154,7 +154,7 @@ class BedrockContentChunkResult(NamedTuple):
     """
 
     response: BedrockGuardrailResponse
-    content: list[BedrockContentItem]
+    content: tuple[BedrockContentItem, ...]
     fragment_group_size: int
 
 
@@ -843,12 +843,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if request_data.get("api_key") is not None:
                 api_key = request_data["api_key"]
 
-        if logging_event_type is not None:
-            event_type = logging_event_type
-        else:
-            event_type = GuardrailEventHooks.pre_call if source == "INPUT" else GuardrailEventHooks.post_call
+        event_type: Final = (
+            logging_event_type
+            if logging_event_type is not None
+            else (GuardrailEventHooks.pre_call if source == "INPUT" else GuardrailEventHooks.post_call)
+        )
 
-        content: Final[list[BedrockContentItem]] = bedrock_request_data.get("content") or []
+        content: Final[tuple[BedrockContentItem, ...]] = tuple(bedrock_request_data.get("content") or ())
         allow_chunking: Final = not self._content_uses_contextual_grounding(content)
 
         try:
@@ -872,7 +873,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     start_time=start_time,
                 )
             raise
-        merged_response = self._merge_bedrock_guardrail_responses(responses)
+        merged_response: Final = self._merge_bedrock_guardrail_responses(responses)
         self._log_apply_guardrail_success(
             merged_response=merged_response,
             request_data=request_data,
@@ -883,16 +884,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     async def _apply_guardrail_content_with_chunking(
         self,
-        content: list[BedrockContentItem],
-        base_request_data: dict,
+        content: Sequence[BedrockContentItem],
+        base_request_data: Mapping[str, Any],
         credentials: "Credentials",
         aws_region_name: str,
         api_key: str | None,
-        request_data: dict | None,
+        request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
         allow_chunking: bool,
-    ) -> list[BedrockContentChunkResult]:
+    ) -> tuple[BedrockContentChunkResult, ...]:
         """Post `content` to ApplyGuardrail, chunking only if AWS rejects it as too large.
 
         Tries `content` as a single call first. AWS's per-request "maximum input
@@ -929,7 +930,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         chunks.
         """
         try:
-            response = await self._post_apply_guardrail_content_with_retry(
+            response: Final = await self._post_apply_guardrail_content_with_retry(
                 content=content,
                 base_request_data=base_request_data,
                 credentials=credentials,
@@ -939,13 +940,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 event_type=event_type,
                 start_time=start_time,
             )
-            return [
+            return (
                 BedrockContentChunkResult(
                     response=response,
-                    content=content,
+                    content=tuple(content),
                     fragment_group_size=1,
-                )
-            ]
+                ),
+            )
         except HTTPException as exc:
             if allow_chunking and self._is_input_too_large_error(exc.detail):
                 batches: Final = self._bin_pack_bedrock_content(content, budget=self.chunk_budget_chars)
@@ -957,10 +958,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         len(batches),
                         self.chunk_budget_chars,
                     )
-                    return [
-                        result
-                        for batch in batches
-                        for result in await self._apply_guardrail_content_with_chunking(
+                    batch_results: Final = [  # mutable-ok: await needs a list comprehension; frozen to a tuple below
+                        await self._apply_guardrail_content_with_chunking(
                             content=batch,
                             base_request_data=base_request_data,
                             credentials=credentials,
@@ -971,12 +970,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                             start_time=start_time,
                             allow_chunking=allow_chunking,
                         )
+                        for batch in batches
                     ]
-                split_content = self._split_bedrock_content(content)
+                    return tuple(result for results in batch_results for result in results)
+                split_content: Final = self._split_bedrock_content(content)
                 if split_content is None:
                     raise
                 first_half, second_half = split_content
-                is_single_item_text_split = len(content) == 1
+                is_single_item_text_split: Final = len(content) == 1
                 verbose_proxy_logger.warning(
                     "Bedrock Guardrail: ApplyGuardrail rejected %d content item(s) as too large; "
                     "splitting into %d + %d and retrying each",
@@ -984,7 +985,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     len(first_half),
                     len(second_half),
                 )
-                first_results = await self._apply_guardrail_content_with_chunking(
+                first_results: Final = await self._apply_guardrail_content_with_chunking(
                     content=first_half,
                     base_request_data=base_request_data,
                     credentials=credentials,
@@ -995,7 +996,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     start_time=start_time,
                     allow_chunking=allow_chunking,
                 )
-                second_results = await self._apply_guardrail_content_with_chunking(
+                second_results: Final = await self._apply_guardrail_content_with_chunking(
                     content=second_half,
                     base_request_data=base_request_data,
                     credentials=credentials,
@@ -1006,20 +1007,22 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     start_time=start_time,
                     allow_chunking=allow_chunking,
                 )
-                combined_results = first_results + second_results
+                combined_results: Final = tuple(first_results) + tuple(second_results)
                 if is_single_item_text_split:
-                    return [result._replace(fragment_group_size=len(combined_results)) for result in combined_results]
+                    return tuple(
+                        result._replace(fragment_group_size=len(combined_results)) for result in combined_results
+                    )
                 return combined_results
             raise
 
     async def _post_apply_guardrail_content_with_retry(
         self,
-        content: list[BedrockContentItem],
-        base_request_data: dict,
+        content: Sequence[BedrockContentItem],
+        base_request_data: Mapping[str, Any],
         credentials: "Credentials",
         aws_region_name: str,
         api_key: str | None,
-        request_data: dict | None,
+        request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
     ) -> BedrockGuardrailResponse:
@@ -1038,8 +1041,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         sleep and every (billed) attempt before the caller's bisection gets a
         chance to split the content, at every level of the recursion.
         """
-        attempt = 0
-        while True:
+        for attempt in range(_BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES + 1):
             try:
                 return await self._post_apply_guardrail_content(
                     content=content,
@@ -1053,23 +1055,22 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
             except HTTPException as exc:
                 if (
-                    exc.status_code == 429
-                    and not self._is_input_too_large_error(exc.detail)
-                    and attempt < _BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES
+                    exc.status_code != 429
+                    or self._is_input_too_large_error(exc.detail)
+                    or attempt >= _BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES
                 ):
-                    await asyncio.sleep(_BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS * (2**attempt))
-                    attempt += 1
-                    continue
-                raise
+                    raise
+                await asyncio.sleep(_BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS * (2**attempt))
+        raise HTTPException(status_code=500, detail="Bedrock guardrail throttle retries exhausted")
 
     async def _post_apply_guardrail_content(
         self,
-        content: list[BedrockContentItem],
-        base_request_data: dict,
+        content: Sequence[BedrockContentItem],
+        base_request_data: Mapping[str, Any],
         credentials: "Credentials",
         aws_region_name: str,
         api_key: str | None,
-        request_data: dict | None,
+        request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
     ) -> BedrockGuardrailResponse:
@@ -1086,8 +1087,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         flow immediately, with no further chunks attempted, so there is no later
         merged response for the caller to log instead.
         """
-        bedrock_request_data = {**base_request_data, "content": content}
-        prepared_request = self._prepare_request(
+        bedrock_request_data: Final = {  # mutable-ok: outbound JSON request body
+            **base_request_data,
+            "content": content,
+        }  # mutable-ok: outbound JSON request body
+        prepared_request: Final = self._prepare_request(
             credentials=credentials,
             data=bedrock_request_data,
             optional_params=self.optional_params,
@@ -1101,7 +1105,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             prepared_request.headers,
         )
 
-        httpx_response = await self._sign_and_post(
+        httpx_response: Final = await self._sign_and_post(
             prepared_request=prepared_request,
             request_data=request_data,
             event_type=event_type,
@@ -1113,7 +1117,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if self._check_bedrock_response_for_exception(httpx_response):
                 _, exception_detail = self._parse_bedrock_guardrail_error_response(httpx_response)
                 raise HTTPException(status_code=500, detail=exception_detail)
-            _json_response = httpx_response.json()
+            _json_response: Final = httpx_response.json()
             # check if the response was flagged
             verbose_proxy_logger.debug(
                 "Bedrock AI response : %s",
@@ -1144,19 +1148,19 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _log_apply_guardrail_attempt(
         self,
         httpx_response: httpx.Response,
-        json_response: dict,
-        request_data: dict | None,
+        json_response: dict,  # mutable-ok: raw AWS JSON payload
+        request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
     ) -> None:
         """Log a single ApplyGuardrail HTTP attempt as-is (its own status,
         derived from its own response). Used only for the blocked-content
         case, which ends the whole chunking flow immediately."""
-        tracing_detail = self._build_tracing_detail(BedrockGuardrailResponse(**json_response))
+        tracing_detail: Final = self._build_tracing_detail(BedrockGuardrailResponse(**json_response))
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
             guardrail_json_response=json_response,
-            request_data=request_data or {},
+            request_data=request_data or {},  # mutable-ok: logging helper requires a dict
             guardrail_status=self._get_bedrock_guardrail_response_status(response=httpx_response),
             start_time=start_time.timestamp(),
             end_time=datetime.now(timezone.utc).timestamp(),
@@ -1168,7 +1172,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _log_apply_guardrail_success(
         self,
         merged_response: BedrockGuardrailResponse,
-        request_data: dict | None,
+        request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
     ) -> None:
@@ -1176,11 +1180,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         under the hood -- using its final merged response, so a chunked
         request produces exactly one telemetry entry, the same as an
         unchunked one would."""
-        tracing_detail = self._build_tracing_detail(merged_response)
+        tracing_detail: Final = self._build_tracing_detail(merged_response)
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
-            guardrail_json_response=dict(merged_response),
-            request_data=request_data or {},
+            guardrail_json_response=dict(merged_response),  # mutable-ok: logging helper requires a dict
+            request_data=request_data or {},  # mutable-ok: logging helper requires a dict
             guardrail_status="success",
             start_time=start_time.timestamp(),
             end_time=datetime.now(timezone.utc).timestamp(),
@@ -1192,7 +1196,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _log_apply_guardrail_failure(
         self,
         detail: object,
-        request_data: dict | None,
+        request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
     ) -> None:
@@ -1203,7 +1207,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
             guardrail_json_response=str(detail),
-            request_data=request_data or {},
+            request_data=request_data or {},  # mutable-ok: logging helper requires a dict
             guardrail_status="guardrail_failed_to_respond",
             start_time=start_time.timestamp(),
             end_time=datetime.now(timezone.utc).timestamp(),
@@ -1212,20 +1216,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
     @staticmethod
-    def _content_uses_contextual_grounding(content: list[BedrockContentItem]) -> bool:
+    def _content_uses_contextual_grounding(content: Sequence[BedrockContentItem]) -> bool:
         """True if any content item carries a contextual-grounding qualifier
         (``grounding_source``, ``query``, or the ``guard_content`` the response
         itself is tagged with once grounding is present)."""
         for item in content:
-            if (item.get("text") or {}).get("qualifiers"):
+            if (item.get("text") or {}).get("qualifiers"):  # mutable-ok: read-only empty fallback
                 return True
         return False
 
     @staticmethod
     def _bin_pack_bedrock_content(
-        content: list[BedrockContentItem],
+        content: Sequence[BedrockContentItem],
         budget: int,
-    ) -> list[list[BedrockContentItem]]:
+    ) -> tuple[tuple[BedrockContentItem, ...], ...]:
         """Pack whole content items, in order, into batches whose combined text
         length stays within `budget`, in a single pass that carries the running
         total rather than re-summing the open batch per item.
@@ -1254,7 +1258,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         failing the request.
         """
         if not content:
-            return [content]
+            return (tuple(content),)
 
         lengths: Final = tuple(len((item.get("text") or BedrockTextContent()).get("text") or "") for item in content)
 
@@ -1265,14 +1269,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return batch_index + 1, length
 
         batch_numbers: Final = (index for index, _ in tuple(accumulate(lengths, assign, initial=(0, 0)))[1:])
-        return [
-            [item for _, item in group] for _, group in groupby(zip(batch_numbers, content), key=lambda pair: pair[0])
-        ]
+        return tuple(
+            tuple(item for _, item in group)
+            for _, group in groupby(zip(batch_numbers, content), key=lambda pair: pair[0])
+        )
 
     @staticmethod
     def _split_bedrock_content(
-        content: list[BedrockContentItem],
-    ) -> tuple[list[BedrockContentItem], list[BedrockContentItem]] | None:
+        content: Sequence[BedrockContentItem],
+    ) -> tuple[tuple[BedrockContentItem, ...], tuple[BedrockContentItem, ...]] | None:
         """Bisect `content` into two roughly-equal, non-empty halves.
 
         When `content` already holds more than one item, it is split by list
@@ -1304,22 +1309,23 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         of recursing forever.
         """
         if len(content) > 1:
-            midpoint = max(1, len(content) // 2)
-            return content[:midpoint], content[midpoint:]
+            midpoint: Final = max(1, len(content) // 2)
+            return tuple(content[:midpoint]), tuple(content[midpoint:])
 
-        text_content = content[0].get("text") or BedrockTextContent()
-        text = text_content.get("text") or ""
+        text_content: Final = content[0].get("text") or BedrockTextContent()
+        text: Final = text_content.get("text") or ""
         if len(text) < 2:
             return None
-        split_at = BedrockGuardrail._nearest_whitespace_split_index(text)
-        qualifiers = text_content.get("qualifiers")
-        if qualifiers:
-            first_text = BedrockTextContent(text=text[:split_at], qualifiers=qualifiers)
-            second_text = BedrockTextContent(text=text[split_at:], qualifiers=qualifiers)
-        else:
-            first_text = BedrockTextContent(text=text[:split_at])
-            second_text = BedrockTextContent(text=text[split_at:])
-        return [BedrockContentItem(text=first_text)], [BedrockContentItem(text=second_text)]
+        split_at: Final = BedrockGuardrail._nearest_whitespace_split_index(text)
+        qualifiers: Final = text_content.get("qualifiers")
+
+        def fragment(piece: str) -> BedrockContentItem:
+            block: Final = (
+                BedrockTextContent(text=piece, qualifiers=qualifiers) if qualifiers else BedrockTextContent(text=piece)
+            )
+            return BedrockContentItem(text=block)
+
+        return (fragment(text[:split_at]),), (fragment(text[split_at:]),)
 
     @staticmethod
     def _nearest_whitespace_split_index(text: str) -> int:
@@ -1380,12 +1386,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         if not isinstance(detail, str):
             return False
-        lowered = detail.lower()
+        lowered: Final = detail.lower()
         return any(substring in lowered for substring in _BEDROCK_TOO_LARGE_ERROR_SUBSTRINGS)
 
     @staticmethod
     def _merge_bedrock_guardrail_responses(
-        chunk_results: list[BedrockContentChunkResult],
+        chunk_results: Sequence[BedrockContentChunkResult],
     ) -> BedrockGuardrailResponse:
         """Merge the per-chunk ApplyGuardrail responses of a chunked request into
         one, so a caller cannot tell whether chunking happened.
@@ -1421,29 +1427,33 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         to its item count is passed through as-is instead of guessed at, since
         AWS's docs don't cover partial masking within one multi-item call.
         """
-        logical_units = BedrockGuardrail._group_fragment_units(chunk_results)
-        per_unit_outputs = tuple(BedrockGuardrail._merge_logical_unit_outputs(unit) for unit in logical_units)
-        merged_outputs = [output for outputs, _ in per_unit_outputs for output in outputs]
-        any_masked = any(masked for _, masked in per_unit_outputs)
+        logical_units: Final = BedrockGuardrail._group_fragment_units(chunk_results)
+        per_unit_outputs: Final = tuple(BedrockGuardrail._merge_logical_unit_outputs(unit) for unit in logical_units)
+        merged_outputs: Final = [  # mutable-ok: logged payload; redaction only traverses dict/list
+            output for outputs, _ in per_unit_outputs for output in outputs
+        ]
+        any_masked: Final = any(masked for _, masked in per_unit_outputs)
 
-        actions = tuple(
+        actions: Final = tuple(
             chunk_result.response.get("action")
             for chunk_result in chunk_results
             if isinstance(chunk_result.response.get("action"), str)
         )
-        merged_action = (
+        merged_action: Final = (
             "GUARDRAIL_INTERVENED" if "GUARDRAIL_INTERVENED" in actions else (actions[-1] if actions else None)
         )
-        merged_assessments = [
+        merged_assessments: Final = [  # mutable-ok: logged payload; redaction only traverses dict/list
             assessment
             for chunk_result in chunk_results
-            for assessment in (chunk_result.response.get("assessments") or [])
+            for assessment in (chunk_result.response.get("assessments") or [])  # mutable-ok: logged payload
         ]
-        any_usage_reported = any(chunk_result.response.get("usage") for chunk_result in chunk_results)
+        any_usage_reported: Final = any(chunk_result.response.get("usage") for chunk_result in chunk_results)
 
-        merged: Final[BedrockGuardrailResponse] = cast(
+        merged: Final[BedrockGuardrailResponse] = cast(  # cast-ok: TypedDict assembled from a comprehension
             BedrockGuardrailResponse,
-            {key: value for chunk_result in chunk_results for key, value in chunk_result.response.items()},
+            {  # mutable-ok: builds the TypedDict payload
+                key: value for chunk_result in chunk_results for key, value in chunk_result.response.items()
+            },
         )
         if merged_action is not None:
             merged["action"] = merged_action
@@ -1458,17 +1468,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     @staticmethod
     def _sum_bedrock_guardrail_usage(
-        chunk_results: list[BedrockContentChunkResult],
+        chunk_results: Sequence[BedrockContentChunkResult],
     ) -> BedrockGuardrailUsage:
         """Sum each chunk's ``usage`` counters field-by-field into one totals dict.
 
         Keys are taken from the responses rather than from a fixed list, so a counter
         this code does not know about (AWS has added several) is still summed and
         reported instead of being silently dropped to zero."""
-        chunk_usages: Final = tuple(chunk_result.response.get("usage") or {} for chunk_result in chunk_results)
-        return cast(
+        chunk_usages: Final = tuple(
+            chunk_result.response.get("usage") or {}  # mutable-ok: read-only empty fallback
+            for chunk_result in chunk_results
+        )
+        return cast(  # cast-ok: TypedDict assembled from a comprehension
             BedrockGuardrailUsage,
-            {
+            {  # mutable-ok: builds the TypedDict payload
                 key: sum(usage.get(key) or 0 for usage in chunk_usages)
                 for key in dict.fromkeys(key for usage in chunk_usages for key in usage)
             },
@@ -1476,8 +1489,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     @staticmethod
     def _group_fragment_units(
-        chunk_results: list[BedrockContentChunkResult],
-    ) -> list[tuple[BedrockContentChunkResult, ...]]:
+        chunk_results: Sequence[BedrockContentChunkResult],
+    ) -> tuple[tuple[BedrockContentChunkResult, ...], ...]:
         """Group consecutive text-fragment chunk results back into the one content
         item each group came from, leaving every ordinary chunk result as a unit of
         one.
@@ -1499,12 +1512,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             for index, (_, starts_unit) in enumerate(tuple(accumulate(chunk_results, advance, initial=(0, False)))[1:])
             if starts_unit
         )
-        return [tuple(chunk_results[start:end]) for start, end in zip(starts, starts[1:] + (len(chunk_results),))]
+        return tuple(tuple(chunk_results[start:end]) for start, end in zip(starts, starts[1:] + (len(chunk_results),)))
 
     @staticmethod
     def _merge_logical_unit_outputs(
         unit: tuple[BedrockContentChunkResult, ...],
-    ) -> tuple[list[BedrockGuardrailOutput], bool]:
+    ) -> tuple[tuple[BedrockGuardrailOutput, ...], bool]:
         """Reduce one logical unit (a fragment group of any size, or a single chunk
         result) to the ``BedrockGuardrailOutput`` entries it contributes to the
         merged response, plus whether any masking actually happened in it.
@@ -1532,28 +1545,33 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         if len(unit) > 1:
 
-            def fragment_outputs(result: BedrockContentChunkResult) -> list[BedrockGuardrailOutput]:
-                return list(result.response.get("outputs") or result.response.get("output") or [])
+            def fragment_outputs(result: BedrockContentChunkResult) -> tuple[BedrockGuardrailOutput, ...]:
+                return tuple(result.response.get("outputs") or result.response.get("output") or ())
 
             def fragment_text(result: BedrockContentChunkResult) -> str:
-                source = (result.content[0].get("text") or {}).get("text") or ""
-                outputs = fragment_outputs(result)
-                masked = outputs[0].get("text") if outputs else None
+                source: Final = (result.content[0].get("text") or {}).get(  # mutable-ok: read-only fallback
+                    "text"
+                ) or ""
+                outputs: Final = fragment_outputs(result)
+                masked: Final = outputs[0].get("text") if outputs else None
                 return masked if masked is not None else source
 
-            merged_text = "".join(fragment_text(result) for result in unit)
-            any_masked = any(fragment_outputs(result) for result in unit)
-            return [BedrockGuardrailOutput(text=merged_text)], any_masked
+            merged_text: Final = "".join(fragment_text(result) for result in unit)
+            any_masked: Final = any(fragment_outputs(result) for result in unit)
+            return (BedrockGuardrailOutput(text=merged_text),), any_masked
 
         (chunk_result,) = unit
-        chunk_outputs = chunk_result.response.get("outputs") or chunk_result.response.get("output") or []
+        chunk_outputs: Final = chunk_result.response.get("outputs") or chunk_result.response.get("output") or ()
         if len(chunk_outputs) == len(chunk_result.content):
-            return list(chunk_outputs), bool(chunk_outputs)
+            return tuple(chunk_outputs), bool(chunk_outputs)
         if not chunk_outputs:
-            return [
-                BedrockGuardrailOutput(text=(item.get("text") or {}).get("text") or "") for item in chunk_result.content
-            ], False
-        return list(chunk_outputs), True
+            return tuple(
+                BedrockGuardrailOutput(
+                    text=(item.get("text") or {}).get("text") or ""  # mutable-ok: read-only fallback
+                )
+                for item in chunk_result.content
+            ), False
+        return tuple(chunk_outputs), True
 
     async def _sign_and_post(
         self,
@@ -1606,8 +1624,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     if log_transport_failure:
                         self.add_standard_logging_guardrail_information_to_request_data(
                             guardrail_provider=self.guardrail_provider,
-                            guardrail_json_response={"error": detail_message},
-                            request_data=request_data or {},
+                            guardrail_json_response={  # mutable-ok: logging helper requires a dict
+                                "error": detail_message
+                            },
+                            request_data=request_data or {},  # mutable-ok: logging helper requires a dict
                             guardrail_status="guardrail_failed_to_respond",
                             start_time=start_time.timestamp(),
                             end_time=datetime.now(timezone.utc).timestamp(),
@@ -1622,7 +1642,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider=self.guardrail_provider,
                 guardrail_json_response={"error": str(e)},
-                request_data=request_data or {},
+                request_data=request_data or {},  # mutable-ok: logging helper requires a dict
                 guardrail_status="guardrail_failed_to_respond",
                 start_time=start_time.timestamp(),
                 end_time=datetime.now(timezone.utc).timestamp(),
@@ -1749,7 +1769,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider=self.guardrail_provider,
                 guardrail_json_response={"error": detail_message},
-                request_data=request_data or {},
+                request_data=request_data or {},  # mutable-ok: logging helper requires a dict
                 guardrail_status="guardrail_failed_to_respond",
                 start_time=start_time.timestamp(),
                 end_time=datetime.now(timezone.utc).timestamp(),
@@ -1765,7 +1785,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider=self.guardrail_provider,
                 guardrail_json_response={"error": str(e)},
-                request_data=request_data or {},
+                request_data=request_data or {},  # mutable-ok: logging helper requires a dict
                 guardrail_status="guardrail_failed_to_respond",
                 start_time=start_time.timestamp(),
                 end_time=datetime.now(timezone.utc).timestamp(),
@@ -1783,7 +1803,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
             guardrail_json_response=self._sanitize_invoke_checks_response_for_logging(json_response),
-            request_data=request_data or {},
+            request_data=request_data or {},  # mutable-ok: logging helper requires a dict
             guardrail_status=self._get_invoke_checks_status(bool(violations)),
             start_time=start_time.timestamp(),
             end_time=datetime.now(timezone.utc).timestamp(),
