@@ -315,8 +315,10 @@ sequenceDiagram
     
     CLI->>Proxy: POST /sso/cli/start
     Proxy->>CLI: Return login_id, poll_secret, user_code
-    CLI->>Browser: Open /sso/key/generate?source=litellm-cli&key=login_id
+    CLI->>Browser: Open /ui/login?source=litellm-cli&key=login_id
     
+    Browser->>Proxy: GET /.well-known/litellm-ui-config
+    Proxy->>Browser: sso_configured
     Browser->>Proxy: GET /sso/key/generate?source=litellm-cli&key=login_id
     Proxy->>Proxy: Set cli_state = litellm-session-token:login_id
     Proxy->>SSO: Redirect with state=litellm-session-token:login_id
@@ -346,13 +348,14 @@ The CLI provides these authentication commands:
 ### Authentication Flow Steps
 
 1. **Start Session**: CLI creates a short-lived login session with `/sso/cli/start`
-2. **Open Browser**: CLI opens browser to `/sso/key/generate` with CLI source and login ID parameters
-3. **SSO Redirect**: Proxy sets the formatted state (`litellm-session-token:{login_id}`) as OAuth state parameter and redirects to SSO provider
-4. **User Authentication**: User completes SSO authentication in browser
-5. **Callback Processing**: SSO provider redirects back to proxy with state parameter
-6. **User Code Verification**: Browser confirms the verification code shown in the CLI
-7. **Polling**: CLI polls `/sso/cli/poll/{login_id}` with the polling secret header until the JWT is ready. When `CLI_SSO_CLAIM_MAP` is configured on the proxy, the poll response may include `attribution_metadata` (allowlisted scalar OIDC claims for client attribution).
-8. **Token Storage**: CLI saves the authentication token to `~/.litellm/token.json`
+2. **Open Browser**: CLI opens browser to `/ui/login` with CLI source and login ID parameters
+3. **SSO Hand-off**: The login page reads `sso_configured` from `/.well-known/litellm-ui-config`; when SSO is set up it forwards the CLI source and login ID to `/sso/key/generate` to start the OAuth flow
+4. **SSO Redirect**: Proxy sets the formatted state (`litellm-session-token:{login_id}`) as OAuth state parameter and redirects to SSO provider
+5. **User Authentication**: User completes SSO authentication in browser
+6. **Callback Processing**: SSO provider redirects back to proxy with state parameter
+7. **User Code Verification**: Browser confirms the verification code shown in the CLI
+8. **Polling**: CLI polls `/sso/cli/poll/{login_id}` with the polling secret header until the JWT is ready. When `CLI_SSO_CLAIM_MAP` is configured on the proxy, the poll response may include `attribution_metadata` (allowlisted scalar OIDC claims for client attribution).
+9. **Token Storage**: CLI saves the authentication token to `~/.litellm/token.json`
 
 ### Benefits of This Approach
 

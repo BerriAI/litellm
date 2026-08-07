@@ -13,6 +13,9 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useWorker } from "@/hooks/useWorker";
 
+const LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli";
+const CLI_LOGIN_ID_REGEX = /^cli-[A-Za-z0-9_-]{12,124}$/;
+
 function LoginPageContent() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -69,6 +72,24 @@ function LoginPageContent() {
     if (switchingWorker && uiConfig?.is_control_plane) {
       clearTokenCookies();
       setIsLoading(false);
+      return;
+    }
+
+    const cliSource = params.get("source");
+    const cliKey = params.get("key");
+    if (
+      cliSource === LITELLM_CLI_SOURCE_IDENTIFIER &&
+      cliKey &&
+      CLI_LOGIN_ID_REGEX.test(cliKey) &&
+      uiConfig?.sso_configured
+    ) {
+      const cliUserCode = params.get("user_code");
+      const ssoQuery = new URLSearchParams({
+        source: LITELLM_CLI_SOURCE_IDENTIFIER,
+        key: cliKey,
+        ...(cliUserCode ? { user_code: cliUserCode } : {}),
+      });
+      router.push(`${getProxyBaseUrl()}/sso/key/generate?${ssoQuery.toString()}`);
       return;
     }
 
