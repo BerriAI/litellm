@@ -95,8 +95,16 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
     return <div className="text-red-500">{error}</div>;
   }
 
-  // Get the provider key matching the selected provider in the guardrail_provider_map
-  const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
+  // Get the provider key matching the selected provider in the guardrail_provider_map.
+  // For dynamically-added providers the map may not yet contain the entry (e.g. when
+  // providerParams are passed via props and populateGuardrailProviderMap has not run).
+  // Fall back to converting the camelCase option key back to snake_case.
+  const providerKey =
+    guardrail_provider_map[selectedProvider]?.toLowerCase() ??
+    selectedProvider
+      .replace(/([A-Z])/g, "_")
+      .toLowerCase()
+      .replace(/^_/, "");
 
   // Get parameters for the selected provider
   const providerFields = providerParams && providerParams[providerKey];
