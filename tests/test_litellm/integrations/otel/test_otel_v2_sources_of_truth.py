@@ -823,10 +823,20 @@ def test_promoted_baggage_is_bounded_allowlist():
         ("https://weather.example.com:8443", ("weather.example.com", 8443)),
         ("mcp://weather.example.com", ("weather.example.com", None)),
         ("http://::1:8080", (None, None)),
+        ("http://fe80::1%25eth0:80", (None, None)),
         (None, (None, None)),
         ("", (None, None)),
     ],
-    ids=["https-default", "http-default", "explicit-port", "no-default-port", "ipv6-unbracketed", "none", "empty"],
+    ids=[
+        "https-default",
+        "http-default",
+        "explicit-port",
+        "no-default-port",
+        "ipv6-unbracketed",
+        "ipv6-zone-scoped",
+        "none",
+        "empty",
+    ],
 )
 def test_upstream_address_port(resource, expected):
     """The redacted MCP origin resolves to the address and port a consumer names its
