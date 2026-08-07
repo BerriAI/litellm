@@ -232,6 +232,7 @@ LLM_CONFIG_NAMES: Final = (
     "MistralConfig",
     "OpenAIResponsesAPIConfig",
     "AzureOpenAIResponsesAPIConfig",
+    "AzureAIResponsesAPIConfig",
     "AzureOpenAIOSeriesResponsesAPIConfig",
     "XAIResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
@@ -932,6 +933,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "AzureOpenAIResponsesAPIConfig": (
         ".llms.azure.responses.transformation",
         "AzureOpenAIResponsesAPIConfig",
+    ),
+    "AzureAIResponsesAPIConfig": (
+        ".llms.azure_ai.responses.transformation",
+        "AzureAIResponsesAPIConfig",
     ),
     "AzureOpenAIOSeriesResponsesAPIConfig": (
         ".llms.azure.responses.o_series_transformation",
