@@ -6053,12 +6053,60 @@ class TestPromotedTraceControlFields:
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_inherited_tags_excludes_caller_tags():
+    """inherited_tags must carry only what key/team/project policy contributed,
+    never anything the caller's own request (header/body) supplied, even when the
+    caller resubmits the identical value -- it's a snapshot taken before the
+    caller's own tags are merged in, not a set difference against caller_tags.
+    tag_based_routing.py's allow_fail_open relies on this so a caller can't strip
+    an inherited constraint's protection by resubmitting its exact value."""
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        # Caller resubmits the exact value the key policy also contributes.
+        "tags": ["key-supplied"],
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id="real-user",
+        metadata={"tags": ["key-supplied"]},
+        team_metadata={"tags": ["team-supplied"]},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert set(updated["metadata"]["tags"]) == {"key-supplied", "team-supplied"}
+    assert set(updated["metadata"]["inherited_tags"]) == {"key-supplied", "team-supplied"}
+    assert tuple(updated["metadata"]["caller_tags"]) == ("key-supplied",)
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_caller_tags_excludes_key_and_team_tags():
     """caller_tags must carry only what the caller itself sent (header + body
     tags), never anything merged in from key/team metadata, even though the
-    merged "tags" field (used for matching) legitimately contains all three.
-    tag_based_routing.py's allow_fail_open relies on this distinction to avoid
-    silently discarding an inherited constraint on a caller-triggered fallback."""
+    merged "tags" field (used for matching) legitimately contains all three."""
     request_mock = MagicMock(spec=Request)
     request_mock.url.path = "/v1/chat/completions"
     request_mock.url = MagicMock()

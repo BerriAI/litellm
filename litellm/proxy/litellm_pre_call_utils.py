@@ -1848,6 +1848,15 @@ async def add_litellm_data_to_request(
     if should_auto_drop_params_for_agentic_cli(user_agent, data, proxy_config):
         data["drop_params"] = True
 
+    # inherited_tags: a snapshot of "tags" as merged from key/team/project policy
+    # above, taken *before* this request's own caller-supplied tags are merged in
+    # below. A tag value present here is policy-backed no matter what the caller
+    # separately submits, including the identical value -- tag_based_routing.py's
+    # allow_fail_open uses this (rather than subtracting caller_tags from the
+    # final merged set) so a caller can't strip an inherited "!"/"&" constraint's
+    # protection just by resubmitting its exact value alongside a conflicting one.
+    data[_metadata_variable_name]["inherited_tags"] = tuple(data[_metadata_variable_name].get("tags") or ())
+
     # Merge caller-supplied tags (x-litellm-tags header, data["tags"] root-level)
     # into request metadata for tag-based routing and spend attribution.
     tags: Final = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
@@ -1876,8 +1885,10 @@ async def add_litellm_data_to_request(
 
     # caller_tags: exactly what this request itself supplied (x-litellm-tags header,
     # body "tags", or body "metadata.tags" on litellm_metadata routes), never
-    # anything from key/team metadata. tag_based_routing.py's allow_fail_open uses
-    # this to tell a caller-supplied "!"/"&" constraint apart from one inherited
+    # anything from key/team metadata. Kept as the complementary record to
+    # inherited_tags above (together they partition "tags" by origin), though
+    # tag_based_routing.py's allow_fail_open reads inherited_tags directly rather
+    # than deriving "not inherited" by subtracting this from the final merged set
     # from key/team policy, both merged into "tags" above.
     data[_metadata_variable_name]["caller_tags"] = tuple(dict.fromkeys((*(tags or ()), *(_caller_body_tags or ()))))
 
