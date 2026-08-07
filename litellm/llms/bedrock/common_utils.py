@@ -1314,11 +1314,11 @@ def resolve_s3_encryption_key_id(
     Precedence: `s3_encryption_key_id` in litellm_params, then optional_params
     (client-side / request params), then the AWS_S3_ENCRYPTION_KEY_ID env var.
     """
-    for source in (litellm_params, optional_params or {}):
-        value = source.get("s3_encryption_key_id")
-        if isinstance(value, str) and value:
-            return value
-    return get_secret_str("AWS_S3_ENCRYPTION_KEY_ID")
+    candidates: Final = tuple(
+        source.get("s3_encryption_key_id") for source in (litellm_params, optional_params) if source is not None
+    )
+    explicit: Final = next((value for value in candidates if isinstance(value, str) and value), None)
+    return explicit or get_secret_str("AWS_S3_ENCRYPTION_KEY_ID")
 
 
 class CommonBatchFilesUtils:
