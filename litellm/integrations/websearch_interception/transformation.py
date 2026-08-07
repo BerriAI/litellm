@@ -391,13 +391,19 @@ class WebSearchTransformation:
                 url = getattr(r, "url", "") or ""
                 title = getattr(r, "title", "") or ""
                 page_age = getattr(r, "date", None) or getattr(r, "last_updated", None)
+                snippet = getattr(r, "snippet", "") or ""
                 items.append(
                     {
                         "type": "web_search_result",
                         "url": url,
                         "title": title,
                         "page_age": page_age,
-                        "encrypted_content": "",
+                        # The provider snippet is the only result text we have.
+                        # Anthropic's native block carries body text in
+                        # encrypted_content, so pass the snippet through there
+                        # rather than dropping it (client citation panels render
+                        # empty otherwise).
+                        "encrypted_content": snippet,
                     }
                 )
         return {
