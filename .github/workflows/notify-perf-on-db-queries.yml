@@ -1,0 +1,95 @@
+name: Notify Perf On DB Queries
+
+on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_staging
+      - "litellm_**"
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  notify-perf:
+    name: notify-perf
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install detector dependencies
+        run: pip install --no-cache-dir "pydantic==2.13.4"
+
+      - name: Detect added DB queries
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate \
+            --jq '[.[] | {filename, patch}]' > changed_files.json
+          if python scripts/detect_new_db_queries.py < changed_files.json > findings.txt; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "### New DB access in this PR"
+              echo
+              echo '```'
+              cat findings.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Request perf review
+        if: steps.detect.outputs.found == 'true' && github.event.pull_request.head.repo.fork == false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          PERF_REVIEWER: yassin-berriai
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [ "$PR_AUTHOR" = "$PERF_REVIEWER" ]; then
+            echo "PR author is the perf reviewer; nothing to request."
+            exit 0
+          fi
+          reviewed=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" --paginate \
+            --jq "[.[] | select(.user.login == \"${PERF_REVIEWER}\")] | length")
+          if [ "$reviewed" != "0" ]; then
+            echo "${PERF_REVIEWER} already reviewed this PR."
+            exit 0
+          fi
+          gh api --method POST "repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers" \
+            -f "reviewers[]=${PERF_REVIEWER}" >/dev/null
+          marker="<!-- notify-perf-on-db-queries -->"
+          existing=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq "[.[] | select(.body | contains(\"${marker}\"))] | length")
+          if [ "$existing" != "0" ]; then
+            echo "Perf review comment already posted."
+            exit 0
+          fi
+          {
+            echo "$marker"
+            echo "This PR adds Prisma queries or changes a Prisma schema, so @${PERF_REVIEWER} has been requested for a performance review."
+            echo
+            echo "The matched lines are in the \`notify-perf\` job summary. Reminder: dashboards and management endpoints should read the daily aggregate tables, since a query against \`LiteLLM_SpendLogs\` scales with request volume and a date-bounded window is not a bounded amount of work."
+          } > perf_comment.md
+          gh pr comment "${PR_NUMBER}" --repo "${REPO}" --body-file perf_comment.md
