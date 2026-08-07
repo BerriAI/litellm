@@ -788,6 +788,7 @@ openai_compatible_providers: Final[list] = [
     "novita",
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
+    "agione",  # AGIone - JSON-configured provider
     "synthetic",  # Synthetic - JSON-configured provider
     "tensormesh",  # Tensormesh - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider
