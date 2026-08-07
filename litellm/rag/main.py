@@ -253,11 +253,7 @@ async def _execute_query_pipeline(
         # kwargs for the search.
         search_kwargs = dict(kwargs)
         search_kwargs.update(
-            {
-                key: retrieval_config[key]
-                for key in _VECTOR_STORE_SEARCH_PARAMS
-                if key in retrieval_config
-            }
+            {key: retrieval_config[key] for key in _VECTOR_STORE_SEARCH_PARAMS if key in retrieval_config}
         )
         search_response: Final = await litellm.vector_stores.asearch(
             vector_store_id=retrieval_config["vector_store_id"],
