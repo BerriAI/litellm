@@ -35,3 +35,23 @@ class TestBytePlusImageGenerationConfig:
         assert req["prompt"] == "a cat"
         assert req["size"] == "2K"
         assert req["output_format"] == "png"
+
+    def test_transform_image_generation_request_extra_body_reserved_fields(self):
+        config = BytePlusImageGenerationConfig()
+        req = config.transform_image_generation_request(
+            model="dola-seedream-5-0-pro-260628",
+            prompt="a cat",
+            optional_params={
+                "extra_body": {
+                    "model": "malicious-model",
+                    "prompt": "malicious prompt",
+                    "custom_field": "custom_val",
+                }
+            },
+            litellm_params={},
+            headers={},
+        )
+        assert req["model"] == "dola-seedream-5-0-pro-260628"
+        assert req["prompt"] == "a cat"
+        assert req["custom_field"] == "custom_val"
+

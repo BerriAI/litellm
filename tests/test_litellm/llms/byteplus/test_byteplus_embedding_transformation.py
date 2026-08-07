@@ -117,3 +117,22 @@ class TestBytePlusEmbeddingConfig:
         assert res.model == "skylark-embedding-vision-250615"
         assert res.data[0]["embedding"] == [0.1, 0.2, 0.3]
 
+    def test_transform_embedding_request_extra_body_reserved_fields(self):
+        config = BytePlusEmbeddingConfig()
+        data = config.transform_embedding_request(
+            model="doubao-embedding-text",
+            input="test text",
+            optional_params={
+                "extra_body": {
+                    "model": "malicious-model",
+                    "input": "malicious input",
+                    "custom_param": "val",
+                }
+            },
+            headers={},
+        )
+        assert data["model"] == "doubao-embedding-text"
+        assert data["input"] == ["test text"]
+        assert data["custom_param"] == "val"
+
+

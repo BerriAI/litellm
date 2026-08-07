@@ -121,7 +121,10 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
                 data[key] = optional_params[key]
 
         if "extra_body" in optional_params and isinstance(optional_params["extra_body"], dict):
-            data.update(optional_params["extra_body"])
+            extra_body: Final = {
+                k: v for k, v in optional_params["extra_body"].items() if k not in ("model", "input")
+            }
+            data.update(extra_body)
 
         return data
 
