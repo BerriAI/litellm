@@ -132,9 +132,17 @@ vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
 }));
 
-// Mock window.location.href for logout testing
+vi.mock("@/utils/returnUrlUtils", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/utils/returnUrlUtils")>();
+  return {
+    ...actual,
+    clearStoredReturnUrl: vi.fn(),
+  };
+});
+
+// Mock window.location for logout testing
 Object.defineProperty(window, "location", {
-  value: { href: "" },
+  value: { href: "", replace: vi.fn() },
   writable: true,
 });
 
@@ -291,6 +299,7 @@ describe("Navbar", () => {
 
   it("should handle logout functionality", async () => {
     const user = userEvent.setup();
+    vi.mocked(window.location.replace).mockClear();
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
@@ -304,9 +313,75 @@ describe("Navbar", () => {
     await user.click(screen.getByText("Logout"));
 
     const cookieUtils = vi.mocked(await import("@/utils/cookieUtils"));
+    const returnUrlUtils = vi.mocked(await import("@/utils/returnUrlUtils"));
     expect(cookieUtils.clearTokenCookies).toHaveBeenCalled();
+    expect(returnUrlUtils.clearStoredReturnUrl).toHaveBeenCalled();
     await waitFor(() => {
-      expect(window.location.href).toBe("https://example.com/logout");
+      expect(window.location.replace).toHaveBeenCalledWith("https://example.com/logout");
+    });
+  });
+
+  it("should redirect to the login page on logout when PROXY_LOGOUT_URL is not configured", async () => {
+    const user = userEvent.setup();
+    vi.mocked(window.location.replace).mockClear();
+
+    const proxyUtils = vi.mocked(await import("@/utils/proxyUtils"));
+    proxyUtils.fetchProxySettings.mockResolvedValueOnce({
+      PROXY_BASE_URL: "",
+      PROXY_LOGOUT_URL: "",
+    });
+
+    renderWithProviders(<Navbar {...defaultProps} accessToken="test-token-no-logout-url" />);
+
+    await user.click(screen.getByRole("button", { name: /open account menu/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("test-user")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByText("Logout"));
+
+    await waitFor(() => {
+      expect(window.location.replace).toHaveBeenCalledWith("http://localhost:4000/ui/login/");
+    });
+  });
+
+  it("should wait for an in-flight proxy settings fetch so a configured logout URL is not skipped", async () => {
+    const user = userEvent.setup();
+    vi.mocked(window.location.replace).mockClear();
+
+    const cookieUtils = vi.mocked(await import("@/utils/cookieUtils"));
+    const returnUrlUtils = vi.mocked(await import("@/utils/returnUrlUtils"));
+    cookieUtils.clearTokenCookies.mockClear();
+    returnUrlUtils.clearStoredReturnUrl.mockClear();
+
+    const proxyUtils = vi.mocked(await import("@/utils/proxyUtils"));
+    let resolveSettings!: (value: { PROXY_BASE_URL: string; PROXY_LOGOUT_URL: string }) => void;
+    proxyUtils.fetchProxySettings.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSettings = resolve;
+        }),
+    );
+
+    renderWithProviders(<Navbar {...defaultProps} accessToken="test-token-pending-settings" />);
+
+    await user.click(screen.getByRole("button", { name: /open account menu/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("test-user")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByText("Logout"));
+
+    expect(window.location.replace).not.toHaveBeenCalled();
+    expect(cookieUtils.clearTokenCookies).toHaveBeenCalled();
+    expect(returnUrlUtils.clearStoredReturnUrl).toHaveBeenCalled();
+
+    resolveSettings({ PROXY_BASE_URL: "", PROXY_LOGOUT_URL: "https://sso.example.com/logout" });
+
+    await waitFor(() => {
+      expect(window.location.replace).toHaveBeenCalledWith("https://sso.example.com/logout");
     });
   });
 
