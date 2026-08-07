@@ -647,6 +647,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             openai_body = _openai_jsonl_content.get("body", {})
             model = openai_body.get("model", "")
             model = litellm.model_alias_map.get(model, model)
+            openai_body = {**openai_body, "model": model}
 
             try:
                 model, _, _, _ = get_llm_provider(

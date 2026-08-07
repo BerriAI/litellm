@@ -33,3 +33,31 @@ def test_bedrock_batch_resolves_model_alias_before_provider_mapping(monkeypatch)
             },
         }
     ]
+
+
+def test_bedrock_batch_resolves_model_alias_before_embedding_mapping(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_alias_map,
+        "bedrock-embedding-batch",
+        "bedrock/amazon.titan-embed-text-v2:0",
+    )
+
+    result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        [
+            {
+                "custom_id": "embedding-1",
+                "url": "/v1/embeddings",
+                "body": {
+                    "model": "bedrock-embedding-batch",
+                    "input": "hello",
+                },
+            }
+        ]
+    )
+
+    assert result == [
+        {
+            "recordId": "embedding-1",
+            "modelInput": {"inputText": "hello"},
+        }
+    ]
