@@ -12,9 +12,9 @@ Two layers, both computed with griffe against the PR's base ref:
   1. Breaking changes (removed objects, changed signatures, changed defaults).
      Allowed only when the PR declares a breaking change the Conventional
      Commits way: a `!` in the title type, or a `BREAKING CHANGE:` footer.
-  2. Newly exported top-level names (`litellm.<name>`). Allowed only under a
-     `feat` or `fix` title, so a `chore`/`refactor` PR cannot quietly widen
-     the public surface.
+  2. Newly exported top-level names (`litellm.<name>`) that the package owns.
+     Allowed only under a `feat` or `fix` title, so a `chore`/`refactor` PR
+     cannot quietly widen the public surface.
 
 Attribute *value* changes are advisory: `Union[A, B] -> A | B` rewrites and
 f-string conversions trip that check constantly without breaking anyone.
@@ -118,17 +118,36 @@ def source_location(obj: Object | Alias) -> tuple[str | None, int | None]:
         return None, None
 
 
-def home_path(obj: Object | Alias) -> str:
+def lookup(roots: tuple[Module, ...], path: str) -> Object | Alias | None:
+    parts: Final = path.split(".")
+    for root in roots:
+        if parts[0] != root.name:
+            continue
+        try:
+            return root.get_member(parts[1:])
+        except Exception:
+            continue
+    return None
+
+
+def home_path(obj: Object | Alias, roots: tuple[Module, ...] = (), seen: frozenset[str] = frozenset()) -> str | None:
     try:
         return obj.canonical_path
     except Exception:
-        return str(getattr(obj, "target_path", obj.path))
+        target: Final = getattr(obj, "target_path", None)
+        if target is None or target in seen:
+            return None
+        next_hop: Final = lookup(roots, target)
+        if next_hop is None:
+            return target
+        return home_path(next_hop, roots, seen | {target}) or target
 
 
-def is_in_scope(obj: Object | Alias, package: str) -> bool:
+def is_in_scope(obj: Object | Alias, package: str, roots: tuple[Module, ...] = ()) -> bool:
     if obj.path.startswith(OUT_OF_SCOPE_PREFIXES):
         return False
-    return home_path(obj).startswith(f"{package}.")
+    home: Final = home_path(obj, roots)
+    return home is not None and home.startswith(f"{package}.")
 
 
 def to_finding(breakage: Breakage, style: ExplanationStyle) -> ApiFinding:
@@ -142,8 +161,12 @@ def to_finding(breakage: Breakage, style: ExplanationStyle) -> ApiFinding:
     )
 
 
-def top_level_names(module: Module) -> frozenset[str]:
-    return frozenset(name for name in module.members if not name.startswith("_"))
+def top_level_names(module: Module, package: str, roots: tuple[Module, ...]) -> frozenset[str]:
+    return frozenset(
+        name
+        for name, member in module.members.items()
+        if not name.startswith("_") and is_in_scope(member, package, roots)
+    )
 
 
 def build_delta(
@@ -153,13 +176,16 @@ def build_delta(
     style: ExplanationStyle,
     package: str = DEFAULT_PACKAGE,
 ) -> ApiDelta:
+    roots: Final = (new, old)
     findings: Final = tuple(
-        dict.fromkeys(to_finding(breakage, style) for breakage in breakages if is_in_scope(breakage.obj, package))
+        dict.fromkeys(
+            to_finding(breakage, style) for breakage in breakages if is_in_scope(breakage.obj, package, roots)
+        )
     )
     return ApiDelta(
         blocking=tuple(f for f in findings if f.kind not in ADVISORY_KINDS),
         advisory=tuple(f for f in findings if f.kind in ADVISORY_KINDS),
-        added_names=tuple(sorted(top_level_names(new) - top_level_names(old))),
+        added_names=tuple(sorted(top_level_names(new, package, roots) - top_level_names(old, package, roots))),
     )
 
 

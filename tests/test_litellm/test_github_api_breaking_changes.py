@@ -168,8 +168,16 @@ class TestScope:
         obj = FakeObject("litellm.BedrockLLM", canonical=None, target="litellm.llms.bedrock.BedrockLLM")
         assert gate.is_in_scope(obj, "litellm") is True
 
-    def test_alias_without_target_falls_back_to_its_own_path(self):
-        assert gate.is_in_scope(FakeObject("litellm.Router", canonical=None), "litellm") is True
+    def test_alias_chained_through_an_internal_module_to_stdlib_is_out_of_scope(self):
+        chained = FakeModule("Final", external=("Final",))
+        assert gate.is_in_scope(chained.members["Final"], "litellm", (chained,)) is False
+
+    def test_alias_chained_within_the_package_stays_in_scope(self):
+        owned = FakeModule("completion")
+        assert gate.is_in_scope(owned.members["completion"], "litellm", (owned,)) is True
+
+    def test_unidentifiable_alias_is_treated_as_out_of_scope(self):
+        assert gate.is_in_scope(FakeObject("litellm.Router", canonical=None), "litellm") is False
 
 
 class FakeKind:
@@ -188,8 +196,28 @@ class FakeBreakage:
 
 
 class FakeModule:
-    def __init__(self, *names: str):
-        self.members = {name: object() for name in names}
+    """Top-level `litellm`. Names are owned by the package unless `external` says otherwise.
+
+    `external` names mimic the real `litellm.Final`: re-exported through an
+    internal module, so only following the alias chain reveals they are stdlib.
+    """
+
+    name = "litellm"
+
+    def __init__(self, *names: str, external: tuple[str, ...] = ()):
+        self.members = {
+            name: FakeObject(f"litellm.{name}", canonical=None, target=f"litellm.scheduler.{name}")
+            if name in external
+            else FakeObject(f"litellm.{name}", f"litellm.main.{name}")
+            for name in names
+        }
+        self._hops = {
+            f"scheduler.{name}": FakeObject(f"litellm.scheduler.{name}", canonical=None, target=f"typing.{name}")
+            for name in external
+        }
+
+    def get_member(self, parts):
+        return self._hops[".".join(parts)]
 
 
 class TestBuildDelta:
@@ -236,6 +264,24 @@ class TestBuildDelta:
     def test_removed_top_level_names_are_not_counted_as_additions(self):
         built = gate.build_delta(FakeModule("completion", "old_flag"), FakeModule("completion"), iter([]), style=None)
         assert built.added_names == ()
+
+    def test_a_newly_imported_stdlib_name_is_not_surface_widening(self):
+        built = gate.build_delta(
+            FakeModule("completion"),
+            FakeModule("completion", "Final", external=("Final",)),
+            iter([]),
+            style=None,
+        )
+        assert built.added_names == ()
+
+    def test_owned_additions_survive_alongside_ignored_stdlib_imports(self):
+        built = gate.build_delta(
+            FakeModule("completion"),
+            FakeModule("completion", "Final", "new_flag", external=("Final",)),
+            iter([]),
+            style=None,
+        )
+        assert built.added_names == ("new_flag",)
 
 
 class TestRendering:
