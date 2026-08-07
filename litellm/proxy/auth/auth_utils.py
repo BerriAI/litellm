@@ -7,6 +7,7 @@ from logging import Logger
 from typing import Any, Final
 
 from fastapi import HTTPException, Request, status
+from pydantic import PositiveInt, TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router, provider_list
@@ -997,6 +998,90 @@ def get_key_model_tpm_limit(
             return {model_name: default_limit}
 
     return None
+
+
+ESTIMATED_OUTPUT_TOKENS_FIELD: Final = "default_estimated_output_tokens"
+ESTIMATED_OUTPUT_TOKENS_PER_MODEL_FIELD: Final = "default_estimated_output_tokens_per_model"
+ESTIMATED_OUTPUT_TOKENS_METADATA_FIELDS: Final = frozenset(
+    {ESTIMATED_OUTPUT_TOKENS_FIELD, ESTIMATED_OUTPUT_TOKENS_PER_MODEL_FIELD}
+)
+
+_ESTIMATED_OUTPUT_TOKENS_ADAPTER: Final = TypeAdapter(PositiveInt)
+_ESTIMATED_OUTPUT_TOKENS_PER_MODEL_ADAPTER: Final = TypeAdapter(Mapping[str, PositiveInt])
+
+
+def _validated_output_token_estimate(raw: object) -> int | None:
+    """Coerce one declared estimate to a positive int, or ignore it."""
+    if raw is None:
+        return None
+    try:
+        return _ESTIMATED_OUTPUT_TOKENS_ADAPTER.validate_python(raw)
+    except ValidationError as validation_error:
+        verbose_proxy_logger.warning(
+            "Ignoring malformed %s in metadata: %s",
+            ESTIMATED_OUTPUT_TOKENS_FIELD,
+            validation_error,
+        )
+        return None
+
+
+def _validated_output_token_estimates_per_model(raw: object) -> Mapping[str, int] | None:
+    """Coerce a declared per-model estimate map, or ignore it."""
+    if raw is None:
+        return None
+    try:
+        return _ESTIMATED_OUTPUT_TOKENS_PER_MODEL_ADAPTER.validate_python(raw)
+    except ValidationError as validation_error:
+        verbose_proxy_logger.warning(
+            "Ignoring malformed %s in metadata: %s",
+            ESTIMATED_OUTPUT_TOKENS_PER_MODEL_FIELD,
+            validation_error,
+        )
+        return None
+
+
+def _estimated_output_tokens_from_metadata(
+    metadata: Mapping[str, Any] | None,
+    model_name: str | None,
+) -> int | None:
+    """Resolve the per-model, then global, estimate out of one metadata blob.
+
+    The two fields are validated independently so a malformed per-model map
+    cannot discard a valid global estimate, or the other way round.
+    """
+    if not metadata or ESTIMATED_OUTPUT_TOKENS_METADATA_FIELDS.isdisjoint(metadata):
+        return None
+
+    if model_name is not None:
+        per_model: Final = _validated_output_token_estimates_per_model(
+            metadata.get(ESTIMATED_OUTPUT_TOKENS_PER_MODEL_FIELD)
+        )
+        per_model_estimate: Final = per_model.get(model_name) if per_model is not None else None
+        if per_model_estimate is not None:
+            return per_model_estimate
+
+    return _validated_output_token_estimate(metadata.get(ESTIMATED_OUTPUT_TOKENS_FIELD))
+
+
+def get_estimated_output_tokens(
+    user_api_key_dict: UserAPIKeyAuth,
+    model_name: str | None = None,
+) -> int | None:
+    """Resolve the operator-declared output-token estimate for TPM reservation.
+
+    Priority order (returns first found):
+    1. Key metadata ``default_estimated_output_tokens_per_model[model_name]``
+    2. Key metadata ``default_estimated_output_tokens``
+    3. Team metadata ``default_estimated_output_tokens_per_model[model_name]``
+    4. Team metadata ``default_estimated_output_tokens``
+
+    Returns ``None`` when nothing is configured, which leaves the static
+    heuristic floor in place.
+    """
+    key_estimate: Final = _estimated_output_tokens_from_metadata(user_api_key_dict.metadata, model_name)
+    if key_estimate is not None:
+        return key_estimate
+    return _estimated_output_tokens_from_metadata(user_api_key_dict.team_metadata, model_name)
 
 
 def get_model_rate_limit_from_metadata(
