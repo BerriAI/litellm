@@ -296,3 +296,46 @@ class TestRouterFallbackDefensivePaths:
             )
 
         prometheus_logger.litellm_remaining_tokens_metric.labels.assert_not_called()
+
+
+class TestProviderHeaderPathEmitsZero:
+    """The sibling path to the router fallback above.
+
+    When a provider does return `x-ratelimit-remaining-*`, the fallback
+    short-circuits and `set_llm_deployment_success_metrics` owns the emit. That
+    branch used to be guarded by `if remaining_requests:`, so a reported `0`
+    was dropped and the gauge kept serving its previous value: a dashboard
+    reading headroom while the quota was gone.
+    """
+
+    def test_should_emit_both_gauges_when_provider_reports_zero(self, prometheus_logger):
+        payload = _build_payload(
+            custom_llm_provider="openai",
+            additional_headers={
+                "x_ratelimit_remaining_requests": 0,
+                "x_ratelimit_remaining_tokens": 0,
+            },
+        )
+
+        prometheus_logger.litellm_remaining_requests_metric = MagicMock()
+        prometheus_logger.litellm_remaining_tokens_metric = MagicMock()
+        prometheus_logger.litellm_deployment_success_responses = MagicMock()
+        prometheus_logger.litellm_deployment_total_requests = MagicMock()
+        prometheus_logger.litellm_deployment_latency_per_output_token = MagicMock()
+        prometheus_logger.litellm_overhead_latency_metric = MagicMock()
+        prometheus_logger.set_deployment_healthy = MagicMock()
+
+        prometheus_logger.set_llm_deployment_success_metrics(
+            request_kwargs={
+                "model": "gpt-5-nano",
+                "litellm_params": {"custom_llm_provider": "openai"},
+                "standard_logging_object": payload,
+            },
+            start_time=None,
+            end_time=None,
+            enum_values=_enum_values(),
+            output_tokens=10,
+        )
+
+        prometheus_logger.litellm_remaining_requests_metric.labels().set.assert_called_once_with(0)
+        prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(0)
