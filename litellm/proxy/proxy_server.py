@@ -5660,6 +5660,7 @@ class ProxyConfig:
                         ),
                         search_tools=search_tools,
                         ignore_invalid_deployments=True,
+                        cache_responses=litellm.cache is not None,
                     )
                     verbose_proxy_logger.debug("updated llm_router: %s", llm_router)
             else:
