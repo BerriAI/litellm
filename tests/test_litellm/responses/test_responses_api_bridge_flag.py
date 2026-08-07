@@ -10,12 +10,16 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
 import litellm
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 
 class TestUseResponsesApiBridgeFlag:
@@ -280,3 +284,83 @@ class TestUseResponsesApiBridgeFlag:
 
         mock_native_handler.assert_called_once()
         assert result is not None
+
+
+class TestAzureResponsesNativeRoutingRegression:
+    """Regression coverage for LIT-2986.
+
+    Azure OpenAI native /responses must route to the native responses handler,
+    never the chat-completions bridge. When Azure was (incorrectly) sent through
+    the bridge, streaming collapsed to delta-only events and broke clients such as
+    Codex CLI that depend on the full lifecycle (response.created, output_item.added,
+    content_part.added, the matching .done events, response.completed).
+
+    The trigger was the dispatch branch `responses_api_provider_config is None or
+    use_chat_completions_api is True`. Unlike the tests above, these exercise the
+    *real* provider-config resolution instead of mocking it, so they fail if Azure
+    ever stops resolving a native responses config (the original root cause).
+    """
+
+    @pytest.mark.parametrize(
+        "model, expected_config",
+        [
+            ("gpt-4o", litellm.AzureOpenAIResponsesAPIConfig),
+            ("gpt-5", litellm.AzureOpenAIResponsesAPIConfig),
+            ("o4-mini", litellm.AzureOpenAIOSeriesResponsesAPIConfig),
+        ],
+    )
+    def test_azure_resolves_native_responses_config(self, model, expected_config):
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model=model, provider=LlmProviders.AZURE
+        )
+        assert config is not None
+        assert isinstance(config, expected_config)
+
+    @patch(
+        "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler"
+    )
+    @patch("litellm.responses.main.base_llm_http_handler.response_api_handler")
+    def test_azure_responses_routes_native_not_bridge(
+        self, mock_native_handler, mock_bridge_handler
+    ):
+        mock_native_handler.return_value = MagicMock()
+        mock_bridge_handler.return_value = MagicMock()
+
+        litellm.responses(
+            model="azure/gpt-4o",
+            input="Hello",
+            api_base="https://example.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-04-01-preview",
+            litellm_logging_obj=MagicMock(),
+        )
+
+        mock_native_handler.assert_called_once()
+        mock_bridge_handler.assert_not_called()
+        assert (
+            mock_native_handler.call_args.kwargs["responses_api_provider_config"]
+            is not None
+        )
+
+    @patch(
+        "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler"
+    )
+    @patch("litellm.responses.main.base_llm_http_handler.response_api_handler")
+    def test_azure_streaming_responses_routes_native_not_bridge(
+        self, mock_native_handler, mock_bridge_handler
+    ):
+        mock_native_handler.return_value = MagicMock()
+        mock_bridge_handler.return_value = MagicMock()
+
+        litellm.responses(
+            model="azure/gpt-4o",
+            input="Hello",
+            stream=True,
+            api_base="https://example.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-04-01-preview",
+            litellm_logging_obj=MagicMock(),
+        )
+
+        mock_native_handler.assert_called_once()
+        mock_bridge_handler.assert_not_called()
