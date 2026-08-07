@@ -15,6 +15,7 @@ vi.mock("@/components/chat_ui/mode_endpoint_mapping", () => ({
     EMBEDDINGS: "embeddings",
     SPEECH: "speech",
     TRANSCRIPTION: "transcription",
+    OCR: "ocr",
     A2A_AGENTS: "a2a_agents",
   },
   getEndpointType: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock("@/components/chat_ui/mode_endpoint_mapping", () => ({
     IMAGE_EDITS: "image_edits",
     ANTHROPIC_MESSAGES: "anthropic_messages",
     EMBEDDING: "embedding",
+    OCR: "ocr",
   },
 }));
 
