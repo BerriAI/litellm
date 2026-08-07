@@ -8,8 +8,11 @@ repository.workspace = true
 [dependencies]
 rand.workspace = true
 reqwest.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+colored_json.workspace = true
 thiserror.workspace = true
 sha2.workspace = true
 aws-config = { version = "1.9.0", default-features = false, features = ["rustls", "rt-tokio"], optional = true }

@@ -1,5 +1,7 @@
+use std::sync::Arc;
 use std::time::Duration;
 
+use crate::logging::{CallLogger, LogSink};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -13,6 +15,8 @@ pub struct MessagesRequest<'a> {
     pub custom_llm_provider: Option<&'a str>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
+    pub litellm_call_id: Option<&'a str>,
+    pub logging_sink: Option<Arc<dyn LogSink>>,
 }
 
 pub(super) struct ProviderMessagesRequest {
@@ -23,6 +27,12 @@ pub(super) struct ProviderMessagesRequest {
     pub(super) body: Value,
     pub(super) upstream_headers: Vec<(String, String)>,
     pub(super) timeout: Option<Duration>,
+    pub(super) logger: Arc<CallLogger>,
+}
+
+pub struct MessagesStreamResponse {
+    pub response: reqwest::Response,
+    pub logger: Arc<CallLogger>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
