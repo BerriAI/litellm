@@ -7,10 +7,10 @@ https://ai.google.dev/static/api/interactions.openapi.json
 Run with: pytest tests/test_litellm/interactions/test_openapi_compliance.py -v
 """
 
-import json
-import os
 from typing import Any, Dict
-from unittest.mock import MagicMock, patch
+
+# This live-spec smoke test prints the matched schema/endpoints for CI logs.
+# ruff: noqa: T201
 
 import httpx
 import pytest
@@ -153,10 +153,9 @@ class TestResponseCompliance:
 
     def test_interaction_response_fields(self, spec_dict):
         """Verify our InteractionsAPIResponse has correct fields."""
-        # The response is the dedicated `Interaction` schema. Google moved the
-        # output-only fields (notably the `steps` array, formerly `outputs`)
-        # off `CreateModelInteractionParams` and onto `Interaction`; the request
-        # schema no longer carries `steps`. Keep this aligned with the live spec.
+        # The response is the dedicated `Interaction` schema. Keep this aligned
+        # with Google's live spec; LiteLLM's wrapper types may keep additional
+        # backwards-compatible aliases such as `outputs`.
         schema = spec_dict["components"]["schemas"]["Interaction"]
 
         # Output fields (readOnly).
@@ -165,9 +164,12 @@ class TestResponseCompliance:
             "status",
             "created",
             "updated",
-            "role",
             "steps",
             "usage",
+            "output_text",
+            "output_image",
+            "output_audio",
+            "output_video",
         ]
 
         for field in output_fields:
@@ -218,7 +220,7 @@ class TestToolsCompliance:
 
         # Tool should be oneOf multiple tool types
         assert "oneOf" in tool_schema or "properties" in tool_schema
-        print(f"✓ Tool schema found")
+        print("✓ Tool schema found")
 
     def test_function_declaration_schema(self, spec_dict):
         """Verify FunctionDeclaration schema for function tools."""
@@ -286,7 +288,7 @@ if __name__ == "__main__":
 
     print(f"\nSpec version: {spec.get('openapi')}")
     print(f"API title: {spec.get('info', {}).get('title')}")
-    print(f"\nEndpoints:")
+    print("\nEndpoints:")
     for path, methods in spec.get("paths", {}).items():
         for method in methods:
             if method in ["get", "post", "delete", "put", "patch"]:
