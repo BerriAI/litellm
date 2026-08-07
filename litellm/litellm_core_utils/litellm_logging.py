@@ -4719,6 +4719,20 @@ class StandardLoggingPayloadSetup:
             )
 
         usage: Final = response_obj.get("usage", None) or {}
+        if not usage:
+            # RerankResponse has no top-level `usage` field - token usage lives
+            # under `meta.billed_units`/`meta.tokens` instead (Cohere-style API).
+            meta = response_obj.get("meta")
+            if isinstance(meta, dict) and ("billed_units" in meta or "tokens" in meta):
+                billed_units = meta.get("billed_units") or {}
+                tokens = meta.get("tokens") or {}
+                total_tokens = billed_units.get("total_tokens", 0) or 0
+                prompt_tokens = tokens.get("input_tokens", total_tokens) or total_tokens
+                return Usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=0,
+                    total_tokens=total_tokens,
+                )
         if usage is None or (not isinstance(usage, dict) and not isinstance(usage, Usage)):
             return Usage(
                 prompt_tokens=0,

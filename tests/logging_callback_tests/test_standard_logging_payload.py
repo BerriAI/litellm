@@ -127,6 +127,43 @@ def test_get_usage_from_image_generation_response():
     assert usage.completion_tokens_details.text_tokens == 100
 
 
+def test_get_usage_from_rerank_response():
+    """
+    RerankResponse has no top-level `usage` field - token usage lives under
+    `meta.billed_units`/`meta.tokens` (Cohere-style API), which is also what
+    hosted_vllm/other rerank servers return. Without this, /ui/usage always
+    showed 0 tokens for every rerank call.
+    """
+    response_obj = {
+        "id": "rerank-d618748e0f5543e8ba09ee7dd131ac59",
+        "results": [],
+        "meta": {
+            "billed_units": {"total_tokens": 42},
+            "tokens": {"input_tokens": 42},
+        },
+    }
+
+    usage = StandardLoggingPayloadSetup.get_usage_from_response_obj(response_obj)
+
+    assert usage.prompt_tokens == 42
+    assert usage.completion_tokens == 0
+    assert usage.total_tokens == 42
+
+
+def test_get_usage_from_rerank_response_no_meta():
+    """
+    A rerank response with no usable `meta` (and no `usage`) should still
+    fall back to all-zero usage instead of raising.
+    """
+    response_obj = {"id": "rerank-abc", "results": [], "meta": None}
+
+    usage = StandardLoggingPayloadSetup.get_usage_from_response_obj(response_obj)
+
+    assert usage.prompt_tokens == 0
+    assert usage.completion_tokens == 0
+    assert usage.total_tokens == 0
+
+
 def test_get_additional_headers():
     additional_headers = {
         "x-ratelimit-limit-requests": "2000",
