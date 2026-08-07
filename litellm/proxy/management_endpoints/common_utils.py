@@ -550,7 +550,7 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
         # only for a truthy value. The falsy value is still persisted below so a
         # previously-set field can be cleared.
         if updated_kv.get(field_name):
-            _premium_user_check()
+            _premium_user_check(feature: f"update {field_name}")
 
     if field_name in updated_kv and updated_kv[field_name] is not None:
         # remove field from updated_kv
