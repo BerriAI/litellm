@@ -348,7 +348,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             merged_chunk["context_management"] = ContextManagementResponse(applied_edits=list(self.applied_edits))
         return self._augment_message_delta_usage(merged_chunk)
 
-    def _handle_choiceless_chunk(self, chunk: Any) -> bool:
+    def _handle_choiceless_chunk(self, chunk: "ModelResponseStream") -> bool:
         """Consume an OpenAI-compatible chunk that carries no ``choices``.
 
         ``choices`` is legitimately empty on metadata-only chunks; the final
@@ -361,7 +361,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         into the held stop-reason chunk); False when the chunk should be
         skipped entirely.
         """
-        if self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None:
+        if self.holding_stop_reason_chunk is not None and _optional_attr(chunk, "usage") is not None:
             self.chunk_queue.append(self._merge_usage_into_held_stop_reason_chunk(chunk))
             self.queued_usage_chunk = True
             self.holding_stop_reason_chunk = None
