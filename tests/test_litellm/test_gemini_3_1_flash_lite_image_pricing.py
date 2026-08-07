@@ -14,7 +14,7 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import completion_cost
@@ -129,8 +129,6 @@ class TestGeminiFlashLiteImageModelInfo:
             assert info["input_cost_per_token"] == EXPECTED["input_cost_per_token"]
             assert info["output_cost_per_token"] == EXPECTED["output_cost_per_token"]
 
-            # A 1K image => 1120 output image tokens => ~$0.0336 (billed at
-            # output_cost_per_image_token, not the text output rate).
             resp = ModelResponse()
             resp.model = "gemini-3.1-flash-lite-image"
             resp.usage = Usage(
@@ -146,7 +144,7 @@ class TestGeminiFlashLiteImageModelInfo:
                 model="gemini-3.1-flash-lite-image",
                 custom_llm_provider="vertex_ai",
             )
-            # 1120 * 3e-5 (image) + 7 * 2.5e-7 (input) == 0.03360175
-            assert abs(cost - 0.03360175) < 1e-6, f"unexpected cost {cost}"
+            expected_cost = 1120 * 3e-05 + 7 * 2.5e-07
+            assert abs(cost - expected_cost) < 1e-6, f"unexpected cost {cost}"
         finally:
             litellm.model_cost = original
