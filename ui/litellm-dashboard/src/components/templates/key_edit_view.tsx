@@ -294,6 +294,10 @@ export function KeyEditView({
         values.duration = null;
       }
 
+      if (keyData.budget_duration && !values.budget_duration) {
+        values.budget_duration = null;
+      }
+
       // Reconcile multi-window budget limits from the editor state, dropping
       // incomplete entries (no max_budget). The backend treats any budget_limits
       // in a /key/update request as an admin-only budget change, so re-sending
@@ -494,7 +498,7 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">
-        <BudgetDurationDropdown />
+        <BudgetDurationDropdown placeholder="Never resets" />
       </Form.Item>
 
       <Form.Item
