@@ -4,9 +4,11 @@ Use this to route requests between Teams
 - If tags in request is a subset of tags in deployment, return deployment
 - if deployments are set with default tags, return all default deployment
 - If no default_deployments are set, return all deployments
+- A "!tag" excludes deployments carrying that tag; a "&tag" requires it
 """
 
 import re
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from litellm._logging import verbose_logger
@@ -114,14 +116,17 @@ def _match_deployment(
     return None
 
 
-def _split_tags(tags: list[str]) -> tuple[list[str], list[str]]:
-    positive: Final = [t for t in tags if not t.startswith("!")]
-    excluded: Final = [tag[1:] for tag in tags if tag.startswith("!") and len(tag) > 1]
-    return positive, excluded
+def _split_tags(tags: list[str]) -> tuple[tuple[str, ...], list[str], tuple[str, ...]]:
+    required: Final = tuple(tag[1:] for tag in tags if tag.startswith("&") and len(tag) > 1)
+    positive: Final = [
+        t for t in tags if not t.startswith("!") and not t.startswith("&")
+    ]  # mutable-ok: feeds _match_deployment's existing list[str]-typed request_tags param
+    excluded: Final = tuple(tag[1:] for tag in tags if tag.startswith("!") and len(tag) > 1)
+    return required, positive, excluded
 
 
 def _exclude_deployments(
-    deployments: list[Any] | dict[Any, Any],
+    deployments: Sequence[Any] | Mapping[Any, Any],
     excluded_set: frozenset[str],
 ) -> list[Any]:
     if not excluded_set:
@@ -129,24 +134,60 @@ def _exclude_deployments(
     return [d for d in deployments if not excluded_set.intersection(d.get("litellm_params", {}).get("tags") or [])]
 
 
-def _require_candidates(
-    candidates: list[Any],
+def _require_all_tags(
+    deployments: Sequence[Any] | Mapping[Any, Any],
+    required_set: frozenset[str],
+) -> tuple[Any, ...]:
+    if not required_set:
+        return tuple(deployments)
+    return tuple(d for d in deployments if required_set.issubset(d.get("litellm_params", {}).get("tags") or []))
+
+
+def _default_tagged_pool(
+    deployments: Sequence[Any] | Mapping[Any, Any],
+) -> tuple[Any, ...]:
+    # Mirrors untagged-request semantics: a "default"-tagged deployment is preferred;
+    # if none exists, every deployment in the group is reachable. Used both as the
+    # base pool for constraint-only requests and as the fail-open fallback.
+    defaults: Final = tuple(d for d in deployments if "default" in (d.get("litellm_params", {}).get("tags") or []))
+    return defaults if defaults else tuple(deployments)
+
+
+def _chain_allows_fail_open(deployments: Sequence[Any] | Mapping[Any, Any]) -> bool:
+    # allow_fail_open is set per model group in model_info, shared by every
+    # deployment in the chain, so checking any one member is sufficient.
+    return any((d.get("model_info") or {}).get("allow_fail_open") is True for d in deployments)
+
+
+def _resolve_or_fail_open(
+    pool: Sequence[Any],
+    healthy_deployments: Sequence[Any] | Mapping[Any, Any],
     model: str,
-    request_tags: Any,
-) -> list[Any]:
-    if not candidates:
-        raise ValueError(
-            f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
-        )
-    return candidates
+    request_tags: object,
+) -> tuple[Any, ...]:
+    if pool:
+        return tuple(pool)
+    if _chain_allows_fail_open(healthy_deployments):
+        return _default_tagged_pool(healthy_deployments)
+    raise ValueError(
+        f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
+    )
 
 
-def _ban_only_base_pool(
-    deployments: list[Any] | dict[Any, Any],
-) -> list[Any]:
-    # Mirrors untagged-request semantics so callers can't use !tags to escape the default pool.
-    defaults: Final = [d for d in deployments if "default" in (d.get("litellm_params", {}).get("tags") or [])]
-    return defaults if defaults else list(deployments)
+def _resolve_constraint_only_pool(
+    healthy_deployments: Sequence[Any] | Mapping[Any, Any],
+    excluded_set: frozenset[str],
+    required_set: frozenset[str],
+    model: str,
+    request_tags: object,
+) -> tuple[Any, ...]:
+    """Resolve the pool for a request whose only tag constraints are "!"/"&"
+    (no plain positive tags or regex preference to further narrow the result)."""
+    pool: Final = _require_all_tags(
+        _exclude_deployments(_default_tagged_pool(healthy_deployments), excluded_set),
+        required_set,
+    )
+    return _resolve_or_fail_open(pool, healthy_deployments, model, request_tags)
 
 
 async def get_deployments_for_tag(
@@ -170,15 +211,12 @@ async def get_deployments_for_tag(
     if request_enable_tag_filtering is not True and llm_router_instance.enable_tag_filtering is not True:
         return healthy_deployments
 
-    if request_kwargs is None:
+    if request_kwargs is None or not healthy_deployments:
         verbose_logger.debug(
-            "get_deployments_for_tag: request_kwargs is None returning healthy_deployments: %s",
+            "get_deployments_for_tag: skipping tag filter (request_kwargs=%s, healthy_deployments=%s)",
+            request_kwargs,
             healthy_deployments,
         )
-        return healthy_deployments
-
-    if not healthy_deployments:
-        verbose_logger.debug("get_deployments_for_tag: empty or None healthy_deployments; skipping tag filter")
         return healthy_deployments
 
     verbose_logger.debug("request metadata: %s", request_kwargs.get(metadata_variable_name))
@@ -192,23 +230,27 @@ async def get_deployments_for_tag(
         user_agent: Final = metadata.get("user_agent", "")
         header_strings: Final[list[str]] = [f"User-Agent: {user_agent}"] if user_agent else []
 
-        positive_tags, excluded_patterns = _split_tags(request_tags or [])
+        required_tags, positive_tags, excluded_patterns = _split_tags(request_tags or [])
 
         excluded_set: Final = frozenset(excluded_patterns)
-        candidates: Final = _exclude_deployments(healthy_deployments, excluded_set)
+        required_set: Final = frozenset(required_tags)
+        allowed_deployments: Final = _exclude_deployments(healthy_deployments, excluded_set)
+        candidates: Final = _require_all_tags(allowed_deployments, required_set)
 
         has_regex_deployments: Final = any(d.get("litellm_params", {}).get("tag_regex") for d in candidates)
-        has_tag_filter: Final = bool(positive_tags) or (bool(header_strings) and has_regex_deployments)
-        ban_only: Final = bool(excluded_set) and not has_tag_filter
+        has_positive_filter: Final = bool(positive_tags) or (bool(header_strings) and has_regex_deployments)
+        constraint_only: Final = (bool(excluded_set) or bool(required_set)) and not has_positive_filter
 
-        if ban_only:
-            pool: Final = _exclude_deployments(_ban_only_base_pool(healthy_deployments), excluded_set)
-            return _require_candidates(pool, model, request_tags)
+        if constraint_only:
+            return _resolve_constraint_only_pool(healthy_deployments, excluded_set, required_set, model, request_tags)
+
+        if required_set and not candidates:
+            return _resolve_or_fail_open((), healthy_deployments, model, request_tags)
 
         new_healthy_deployments: Final[list[Any]] = []
         default_deployments: Final[list[Any]] = []
 
-        if has_tag_filter:
+        if has_positive_filter:
             verbose_logger.debug(
                 "get_deployments_for_tag routing: request_tags=%s user_agent=%s",
                 request_tags,
