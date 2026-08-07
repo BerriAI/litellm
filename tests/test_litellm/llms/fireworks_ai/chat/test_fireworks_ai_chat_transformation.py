@@ -1204,6 +1204,65 @@ def test_transform_response_captures_token_ids():
     assert result._hidden_params["fireworks_token_ids"] == [[4, 5, 6]]
 
 
+def test_transform_response_sets_tool_calls_finish_reason_for_content_embedded_call():
+    """
+    Fireworks returns content-embedded tool calls with finish_reason="stop".
+    After litellm lifts the JSON call into message.tool_calls, finish_reason
+    must be upgraded to "tool_calls" so OpenAI-style agent loops execute the
+    tool instead of treating the turn as finished (issue #33036).
+    """
+    config = FireworksAIConfig()
+    body = {
+        "id": "resp-tool",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "accounts/fireworks/models/llama",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        {"name": "get_weather", "arguments": {"city": "SF"}}
+                    ),
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    result = config.transform_response(
+        model="llama",
+        raw_response=_make_fireworks_raw_response(body),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "get_weather", "parameters": {}},
+                }
+            ]
+        },
+        litellm_params={},
+        encoding=None,
+    )
+    choice = result.choices[0]
+    assert choice.message.tool_calls is not None
+    assert choice.message.tool_calls[0].function.name == "get_weather"
+    assert choice.finish_reason == "tool_calls"
+
+
+def test_transform_response_keeps_stop_finish_reason_for_plain_text():
+    """A plain-text Fireworks response must keep finish_reason="stop"."""
+    result = _run_transform_response(dict(_BASE_CHAT_COMPLETION_RESPONSE))
+    choice = result.choices[0]
+    assert choice.message.tool_calls is None
+    assert choice.finish_reason == "stop"
+
+
 def test_streaming_surfaces_fireworks_response_fields():
     """
     The Fireworks-specific response fields captured into _hidden_params for
