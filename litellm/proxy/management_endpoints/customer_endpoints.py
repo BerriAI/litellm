@@ -10,6 +10,7 @@ All /customer management endpoints
 """
 
 #### END-USER/CUSTOMER MANAGEMENT ####
+import asyncio
 from collections.abc import Iterable, Sequence
 from datetime import datetime, timedelta
 from typing import Final
@@ -59,20 +60,19 @@ async def _set_end_users_blocked(user_ids: Sequence[str], blocked: bool) -> tupl
         raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
 
     try:
-        records: Final = tuple(
-            LiteLLM_EndUserTable.model_validate(
-                (
-                    await EndUserRepository(prisma_client).table.upsert(
-                        where={"user_id": user_id},
-                        data={
-                            "create": {"user_id": user_id, "blocked": blocked},
-                            "update": {"blocked": blocked},
-                        },
-                    )
-                ).model_dump()
+        rows: Final = await asyncio.gather(
+            *(
+                EndUserRepository(prisma_client).table.upsert(
+                    where={"user_id": user_id},
+                    data={
+                        "create": {"user_id": user_id, "blocked": blocked},
+                        "update": {"blocked": blocked},
+                    },
+                )
+                for user_id in user_ids
             )
-            for user_id in user_ids
         )
+        records: Final = tuple(LiteLLM_EndUserTable.model_validate(row.model_dump()) for row in rows)
     except Exception as e:
         verbose_proxy_logger.error("An error occurred - %s", e)
         raise HTTPException(status_code=500, detail={"error": str(e)})
