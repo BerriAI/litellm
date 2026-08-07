@@ -231,18 +231,31 @@ def _trusted_only_pool(
     healthy_deployments: Sequence[Any] | Mapping[Any, Any],
     excluded_set: frozenset[str],
     required_set: frozenset[str],
-    caller_excluded_set: frozenset[str] | None,
-    caller_required_set: frozenset[str] | None,
+    inherited_excluded_set: frozenset[str] | None,
+    inherited_required_set: frozenset[str] | None,
 ) -> tuple[Any, ...]:
-    # caller_*_set is None only when this request carries no origin information at
-    # all (e.g. direct SDK Router usage, bypassing the proxy layer that populates
-    # metadata.caller_tags) -- treat every constraint as caller-supplied in that
-    # case (trusted == empty), reproducing this function's pre-caller_tags
-    # behavior exactly: an unconditional fall-open to the full default-tagged pool,
-    # constraints discarded entirely. Only a positively-known caller_*_set narrows
-    # what gets discarded to just what the caller actually supplied.
-    trusted_excluded: Final = frozenset[str]() if caller_excluded_set is None else excluded_set - caller_excluded_set
-    trusted_required: Final = frozenset[str]() if caller_required_set is None else required_set - caller_required_set
+    # inherited_*_set is None only when this request carries no origin information
+    # at all (e.g. direct SDK Router usage, bypassing the proxy layer that
+    # populates metadata.inherited_tags) -- treat every constraint as
+    # caller-controlled in that case (protected == empty), reproducing this
+    # function's pre-provenance behavior exactly: an unconditional fall-open to the
+    # full default-tagged pool, constraints discarded entirely. Otherwise, a tag
+    # value is protected the moment it has ANY inherited backing, even when the
+    # caller also happens to submit the identical value themselves -- set
+    # membership can't distinguish "this value came from policy" from "this value
+    # coincidentally matches policy," so presence in the inherited set (not
+    # absence from a caller-supplied set) is what must gate discardability. This
+    # is deliberately intersection with inherited_*_set, not subtraction of a
+    # caller-supplied set: subtraction would let a caller strip an inherited
+    # requirement's protection just by resubmitting its exact value alongside a
+    # conflicting one (e.g. inherited "&region:eu" plus caller "&region:eu"
+    # and "!region:eu" would otherwise cancel the inherited requirement out).
+    trusted_excluded: Final = (
+        frozenset[str]() if inherited_excluded_set is None else inherited_excluded_set & excluded_set
+    )
+    trusted_required: Final = (
+        frozenset[str]() if inherited_required_set is None else inherited_required_set & required_set
+    )
     return _require_all_tags(_exclude_deployments(healthy_deployments, trusted_excluded), trusted_required)
 
 
@@ -251,8 +264,8 @@ def _resolve_or_fail_open(
     healthy_deployments: Sequence[Any] | Mapping[Any, Any],
     excluded_set: frozenset[str],
     required_set: frozenset[str],
-    caller_excluded_set: frozenset[str] | None,
-    caller_required_set: frozenset[str] | None,
+    inherited_excluded_set: frozenset[str] | None,
+    inherited_required_set: frozenset[str] | None,
     routing_confirmed: frozenset[str],
     model: str,
     request_tags: object,
@@ -260,14 +273,13 @@ def _resolve_or_fail_open(
     if pool:
         return tuple(pool)
     if _chain_allows_fail_open(healthy_deployments, excluded_set, required_set, routing_confirmed):
-        # Fall open only within whatever still satisfies the constraints this
-        # request's caller did not itself supply. A constraint entirely
-        # attributable to the caller (or, when caller_tags is unavailable, any
-        # constraint at all) can be discarded; one inherited from key/team policy
-        # cannot -- if that alone is unsatisfiable, raise instead of silently
-        # routing around it.
+        # Fall open only within whatever still satisfies whichever constraints
+        # trace back to key/team policy. A constraint with no inherited backing at
+        # all (or, when inherited_tags is unavailable, any constraint at all) can
+        # be discarded; one inherited from key/team policy cannot -- if that alone
+        # is unsatisfiable, raise instead of silently routing around it.
         trusted_pool: Final = _trusted_only_pool(
-            healthy_deployments, excluded_set, required_set, caller_excluded_set, caller_required_set
+            healthy_deployments, excluded_set, required_set, inherited_excluded_set, inherited_required_set
         )
         if trusted_pool:
             return _default_tagged_pool(trusted_pool)
@@ -280,8 +292,8 @@ def _resolve_constraint_only_pool(
     healthy_deployments: Sequence[Any] | Mapping[Any, Any],
     excluded_set: frozenset[str],
     required_set: frozenset[str],
-    caller_excluded_set: frozenset[str] | None,
-    caller_required_set: frozenset[str] | None,
+    inherited_excluded_set: frozenset[str] | None,
+    inherited_required_set: frozenset[str] | None,
     routing_confirmed: frozenset[str],
     model: str,
     request_tags: object,
@@ -296,8 +308,8 @@ def _resolve_constraint_only_pool(
         healthy_deployments,
         excluded_set,
         required_set,
-        caller_excluded_set,
-        caller_required_set,
+        inherited_excluded_set,
+        inherited_required_set,
         routing_confirmed,
         model,
         request_tags,
@@ -337,21 +349,26 @@ def _chain_tag_filtering_override(
     return None
 
 
-def _caller_constraint_sets(
-    caller_tags: object, routing_prefix: str
+def _inherited_constraint_sets(
+    inherited_tags: object, routing_prefix: str
 ) -> tuple[frozenset[str] | None, frozenset[str] | None]:
     # None means no origin information is available at all (e.g. this request
-    # bypassed the proxy layer that populates metadata.caller_tags, as direct SDK
-    # Router usage does) -- callers of this must treat that as "every constraint is
-    # trusted," not "the caller supplied none," see _trusted_only_pool. caller_tags
-    # is stripped through the same routing_prefix as the main request tags so a
-    # caller who used the prefix on their own tag still matches correctly against
-    # the (already-stripped) required_set/excluded_set computed from request_tags.
-    if not isinstance(caller_tags, (list, tuple)):
+    # bypassed the proxy layer that populates metadata.inherited_tags, as direct
+    # SDK Router usage does) -- callers of this must treat that as "nothing is
+    # protected," not "nothing is inherited," see _trusted_only_pool.
+    # metadata.inherited_tags is a snapshot of whatever key/team/project policy
+    # merged into "tags" *before* this request's own caller-supplied tags were
+    # merged in on top (see litellm_pre_call_utils.py), so a value present here is
+    # policy-backed regardless of whether the caller also happens to submit the
+    # identical value. inherited_tags is stripped through the same routing_prefix
+    # as the main request tags so a policy-inherited prefixed tag still matches
+    # correctly against the (already-stripped) required_set/excluded_set computed
+    # from request_tags.
+    if not isinstance(inherited_tags, (list, tuple)):
         return None, None
-    rewritten_caller_tags: Final = _strip_routing_prefix(caller_tags, routing_prefix)[0]
-    caller_required, _caller_positive, caller_excluded = _split_tags(rewritten_caller_tags)
-    return frozenset(caller_required), frozenset(caller_excluded)
+    rewritten_inherited_tags: Final = _strip_routing_prefix(inherited_tags, routing_prefix)[0]
+    inherited_required, _inherited_positive, inherited_excluded = _split_tags(rewritten_inherited_tags)
+    return frozenset(inherited_required), frozenset(inherited_excluded)
 
 
 def _tag_known_to_group(
@@ -429,7 +446,9 @@ async def get_deployments_for_tag(
         # group" heuristics that unprefixed tags still go through unchanged below.
         rewritten_tags, routing_confirmed = _strip_routing_prefix(request_tags or [], routing_prefix)
         required_tags, positive_tags, excluded_patterns = _split_tags(rewritten_tags)
-        caller_required_set, caller_excluded_set = _caller_constraint_sets(metadata.get("caller_tags"), routing_prefix)
+        inherited_required_set, inherited_excluded_set = _inherited_constraint_sets(
+            metadata.get("inherited_tags"), routing_prefix
+        )
 
         excluded_set: Final = frozenset(excluded_patterns)
         required_set: Final = frozenset(required_tags)
@@ -447,8 +466,8 @@ async def get_deployments_for_tag(
                 healthy_deployments,
                 excluded_set,
                 required_set,
-                caller_excluded_set,
-                caller_required_set,
+                inherited_excluded_set,
+                inherited_required_set,
                 routing_confirmed,
                 model,
                 request_tags,
@@ -499,8 +518,8 @@ async def get_deployments_for_tag(
                     healthy_deployments,
                     excluded_set,
                     required_set,
-                    caller_excluded_set,
-                    caller_required_set,
+                    inherited_excluded_set,
+                    inherited_required_set,
                     routing_confirmed,
                     model,
                     request_tags,
@@ -516,8 +535,8 @@ async def get_deployments_for_tag(
                     healthy_deployments,
                     excluded_set,
                     required_set,
-                    caller_excluded_set,
-                    caller_required_set,
+                    inherited_excluded_set,
+                    inherited_required_set,
                     routing_confirmed,
                     model,
                     request_tags,
