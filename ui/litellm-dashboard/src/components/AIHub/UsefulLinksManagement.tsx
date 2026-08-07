@@ -23,7 +23,6 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
   const [links, setLinks] = useState<Link[]>([]);
   const [newLink, setNewLink] = useState({ url: "", displayName: "" });
   const [editingLink, setEditingLink] = useState<Link | null>(null);
-  const [loading, setLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
   const [isRearranging, setIsRearranging] = useState(false);
   const [originalLinksOrder, setOriginalLinksOrder] = useState<Link[]>([]);
@@ -32,7 +31,6 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     if (!accessToken) return;
 
     try {
-      setLoading(true);
       const response = await getPublicModelHubInfo();
 
       if (response && response.useful_links) {
@@ -73,8 +71,6 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     } catch (error) {
       console.error("Error fetching useful links:", error);
       setLinks([]);
-    } finally {
-      setLoading(false);
     }
   };
 

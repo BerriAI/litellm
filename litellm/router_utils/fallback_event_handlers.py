@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -180,7 +180,7 @@ async def log_success_fallback_event(original_model_group: str, kwargs: dict, or
         Errors during logging are caught and reported but do not interrupt the process.
     """
     # Get deduplicated CustomLogger instances from all callback lists
-    custom_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
+    custom_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
 
     for _callback_custom_logger in custom_loggers:
         try:
@@ -208,7 +208,7 @@ async def log_failure_fallback_event(original_model_group: str, kwargs: dict, or
         Errors during logging are caught and reported but do not interrupt the process.
     """
     # Get deduplicated CustomLogger instances from all callback lists
-    custom_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
+    custom_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
 
     for _callback_custom_logger in custom_loggers:
         try:
@@ -237,7 +237,7 @@ def _check_non_standard_fallback_format(fallbacks: list[Any] | None) -> bool:
         return True
     elif all(isinstance(item, dict) for item in fallbacks):
         for item in fallbacks:
-            for key in LiteLLMParamsTypedDict.__annotations__.keys():
+            for key in LiteLLMParamsTypedDict.__annotations__:
                 if key in item:
                     # If the value is a list, it's likely a standard fallback model group mapping
                     # (e.g. {"model": ["backup"]}) rather than a parameter override.

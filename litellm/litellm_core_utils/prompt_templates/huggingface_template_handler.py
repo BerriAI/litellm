@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
@@ -33,13 +33,13 @@ def _get_tokenizer_config(hf_model_name: str) -> dict[str, Any]:
         Dict with 'status' and optionally 'tokenizer' keys
     """
     try:
-        url = f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
-        client = _get_httpx_client()
-        response = client.get(url=url)
+        url: Final = f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
+        client: Final = _get_httpx_client()
+        response: Final = client.get(url=url)
     except Exception as e:
         raise e
     if response.status_code == 200:
-        tokenizer_config = json.loads(response.content)
+        tokenizer_config: Final = json.loads(response.content)
         return {"status": "success", "tokenizer": tokenizer_config}
     else:
         return {"status": "failure"}
@@ -56,15 +56,15 @@ async def _aget_tokenizer_config(hf_model_name: str) -> dict[str, Any]:
         Dict with 'status' and optionally 'tokenizer' keys
     """
     try:
-        url = f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
-        client = get_async_httpx_client(
+        url: Final = f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
+        client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.PromptFactory,
         )
-        response = await client.get(url=url)
+        response: Final = await client.get(url=url)
     except Exception as e:
         raise e
     if response.status_code == 200:
-        tokenizer_config = json.loads(response.content)
+        tokenizer_config: Final = json.loads(response.content)
         return {"status": "success", "tokenizer": tokenizer_config}
     else:
         return {"status": "failure"}
@@ -80,8 +80,8 @@ def _get_chat_template_file(hf_model_name: str) -> dict[str, Any]:
     Returns:
         Dict with 'status' and optionally 'chat_template' keys
     """
-    template_filenames = ["chat_template.jinja", "chat_template.jinja2"]
-    client = _get_httpx_client()
+    template_filenames: Final = ["chat_template.jinja", "chat_template.jinja2"]
+    client: Final = _get_httpx_client()
 
     for filename in template_filenames:
         try:
@@ -108,8 +108,8 @@ async def _aget_chat_template_file(hf_model_name: str) -> dict[str, Any]:
     Returns:
         Dict with 'status' and optionally 'chat_template' keys
     """
-    template_filenames = ["chat_template.jinja", "chat_template.jinja2"]
-    client = get_async_httpx_client(
+    template_filenames: Final = ["chat_template.jinja", "chat_template.jinja2"]
+    client: Final = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.PromptFactory,
     )
 

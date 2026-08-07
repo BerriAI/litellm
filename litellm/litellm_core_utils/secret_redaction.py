@@ -7,14 +7,15 @@ secrets from strings without depending on the logging-configuration module.
 """
 
 import re
+from typing import Final
 
 from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
 
-_REDACTED = "REDACTED"
+_REDACTED: Final = "REDACTED"
 
 
 def _build_secret_patterns() -> "re.Pattern[str]":
-    patterns: list[str] = [
+    patterns: Final[list[str]] = [
         # PEM private key / certificate blocks
         r"-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----",
         # GCP OAuth2 access tokens (ya29.*)
@@ -76,7 +77,7 @@ def _build_secret_patterns() -> "re.Pattern[str]":
     return re.compile("|".join(patterns), re.IGNORECASE)
 
 
-_SECRET_RE = _build_secret_patterns()
+_SECRET_RE: Final = _build_secret_patterns()
 
 
 def redact_string(value: str) -> str:

@@ -44,7 +44,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
   };
 
   const [prompt, setPrompt] = useState<PromptType>(getInitialPrompt());
-  const [editMode, setEditMode] = useState<boolean>(!!initialPromptData);
+  const [editMode] = useState<boolean>(!!initialPromptData);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
 
   // Construct versioned ID from prompt_id and version field

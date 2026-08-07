@@ -50,22 +50,6 @@ interface KeyEditViewProps {
 }
 
 // Add this helper function
-const getAvailableModelsForKey = (keyData: KeyResponse, teams: any[] | null): string[] => {
-  // If no teams data is available, return empty array
-  if (!teams || !keyData.team_id) {
-    return [];
-  }
-
-  // Find the team that matches the key's team_id
-  const keyTeam = teams.find((team) => team.team_id === keyData.team_id);
-
-  // If team found and has models, return those models
-  if (keyTeam?.models) {
-    return keyTeam.models;
-  }
-
-  return [];
-};
 
 // Helper function to determine key_type display value from allowed_routes
 const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string => {
@@ -310,6 +294,10 @@ export function KeyEditView({
         values.duration = null;
       }
 
+      if (keyData.budget_duration && !values.budget_duration) {
+        values.budget_duration = null;
+      }
+
       // Reconcile multi-window budget limits from the editor state, dropping
       // incomplete entries (no max_budget). The backend treats any budget_limits
       // in a /key/update request as an admin-only budget change, so re-sending
@@ -510,7 +498,7 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">
-        <BudgetDurationDropdown />
+        <BudgetDurationDropdown placeholder="Never resets" />
       </Form.Item>
 
       <Form.Item

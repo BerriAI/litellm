@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { NuqsTestingAdapter, OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
@@ -77,31 +78,6 @@ vi.mock("@/components/team/TeamInfo", () => ({
     return <div data-testid="team-info-view" />;
   },
 }));
-
-// The selected team is URL-derived (?team=) via useTeamDetailRouting. Next's real useSearchParams
-// re-renders subscribers on history.pushState/replaceState; mirror that so URL changes propagate.
-vi.mock("next/navigation", async () => {
-  const { useSyncExternalStore } = await import("react");
-  const LOCATION_CHANGE_EVENT = "test-locationchange";
-  for (const method of ["pushState", "replaceState"] as const) {
-    const original = window.history[method].bind(window.history);
-    window.history[method] = (...args: Parameters<History["pushState"]>) => {
-      original(...args);
-      window.dispatchEvent(new Event(LOCATION_CHANGE_EVENT));
-    };
-  }
-  const subscribe = (onChange: () => void) => {
-    window.addEventListener(LOCATION_CHANGE_EVENT, onChange);
-    window.addEventListener("popstate", onChange);
-    return () => {
-      window.removeEventListener(LOCATION_CHANGE_EVENT, onChange);
-      window.removeEventListener("popstate", onChange);
-    };
-  };
-  return {
-    useSearchParams: () => new URLSearchParams(useSyncExternalStore(subscribe, () => window.location.search)),
-  };
-});
 
 vi.mock("./ModelSelect/ModelSelect", () => {
   const ModelSelect = React.forwardRef(({ value, onChange, dataTestId, id }: any, ref: any) => {
@@ -182,15 +158,21 @@ const createQueryClient = () => {
   });
 };
 
-const renderWithQueryClient = (component: React.ReactElement) => {
+const renderWithQueryClient = (
+  component: React.ReactElement,
+  options?: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction },
+) => {
   const queryClient = createQueryClient();
-  return render(<QueryClientProvider client={queryClient}>{component}</QueryClientProvider>);
+  return render(
+    <NuqsTestingAdapter searchParams={options?.searchParams} onUrlUpdate={options?.onUrlUpdate} hasMemory>
+      <QueryClientProvider client={queryClient}>{component}</QueryClientProvider>
+    </NuqsTestingAdapter>,
+  );
 };
 
 // Re-establish safe defaults before every test (clearAllMocks keeps return values, so restore them here).
 beforeEach(() => {
   mockTeamsTableProps = null;
-  window.history.replaceState(null, "", "/teams/");
 });
 
 describe("Teams - handleCreate organization handling", () => {
@@ -479,32 +461,42 @@ describe("Teams - team detail deep link (?team=)", () => {
   });
 
   it("selecting a team pushes ?team= to the URL", async () => {
-    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    const onUrlUpdate = vi.fn();
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />, { onUrlUpdate });
 
     await waitFor(() => expect(mockTeamsTableProps).not.toBeNull());
     act(() => mockTeamsTableProps.onSelectTeam({ ...baseTableTeam, team_id: "team-deep-link" }));
 
-    expect(window.location.search).toContain("team=team-deep-link");
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    const lastUpdate = onUrlUpdate.mock.calls.at(-1)![0];
+    expect(lastUpdate.searchParams.get("team")).toBe("team-deep-link");
+    expect(lastUpdate.options.history).toBe("push");
+
     await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
     expect(mockTeamInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ teamId: "team-deep-link" }));
   });
 
   it("opens the team detail view directly from a ?team= deep link", async () => {
-    window.history.replaceState(null, "", "/teams/?team=team-from-url");
-    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />, {
+      searchParams: "?team=team-from-url",
+    });
 
     await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
     expect(mockTeamInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ teamId: "team-from-url" }));
   });
 
   it("closing the team detail view removes ?team= from the URL", async () => {
-    window.history.replaceState(null, "", "/teams/?team=team-from-url");
-    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    const onUrlUpdate = vi.fn();
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />, {
+      searchParams: "?team=team-from-url",
+      onUrlUpdate,
+    });
 
     await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
     act(() => mockTeamInfoView.mock.calls.at(-1)?.[0].onClose());
 
-    expect(window.location.search).not.toContain("team=");
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(onUrlUpdate.mock.calls.at(-1)![0].searchParams.has("team")).toBe(false);
     await waitFor(() => expect(screen.queryByTestId("team-info-view")).not.toBeInTheDocument());
   });
 });

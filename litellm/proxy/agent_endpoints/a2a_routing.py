@@ -5,7 +5,7 @@ Handles routing for A2A agents (models with "a2a/<agent-name>" prefix).
 Looks up agents in the registry and injects their API base URL.
 """
 
-from typing import Any
+from typing import Any, Final
 
 from fastapi import HTTPException
 
@@ -34,29 +34,29 @@ async def route_a2a_agent_request(
         ProxyModelNotFoundError,
     )
 
-    model_name = data.get("model", "")
+    model_name: Final = data.get("model", "")
 
     # Check if this is an A2A agent request
     if not isinstance(model_name, str) or not model_name.startswith("a2a/"):
         return None
 
     # Extract agent name (e.g., "a2a/my-agent" -> "my-agent")
-    agent_name = model_name[4:]
+    agent_name: Final = model_name[4:]
 
     # Look up agent in registry
-    agent = global_agent_registry.get_agent_by_name(agent_name)
+    agent: Final = global_agent_registry.get_agent_by_name(agent_name)
     if agent is None:
         verbose_proxy_logger.error("[A2A] Agent '%s' not found in registry", agent_name)
         route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
         raise ProxyModelNotFoundError(route=route_name, model_name=model_name)
 
     # Verify the caller is permitted to use this agent (admins bypass the check)
-    is_admin = user_api_key_dict is not None and (
+    is_admin: Final = user_api_key_dict is not None and (
         user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     )
     if not is_admin:
-        is_allowed = await AgentRequestHandler.is_agent_allowed(
+        is_allowed: Final = await AgentRequestHandler.is_agent_allowed(
             agent_id=agent.agent_id,
             user_api_key_auth=user_api_key_dict,
         )
