@@ -13,6 +13,17 @@ from litellm.types.router import RequestType  # re-export for convenience  # noq
 DEFAULT_QUALITY_WEIGHT: Final[float] = 0.7  # UNVALIDATED — calibrated against [0] sessions
 DEFAULT_COST_WEIGHT: Final[float] = 0.3  # UNVALIDATED — calibrated against [0] sessions
 
+# D7 — Efficiency posterior (see adaptive_router/efficiency.py). Defaults to weight=0.0: additive,
+# opt-in, does not change existing quality/cost-tuned deployments' routing until an operator
+# reallocates weight into it. gamma/target_latency/throughput_max follow the same composite-reward
+# shape as the reference efficiency-bandit design this was ported from; all UNVALIDATED against
+# real traffic, expect to retune (see PHASE1_PLAN.md Decision 2 on target_latency in particular —
+# a single fixed default across heterogeneous deployments is a known simplification).
+DEFAULT_EFFICIENCY_WEIGHT: Final[float] = 0.0  # UNVALIDATED — opt-in until we have before/after data
+EFFICIENCY_GAMMA: Final[float] = 0.5  # UNVALIDATED — latency-score vs throughput-score tradeoff
+DEFAULT_TARGET_LATENCY_SECONDS: Final[float] = 1.0  # UNVALIDATED — static; no auto-calibration yet
+EFFICIENCY_THROUGHPUT_MAX: Final[float] = 100.0  # UNVALIDATED — tokens/sec normalizer
+
 # D4 — Cold-start prior: (alpha + beta) total mass = COLD_START_MASS
 # Mean of Beta = base_tier_weight + (strength_bonus if declared)
 BASE_TIER_WEIGHT: Final[dict[int, float]] = {1: 0.3, 2: 0.5, 3: 0.7}  # UNVALIDATED

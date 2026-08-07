@@ -53,8 +53,15 @@ class AdaptiveRouterUpdateQueue:
         model_name: str,
         delta_alpha: float,
         delta_beta: float,
+        delta_alpha_eff: float = 0.0,
+        delta_beta_eff: float = 0.0,
     ) -> None:
-        """Aggregate a bandit-cell delta. Multiple deltas to the same cell sum."""
+        """Aggregate a bandit-cell delta. Multiple deltas to the same cell sum.
+
+        Efficiency deltas (delta_alpha_eff/delta_beta_eff) default to 0.0 so a caller that
+        only updates quality (unchanged from v0) leaves the efficiency posterior untouched
+        for this flush -- same as passing no efficiency update at all.
+        """
         key: Final[StateKey] = (router_name, request_type, model_name)
         async with self._lock:
             current: Final = self._state_agg.get(key)
@@ -62,11 +69,15 @@ class AdaptiveRouterUpdateQueue:
                 self._state_agg[key] = {
                     "delta_alpha": delta_alpha,
                     "delta_beta": delta_beta,
+                    "delta_alpha_eff": delta_alpha_eff,
+                    "delta_beta_eff": delta_beta_eff,
                     "samples_added": 1,
                 }
             else:
                 current["delta_alpha"] += delta_alpha
                 current["delta_beta"] += delta_beta
+                current["delta_alpha_eff"] += delta_alpha_eff
+                current["delta_beta_eff"] += delta_beta_eff
                 current["samples_added"] += 1
             self._max_state_size_seen = max(self._max_state_size_seen, len(self._state_agg))
 
@@ -129,11 +140,15 @@ class AdaptiveRouterUpdateQueue:
                             "model_name": model,
                             "alpha": payload["delta_alpha"],
                             "beta": payload["delta_beta"],
+                            "alpha_eff": payload["delta_alpha_eff"],
+                            "beta_eff": payload["delta_beta_eff"],
                             "total_samples": int(payload["samples_added"]),
                         },
                         "update": {
                             "alpha": {"increment": payload["delta_alpha"]},
                             "beta": {"increment": payload["delta_beta"]},
+                            "alpha_eff": {"increment": payload["delta_alpha_eff"]},
+                            "beta_eff": {"increment": payload["delta_beta_eff"]},
                             "total_samples": {"increment": int(payload["samples_added"])},
                         },
                     },

@@ -1294,6 +1294,7 @@ class ComplexityRouter(CustomLogger):
         from litellm.router_strategy.adaptive_router.bandit import (
             normalized_cost,
             thompson_sample,
+            thompson_sample_efficiency,
         )
         from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 
@@ -1320,6 +1321,7 @@ class ComplexityRouter(CustomLogger):
                         "eligible_mode": "classified_tier",
                         "quality_weight": self.config.adaptive_weights.quality,
                         "cost_weight": self.config.adaptive_weights.cost,
+                        "efficiency_weight": self.config.adaptive_weights.efficiency,
                         "tier_distance_penalty": self.config.tier_distance_penalty,
                         "chosen_model": chosen_model,
                         "candidates": [
@@ -1341,6 +1343,7 @@ class ComplexityRouter(CustomLogger):
         all_costs: Final = [adaptive.model_to_cost.get(m, 0.0) for m in candidates]
         quality_weight: Final = self.config.adaptive_weights.quality
         cost_weight: Final = self.config.adaptive_weights.cost
+        efficiency_weight: Final = self.config.adaptive_weights.efficiency
         penalty_weight: Final = self.config.tier_distance_penalty
 
         best_model: str | None = None
@@ -1350,6 +1353,10 @@ class ComplexityRouter(CustomLogger):
             cell = adaptive._cells[(request_type, model)]
             quality_sample = thompson_sample(cell)
             cost_score = normalized_cost(adaptive.model_to_cost.get(model, 0.0), all_costs)
+            # Only sampled when an operator has opted in (efficiency_weight != 0.0) -- see
+            # AdaptiveRouterWeights.efficiency default. Otherwise this is a no-op extra draw
+            # avoided entirely, and the score below is byte-identical to pre-Phase-1 behavior.
+            efficiency_sample = thompson_sample_efficiency(cell) if efficiency_weight != 0.0 else 0.0
             if self.config.adaptive_eligible == "classified_tier":
                 distance = 0
             else:
@@ -1357,12 +1364,18 @@ class ComplexityRouter(CustomLogger):
                 distance = min(
                     abs(TIER_SEVERITY_ORDER.index(model_tier) - classified_idx) for model_tier in model_tiers
                 )
-            score = quality_weight * quality_sample + cost_weight * cost_score - penalty_weight * distance
+            score = (
+                quality_weight * quality_sample
+                + cost_weight * cost_score
+                + efficiency_weight * efficiency_sample
+                - penalty_weight * distance
+            )
             candidate_scores.append(
                 {
                     "model": model,
                     "quality_sample": quality_sample,
                     "cost_score": cost_score,
+                    "efficiency_sample": efficiency_sample,
                     "tier_distance": distance,
                     "score": score,
                 }
@@ -1382,6 +1395,7 @@ class ComplexityRouter(CustomLogger):
                     "eligible_mode": self.config.adaptive_eligible,
                     "quality_weight": quality_weight,
                     "cost_weight": cost_weight,
+                    "efficiency_weight": efficiency_weight,
                     "tier_distance_penalty": penalty_weight,
                     "chosen_model": best_model,
                     "candidates": candidate_scores,

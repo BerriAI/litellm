@@ -81,6 +81,31 @@ async def test_flush_state_sums_correctly(queue, mock_prisma):
 
 
 @pytest.mark.asyncio
+async def test_add_state_delta_with_efficiency_deltas(queue):
+    """Efficiency deltas should aggregate separately from quality deltas."""
+    await queue.add_state_delta(
+        "r1", "general", "gpt-4", delta_alpha=1.0, delta_beta=0.0, delta_alpha_eff=0.8, delta_beta_eff=0.2
+    )
+    sizes = await queue.queue_size()
+    assert sizes["state_pending"] == 1
+
+
+@pytest.mark.asyncio
+async def test_flush_state_writes_efficiency_deltas(queue, mock_prisma):
+    """Efficiency deltas should be written to create and update branches."""
+    await queue.add_state_delta("r1", "general", "gpt-4", 1.0, 0.0, 0.8, 0.2)
+    await queue.flush_state_to_db(mock_prisma)
+
+    call = mock_prisma.db.litellm_adaptiverouterstate.upsert.call_args
+    # Check create branch has efficiency deltas
+    assert call.kwargs["data"]["create"]["alpha_eff"] == 0.8
+    assert call.kwargs["data"]["create"]["beta_eff"] == 0.2
+    # Check update branch increments efficiency
+    assert "alpha_eff" in call.kwargs["data"]["update"]
+    assert "beta_eff" in call.kwargs["data"]["update"]
+
+
+@pytest.mark.asyncio
 async def test_flush_session_drains_aggregator(queue, mock_prisma):
     await queue.add_session_state("s1", "r1", "gpt-4", {"classified_type": "general"})
     n = await queue.flush_session_to_db(mock_prisma)

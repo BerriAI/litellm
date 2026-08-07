@@ -26,10 +26,12 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.router_strategy.adaptive_router.bandit import (
     BanditCell,
     apply_delta,
+    apply_efficiency_delta,
     initial_cell,
     pick_best,
 )
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
+from litellm.router_strategy.adaptive_router.efficiency import composite_efficiency_reward
 from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
     MIN_QUALITY_TIER_HEADER,
@@ -139,7 +141,15 @@ class AdaptiveRouter:
                     continue
                 if row.model_name not in self.config.available_models:
                     continue
-                self._cells[(rt, row.model_name)] = BanditCell(alpha=row.alpha, beta=row.beta)
+                # Read both quality and efficiency posteriors. If a row was created
+                # before alpha_eff/beta_eff columns existed, Prisma returns their
+                # defaults (1.0 each, the uninformative prior).
+                self._cells[(rt, row.model_name)] = BanditCell(
+                    alpha=row.alpha,
+                    beta=row.beta,
+                    alpha_eff=getattr(row, "alpha_eff", 1.0),
+                    beta_eff=getattr(row, "beta_eff", 1.0),
+                )
                 loaded += 1
             verbose_router_logger.info(
                 "AdaptiveRouter[%s]: loaded %d cells from DB",
@@ -225,6 +235,7 @@ class AdaptiveRouter:
             costs,
             quality_weight=self.config.weights.quality,
             cost_weight=self.config.weights.cost,
+            efficiency_weight=self.config.weights.efficiency,
         )
 
     async def get_state_snapshot(self) -> dict[str, Any]:
@@ -232,18 +243,22 @@ class AdaptiveRouter:
         cells: Final = []
         for (rt, model), cell in sorted(self._cells.items(), key=lambda kv: (kv[0][0].value, kv[0][1])):
             total = cell.alpha + cell.beta
+            total_eff = cell.alpha_eff + cell.beta_eff
             cells.append(
                 {
                     "request_type": rt.value,
                     "model": model,
                     "alpha": cell.alpha,
                     "beta": cell.beta,
+                    "alpha_eff": cell.alpha_eff,
+                    "beta_eff": cell.beta_eff,
                     # Net observations that have moved the posterior, excluding
                     # the cold-start prior mass. `alpha + beta` would show the
                     # initial COLD_START_MASS (e.g. 10) before any real traffic
                     # arrives, which confuses operators reading the endpoint.
                     "samples": cell.total_samples,
                     "quality_mean": cell.alpha / total if total > 0 else 0.0,
+                    "efficiency_mean": cell.alpha_eff / total_eff if total_eff > 0 else 0.0,
                 }
             )
         queue: Final = await self.queue.queue_size()
@@ -255,6 +270,7 @@ class AdaptiveRouter:
             "weights": {
                 "quality": self.config.weights.quality,
                 "cost": self.config.weights.cost,
+                "efficiency": self.config.weights.efficiency,
             },
             "model_costs": dict(self.model_to_cost),
             "cells": cells,
@@ -472,6 +488,65 @@ class AdaptiveRouter:
                 combined_delta,
             )
             return combined_delta
+
+    async def record_efficiency(
+        self,
+        model_name: str,
+        request_type: RequestType,
+        latency_seconds: float,
+        completion_tokens: int,
+        is_failure: bool = False,
+    ) -> float:
+        """
+        Update the (request_type, model) cell's efficiency posterior from one observed
+        call. Independent of record_turn's quality-signal path -- same cell, separate
+        Beta, no shared attribution/session-context bookkeeping needed because latency
+        and token count belong to *this* call, not a delayed judgment about the previous
+        one. Returns the reward that was applied, mainly for tests/observability.
+
+        is_failure mirrors record_turn's own failure handling (Turn.response_status feeding
+        the `failure` signal) rather than introducing a second way to decide a call failed.
+        """
+        reward: Final = (
+            0.0
+            if is_failure
+            else composite_efficiency_reward(
+                latency_seconds=latency_seconds,
+                completion_tokens=completion_tokens,
+            )
+        )
+        d_alpha_eff: Final = reward
+        d_beta_eff: Final = 1.0 - reward
+        async with self._lock:
+            cell_key: Final = (request_type, model_name)
+            if cell_key not in self._cells:
+                self._cells[cell_key] = initial_cell(
+                    self.model_to_prefs.get(model_name, _default_prefs()), request_type
+                )
+            self._cells[cell_key] = apply_efficiency_delta(
+                self._cells[cell_key],
+                d_alpha_eff,
+                d_beta_eff,
+            )
+            await self.queue.add_state_delta(
+                self.router_name,
+                request_type.value,
+                model_name,
+                delta_alpha=0.0,
+                delta_beta=0.0,
+                delta_alpha_eff=d_alpha_eff,
+                delta_beta_eff=d_beta_eff,
+            )
+        verbose_router_logger.debug(
+            "AdaptiveRouter[%s]: efficiency model=%s request_type=%s latency=%.3fs tokens=%d reward=%.3f",
+            self.router_name,
+            model_name,
+            request_type.value,
+            latency_seconds,
+            completion_tokens,
+            reward,
+        )
+        return reward
 
     @staticmethod
     def _persistable_session_snapshot(state: SessionState) -> dict[str, Any]:
