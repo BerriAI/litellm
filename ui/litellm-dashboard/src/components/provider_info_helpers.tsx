@@ -28,6 +28,7 @@ import hyperbolicLogo from "../../public/assets/logos/hyperbolic.svg";
 import infinityLogo from "../../public/assets/logos/infinity.png";
 import jinaLogo from "../../public/assets/logos/jina.png";
 import lambdaLogo from "../../public/assets/logos/lambda.svg";
+import litellmLogo from "../../public/assets/logos/litellm_logo.jpg";
 import lmstudioLogo from "../../public/assets/logos/lmstudio.svg";
 import metaLlamaLogo from "../../public/assets/logos/meta_llama.svg";
 import microsoftAzureLogo from "../../public/assets/logos/microsoft_azure.svg";
@@ -292,6 +293,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Anthropic]: anthropicLogo.src,
   [Providers.ANTHROPIC_TEXT]: anthropicLogo.src,
   [Providers.AssemblyAI]: assemblyaiSmallLogo.src,
+  [Providers.AUTO_ROUTER]: litellmLogo.src,
   [Providers.Azure]: microsoftAzureLogo.src,
   [Providers.Azure_AI_Studio]: microsoftAzureLogo.src,
   [Providers.AZURE_TEXT]: microsoftAzureLogo.src,

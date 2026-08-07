@@ -116,7 +116,6 @@ describe("provider_info_helpers", () => {
   describe("provider logo bundled assets", () => {
     it("should map every provider to a bundled logo except the known logoless set, never a raw /ui/assets path", () => {
       const knownLogolessProviders = [
-        Providers.AUTO_ROUTER,
         Providers.BYTEZ,
         Providers.CLARIFAI,
         Providers.COMPACTIFAI,
@@ -149,6 +148,13 @@ describe("provider_info_helpers", () => {
     it("should resolve a provider to its own bundled logo via getProviderLogoAndName", () => {
       const { logo } = getProviderLogoAndName("openai");
       expect(logo).toContain("openai_small");
+    });
+
+    it("should resolve the auto_router provider to the bundled LiteLLM logo", () => {
+      const { logo, displayName } = getProviderLogoAndName("auto_router");
+      expect(displayName).toBe(Providers.AUTO_ROUTER);
+      expect(logo).toBeTruthy();
+      expect(logo).toContain("litellm_logo");
     });
   });
 
