@@ -197,6 +197,22 @@ model_list:
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
 
+  # ── Vertex AI Chirp 3 HD STT (gRPC streaming) ─────────────────────────────
+  - model_name: chirp-3-hd-stt
+    litellm_params:
+      model: vertex_ai/chirp-3-hd
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: us-central1
+      vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
+
+  # ── Vertex AI Chirp 3 HD TTS (gRPC streaming) ─────────────────────────────
+  - model_name: chirp-3-hd-tts
+    litellm_params:
+      model: vertex_ai/tts-1
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: us-central1
+      vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
+
 general_settings:
   master_key: sk-1234
   # Opt-in: let CheckBatchCost track cost for unmanaged batches created with a raw
