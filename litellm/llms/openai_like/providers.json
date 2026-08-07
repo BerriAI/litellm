@@ -183,5 +183,9 @@
       "max_completion_tokens": "max_tokens"
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
+  },
+  "runware": {
+    "base_url": "https://api.runware.ai/v1",
+    "api_key_env": "RUNWARE_API_KEY"
   }
 }
