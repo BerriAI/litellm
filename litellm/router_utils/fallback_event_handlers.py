@@ -169,7 +169,7 @@ async def run_async_fallback(
             kwargs[metadata_variable_name] = {
                 **(kwargs.get(metadata_variable_name) or {}),
                 "model_group": kwargs.get("model", None),
-            }  # update model_group used, if fallbacks are done
+            }
             fallback_depth = fallback_depth + 1
             kwargs["fallback_depth"] = fallback_depth
             kwargs["max_fallbacks"] = max_fallbacks
