@@ -800,7 +800,9 @@ def test_promoted_baggage_is_bounded_allowlist():
     promoted = promoted_baggage(identity, "gpt-4o", BAGGAGE_PROMOTED_KEYS)
     assert promoted[LiteLLM.TEAM_ID] == "t1"
     assert promoted[LiteLLM.TEAM_ALIAS] == "team one"
-    assert promoted[GenAI.REQUEST_MODEL] == "gpt-4o"
+    assert promoted[LiteLLM.REQUEST_MODEL] == "gpt-4o"
+    # canonical gen_ai.* is not promoted: it would mark non-GenAI spans as LLM ops
+    assert GenAI.REQUEST_MODEL not in promoted
     # allowlisted metadata sub-key is promoted under the litellm.metadata.* prefix
     assert promoted[f"{LiteLLM.METADATA_PREFIX}user_api_key_org_id"] == "org1"
     # full metadata blob is NOT promoted
