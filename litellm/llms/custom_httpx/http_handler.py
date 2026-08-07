@@ -434,14 +434,19 @@ def _safe_read_response(response: httpx.Response, timeout: float | None = None) 
 
 def _build_masked_request(original_request: httpx.Request, masked_url: str) -> httpx.Request:
     """Build a masked request without forcing unread streaming bodies into memory."""
-    headers = httpx.Headers(original_request.headers)
+    headers: Final = httpx.Headers(original_request.headers)
     try:
-        request_content = original_request.content
+        request_content: Final = original_request.content
     except httpx.RequestNotRead:
-        request_content = b""
         headers.pop("content-length", None)
         headers.pop("transfer-encoding", None)
         headers.pop("content-type", None)
+        return httpx.Request(
+            method=original_request.method,
+            url=masked_url,
+            headers=headers,
+            content=b"",
+        )
 
     return httpx.Request(
         method=original_request.method,
