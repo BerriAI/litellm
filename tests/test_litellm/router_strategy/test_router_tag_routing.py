@@ -1136,6 +1136,14 @@ async def test_request_level_enable_tag_filtering_false_cannot_disable_global():
 # --- model_info.enable_tag_filtering per-chain override ---
 
 
+class _FakeRouterForChainOverride:
+    def __init__(self, all_deployments):
+        self._all_deployments = all_deployments
+
+    def _get_all_deployments(self, model_name):
+        return self._all_deployments
+
+
 def test_chain_tag_filtering_override_reads_any_member():
     from litellm.router_strategy.tag_based_routing import _chain_tag_filtering_override
 
@@ -1143,14 +1151,47 @@ def test_chain_tag_filtering_override_reads_any_member():
         {"model_info": {}},
         {"model_info": {"enable_tag_filtering": False}},
     ]
-    assert _chain_tag_filtering_override(deployments) is False
+    router = _FakeRouterForChainOverride(deployments)
+    assert _chain_tag_filtering_override(router, "gpt-4", deployments) is False
 
 
 def test_chain_tag_filtering_override_none_when_unset_anywhere():
     from litellm.router_strategy.tag_based_routing import _chain_tag_filtering_override
 
     deployments = [{"model_info": {}}, {}]
-    assert _chain_tag_filtering_override(deployments) is None
+    router = _FakeRouterForChainOverride(deployments)
+    assert _chain_tag_filtering_override(router, "gpt-4", deployments) is None
+
+
+def test_chain_tag_filtering_override_survives_the_overriding_member_going_unhealthy():
+    # Regression: the per-group override must be resolved from every deployment
+    # configured for the model, not just the ones that survived cooldown/health
+    # filtering. async_get_healthy_deployments filters cooldowns before calling
+    # into get_deployments_for_tag, so healthy_deployments alone can be missing
+    # the one deployment that carries the group's only explicit override.
+    from litellm.router_strategy.tag_based_routing import _chain_tag_filtering_override
+
+    all_deployments = [
+        {"model_info": {"enable_tag_filtering": True}},
+        {"model_info": {}},
+    ]
+    router = _FakeRouterForChainOverride(all_deployments)
+    # The overriding deployment (index 0) is cooled down and absent from
+    # healthy_deployments -- the override must still be found via the full-group
+    # lookup, not silently lost.
+    healthy_deployments = [all_deployments[1]]
+    assert _chain_tag_filtering_override(router, "gpt-4", healthy_deployments) is True
+
+
+def test_chain_tag_filtering_override_falls_back_to_healthy_deployments_on_lookup_error():
+    from litellm.router_strategy.tag_based_routing import _chain_tag_filtering_override
+
+    class _BrokenRouter:
+        def _get_all_deployments(self, model_name):
+            raise RuntimeError("model group not found")
+
+    healthy_deployments = [{"model_info": {"enable_tag_filtering": False}}]
+    assert _chain_tag_filtering_override(_BrokenRouter(), "gpt-4", healthy_deployments) is False
 
 
 @pytest.mark.asyncio()
