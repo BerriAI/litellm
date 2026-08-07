@@ -7,6 +7,7 @@ from typing import Final
 import anyio
 
 ANTHROPIC_PING_SSE_CHUNK: Final = 'event: ping\ndata: {"type": "ping"}\n\n'
+SSE_COMMENT_PING_CHUNK: Final = ": ping\n\n"
 
 
 def _coerce_interval(ping_interval_seconds: float | str | None) -> float | None:
@@ -24,16 +25,18 @@ def _coerce_interval(ping_interval_seconds: float | str | None) -> float | None:
 def wrap_sse_stream_with_keepalive_pings(
     stream: AsyncGenerator[str, None],
     ping_interval_seconds: float | str | None,
+    ping_chunk: str,
 ) -> AsyncGenerator[str, None]:
     interval: Final = _coerce_interval(ping_interval_seconds)
     if interval is None:
         return stream
-    return _keepalive_ping_stream(stream=stream, ping_interval_seconds=interval)
+    return _keepalive_ping_stream(stream=stream, ping_interval_seconds=interval, ping_chunk=ping_chunk)
 
 
 async def _keepalive_ping_stream(
     stream: AsyncGenerator[str, None],
     ping_interval_seconds: float,
+    ping_chunk: str,
 ) -> AsyncGenerator[str, None]:
     pending = asyncio.ensure_future(
         stream.__anext__()
@@ -42,7 +45,7 @@ async def _keepalive_ping_stream(
         while True:
             await asyncio.wait({pending}, timeout=ping_interval_seconds)
             if not pending.done():
-                yield ANTHROPIC_PING_SSE_CHUNK
+                yield ping_chunk
                 continue
             try:
                 yield pending.result()

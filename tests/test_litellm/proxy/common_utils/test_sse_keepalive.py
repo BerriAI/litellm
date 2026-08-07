@@ -22,7 +22,11 @@ async def test_pings_fill_mid_stream_silence_and_preserve_chunk_order():
         await asyncio.sleep(0.3)
         yield TEXT_DELTA_CHUNK
 
-    wrapped: Final = wrap_sse_stream_with_keepalive_pings(stream=gappy_stream(), ping_interval_seconds=0.05)
+    wrapped: Final = wrap_sse_stream_with_keepalive_pings(
+        stream=gappy_stream(),
+        ping_interval_seconds=0.05,
+        ping_chunk=ANTHROPIC_PING_SSE_CHUNK,
+    )
     collected: Final = [chunk async for chunk in wrapped]
 
     assert collected[0] == MESSAGE_START_CHUNK
@@ -40,7 +44,11 @@ async def test_ping_emitted_while_waiting_for_first_chunk():
         await asyncio.sleep(0.2)
         yield MESSAGE_START_CHUNK
 
-    wrapped: Final = wrap_sse_stream_with_keepalive_pings(stream=slow_start_stream(), ping_interval_seconds=0.05)
+    wrapped: Final = wrap_sse_stream_with_keepalive_pings(
+        stream=slow_start_stream(),
+        ping_interval_seconds=0.05,
+        ping_chunk=ANTHROPIC_PING_SSE_CHUNK,
+    )
     collected: Final = [chunk async for chunk in wrapped]
 
     assert collected[0] == ANTHROPIC_PING_SSE_CHUNK
@@ -54,7 +62,11 @@ async def test_no_pings_when_chunks_arrive_faster_than_interval():
         yield TEXT_DELTA_CHUNK
         yield TEXT_DELTA_CHUNK
 
-    wrapped: Final = wrap_sse_stream_with_keepalive_pings(stream=fast_stream(), ping_interval_seconds=1.0)
+    wrapped: Final = wrap_sse_stream_with_keepalive_pings(
+        stream=fast_stream(),
+        ping_interval_seconds=1.0,
+        ping_chunk=ANTHROPIC_PING_SSE_CHUNK,
+    )
     collected: Final = [chunk async for chunk in wrapped]
 
     assert collected == [MESSAGE_START_CHUNK, TEXT_DELTA_CHUNK, TEXT_DELTA_CHUNK]
@@ -66,7 +78,11 @@ async def test_upstream_exception_propagates():
         yield MESSAGE_START_CHUNK
         raise ValueError("upstream broke")
 
-    wrapped: Final = wrap_sse_stream_with_keepalive_pings(stream=failing_stream(), ping_interval_seconds=5.0)
+    wrapped: Final = wrap_sse_stream_with_keepalive_pings(
+        stream=failing_stream(),
+        ping_interval_seconds=5.0,
+        ping_chunk=ANTHROPIC_PING_SSE_CHUNK,
+    )
 
     assert await wrapped.__anext__() == MESSAGE_START_CHUNK
     with pytest.raises(ValueError, match="upstream broke"):
@@ -85,7 +101,11 @@ async def test_aclose_mid_silence_cancels_upstream_and_runs_its_cleanup():
         finally:
             upstream_cleaned_up.set()
 
-    wrapped: Final = wrap_sse_stream_with_keepalive_pings(stream=hung_stream(), ping_interval_seconds=0.05)
+    wrapped: Final = wrap_sse_stream_with_keepalive_pings(
+        stream=hung_stream(),
+        ping_interval_seconds=0.05,
+        ping_chunk=ANTHROPIC_PING_SSE_CHUNK,
+    )
 
     assert await wrapped.__anext__() == MESSAGE_START_CHUNK
     assert await wrapped.__anext__() == ANTHROPIC_PING_SSE_CHUNK
@@ -100,7 +120,11 @@ async def test_non_positive_interval_returns_stream_unwrapped():
         yield MESSAGE_START_CHUNK
 
     stream: Final = any_stream()
-    assert wrap_sse_stream_with_keepalive_pings(stream=stream, ping_interval_seconds=0) is stream
+    assert wrap_sse_stream_with_keepalive_pings(
+        stream=stream,
+        ping_interval_seconds=0,
+        ping_chunk=ANTHROPIC_PING_SSE_CHUNK,
+    ) is stream
     await stream.aclose()
 
 
@@ -123,7 +147,11 @@ async def test_invalid_config_interval_returns_stream_unwrapped(bad_interval: fl
         yield MESSAGE_START_CHUNK
 
     stream: Final = any_stream()
-    assert wrap_sse_stream_with_keepalive_pings(stream=stream, ping_interval_seconds=bad_interval) is stream
+    assert wrap_sse_stream_with_keepalive_pings(
+        stream=stream,
+        ping_interval_seconds=bad_interval,
+        ping_chunk=ANTHROPIC_PING_SSE_CHUNK,
+    ) is stream
     await stream.aclose()
 
 
@@ -133,7 +161,11 @@ async def test_numeric_string_interval_from_yaml_config_enables_pings():
         await asyncio.sleep(0.2)
         yield MESSAGE_START_CHUNK
 
-    wrapped: Final = wrap_sse_stream_with_keepalive_pings(stream=slow_start_stream(), ping_interval_seconds="0.05")
+    wrapped: Final = wrap_sse_stream_with_keepalive_pings(
+        stream=slow_start_stream(),
+        ping_interval_seconds="0.05",
+        ping_chunk=ANTHROPIC_PING_SSE_CHUNK,
+    )
     collected: Final = [chunk async for chunk in wrapped]
 
     assert collected[0] == ANTHROPIC_PING_SSE_CHUNK
@@ -147,7 +179,11 @@ async def test_create_response_streams_ping_first_for_slow_upstream():
         yield MESSAGE_START_CHUNK
 
     response: Final = await create_response(
-        generator=wrap_sse_stream_with_keepalive_pings(stream=slow_start_stream(), ping_interval_seconds=0.05),
+        generator=wrap_sse_stream_with_keepalive_pings(
+        stream=slow_start_stream(),
+        ping_interval_seconds=0.05,
+        ping_chunk=ANTHROPIC_PING_SSE_CHUNK,
+    ),
         media_type="text/event-stream",
         headers={},
     )
