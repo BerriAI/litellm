@@ -203,6 +203,7 @@ def _get_provider_handlers() -> dict[str, type[BaseTranslation]]:
         )
 
         _PROVIDER_HANDLERS = {"bedrock": BedrockPassthroughGuardrailHandler}
+        _PROVIDER_HANDLERS["chatgpt"] = PassThroughEndpointHandler
     return _PROVIDER_HANDLERS
 
 

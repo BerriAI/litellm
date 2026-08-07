@@ -8473,6 +8473,12 @@ class ProviderConfigManager:
             )
 
             return WatsonxPassthroughConfig()
+        elif LlmProviders.CHATGPT == provider:
+            from litellm.llms.chatgpt.search.transformation import (
+                ChatGPTSearchPassthroughConfig,
+            )
+
+            return ChatGPTSearchPassthroughConfig()
         return None
 
     @staticmethod

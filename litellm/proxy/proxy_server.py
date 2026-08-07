@@ -2024,11 +2024,11 @@ if docs_url != "/" and root_redirect_url is not None:
         return RedirectResponse(url=root_redirect_url)
 
 
-user_api_base: str | None = None
-user_model: str | None = None
+user_api_base = None
+user_model = None
 user_debug = False
 user_max_tokens = None
-user_request_timeout: float | None = None
+user_request_timeout = None
 user_temperature = None
 user_telemetry = True
 user_config: Final = None
