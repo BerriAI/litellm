@@ -34,11 +34,17 @@ from litellm.types.utils import (
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
 
-_PASS_THROUGH_CALL_TYPES: Final[frozenset[str]] = frozenset(
+_UNATTRIBUTED_TRACKABLE_CALL_TYPES: Final[frozenset[str]] = frozenset(
     {
         CallTypes.pass_through.value,
         CallTypes.llm_passthrough_route.value,
         CallTypes.allm_passthrough_route.value,
+        # CheckBatchCost's synthetic logging_obj for a completed managed batch only ever
+        # carries user_api_key_user_id (from LiteLLM_ManagedObjectTable.created_by) and
+        # user_api_key_team_id (from .team_id) -- both are None for batches created with
+        # the master key or a team-less key, since the table never stores the raw key
+        # hash. The batch already incurred real provider cost, so track it regardless.
+        CallTypes.aretrieve_batch.value,
     }
 )
 
@@ -440,6 +446,8 @@ def _should_track_cost_callback(
     the request with no key/user/team/end-user to attribute spend to. Those
     requests still forward real provider traffic that operators expect to see
     in request/usage logs, so they are tracked even when unauthenticated.
+    The same reasoning applies to a completed managed batch's cost event
+    (see _UNATTRIBUTED_TRACKABLE_CALL_TYPES).
     """
 
     # don't run track cost callback if user opted into disabling spend
@@ -448,7 +456,7 @@ def _should_track_cost_callback(
 
     if user_api_key is not None or user_id is not None or team_id is not None or end_user_id is not None:
         return True
-    return call_type in _PASS_THROUGH_CALL_TYPES
+    return call_type in _UNATTRIBUTED_TRACKABLE_CALL_TYPES
 
 
 def _get_budget_reservation_from_metadata(metadata: dict) -> dict | None:

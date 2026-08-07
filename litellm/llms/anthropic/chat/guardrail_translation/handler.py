@@ -26,10 +26,13 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    anthropic_tool_name,
+    effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
-    openai_messages_without_system,
-    openai_messages_without_tool,
+    merge_guardrailed_scoped_messages,
+    merge_returned_tools_into_request_tools,
+    scoped_structured_message_indices,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -326,19 +329,25 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
 
         chat_completion_compatible_request: Final = self._translate_to_openai(data)
 
-        structured_messages = cast(
+        full_structured_messages: Final = cast(
             list[AllMessageValues],
             chat_completion_compatible_request.get("messages", []),
         )
-        if skip_system:
-            structured_messages = openai_messages_without_system(structured_messages)
-        if skip_tool:
-            structured_messages = openai_messages_without_tool(structured_messages)
+        scoped_message_indices: Final = scoped_structured_message_indices(
+            full_structured_messages,
+            scan_only_tool_results=scan_only_tool_results,
+            skip_system=skip_system,
+            skip_tool=skip_tool,
+        )
+        structured_messages: Final = [full_structured_messages[index] for index in scoped_message_indices]
 
-        tools_to_check: Final[list[ChatCompletionToolParam]] = chat_completion_compatible_request.get("tools", [])
+        tools_to_check: Final[list[ChatCompletionToolParam]] = (
+            [] if scan_only_tool_results else chat_completion_compatible_request.get("tools", [])
+        )
 
         # Step 1: Extract all text content and images
         extracted: Final = tuple(
@@ -347,6 +356,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 msg_idx=msg_idx,
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
+                scan_only_tool_results=scan_only_tool_results,
             )
             for msg_idx, message in enumerate(messages)
         )
@@ -388,14 +398,31 @@ class AnthropicMessagesHandler(BaseTranslation):
                     if converted_tool is not None:
                         anthropic_tools.append(converted_tool)
                     # Note: MCP servers are handled separately in the main transformation
-                data["tools"] = anthropic_tools
+                data["tools"] = (
+                    merge_returned_tools_into_request_tools(
+                        request_tools=data.get("tools"),
+                        returned_tools=anthropic_tools,
+                        tool_name=anthropic_tool_name,
+                    )
+                    if scan_only_tool_results
+                    else anthropic_tools
+                )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")
             if (
                 guardrailed_structured_messages is not None
                 and guardrailed_structured_messages is not original_structured_messages
             ):
-                self._write_back_structured_messages(data, guardrailed_structured_messages)
+                self._write_back_structured_messages(
+                    data,
+                    guardrailed_structured_messages
+                    if guardrail_to_apply.structured_messages_cover_full_request()
+                    else merge_guardrailed_scoped_messages(
+                        full_messages=full_structured_messages,
+                        scoped_indices=scoped_message_indices,
+                        guardrailed_scoped=guardrailed_structured_messages,
+                    ),
+                )
             else:
                 # Step 3: Map guardrail responses back to original message structure
                 await self._apply_guardrail_responses_to_input(
@@ -461,6 +488,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         msg_idx: int,
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
+        scan_only_tool_results: bool = False,
     ) -> ExtractedInput:
         """
         Extract text content and images from a message.
@@ -471,6 +499,8 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         content: Final = message.get("content", None)
         if isinstance(content, str):
+            if scan_only_tool_results:
+                return EMPTY_EXTRACTED_INPUT
             return ExtractedInput(scanned=(ScannedText(content, MessageContentTarget(msg_idx)),), images=())
         if not isinstance(content, list):
             return EMPTY_EXTRACTED_INPUT
@@ -481,6 +511,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 msg_idx=msg_idx,
                 content_idx=content_idx,
                 skip_tool_message=skip_tool_message,
+                scan_only_tool_results=scan_only_tool_results,
             )
             for content_idx, content_item in enumerate(content)
             if isinstance(content_item, dict)
@@ -497,11 +528,15 @@ class AnthropicMessagesHandler(BaseTranslation):
         msg_idx: int,
         content_idx: int,
         skip_tool_message: bool,
+        scan_only_tool_results: bool = False,
     ) -> ExtractedInput:
         if content_item.get("type") == "tool_result":
             if skip_tool_message:
                 return EMPTY_EXTRACTED_INPUT
             return cls._extract_tool_result(content_item=content_item, msg_idx=msg_idx, content_idx=content_idx)
+
+        if scan_only_tool_results:
+            return EMPTY_EXTRACTED_INPUT
 
         text_str: Final = content_item.get("text", None)
         return ExtractedInput(
@@ -550,22 +585,6 @@ class AnthropicMessagesHandler(BaseTranslation):
         # Could be base64 or url
         data: Final = source.get("data")
         return (data,) if data else ()
-
-    def _extract_input_tools(
-        self,
-        tools: list[dict[str, Any]],
-        tools_to_check: list[ChatCompletionToolParam],
-    ) -> None:
-        """
-        Extract tools from a message.
-        """
-        ## CHECK FOR TOOLS
-        if tools is not None and isinstance(tools, list):
-            # TRANSFORM ANTHROPIC TOOLS TO OPENAI TOOLS
-            openai_tools: Final = self.adapter.translate_anthropic_tools_to_openai(
-                tools=cast(list[AllAnthropicToolsValues], tools)
-            )
-            tools_to_check.extend(openai_tools)
 
     async def _apply_guardrail_responses_to_input(
         self,

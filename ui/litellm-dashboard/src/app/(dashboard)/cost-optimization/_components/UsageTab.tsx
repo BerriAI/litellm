@@ -141,7 +141,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const rangeLabel = formatRangeLabel(startTime ?? undefined, endTime ?? undefined);
   const savingsSubtitle = [
     accumulation === "cumulative" ? "Running total saved" : `Saved ${intervalLabel.toLowerCase()}`,
-    rangeLabel,
+    rangeLabel && `${rangeLabel} (UTC)`,
   ]
     .filter(Boolean)
     .join(" \u00b7 ");
@@ -179,6 +179,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   return (
     <div className="w-full space-y-6">
       <div className="flex flex-wrap items-center justify-end gap-4">
+        <span className="text-sm text-muted-foreground">Spend is bucketed by UTC day</span>
         <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
       </div>
 

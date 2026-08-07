@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, Final, List, Literal, Optional, Uni
 from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 import litellm
 from litellm import Router, verbose_logger
@@ -81,6 +82,14 @@ else:
     PrismaClient = Any
 
 
+def _sanitized_parse_error(e: Exception) -> str:
+    return (
+        str(e.errors(include_input=False, include_url=False, include_context=False))
+        if isinstance(e, ValidationError)
+        else type(e).__name__
+    )
+
+
 def _decode_json_blob(blob: object) -> object:
     return json.loads(blob) if isinstance(blob, str) else blob
 
@@ -89,10 +98,26 @@ def _parse_managed_batch_row(row: "PrismaManagedObjectRow") -> Optional[LiteLLMB
     try:
         batch_obj: Final = LiteLLMBatch.model_validate(_decode_json_blob(row.file_object))
     except Exception as e:
-        verbose_logger.warning(f"Failed to parse batch object {row.unified_object_id}: {e}")
+        verbose_logger.warning(
+            f"Failed to parse batch object {row.unified_object_id}: {_sanitized_parse_error(e)}"
+        )
         return None
     batch_obj.id = row.unified_object_id
     return batch_obj
+
+
+def _parse_managed_file_object(
+    raw_file_object: object, unified_file_id: str
+) -> Optional[OpenAIFileObject]:
+    if raw_file_object is None:
+        return None
+    try:
+        return OpenAIFileObject.model_validate(raw_file_object)
+    except Exception as e:
+        verbose_logger.warning(
+            f"Failed to parse managed file object {unified_file_id}: {_sanitized_parse_error(e)}"
+        )
+        return None
 
 
 class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
@@ -440,11 +465,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             }
         )
         return [
-            OpenAIFileObject.model_validate(row.file_object).model_copy(
-                update={"id": row.unified_file_id}
-            )
+            parsed_file_object.model_copy(update={"id": row.unified_file_id})
             for row in file_ids
-            if row.file_object is not None
+            if (
+                parsed_file_object := _parse_managed_file_object(
+                    row.file_object, row.unified_file_id
+                )
+            )
+            is not None
         ]
 
     async def check_managed_file_id_access(
