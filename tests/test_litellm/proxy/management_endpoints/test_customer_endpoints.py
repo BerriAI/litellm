@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
@@ -860,3 +861,83 @@ def test_new_customer_evicts_cached_negative_validation(mock_prisma_client, mock
 
     assert response.status_code == 200
     assert cache.in_memory_cache.get_cache("end_user_validation:c1") is None
+
+
+class _PrismaEndUserRow(BaseModel):
+    """Stand-in for the prisma-generated row model, which is a distinct class from
+    litellm's LiteLLM_EndUserTable and has no dict-like `.get`."""
+
+    user_id: str
+    blocked: bool
+    spend: float = 0.0
+
+
+def test_block_customer_returns_200_for_prisma_row(mock_prisma_client, mock_user_api_key_auth):
+    """The prisma row is not a LiteLLM_EndUserTable, so returning it raw made
+    response_model validation blow up with a 500 on every /customer/block call."""
+    mock_prisma_client.db.litellm_endusertable.upsert = AsyncMock(
+        return_value=_PrismaEndUserRow(user_id="blocked-1", blocked=True)
+    )
+
+    response = client.post(
+        "/customer/block",
+        json={"user_ids": ["blocked-1"]},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["blocked_users"][0] == {
+        "user_id": "blocked-1",
+        "blocked": True,
+        "alias": None,
+        "spend": 0.0,
+        "allowed_model_region": None,
+        "default_model": None,
+        "budget_id": None,
+        "litellm_budget_table": None,
+        "object_permission_id": None,
+        "object_permission": None,
+    }
+
+
+def test_unblock_customer_clears_blocked_flag_in_db(mock_prisma_client, mock_user_api_key_auth):
+    """Unblocking used to only mutate the in-memory litellm.blocked_user_list, so a customer
+    blocked through /customer/block stayed blocked in the DB forever."""
+    upsert = AsyncMock(return_value=_PrismaEndUserRow(user_id="blocked-1", blocked=False))
+    mock_prisma_client.db.litellm_endusertable.upsert = upsert
+
+    response = client.post(
+        "/customer/unblock",
+        json={"user_ids": ["blocked-1"]},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    assert upsert.call_args.kwargs["data"]["update"] == {"blocked": False}
+
+
+def test_block_and_unblock_invalidate_cached_end_users(mock_prisma_client, mock_user_api_key_auth, monkeypatch):
+    invalidated: list[str] = []
+
+    async def _record(end_user_id: str, user_api_key_cache) -> None:
+        invalidated.append(end_user_id)
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.customer_endpoints.delete_cached_end_user_object",
+        _record,
+    )
+    mock_prisma_client.db.litellm_endusertable.upsert = AsyncMock(
+        return_value=_PrismaEndUserRow(user_id="blocked-1", blocked=True)
+    )
+
+    for route in ("/customer/block", "/customer/unblock"):
+        assert (
+            client.post(
+                route,
+                json={"user_ids": ["blocked-1"]},
+                headers={"Authorization": "Bearer test-key"},
+            ).status_code
+            == 200
+        )
+
+    assert invalidated == ["blocked-1", "blocked-1"]

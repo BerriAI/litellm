@@ -10,7 +10,8 @@ All /customer management endpoints
 """
 
 #### END-USER/CUSTOMER MANAGEMENT ####
-from collections.abc import Iterable
+import asyncio
+from collections.abc import Iterable, Sequence
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -52,6 +53,34 @@ async def _invalidate_cached_end_users(end_user_ids: Iterable[str]) -> None:
         await delete_cached_end_user_object(end_user_id=end_user_id, user_api_key_cache=user_api_key_cache)
 
 
+async def _set_end_users_blocked(user_ids: Sequence[str], blocked: bool) -> tuple[LiteLLM_EndUserTable, ...]:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
+
+    try:
+        rows: Final = await asyncio.gather(
+            *(
+                EndUserRepository(prisma_client).table.upsert(
+                    where={"user_id": user_id},
+                    data={
+                        "create": {"user_id": user_id, "blocked": blocked},
+                        "update": {"blocked": blocked},
+                    },
+                )
+                for user_id in user_ids
+            )
+        )
+        records: Final = tuple(LiteLLM_EndUserTable.model_validate(row.model_dump()) for row in rows)
+    except Exception as e:
+        verbose_proxy_logger.error("An error occurred - %s", e)
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+    await _invalidate_cached_end_users(user_ids)
+    return records
+
+
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
     """Validate a raw end-user DB row into the typed customer response.
 
@@ -91,31 +120,7 @@ async def block_user(data: BlockUsers):
         }'
         ```
     """
-    from litellm.proxy.proxy_server import prisma_client
-
-    try:
-        records: Final = []
-        if prisma_client is not None:
-            for id in data.user_ids:
-                record = await EndUserRepository(prisma_client).table.upsert(
-                    where={"user_id": id},
-                    data={
-                        "create": {"user_id": id, "blocked": True},
-                        "update": {"blocked": True},
-                    },
-                )
-                records.append(record)
-            await _invalidate_cached_end_users(data.user_ids)
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": "Postgres DB Not connected"},
-            )
-
-        return {"blocked_users": records}
-    except Exception as e:
-        verbose_proxy_logger.error("An error occurred - %s", e)
-        raise HTTPException(status_code=500, detail={"error": str(e)})
+    return BlockUsersResponse(blocked_users=list(await _set_end_users_blocked(user_ids=data.user_ids, blocked=True)))
 
 
 @router.post(
@@ -130,7 +135,7 @@ async def block_user(data: BlockUsers):
     dependencies=[Depends(user_api_key_auth)],
     response_model=UnblockUsersResponse,
 )
-async def unblock_user(data: BlockUsers):
+async def unblock_user(data: BlockUsers) -> UnblockUsersResponse:
     """
     [BETA] Unblock calls with this user id
 
@@ -143,38 +148,14 @@ async def unblock_user(data: BlockUsers):
     }'
     ```
     """
-    try:
-        from enterprise.enterprise_hooks.blocked_user_list import (
-            _ENTERPRISE_BlockedUserList,
-        )
-    except ImportError:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "Blocked user check was never set. This call has no effect."
-                + CommonProxyErrors.missing_enterprise_package_docker.value
-            },
-        )
-
-    if (
-        not any(isinstance(x, _ENTERPRISE_BlockedUserList) for x in litellm.callbacks)
-        or litellm.blocked_user_list is None
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "Blocked user check was never set. This call has no effect."},
-        )
+    await _set_end_users_blocked(user_ids=data.user_ids, blocked=False)
 
     if isinstance(litellm.blocked_user_list, list):
-        for id in data.user_ids:
-            litellm.blocked_user_list.remove(id)
-    else:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "`blocked_user_list` must be set as a list. Filepaths can't be updated."},
-        )
+        remaining: Final = tuple(user_id for user_id in litellm.blocked_user_list if user_id not in set(data.user_ids))
+        litellm.blocked_user_list = list(remaining)
+        return UnblockUsersResponse(blocked_users=list(remaining))
 
-    return {"blocked_users": litellm.blocked_user_list}
+    return UnblockUsersResponse(blocked_users=[])
 
 
 def new_budget_request(data: NewCustomerRequest) -> BudgetNewRequest | None:

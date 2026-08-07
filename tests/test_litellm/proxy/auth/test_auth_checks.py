@@ -5723,3 +5723,53 @@ async def test_delete_cached_end_user_object_still_broadcasts_when_eviction_fail
         ("end_user_id:eu-1", "user_api_key"),
         ("end_user_validation:eu-1", "user_api_key"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_common_checks_rejects_blocked_end_user():
+    """A customer blocked via /customer/block must not be able to make LLM calls.
+
+    Enforcement used to live only in the enterprise blocked_user_list hook, so on a default
+    install `blocked: true` in the DB had no effect at all.
+    """
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    with pytest.raises(ProxyException) as exc_info:
+        await common_checks(
+            request_body={"user": "blocked-customer"},
+            team_object=None,
+            user_object=None,
+            end_user_object=LiteLLM_EndUserTable(user_id="blocked-customer", blocked=True),
+            global_proxy_spend=None,
+            general_settings={},
+            route="/v1/chat/completions",
+            llm_router=None,
+            proxy_logging_obj=AsyncMock(),
+            valid_token=UserAPIKeyAuth(token="test-token"),
+            request=MagicMock(),
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.blocked_user
+    assert "blocked-customer" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_common_checks_allows_unblocked_end_user():
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    result = await common_checks(
+        request_body={"user": "ok-customer"},
+        team_object=None,
+        user_object=None,
+        end_user_object=LiteLLM_EndUserTable(user_id="ok-customer", blocked=False),
+        global_proxy_spend=None,
+        general_settings={},
+        route="/v1/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=AsyncMock(),
+        valid_token=UserAPIKeyAuth(token="test-token"),
+        request=MagicMock(),
+    )
+
+    assert result is True

@@ -3636,6 +3636,11 @@ class ProxyErrorTypes(str, enum.Enum):
     Tool is not in the allowed tools list for this key/team
     """
 
+    blocked_user = "blocked_user"
+    """
+    End-user is blocked from making requests
+    """
+
     @classmethod
     def get_model_access_error_type_for_object(
         cls, object_type: Literal["key", "user", "team", "org", "project"]

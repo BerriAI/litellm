@@ -554,6 +554,16 @@ async def common_checks(
     if team_object is not None and team_object.blocked is True:
         raise Exception(f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if you're an admin.")
 
+    # 1.05 If end-user is blocked
+    if end_user_object is not None and end_user_object.blocked is True:
+        raise ProxyException(
+            message=f"User blocked from making LLM API Calls. User={end_user_object.user_id}. "
+            "Update via `/customer/unblock` if you're an admin.",
+            type=ProxyErrorTypes.blocked_user,
+            param="user",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
     # 2. If team can call model (or key's access_group_ids grant it)
     if _model and team_object:
         with tracer.trace("litellm.proxy.auth.common_checks.can_team_access_model"):
