@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, Final, List, Literal, Optional, Uni
 from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 import litellm
 from litellm import Router, verbose_logger
@@ -72,6 +73,26 @@ else:
     Span = Any
     InternalUsageCache = Any
     PrismaClient = Any
+
+
+def _parse_managed_file_object(
+    raw_file_object: object, unified_file_id: str
+) -> Optional[OpenAIFileObject]:
+    if raw_file_object is None:
+        return None
+    try:
+        return OpenAIFileObject.model_validate(raw_file_object)
+    except ValidationError as e:
+        verbose_logger.warning(
+            f"Failed to parse managed file object {unified_file_id}: "
+            f"{e.errors(include_input=False, include_url=False, include_context=False)}"
+        )
+        return None
+    except Exception as e:
+        verbose_logger.warning(
+            f"Failed to parse managed file object {unified_file_id}: {type(e).__name__}"
+        )
+        return None
 
 
 class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
@@ -384,11 +405,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             }
         )
         return [
-            OpenAIFileObject.model_validate(row.file_object).model_copy(
-                update={"id": row.unified_file_id}
-            )
+            parsed_file_object.model_copy(update={"id": row.unified_file_id})
             for row in file_ids
-            if row.file_object is not None
+            if (
+                parsed_file_object := _parse_managed_file_object(
+                    row.file_object, row.unified_file_id
+                )
+            )
+            is not None
         ]
 
     async def check_managed_file_id_access(

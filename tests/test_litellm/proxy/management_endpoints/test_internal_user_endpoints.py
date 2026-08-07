@@ -2295,6 +2295,75 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_get_user_daily_activity_aggregated_non_admin_cannot_view_other_users(
+    monkeypatch,
+):
+    """
+    Same scoping contract as
+    test_get_user_daily_activity_non_admin_cannot_view_other_users, on the
+    aggregated route. Non-admins reach this handler now that the route is in
+    self_managed_routes, so the 403-on-mismatch and default-to-self behaviour
+    has to hold here too: opening the route must not widen access.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        get_user_daily_activity_aggregated,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    non_admin_key_dict = UserAPIKeyAuth(
+        user_id="regular-user-123",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    # Case 1: Non-admin targets another user's data — 403, helper never reached
+    with patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
+        new_callable=AsyncMock,
+    ) as mock_get_daily_agg:
+        with pytest.raises(HTTPException) as exc_info:
+            await get_user_daily_activity_aggregated(
+                start_date="2025-01-01",
+                end_date="2025-01-31",
+                model=None,
+                api_key=None,
+                user_id="other-user-456",
+                timezone=None,
+                user_api_key_dict=non_admin_key_dict,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "Non-admin users can only view their own spend data" in str(exc_info.value.detail)
+        mock_get_daily_agg.assert_not_called()
+
+    # Case 2: Non-admin omits user_id — scoped to their own user_id, not global
+    mock_response = MagicMock()
+    with patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ) as mock_get_daily_agg:
+        result = await get_user_daily_activity_aggregated(
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+            model=None,
+            api_key=None,
+            user_id=None,
+            timezone=None,
+            user_api_key_dict=non_admin_key_dict,
+        )
+
+        assert result is mock_response
+        mock_get_daily_agg.assert_called_once()
+        assert mock_get_daily_agg.call_args.kwargs["entity_id"] == "regular-user-123"
+
+
+@pytest.mark.asyncio
 async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
     """
     Test that delete_user removes invitation links where the deleted user is the

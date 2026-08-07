@@ -1111,6 +1111,10 @@ async def proxy_startup_event(app: FastAPI):
                 prisma_client=prisma_client,
             )
         )
+    ProxyStartupEvent._warn_budget_without_db(
+        max_budget=litellm.max_budget,
+        prisma_client=prisma_client,
+    )
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     if prisma_client is not None:
@@ -3909,6 +3913,10 @@ class ProxyConfig:
         # whether an existing request predates the prices it just fetched, and re-serving one
         # costs a single fetch where skipping one leaves it priced wrong indefinitely
         self.model_cost_map_applied_revision: int = 0
+        # Keys explicitly set in the YAML config file. Used to give YAML
+        # precedence over stale DB-cached values for these specific keys
+        # during periodic config reloads (_update_general_settings).
+        self._yaml_general_settings_keys: set[str] = set()  # mutable-ok: populated once at startup, read-only thereafter  # fmt: skip
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -4839,6 +4847,11 @@ class ProxyConfig:
         _hc_staleness = None
         _hc_ignore_transient = False
         if general_settings:
+            # Record which keys were explicitly set in the YAML config file.
+            # These keys take precedence over DB-cached values during periodic
+            # reloads (see _update_general_settings).
+            self._yaml_general_settings_keys = set(general_settings.keys())  # mutable-ok: snapshot of YAML keys at load time  # fmt: skip
+
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings: Final = general_settings.get("key_management_settings", None)
             if key_management_settings is not None:
@@ -6049,7 +6062,15 @@ class ProxyConfig:
 
         ## STORE PROMPTS IN SPEND LOGS ##
         if "store_prompts_in_spend_logs" in _general_settings:
-            value = _general_settings["store_prompts_in_spend_logs"]
+            # If the YAML config explicitly set this key, prefer the YAML value
+            # over the DB-cached value. This ensures config changes deployed via
+            # CI/CD take effect without requiring a manual /config/update call.
+            # When YAML does not set this key, the DB value is used (preserving
+            # admin UI runtime changes).
+            if "store_prompts_in_spend_logs" in self._yaml_general_settings_keys:
+                value = general_settings.get("store_prompts_in_spend_logs")
+            else:
+                value = _general_settings["store_prompts_in_spend_logs"]
             # Normalize case: handle True/true/TRUE, False/false/FALSE, None/null
             if value is None:
                 general_settings["store_prompts_in_spend_logs"] = None
@@ -7808,6 +7829,19 @@ def giveup(e):
 
 
 class ProxyStartupEvent:
+    @staticmethod
+    def _warn_budget_without_db(max_budget: float | None, prisma_client: PrismaClient | None) -> None:
+        if prisma_client is not None or not max_budget or max_budget <= 0:
+            return
+
+        verbose_proxy_logger.warning(
+            "A proxy-wide budget (litellm.max_budget=%s) is configured but no database is connected, "
+            "so the budget will NOT be enforced and requests will never be blocked. Set DATABASE_URL or "
+            "general_settings.database_url and restart. Redis and fail_closed_budget_enforcement do not "
+            "cover the proxy-wide budget because there is no global spend counter; Redis alone is not a substitute.",
+            max_budget,
+        )
+
     @classmethod
     def _initialize_startup_logging(
         cls,
