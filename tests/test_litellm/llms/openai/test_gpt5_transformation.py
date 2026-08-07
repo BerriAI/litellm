@@ -1309,3 +1309,44 @@ def test_responses_gpt54_allow_temperature_effort_none(
         drop_params=False,
     )
     assert params["temperature"] == 0.7
+
+
+# ---------------------------------------------------------------------------
+# Tests for stop parameter support on gpt-5.5+ (LIT-3272)
+# ---------------------------------------------------------------------------
+
+
+class TestGPT55StopParam:
+    """gpt-5.5+ is a full-featured text model that supports stop sequences.
+    Earlier reasoning-only models (gpt-5, gpt-5.1 – gpt-5.4) must not.
+    """
+
+    def test_gpt55_stop_in_supported_params(self):
+        config = OpenAIGPT5Config()
+        supported = config.get_supported_openai_params(model="gpt-5.5")
+        assert "stop" in supported
+
+    def test_gpt5_stop_not_in_supported_params(self):
+        config = OpenAIGPT5Config()
+        for model in ("gpt-5", "gpt-5.1", "gpt-5.2", "gpt-5.4"):
+            supported = config.get_supported_openai_params(model=model)
+            assert "stop" not in supported, f"stop should not be supported for {model}"
+
+    def test_gpt55_stop_passes_through(self):
+        config = OpenAIGPT5Config()
+        params = config.map_openai_params(
+            non_default_params={"stop": ["END"]},
+            optional_params={},
+            model="gpt-5.5",
+            drop_params=False,
+        )
+        assert params.get("stop") == ["END"]
+
+    def test_gpt5_stop_not_in_supported_params_gpt5(self):
+        """stop is NOT in the supported list for gpt-5.  LiteLLM's main completion
+        logic uses this list to raise UnsupportedParamsError (drop_params=False) or
+        silently drop it (drop_params=True) before map_openai_params is called.
+        """
+        config = OpenAIGPT5Config()
+        supported = config.get_supported_openai_params(model="gpt-5")
+        assert "stop" not in supported

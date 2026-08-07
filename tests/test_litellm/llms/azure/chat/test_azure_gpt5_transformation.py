@@ -1,7 +1,17 @@
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+
+
+@pytest.fixture(autouse=True)
+def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url)
+    )
+    litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 
 @pytest.fixture()
@@ -299,3 +309,64 @@ def test_azure_gpt5_1_does_not_support_logprobs(config: AzureOpenAIGPT5Config):
     supported_params = config.get_supported_openai_params(model="gpt-5.1")
     assert "logprobs" not in supported_params
     assert "top_logprobs" not in supported_params
+
+
+# ---------------------------------------------------------------------------
+# Tests for stop parameter support on Azure gpt-5.5+ (LIT-3272)
+# ---------------------------------------------------------------------------
+
+
+class TestAzureGPT55StopParam:
+    """Azure gpt-5.5+ is a full-featured text model that supports stop sequences."""
+
+    def test_azure_gpt55_stop_in_supported_params(self, config: AzureOpenAIGPT5Config):
+        supported = config.get_supported_openai_params(model="gpt-5.5")
+        assert "stop" in supported
+
+    def test_azure_gpt55_series_stop_in_supported_params(
+        self, config: AzureOpenAIGPT5Config
+    ):
+        for model in (
+            "gpt5_series/gpt-5.5",
+            "azure/gpt-5.5",
+            "gpt5_series/gpt-5.5-pro",
+        ):
+            supported = config.get_supported_openai_params(model=model)
+            assert "stop" in supported, f"stop should be supported for {model}"
+
+    def test_azure_gpt5_stop_not_in_supported_params(
+        self, config: AzureOpenAIGPT5Config
+    ):
+        for model in (
+            "gpt-5",
+            "gpt-5.1",
+            "gpt-5.4",
+            "gpt5_series/gpt-5",
+            "gpt5_series/gpt-5.4",
+        ):
+            supported = config.get_supported_openai_params(model=model)
+            assert (
+                "stop" not in supported
+            ), f"stop should not be supported for Azure {model}"
+
+    def test_azure_gpt55_stop_passes_through(self, config: AzureOpenAIGPT5Config):
+        params = config.map_openai_params(
+            non_default_params={"stop": ["END"]},
+            optional_params={},
+            model="gpt-5.5",
+            drop_params=False,
+            api_version="2024-05-01-preview",
+        )
+        assert params.get("stop") == ["END"]
+
+    def test_azure_gpt5_stop_dropped_with_drop_params(
+        self, config: AzureOpenAIGPT5Config
+    ):
+        params = config.map_openai_params(
+            non_default_params={"stop": ["END"]},
+            optional_params={},
+            model="gpt-5",
+            drop_params=True,
+            api_version="2024-05-01-preview",
+        )
+        assert "stop" not in params
