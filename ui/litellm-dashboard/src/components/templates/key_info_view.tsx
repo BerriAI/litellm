@@ -327,7 +327,7 @@ export default function KeyInfoView({
       }
       toast.success("Key updated successfully");
       setIsEditing(false);
-      // Refresh key data here if needed
+      await queryClient.invalidateQueries({ queryKey: keyKeys.lists() });
     } catch (error) {
       toast.fromError(parseErrorMessage(error));
       console.error("Error updating key:", error);
