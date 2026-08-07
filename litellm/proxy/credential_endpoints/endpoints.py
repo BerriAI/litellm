@@ -274,10 +274,7 @@ def update_db_credential(
 
     # update model info
     if encrypted_credential.credential_info:
-        """Update credential info"""
-        if "credential_info" not in merged_credential.credential_info:
-            merged_credential.credential_info = {}
-        merged_credential.credential_info.update(encrypted_credential.credential_info)
+        merged_credential.credential_info = encrypted_credential.credential_info
 
     return merged_credential
 
@@ -331,9 +328,11 @@ async def update_credential(
             in_memory_values: Final = dict(existing_in_memory.credential_values or {})
             if credential.credential_values:
                 in_memory_values.update(credential.credential_values)
-            in_memory_info: Final = dict(existing_in_memory.credential_info or {})
-            if credential.credential_info:
-                in_memory_info.update(credential.credential_info)
+            in_memory_info: Final = (
+                dict(credential.credential_info)
+                if credential.credential_info
+                else dict(existing_in_memory.credential_info or {})
+            )
             updated_in_memory: Final = CredentialItem(
                 credential_name=new_name,
                 credential_values=in_memory_values,
