@@ -1423,6 +1423,65 @@ class TestBedrockLLMProxyRoute:
             assert result == "success"
 
     @pytest.mark.asyncio
+    async def test_bedrock_router_passthrough_preserves_messages_for_logging(self):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            handle_bedrock_passthrough_router_model,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_request.url = MagicMock()
+        mock_request.url.path = "/bedrock/model/test-model/converse"
+
+        request_messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"text": "Give me 5 Kubernetes image security best practices."}
+                ],
+            }
+        ]
+        mock_request_body = {
+            "messages": request_messages,
+            "inferenceConfig": {"maxTokens": 4096, "temperature": 1},
+        }
+
+        mock_processor = Mock()
+        mock_processor.base_passthrough_process_llm_request = AsyncMock(
+            return_value="success"
+        )
+
+        with patch(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+            return_value=mock_processor,
+        ) as mock_processor_cls:
+            result = await handle_bedrock_passthrough_router_model(
+                model="test-model",
+                endpoint="model/test-model/converse",
+                request=mock_request,
+                request_body=mock_request_body,
+                llm_router=Mock(),
+                user_api_key_dict=Mock(),
+                proxy_logging_obj=Mock(),
+                general_settings={},
+                proxy_config=None,
+                select_data_generator=None,
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                version=None,
+            )
+
+        initialized_data = mock_processor_cls.call_args.kwargs["data"]
+        assert initialized_data["data"] == mock_request_body
+        assert initialized_data["messages"] == request_messages
+        assert result == "success"
+
+    @pytest.mark.asyncio
     async def test_bedrock_error_handling_returns_actual_error(self):
         """
         Test that when Bedrock API returns an error, it is properly propagated to the user
