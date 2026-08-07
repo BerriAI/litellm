@@ -46,6 +46,10 @@ class AgentsRepository(PrismaTableRepository):
     table_name = "litellm_agentstable"
 
 
+class ObjectPermissionRepository(PrismaTableRepository):
+    table_name = "litellm_objectpermissiontable"
+
+
 class GuardrailsRepository(PrismaTableRepository):
     table_name = "litellm_guardrailstable"
 
