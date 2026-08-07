@@ -187,11 +187,8 @@ _COVERED: Final = _p("covered")
 _CACHE_HIT: Final = _p("cache_hit")
 _CACHE_TTL: Final = _p("cache_ttl_seconds")
 _TOUCHED: Final = _p("cache_touched")
-_TIER: Final = f'{_p("tier")}::text'
-
-_TIER_TURNS_DELTA: Final = (
-    f"(CASE WHEN {_TIER} IS NOT NULL THEN jsonb_build_object({_TIER}, 1) ELSE '{{}}'::jsonb END)"
-)
+_TIER: Final = f"{_p('tier')}::text"
+_TIER_DELTA: Final = f"(CASE WHEN {_TIER} IS NULL THEN '{{}}'::jsonb ELSE jsonb_build_object({_TIER}, 1) END)"
 
 _IN_ORDER: Final = f"{_TURN_AT}::timestamp >= t.last_turn_at"
 _SAME: Final = f"{_IN_ORDER} AND t.last_model = {_MODEL}"
@@ -220,7 +217,7 @@ VALUES (
     (CASE WHEN {_CACHE_TTL}::int = {CACHE_TTL_5M_SECONDS} THEN 1 ELSE 0 END),
     (CASE WHEN {_CACHE_TTL}::int = {CACHE_TTL_1H_SECONDS} THEN 1 ELSE 0 END),
     {_p("total_tokens")}::bigint, {_p("spend")}::float8, {_p("saved_spend")}::float8,
-    {_TIER_TURNS_DELTA}
+    {_TIER_DELTA}
 )
 ON CONFLICT (api_key, session_id, router_name) DO UPDATE SET
     turns = t.turns + 1,
@@ -251,7 +248,7 @@ ON CONFLICT (api_key, session_id, router_name) DO UPDATE SET
                 ELSE COALESCE((t.models -> {_MODEL} ->> 'ttl')::int, {_CACHE_TTL}::int) END)
     )),
     last_model = (CASE WHEN {_IN_ORDER} THEN {_MODEL} ELSE t.last_model END),
-    tier_turns = (CASE WHEN {_TIER} IS NOT NULL
+    tier_turns = (CASE WHEN {_TIER} IS NOT NULL AND t.router_type = {_p("router_type")}
         THEN t.tier_turns || jsonb_build_object({_TIER}, COALESCE((t.tier_turns ->> {_TIER})::int, 0) + 1)
         ELSE t.tier_turns END),
     first_turn_at = LEAST(t.first_turn_at, EXCLUDED.first_turn_at),

@@ -292,6 +292,7 @@ class TestAutoRouterBenchmarks:
     ROW = _SessionAggRow(
         router_name="live-auto",
         router_type="complexity",
+        tier_turns={},
         sessions=4,
         turns=40,
         unordered_turns=1,
@@ -444,27 +445,11 @@ class TestAutoRouterBenchmarks:
         assert response.groups[0].saved_pct == response.totals.saved_pct == 75.0
 
     @pytest.mark.asyncio
-    async def test_tier_turns_survive_the_jsonb_text_cast_the_sql_selects(self, monkeypatch: pytest.MonkeyPatch):
-        from litellm.proxy import proxy_server
-        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
-
-        class _DB:
-            async def query_raw(self, sql: str, *params: object):
-                return [{**TestAutoRouterBenchmarks.ROW.model_dump(), "tier_turns": '{"simple": 24, "complex": 16}'}]
-
-        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
-
-        response = await get_auto_router_benchmarks(
-            user_api_key_dict=ADMIN,
-            start_date="2026-07-01",
-            end_date="2026-08-01",
-        )
-        assert response.groups[0].tier_turns == {"simple": 24, "complex": 16}
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("wire_value", ['{}', {}, None])
-    async def test_a_window_with_no_tiered_turns_reports_an_empty_map(
-        self, wire_value: object, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        "wire_value, expected", [({"simple": 24, "complex": 16}, {"simple": 24, "complex": 16}), ({}, {})]
+    )
+    async def test_the_tier_map_reaches_the_response_as_the_jsonb_column_returns_it(
+        self, wire_value: dict, expected: dict, monkeypatch: pytest.MonkeyPatch
     ):
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
@@ -480,4 +465,4 @@ class TestAutoRouterBenchmarks:
             start_date="2026-07-01",
             end_date="2026-08-01",
         )
-        assert response.groups[0].tier_turns == {}
+        assert response.groups[0].tier_turns == expected

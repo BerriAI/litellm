@@ -4,12 +4,11 @@ AUTO ROUTER MANAGEMENT ENDPOINTS
 POST /auto_router/test_routing - Route one prompt through an unsaved complexity-router config
 """
 
-import json
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Annotated, Final
 
-from pydantic import BaseModel, Field, TypeAdapter, field_validator
+from pydantic import BaseModel, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
@@ -261,18 +260,9 @@ async def preview_auto_router_routing(
 class _SessionAggRow(BaseModel):
     router_name: str
     router_type: str
-    tier_turns: dict[str, int] = Field(default_factory=dict)
+    tier_turns: dict[str, int]
     sessions: int
     turns: int
-
-    @field_validator("tier_turns", mode="before")
-    @classmethod
-    def _parse_tier_turns(cls, value: object) -> object:
-        if value is None:
-            return {}
-        if isinstance(value, str):
-            return json.loads(value)
-        return value
     unordered_turns: int
     covered_turns: int
     cache_hits: int
@@ -310,7 +300,7 @@ tier_maps AS (
 )
 SELECT
     agg.*,
-    COALESCE(tier_maps.tier_turns, '{}'::jsonb)::text AS tier_turns
+    COALESCE(tier_maps.tier_turns, '{}'::jsonb) AS tier_turns
 FROM (
 SELECT
     router_name,
@@ -395,6 +385,7 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
     return _SessionAggRow(
         router_name="",
         router_type="",
+        tier_turns={},
         sessions=sum(row.sessions for row in rows),
         turns=sum(row.turns for row in rows),
         unordered_turns=sum(row.unordered_turns for row in rows),
