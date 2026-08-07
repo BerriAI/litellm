@@ -387,7 +387,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       if (!presetLabel) return;
       const freshRange = getRelativeRangeByShortLabel(presetLabel);
       if (!freshRange) return;
-      if (freshRange.from.getTime() !== dateValue.from?.getTime() || freshRange.to.getTime() !== dateValue.to?.getTime()) {
+      if (
+        freshRange.from.getTime() !== dateValue.from?.getTime() ||
+        freshRange.to.getTime() !== dateValue.to?.getTime()
+      ) {
         setDateValue(freshRange);
         persistDateRange(freshRange);
       }
