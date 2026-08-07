@@ -1775,12 +1775,7 @@ class ProxyLogging:
             get_call_types_for_route,
         )
 
-        route: Final = user_api_key_dict.request_route
-        if not route:
-            return False
-        call_types: Final = get_call_types_for_route(route)
-        if not call_types:
-            return False
+        call_types: Final = get_call_types_for_route(user_api_key_dict.request_route)
         return any(guardrail.supports_streaming_call_type(call_type) for call_type in call_types)
 
     @staticmethod
