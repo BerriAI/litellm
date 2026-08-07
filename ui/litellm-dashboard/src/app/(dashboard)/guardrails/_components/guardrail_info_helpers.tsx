@@ -1,4 +1,5 @@
 import aimSecurityLogo from "../../../../../public/assets/logos/aim_security.jpeg";
+import akamaiLogo from "../../../../../public/assets/logos/akamai.svg";
 import aktoLogo from "../../../../../public/assets/logos/akto.svg";
 import aporiaLogo from "../../../../../public/assets/logos/aporia.png";
 import bedrockLogo from "../../../../../public/assets/logos/bedrock.svg";
@@ -181,6 +182,7 @@ export const guardrailLogoMap = {
   "Pangea Guardrail": pangeaLogo.src,
   "AIM Guardrail": aimSecurityLogo.src,
   "Cato Networks Guardrail": catoNetworksLogo.src,
+  "Akamai Firewall for AI": akamaiLogo.src,
   "OpenAI Moderation": openaiSmallLogo.src,
   EnkryptAI: enkryptAiLogo.src,
   "Prompt Security": promptSecurityLogo.src,
