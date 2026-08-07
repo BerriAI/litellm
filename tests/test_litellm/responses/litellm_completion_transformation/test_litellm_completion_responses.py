@@ -670,6 +670,58 @@ class TestLiteLLMCompletionResponsesConfig:
         assert tool_calls[0].arguments == '{"message":"hello"}'
 
 
+    def test_transform_top_level_function_collision_stays_unnamespaced(self):
+        tool_call_id = "call_top_level_collision"
+        chat_completion_response = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(name="run", arguments="{}"),
+                            )
+                        ],
+                    ),
+                )
+            ]
+        )
+        responses_api_request = {
+            "tools": [
+                {"type": "function", "name": "run", "parameters": {"type": "object"}},
+                {
+                    "type": "namespace",
+                    "name": "admin",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "run",
+                            "parameters": {"type": "object"},
+                        }
+                    ],
+                },
+            ]
+        }
+
+        try:
+            response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="Run the tool",
+                responses_api_request=responses_api_request,
+                chat_completion_response=chat_completion_response,
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        tool_call = next(item for item in response.output if item.type == "function_call")
+        assert tool_call.name == "run"
+        assert getattr(tool_call, "namespace", None) is None
+
+
 class TestFunctionCallTransformation:
     """Test cases for function_call input transformation"""
 
@@ -1764,6 +1816,55 @@ class TestToolTransformation:
         assert result_tool["function"]["parameters"] == namespace_tool["tools"][0]["parameters"]
         assert result_tool["function"]["description"] == "Multi-agent tools\n\nSpawn an agent"
 
+    @pytest.mark.parametrize("nested", [True, False])
+    def test_transform_namespace_tools_preserves_allowed_callers(self, nested):
+        function_tool = {
+            "type": "function",
+            "name": "spawn_agent",
+            "parameters": {"type": "object", "properties": {}},
+            "allowed_callers": ["code_execution_20250825"],
+        }
+        namespace_tool = (
+            {
+                "type": "namespace",
+                "name": "collaboration",
+                "tools": [function_tool],
+            }
+            if nested
+            else {**function_tool, "type": "namespace"}
+        )
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[namespace_tool]
+        )
+
+        assert result_tools[0]["allowed_callers"] == ["code_execution_20250825"]
+
+
+    @pytest.mark.parametrize("nested", [True, False])
+    def test_transform_namespace_tools_rejects_invalid_allowed_callers(self, nested):
+        function_tool = {
+            "type": "function",
+            "name": "spawn_agent",
+            "parameters": {"type": "object", "properties": {}},
+            "allowed_callers": "code_execution_20250825",
+        }
+        namespace_tool = (
+            {
+                "type": "namespace",
+                "name": "collaboration",
+                "tools": [function_tool],
+            }
+            if nested
+            else {**function_tool, "type": "namespace"}
+        )
+
+        with pytest.raises(ValueError, match="allowed_callers must be a list of strings"):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[namespace_tool]
+            )
+
+
     def test_transform_flat_namespace_tools_to_function_tools(self):
         namespace_tool = {
             "type": "namespace",
@@ -1809,7 +1910,7 @@ class TestToolTransformation:
             ],
         }
 
-        result = LiteLLMCompletionResponsesConfig._namespace_tool_name_map(
+        result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
             [namespace_tool]
         )
 
@@ -1855,7 +1956,7 @@ class TestToolTransformation:
             },
         ]
 
-        result = LiteLLMCompletionResponsesConfig._namespace_tool_name_map(
+        result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
             tools
         )
 
@@ -1863,6 +1964,55 @@ class TestToolTransformation:
         assert result["beta__run"] == ("beta", "run")
         assert result["gamma__run"] == ("gamma", "run")
         assert "run" not in result
+
+    def test_namespace_tool_name_map_drops_top_level_function_collision(self):
+        tools = [
+            {"type": "function", "name": "run", "parameters": {"type": "object"}},
+            {
+                "type": "namespace",
+                "name": "admin",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "run",
+                        "parameters": {"type": "object"},
+                    }
+                ],
+            },
+        ]
+
+        result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
+
+        assert result["admin__run"] == ("admin", "run")
+        assert "run" not in result
+
+
+    def test_transform_tools_rejects_flattened_name_collision(self):
+        tools = [
+            {
+                "type": "function",
+                "name": "admin__run",
+                "parameters": {"type": "object"},
+            },
+            {
+                "type": "namespace",
+                "name": "admin",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "run",
+                        "parameters": {"type": "object"},
+                    }
+                ],
+            },
+        ]
+
+        with pytest.raises(
+            ValueError,
+            match="Top-level function names conflict with flattened namespace tools: admin__run",
+        ):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
+
 
     def test_restore_namespace_tool_name_leaves_unknown_tool_unchanged(self):
         tool_name, namespace = LiteLLMCompletionResponsesConfig._restore_namespace_tool_name(
@@ -2894,6 +3044,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._final_tool_events_queued = False
         iterator._custom_tool_names = set()
         iterator.responses_api_request = {}
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(None)
         return iterator
 
     def _make_text_chunk(self):
@@ -2960,6 +3111,10 @@ class TestEnsureOutputItemContentPartAdded:
             ]
         }
 
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+
         iterator._queue_tool_call_delta_events(
             [
                 {
@@ -2996,6 +3151,10 @@ class TestEnsureOutputItemContentPartAdded:
             ]
         }
 
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+
         iterator._queue_tool_call_delta_events(
             [
                 {
@@ -3028,6 +3187,10 @@ class TestEnsureOutputItemContentPartAdded:
                 }
             ]
         }
+
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
 
         iterator._queue_tool_call_delta_events(
             [
@@ -3097,6 +3260,10 @@ class TestEnsureOutputItemContentPartAdded:
                 }
             ]
         }
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+
         message = MagicMock()
         message.tool_calls = [
             {
@@ -3120,6 +3287,86 @@ class TestEnsureOutputItemContentPartAdded:
         assert "".join(event.delta for event in delta_events) == '{"message":"hello world"}'
         assert done.item.name == "spawn_agent"
         assert done.item.namespace == "collaboration"
+
+    def test_streaming_top_level_function_collision_stays_unnamespaced(self):
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {"type": "function", "name": "run", "parameters": {"type": "object"}},
+                {
+                    "type": "namespace",
+                    "name": "admin",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "run",
+                            "parameters": {"type": "object"},
+                        }
+                    ],
+                },
+            ]
+        }
+
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+
+        iterator._queue_tool_call_delta_events(
+            [
+                {
+                    "index": 0,
+                    "id": "call_top_level",
+                    "function": {"name": "run", "arguments": "{}"},
+                }
+            ]
+        )
+
+        added = iterator._pending_tool_events[0]
+        assert added.item.name == "run"
+        assert getattr(added.item, "namespace", None) is None
+
+
+    def test_streaming_namespace_map_is_built_once(self):
+        from unittest.mock import MagicMock, patch
+
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        mock_stream_wrapper = MagicMock()
+        mock_stream_wrapper.logging_obj = MagicMock()
+        request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "admin",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "run",
+                            "parameters": {"type": "object"},
+                        }
+                    ],
+                }
+            ]
+        }
+
+        with patch.object(
+            LiteLLMCompletionResponsesConfig,
+            "namespace_tool_name_map",
+            wraps=LiteLLMCompletionResponsesConfig.namespace_tool_name_map,
+        ) as namespace_map:
+            iterator = LiteLLMCompletionStreamingIterator(
+                model="test-model",
+                litellm_custom_stream_wrapper=mock_stream_wrapper,
+                request_input="test",
+                responses_api_request=request,
+            )
+            iterator._responses_namespace_tool_call_fields("admin__run")
+            iterator._responses_namespace_tool_call_fields("admin__run")
+
+        namespace_map.assert_called_once_with(request["tools"])
+
 
     def test_emit_response_completed_uses_stream_finish_reason(self):
         """

@@ -4,8 +4,9 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 
 import json
 import re
-from collections.abc import Sequence
-from typing import Any, Final, Literal, cast
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import Any, Final, Literal, TypeAlias, cast
 
 from openai.types.chat.chat_completion_named_tool_choice_param import (
     ChatCompletionNamedToolChoiceParam,
@@ -37,9 +38,11 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
     ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
     InputTokensDetails,
+    OpenAIChatCompletionTextObject,
     OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
     OpenAIWebSearchUserLocation,
@@ -76,11 +79,12 @@ from .custom_tools import (
     extract_custom_tool_names,
     is_custom_tool_call,
     unwrap_custom_tool_arguments,
+    validated_allowed_callers,
 )
 
-NsMap = dict[str, tuple[str, str]]
-NsTool = dict[str, Any]
-RespTools = list[FunctionToolParam | OpenAIMcpServerTool] | None
+NamespaceNameMap: TypeAlias = Mapping[str, tuple[str, str]]
+NamespaceTool: TypeAlias = Mapping[str, object]
+ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE: Final = InMemoryCache()
@@ -1211,7 +1215,9 @@ class LiteLLMCompletionResponsesConfig:
                     elif item.get("type") == "encrypted_content":
                         encrypted_content = item.get("encrypted_content")
                         if encrypted_content is not None:
-                            content_list.append({"type": "text", "text": str(encrypted_content)})
+                            content_list.append(
+                                OpenAIChatCompletionTextObject(type="text", text=str(encrypted_content))
+                            )
                     else:
                         # Skip text blocks with None text to avoid downstream errors
                         text_value = item.get("text")
@@ -1273,43 +1279,88 @@ class LiteLLMCompletionResponsesConfig:
         return ChatCompletionSystemMessage(role="system", content=instructions or "")
 
     @staticmethod
-    def _build_ns_chat_tool(ns: str, ns_desc: str, ns_tool: NsTool, nested: bool) -> ChatCompletionToolParam | None:
-        if nested and ns_tool.get("type") != "function":
+    def _build_ns_chat_tool(
+        namespace: str,
+        namespace_description: str,
+        namespace_tool: NamespaceTool,
+        nested: bool,
+    ) -> ChatCompletionToolParam | None:
+        if nested and namespace_tool.get("type") != "function":
             return None
 
-        raw_parameters = ns_tool.get("parameters")
-        parameters = dict(raw_parameters) if isinstance(raw_parameters, dict) else {}
-        normalized_parameters = parameters if parameters and "type" in parameters else {**parameters, "type": "object"}
-        tool_name = str(ns_tool.get("name") or "")
-        raw_description = str(ns_tool.get("description") or "")
-        description = raw_description
-        if nested and ns_desc:
-            description = f"{ns_desc}\n\n{raw_description}" if raw_description else ns_desc
-        chat_tool_name = f"{ns}__{tool_name}" if nested else tool_name
-        function: dict[str, Any] = {"name": chat_tool_name}
-        function["description"] = description
-        function["parameters"] = normalized_parameters
-        function["strict"] = bool(ns_tool.get("strict", False))
-        return {"type": "function", "function": function}
+        raw_parameters: Final = namespace_tool.get("parameters")
+        parameters: Final = (
+            MappingProxyType(raw_parameters) if isinstance(raw_parameters, Mapping) else MappingProxyType({})
+        )
+        normalized_parameters: Final = (
+            parameters if parameters and "type" in parameters else MappingProxyType({**parameters, "type": "object"})
+        )
+        tool_name: Final = str(namespace_tool.get("name") or "")
+        raw_description: Final = str(namespace_tool.get("description") or "")
+        description: Final = (
+            f"{namespace_description}\n\n{raw_description}"
+            if nested and namespace_description and raw_description
+            else namespace_description
+            if nested and namespace_description
+            else raw_description
+        )
+        chat_tool_name: Final = f"{namespace}__{tool_name}" if nested else tool_name
+        function: Final = ChatCompletionToolParamFunctionChunk(
+            name=chat_tool_name,
+            description=description,
+            parameters=normalized_parameters,
+            strict=bool(namespace_tool.get("strict", False)),
+        )
+        allowed_callers: Final = validated_allowed_callers(namespace_tool.get("allowed_callers"))
+        if allowed_callers is None:
+            return ChatCompletionToolParam(type="function", function=function)
+        return ChatCompletionToolParam(type="function", function=function, allowed_callers=allowed_callers)
 
     @staticmethod
-    def _namespace_chat_tools(tool: dict[str, Any]) -> list[ChatCompletionToolParam]:
-        namespace = str(tool.get("name") or "")
-        namespace_description = str(tool.get("description") or "")
-        namespace_tools = tool.get("tools")
-        if isinstance(namespace_tools, list):
-            chat_completion_tools: list[ChatCompletionToolParam] = []
-            ns = namespace
-            ns_desc = namespace_description
-            for ns_tool in namespace_tools:
-                if not isinstance(ns_tool, dict):
-                    continue
-                chat_tool = LiteLLMCompletionResponsesConfig._build_ns_chat_tool(ns, ns_desc, ns_tool, True)
-                if chat_tool is not None:
-                    chat_completion_tools.append(chat_tool)
-            return chat_completion_tools
-        flat_tool = LiteLLMCompletionResponsesConfig._build_ns_chat_tool(namespace, namespace_description, tool, False)
-        return [flat_tool] if flat_tool is not None else []
+    def _namespace_chat_tools(tool: NamespaceTool) -> tuple[ChatCompletionToolParam, ...]:
+        namespace: Final = str(tool.get("name") or "")
+        namespace_description: Final = str(tool.get("description") or "")
+        namespace_tools: Final = tool.get("tools")
+        if isinstance(namespace_tools, Sequence) and not isinstance(namespace_tools, (str, bytes)):
+            return tuple(
+                chat_tool
+                for raw_tool in namespace_tools
+                if isinstance(raw_tool, Mapping)
+                if (
+                    chat_tool := LiteLLMCompletionResponsesConfig._build_ns_chat_tool(
+                        namespace,
+                        namespace_description,
+                        raw_tool,
+                        True,
+                    )
+                )
+                is not None
+            )
+        flat_tool: Final = LiteLLMCompletionResponsesConfig._build_ns_chat_tool(
+            namespace, namespace_description, tool, False
+        )
+        return (flat_tool,) if flat_tool is not None else ()
+
+    @staticmethod
+    def _validate_namespace_name_collisions(tools: ResponseTools) -> None:
+        top_level_function_names: Final = frozenset(
+            str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
+        )
+        flattened_namespace_names: Final = frozenset(
+            f"{(tool.get('name') or '')!s}__{(namespace_tool.get('name') or '')!s}"
+            for tool in tools or ()
+            if tool.get("type") == "namespace"
+            for namespace_tools in (tool.get("tools"),)
+            if isinstance(namespace_tools, Sequence) and not isinstance(namespace_tools, (str, bytes))
+            for namespace_tool in namespace_tools
+            if isinstance(namespace_tool, Mapping) and namespace_tool.get("type") == "function"
+        )
+        conflicting_tool_names: Final = top_level_function_names & flattened_namespace_names
+        if conflicting_tool_names:
+            raise ValueError(
+                "Top-level function names conflict with flattened namespace tools: "
+                + ", ".join(sorted(conflicting_tool_names))
+            )
 
     @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(
@@ -1323,6 +1374,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         if tools is None:
             return [], None
+        LiteLLMCompletionResponsesConfig._validate_namespace_name_collisions(tools)
         chat_completion_tools: Final[list[ChatCompletionToolParam | OpenAIMcpServerTool]] = []
         web_search_options: OpenAIWebSearchOptions | None = None
         for tool in tools:
@@ -1429,40 +1481,42 @@ class LiteLLMCompletionResponsesConfig:
         return result
 
     @staticmethod
-    def _namespace_tool_name_map(tools: RespTools) -> NsMap:
-        namespace_tool_names: NsMap = {}
-        ambiguous_unqualified_names: set[str] = set()
-        for tool in tools or []:
-            if not isinstance(tool, dict) or tool.get("type") != "namespace":
-                continue
-            namespace = str(tool.get("name") or "")
-            for namespace_tool in tool.get("tools") or []:
-                if not isinstance(namespace_tool, dict) or namespace_tool.get("type") != "function":
-                    continue
-                tool_name = str(namespace_tool.get("name") or "")
-                namespace_tool_names[f"{namespace}__{tool_name}"] = (namespace, tool_name)
-                if tool_name in ambiguous_unqualified_names:
-                    continue
-                existing = namespace_tool_names.get(tool_name)
-                if existing is not None and existing != (namespace, tool_name):
-                    ambiguous_unqualified_names.add(tool_name)
-                    namespace_tool_names.pop(tool_name, None)
-                    continue
-                namespace_tool_names[tool_name] = (namespace, tool_name)
-        return namespace_tool_names
+    def namespace_tool_name_map(tools: ResponseTools) -> NamespaceNameMap:
+        namespace_entries: Final = tuple(
+            (str(tool.get("name") or ""), str(namespace_tool.get("name") or ""))
+            for tool in tools or ()
+            if tool.get("type") == "namespace"
+            for namespace_tools in (tool.get("tools"),)
+            if isinstance(namespace_tools, Sequence) and not isinstance(namespace_tools, (str, bytes))
+            for namespace_tool in namespace_tools
+            if isinstance(namespace_tool, Mapping) and namespace_tool.get("type") == "function"
+        )
+        top_level_function_names: Final = frozenset(
+            str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
+        )
+        unqualified_counts: Final = MappingProxyType(
+            {
+                tool_name: sum(1 for _, candidate_name in namespace_entries if candidate_name == tool_name)
+                for tool_name in frozenset(tool_name for _, tool_name in namespace_entries)
+            }
+        )
+        unambiguous_entries: Final = tuple(
+            (tool_name, (namespace, tool_name))
+            for namespace, tool_name in namespace_entries
+            if tool_name not in top_level_function_names and unqualified_counts[tool_name] == 1
+        )
+        qualified_entries: Final = tuple(
+            (f"{namespace}__{tool_name}", (namespace, tool_name)) for namespace, tool_name in namespace_entries
+        )
+        return MappingProxyType(dict(qualified_entries + unambiguous_entries))
 
     @staticmethod
-    def _restore_namespace_tool_name(tool_name: str, names: NsMap) -> tuple[str, str | None]:
+    def _restore_namespace_tool_name(tool_name: str, names: NamespaceNameMap) -> tuple[str, str | None]:
         mapped = names.get(tool_name)
         if mapped is None:
             return tool_name, None
         namespace, restored_tool_name = mapped
         return restored_tool_name, namespace
-
-    @staticmethod
-    def _set_tool_call_namespace(output_tool_call: ResponseFunctionToolCall, namespace: str | None) -> None:
-        if namespace:
-            setattr(output_tool_call, "namespace", namespace)
 
     @staticmethod
     def transform_chat_completion_tools_to_responses_tools(
@@ -1487,13 +1541,9 @@ class LiteLLMCompletionResponsesConfig:
                             value=tool_call,
                         )
 
-        # Extract custom tool names from the original request
-        custom_tool_names: set[str] = set()
-        namespace_tool_names: NsMap = {}
-        if responses_api_request and "tools" in responses_api_request:
-            req_tools = responses_api_request["tools"]
-            custom_tool_names = extract_custom_tool_names(req_tools)
-            namespace_tool_names = LiteLLMCompletionResponsesConfig._namespace_tool_name_map(req_tools)
+        request_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
+        custom_tool_names: Final = extract_custom_tool_names(request_tools)
+        namespace_tool_names: Final = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
 
         responses_tools: Final[list[ResponseFunctionToolCall | CustomToolCallOutputItem]] = []
         for tool in all_chat_completion_tools:
@@ -1545,7 +1595,7 @@ class LiteLLMCompletionResponsesConfig:
                         type="function_call",
                         status=function_definition.get("status") or "completed",
                     )
-                    LiteLLMCompletionResponsesConfig._set_tool_call_namespace(output_tool_call, namespace)
+                    output_tool_call.namespace = namespace
 
                     # Pass through provider_specific_fields as-is if present
                     if provider_specific_fields:
