@@ -1056,6 +1056,32 @@ def _add_text_like_part_events(
         )
 
 
+def _initial_added_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy of an output-item/content-part payload with its
+    incrementally streamed fields emptied, matching what the OpenAI
+    Responses API emits on ``*.added`` events.
+
+    The full values are delivered through the subsequent delta events and
+    repeated on the corresponding ``*.done`` events. Emitting them on the
+    ``added`` event as well makes spec-following clients — which seed an
+    accumulator from ``added`` and append every delta — assemble the
+    content twice (for function calls the arguments JSON is doubled,
+    which is invalid JSON).
+    """
+    payload_type = payload.get("type")
+    if payload_type == "function_call":
+        return {**payload, "arguments": ""}
+    if payload_type == "message":
+        return {**payload, "content": []}
+    if payload_type == "reasoning":
+        return {**payload, "summary": []}
+    if payload_type == "output_text":
+        return {**payload, "text": "", "annotations": []}
+    if payload_type == "refusal":
+        return {**payload, "refusal": ""}
+    return payload
+
+
 def _build_synthetic_response_events(
     *,
     transformed: Any,
@@ -1097,7 +1123,7 @@ def _build_synthetic_response_events(
                 type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                 output_index=output_index,
                 item=openai_types.BaseLiteLLMOpenAIResponseObject(
-                    **output_item_payload
+                    **_initial_added_payload(output_item_payload)
                 ),
             )
         )
@@ -1114,7 +1140,7 @@ def _build_synthetic_response_events(
                         output_index=output_index,
                         content_index=content_index,
                         part=openai_types.BaseLiteLLMOpenAIResponseObject(
-                            **part_payload
+                            **_initial_added_payload(part_payload)
                         ),
                     )
                 )
