@@ -381,3 +381,89 @@ def test_sync_stream_no_extra_delta_when_tool_args_empty():
         f"got {len(input_json_deltas)}"
     )
     assert input_json_deltas[0]["delta"]["partial_json"] == '{"location": "NYC"}'
+
+
+def _last_message_delta(events):
+    deltas = [
+        e
+        for e in events
+        if isinstance(e, dict) and e.get("type") == "message_delta"
+    ]
+    assert deltas, f"expected a message_delta event; got {[e.get('type') for e in events if isinstance(e, dict)]}"
+    return deltas[-1]
+
+
+def _tool_call_chunk():
+    return _make_chunk(
+        Delta(
+            content=None,
+            role="assistant",
+            tool_calls=[
+                ChatCompletionDeltaToolCall(
+                    id="call_abc123",
+                    function=Function(name="get_weather", arguments='{"city": "San Francisco"}'),
+                    type="function",
+                    index=0,
+                )
+            ],
+        )
+    )
+
+
+def test_sync_stream_stop_reason_is_tool_use_when_finish_reason_stop():
+    """
+    Regression for #34692: ollama_chat streaming reports finish_reason="stop"
+    on the final chunk even when the turn contains a tool call. The emitted
+    message_delta must still carry stop_reason="tool_use" (matching the
+    non-streaming response and the Anthropic Messages spec), or clients drop
+    the tool call.
+    """
+    finish_chunk = _make_chunk(
+        Delta(content=None, role="assistant", tool_calls=None),
+        finish_reason="stop",
+    )
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter([_tool_call_chunk(), finish_chunk]),
+        model="test-model",
+    )
+    events = _collect_events_sync(wrapper)
+    assert _last_message_delta(events)["delta"]["stop_reason"] == "tool_use"
+
+
+@pytest.mark.asyncio
+async def test_async_stream_stop_reason_is_tool_use_when_finish_reason_stop():
+    """Async counterpart of the #34692 stop_reason regression."""
+    finish_chunk = _make_chunk(
+        Delta(content=None, role="assistant", tool_calls=None),
+        finish_reason="stop",
+    )
+
+    async def mock_stream():
+        for c in [_tool_call_chunk(), finish_chunk]:
+            yield c
+
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=mock_stream(),
+        model="test-model",
+    )
+    events = await _collect_events_async(wrapper)
+    assert _last_message_delta(events)["delta"]["stop_reason"] == "tool_use"
+
+
+def test_sync_stream_stop_reason_stays_end_turn_without_tool_use():
+    """
+    Guard: a plain text turn ending in finish_reason="stop" must keep
+    stop_reason="end_turn". The tool_use override must not fire when no
+    tool_use block was streamed.
+    """
+    text_chunk = _make_chunk(Delta(content="Hello there", role="assistant", tool_calls=None))
+    finish_chunk = _make_chunk(
+        Delta(content=None, role="assistant", tool_calls=None),
+        finish_reason="stop",
+    )
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter([text_chunk, finish_chunk]),
+        model="test-model",
+    )
+    events = _collect_events_sync(wrapper)
+    assert _last_message_delta(events)["delta"]["stop_reason"] == "end_turn"
