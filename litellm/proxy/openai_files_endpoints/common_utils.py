@@ -13,9 +13,11 @@ from litellm.types.utils import SpecialEnums
 
 if TYPE_CHECKING:
     from fastapi import Request
+    from prisma.models import LiteLLM_ManagedObjectTable
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
+    from litellm.types.utils import LiteLLMBatch
 
 
 def _is_base64_encoded_unified_file_id(b64_uid: str) -> str | Literal[False]:
@@ -41,6 +43,17 @@ def convert_b64_uid_to_unified_uid(b64_uid: str) -> str:
         return is_base64_unified_file_id
     else:
         return b64_uid
+
+
+def resolve_managed_output_file_model_name(
+    unified_input_file_id: str | None, fallback_model_name: str | None
+) -> str | None:
+    if not unified_input_file_id:
+        return fallback_model_name
+    target_model_names: Final = get_models_from_unified_file_id(convert_b64_uid_to_unified_uid(unified_input_file_id))
+    if target_model_names:
+        return ",".join(target_model_names)
+    return fallback_model_name
 
 
 def get_models_from_unified_file_id(unified_file_id: str) -> list[str]:
@@ -360,7 +373,7 @@ def get_team_provider_credentials(
     def _provider_credentials(model_id: str) -> dict | None:
         credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
         if credentials is not None and credentials.get("custom_llm_provider") == custom_llm_provider:
-            return credentials
+            return {key: value for key, value in credentials.items() if key != "model"}
         return None
 
     # 1. Prefer the team's own BYOK deployment, matched by model_info.team_id.
@@ -883,6 +896,68 @@ def _extract_model_param(request: "Request", request_body: dict) -> str | None:
 # ============================================================================
 
 
+def _batch_response_model_id_candidates(
+    response,
+    unified_batch_id: str | Literal[False] | None,
+) -> tuple[str, ...]:
+    response_id: Final = getattr(response, "id", None)
+    decoded_response_id: Final = (
+        _is_base64_encoded_unified_file_id(response_id) if isinstance(response_id, str) else False
+    )
+    return tuple(
+        candidate
+        for candidate in (
+            unified_batch_id if isinstance(unified_batch_id, str) else None,
+            decoded_response_id or None,
+            response_id
+            if isinstance(response_id, str)
+            and not decoded_response_id
+            and response_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value)
+            else None,
+        )
+        if candidate
+    )
+
+
+def _model_id_for_batch_response(
+    response: "LiteLLMBatch",
+    unified_batch_id: str | Literal[False] | None,
+) -> str | None:
+    hidden_params: Final = getattr(response, "_hidden_params", None) or {}
+    model_id: Final = hidden_params.get("model_id")
+    if model_id:
+        return model_id
+    return next(
+        (
+            candidate_model_id
+            for candidate in _batch_response_model_id_candidates(response, unified_batch_id)
+            if (candidate_model_id := get_model_id_from_unified_batch_id(candidate))
+        ),
+        None,
+    )
+
+
+def _model_name_for_batch_response(response: "LiteLLMBatch") -> str | None:
+    hidden_params: Final = getattr(response, "_hidden_params", None) or {}
+    unified_file_id: Final = hidden_params.get("unified_file_id")
+    return resolve_managed_output_file_model_name(
+        unified_input_file_id=unified_file_id
+        if isinstance(unified_file_id, str)
+        else getattr(response, "input_file_id", None),
+        fallback_model_name=hidden_params.get("model_name"),
+    )
+
+
+def _batch_owner_auth_from_db_object(db_batch_object: "LiteLLM_ManagedObjectTable") -> "UserAPIKeyAuth | None":
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    created_by: Final = getattr(db_batch_object, "created_by", None)
+    if not isinstance(created_by, str) or not created_by:
+        return None
+    raw_team_id: Final = getattr(db_batch_object, "team_id", None)
+    return UserAPIKeyAuth(user_id=created_by, team_id=raw_team_id if isinstance(raw_team_id, str) else None)
+
+
 async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
     """
     If the batch response contains a raw provider input_file_id (not already a
@@ -934,6 +1009,7 @@ async def ensure_batch_response_managed_file_ids(
     verbose_proxy_logger,
     user_api_key_dict=None,
     db_batch_object=None,
+    unified_batch_id: str | Literal[False] | None = None,
 ) -> None:
     """Normalize batch file IDs to managed unified IDs before DB persistence."""
     await resolve_input_file_id_to_unified(response, prisma_client)
@@ -942,27 +1018,15 @@ async def ensure_batch_response_managed_file_ids(
     if managed_files_obj is None:
         return
 
-    hidden_params: Final = getattr(response, "_hidden_params", None) or {}
-    model_id: Final = hidden_params.get("model_id")
+    model_id: Final = _model_id_for_batch_response(response, unified_batch_id)
     if not model_id:
         return
 
-    model_name = hidden_params.get("model_name")
-    unified_file_id: Final = hidden_params.get("unified_file_id")
-    if not model_name and isinstance(unified_file_id, str):
-        decoded_unified_file_id: Final = _is_base64_encoded_unified_file_id(unified_file_id) or unified_file_id
-        target_model_names: Final = get_models_from_unified_file_id(decoded_unified_file_id)
-        if target_model_names:
-            model_name = ",".join(target_model_names)
+    model_name: Final = _model_name_for_batch_response(response)
 
-    if user_api_key_dict is None and db_batch_object is not None:
-        from litellm.proxy._types import UserAPIKeyAuth
-
-        user_api_key_dict = UserAPIKeyAuth(
-            user_id=getattr(db_batch_object, "created_by", None) or "default-user-id",
-            team_id=getattr(db_batch_object, "team_id", None),
-        )
-    if user_api_key_dict is None:
+    owner_auth: Final = _batch_owner_auth_from_db_object(db_batch_object) if db_batch_object is not None else None
+    effective_auth: Final = owner_auth if owner_auth is not None else user_api_key_dict
+    if effective_auth is None:
         return
 
     for file_attr in ("output_file_id", "error_file_id"):
@@ -978,9 +1042,9 @@ async def ensure_batch_response_managed_file_ids(
             await managed_files_obj.store_unified_file_id(
                 file_id=new_unified_file_id,
                 file_object=None,
-                litellm_parent_otel_span=getattr(user_api_key_dict, "parent_otel_span", None),
+                litellm_parent_otel_span=getattr(effective_auth, "parent_otel_span", None),
                 model_mappings={model_id: raw_file_id},
-                user_api_key_dict=user_api_key_dict,
+                user_api_key_dict=effective_auth,
             )
             setattr(response, file_attr, new_unified_file_id)
             verbose_proxy_logger.debug("Converted batch %s %r to managed ID before DB write", file_attr, raw_file_id)
@@ -1039,8 +1103,16 @@ async def get_batch_from_database(
         response: Final = LiteLLMBatch.model_validate(batch_data)
         response.id = batch_id
 
-        # The stored batch object has the raw provider input_file_id. Resolve to unified ID.
-        await resolve_input_file_id_to_unified(response, prisma_client)
+        # The stored batch object may have raw provider file IDs. Register any missing
+        # managed-file rows and normalize output/error IDs before returning.
+        await ensure_batch_response_managed_file_ids(
+            response=response,
+            managed_files_obj=managed_files_obj,
+            prisma_client=prisma_client,
+            verbose_proxy_logger=verbose_proxy_logger,
+            db_batch_object=db_batch_object,
+            unified_batch_id=unified_batch_id,
+        )
 
         verbose_proxy_logger.debug(
             "Retrieved batch %s from ManagedObjectTable with status=%s", batch_id, response.status
@@ -1076,7 +1148,7 @@ async def update_batch_in_database(
         managed_files_obj: The managed_files proxy hook object
         prisma_client: Prisma database client
         verbose_proxy_logger: Logger instance
-        db_batch_object: Optional existing database object (for comparison)
+        db_batch_object: Optional existing database object; fetched by unified_object_id when omitted
         operation: Description of operation ("update", "cancel", etc.)
         user_api_key_dict: Optional auth context for creating managed file IDs
     """
@@ -1089,6 +1161,12 @@ async def update_batch_in_database(
         if not prisma_client:
             return
 
+        effective_db_batch_object: Final = (
+            db_batch_object
+            if db_batch_object is not None
+            else await ManagedObjectRepository(prisma_client).table.find_first(where={"unified_object_id": batch_id})
+        )
+
         # Always normalize the response's file IDs to unified managed IDs
         # (mutates in place) so the caller returns unified IDs to the user
         # even when we skip the DB update below for an unchanged status.
@@ -1098,16 +1176,17 @@ async def update_batch_in_database(
             prisma_client=prisma_client,
             verbose_proxy_logger=verbose_proxy_logger,
             user_api_key_dict=user_api_key_dict,
-            db_batch_object=db_batch_object,
+            db_batch_object=effective_db_batch_object,
+            unified_batch_id=unified_batch_id,
         )
 
         # Only update if status has changed (when db_batch_object is provided)
-        if db_batch_object and response.status == db_batch_object.status:
+        if effective_db_batch_object and response.status == effective_db_batch_object.status:
             return
 
-        if db_batch_object:
+        if effective_db_batch_object:
             verbose_proxy_logger.info(
-                "Updating batch %s status from %s to %s", batch_id, db_batch_object.status, response.status
+                "Updating batch %s status from %s to %s", batch_id, effective_db_batch_object.status, response.status
             )
         else:
             verbose_proxy_logger.info("Updating batch %s status to %s after %s", batch_id, response.status, operation)

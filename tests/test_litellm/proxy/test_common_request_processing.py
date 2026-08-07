@@ -833,6 +833,63 @@ class TestProxyBaseLLMRequestProcessing:
         assert "x-litellm-response-cost-margin-amount" not in headers
         assert "x-litellm-response-cost-margin-percent" not in headers
 
+    @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+    def test_get_custom_headers_classifier_cost_from_routing_decision(self, metadata_key):
+        """The auto-router's LLM classifier cost must surface as its own header.
+
+        x-litellm-response-cost stays the final routed call's cost (it feeds the
+        margin/discount family and chargeback); the classifier's cost is read from the
+        routing_decision the pre-routing hook recorded in the request metadata. The
+        bucket is metadata on chat-style routes and litellm_metadata on messages-style
+        routes, so both must work.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.00023,
+            request_data={
+                metadata_key: {
+                    "routing_decision": {"cause": "llm_classifier", "classifier_cost": 8.1e-05},
+                }
+            },
+        )
+
+        assert headers["x-litellm-classifier-cost"] == "8.1e-05"
+        assert float(headers["x-litellm-response-cost"]) == 0.00023
+
+    @pytest.mark.parametrize(
+        "request_data",
+        [
+            None,
+            {},
+            {"metadata": {}},
+            {"metadata": {"routing_decision": {"cause": "heuristic_scorer"}}},
+            {"metadata": {"routing_decision": {"cause": "llm_classifier", "classifier_cost": "bogus"}}},
+            {"metadata": {"routing_decision": {"cause": "llm_classifier", "classifier_cost": True}}},
+        ],
+    )
+    def test_get_custom_headers_omits_classifier_cost_without_a_priced_decision(self, request_data):
+        """No routing decision, a decision without a classifier call, or a malformed cost
+        must all omit the header entirely rather than emit 0 or a junk value."""
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.00023,
+            request_data=request_data,
+        )
+
+        assert "x-litellm-classifier-cost" not in headers
+
     def test_get_cost_breakdown_from_logging_obj_helper(self):
         """
         Test the helper function that extracts cost breakdown information.

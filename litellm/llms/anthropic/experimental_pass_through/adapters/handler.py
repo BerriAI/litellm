@@ -1,5 +1,10 @@
 from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import Any, Final, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    cast,
+)
 
 import litellm
 from litellm._logging import verbose_logger
@@ -21,6 +26,10 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.utils import ModelResponse
 from litellm.utils import get_model_info
 
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.router import Router
+
 # Anthropic-only keys already mapped by the translator; strip on extra_kwargs re-merge.
 ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset({"output_config"})
 
@@ -35,6 +44,14 @@ def _messages_have_compaction_block(messages: list[dict]) -> bool:
             if isinstance(block, dict) and block.get("type") == "compaction":
                 return True
     return False
+
+
+def _proxy_router_fallback() -> "Router | None":
+    try:
+        from litellm.proxy.proxy_server import llm_router as _proxy_router
+    except Exception:
+        return None
+    return _proxy_router
 
 
 def _extract_proxy_litellm_metadata(kwargs: dict[str, Any]) -> dict[str, Any] | None:
@@ -64,8 +81,8 @@ async def _prepare_context_managed_request(
     context_management_spec: Any,
     litellm_metadata: dict | None,
     additional_drop_params: list[str] | None,
-    llm_router: Any,
-    user_api_key_auth: Any = None,
+    llm_router: "Router | None",
+    user_api_key_auth: "UserAPIKeyAuth | None" = None,
 ) -> PolyfillResult | None:
     """Apply client compaction history, then optional context_management polyfill."""
     from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
@@ -149,7 +166,7 @@ def _polyfill_will_run(
         COMPACT_EDIT_TYPE,
     )
 
-    return any(isinstance(edit, dict) and edit.get("type") == COMPACT_EDIT_TYPE for edit in edits)
+    return any(edit.get("type") == COMPACT_EDIT_TYPE for edit in edits)
 
 
 def _spec_has_non_compact_edits(
@@ -175,10 +192,7 @@ def _spec_has_non_compact_edits(
         COMPACT_EDIT_TYPE,
     )
 
-    return any(
-        isinstance(edit, dict) and isinstance(edit.get("type"), str) and edit.get("type") != COMPACT_EDIT_TYPE
-        for edit in edits
-    )
+    return any(isinstance(edit.get("type"), str) and edit.get("type") != COMPACT_EDIT_TYPE for edit in edits)
 
 
 def _context_management_explicitly_dropped(additional_drop_params: list[str] | None) -> bool:
@@ -228,8 +242,8 @@ async def _run_polyfill_if_enabled(
     context_management_spec: Any,
     litellm_metadata: dict | None,
     additional_drop_params: list[str] | None,
-    llm_router: Any,
-    user_api_key_auth: Any = None,
+    llm_router: "Router | None",
+    user_api_key_auth: "UserAPIKeyAuth | None" = None,
 ) -> PolyfillResult | None:
     """Run the async context_management polyfill if a spec is present.
 
@@ -339,7 +353,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         reasoning_effort: Final = completion_kwargs.get("reasoning_effort")
         summary: Final = thinking.get("summary")
         if isinstance(reasoning_effort, str) and reasoning_effort:
-            reasoning_dict: Final[dict[str, Any]] = {"effort": reasoning_effort}
+            reasoning_dict: Final[dict[str, object]] = {"effort": reasoning_effort}
             if summary:
                 reasoning_dict["summary"] = summary
             elif auto_summary:
@@ -528,21 +542,17 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         top_p: float | None = None,
         output_format: dict | None = None,
         **kwargs,
-    ) -> AnthropicMessagesResponse | AsyncIterator[Any] | Iterator[bytes]:
+    ) -> AnthropicMessagesResponse | AsyncIterator[bytes] | Iterator[bytes]:
         """Handle non-Anthropic models asynchronously using the adapter"""
         context_management: Final = kwargs.pop("context_management", None)
         additional_drop_params: Final[list[str] | None] = kwargs.get("additional_drop_params", None)
-        litellm_router = kwargs.pop("litellm_router", None)
-        if litellm_router is None:
-            try:
-                from litellm.proxy.proxy_server import llm_router as _proxy_router
-
-                litellm_router = _proxy_router
-            except Exception:
-                pass
+        requested_router: Final[Router | None] = kwargs.pop("litellm_router", None)
+        litellm_router: Final[Router | None] = (
+            requested_router if requested_router is not None else _proxy_router_fallback()
+        )
 
         proxy_litellm_metadata: Final = _extract_proxy_litellm_metadata(kwargs)
-        user_api_key_auth: Final = (
+        user_api_key_auth: Final[UserAPIKeyAuth | None] = (
             proxy_litellm_metadata.get("user_api_key_auth") if proxy_litellm_metadata is not None else None
         )
 
@@ -626,8 +636,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
     ) -> (
         AnthropicMessagesResponse
         | Iterator[bytes]
-        | AsyncIterator[Any]
-        | Coroutine[Any, Any, AnthropicMessagesResponse | AsyncIterator[Any] | Iterator[bytes]]
+        | AsyncIterator[bytes]
+        | Coroutine[None, None, AnthropicMessagesResponse | AsyncIterator[bytes] | Iterator[bytes]]
     ):
         """Handle non-Anthropic models using the adapter."""
         if _is_async is True:
@@ -667,7 +677,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # ``llm_router`` is ``None``, which is safe to call from the bridged
         # loop. The async ``async_anthropic_messages_handler`` path is
         # unaffected because it ``await``s within the original event loop.
-        litellm_router: Final = kwargs.pop("litellm_router", None)
+        litellm_router: Final[Router | None] = kwargs.pop("litellm_router", None)
 
         # Skip the async bridge entirely when there is nothing for either the
         # polyfill or the client-history slice-only fallback to do. The vast
@@ -679,7 +689,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             polyfill_result: PolyfillResult | None = None
         else:
             proxy_litellm_metadata: Final = _extract_proxy_litellm_metadata(kwargs)
-            user_api_key_auth: Final = (
+            user_api_key_auth: Final[UserAPIKeyAuth | None] = (
                 proxy_litellm_metadata.get("user_api_key_auth") if proxy_litellm_metadata is not None else None
             )
             polyfill_result = run_async_function(

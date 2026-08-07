@@ -859,6 +859,7 @@ class BaseAWSLLM:
                     "Action": [
                         "bedrock:InvokeModel",
                         "bedrock:InvokeModelWithResponseStream",
+                        "bedrock:CountTokens",
                         "bedrock:ApplyGuardrail",
                         "bedrock:GetGuardrail",
                         "bedrock:ListGuardrails",

@@ -296,7 +296,7 @@ class AnthropicFilesHandler:
                     index=0,
                     message=litellm.Message(content="", role="assistant"),
                 )
-            ]  # type: ignore
+            ]
 
             # Create a logging object for transformation
             logging_obj: Final = Logging(

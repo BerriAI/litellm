@@ -1,7 +1,7 @@
 import asyncio
 import sys
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Union
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
 from pydantic import BaseModel
 from typing_extensions import TypedDict
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
     InternalUsageCache = _InternalUsageCache
 else:
     Span = Any
@@ -532,7 +532,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             total_tokens = 0
 
             if isinstance(response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse)):
-                total_tokens = response_obj.usage.total_tokens  # type: ignore
+                total_tokens = response_obj.usage.total_tokens
 
             # ------------
             # Update usage - API Key
@@ -612,7 +612,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     response_obj,
                     (ModelResponse, EmbeddingResponse, TextCompletionResponse),
                 ):
-                    total_tokens = response_obj.usage.total_tokens  # type: ignore
+                    total_tokens = response_obj.usage.total_tokens
 
                 request_count_api_key = f"{user_api_key_user_id}::{precise_minute}::request_count"
 
@@ -644,7 +644,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     response_obj,
                     (ModelResponse, EmbeddingResponse, TextCompletionResponse),
                 ):
-                    total_tokens = response_obj.usage.total_tokens  # type: ignore
+                    total_tokens = response_obj.usage.total_tokens
 
                 request_count_api_key = f"{user_api_key_team_id}::{precise_minute}::request_count"
 
@@ -676,7 +676,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     response_obj,
                     (ModelResponse, EmbeddingResponse, TextCompletionResponse),
                 ):
-                    total_tokens = response_obj.usage.total_tokens  # type: ignore
+                    total_tokens = response_obj.usage.total_tokens
 
                 request_count_api_key = f"{user_api_key_end_user_id}::{precise_minute}::request_count"
 

@@ -4024,6 +4024,42 @@ def test_get_deployment_credentials_with_provider_resolves_credential_name():
     litellm.credential_list = []
 
 
+def test_get_deployment_credentials_with_provider_bedrock_batch_fields():
+    """
+    Test that get_deployment_credentials_with_provider returns the deployment's
+    model and the Bedrock batch/S3 fields (s3_region_name, s3_encryption_key_id,
+    aws_batch_role_arn) instead of silently dropping them (#25104).
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_region_name": "us-west-2",
+                    "s3_bucket_name": "my-batch-bucket",
+                    "s3_region_name": "us-east-1",
+                    "s3_encryption_key_id": "arn:aws:kms:us-west-2:123:key/abc",
+                    "aws_batch_role_arn": "arn:aws:iam::123:role/batch-role",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="bedrock-batch-model"
+    )
+
+    assert credentials is not None
+    assert credentials["custom_llm_provider"] == "bedrock"
+    assert credentials["model"] == "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    assert credentials["aws_region_name"] == "us-west-2"
+    assert credentials["s3_bucket_name"] == "my-batch-bucket"
+    assert credentials["s3_region_name"] == "us-east-1"
+    assert credentials["s3_encryption_key_id"] == "arn:aws:kms:us-west-2:123:key/abc"
+    assert credentials["aws_batch_role_arn"] == "arn:aws:iam::123:role/batch-role"
+
+
 def _team_wildcard_model(api_key: str, model_id: str = "team-wildcard-id") -> dict:
     return {
         "model_name": f"model_name_team-1_{model_id}",
@@ -6021,16 +6057,16 @@ def test_initialize_deployment_for_pass_through_keeps_bedrock_iam_deployment():
     ]
 
 
-def test_initialize_deployment_for_pass_through_sets_credentials_with_api_key():
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-        passthrough_endpoint_router,
+def test_pass_through_deployment_api_key_resolves_via_get_credentials():
+    from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+        PassthroughEndpointRouter,
     )
 
-    passthrough_endpoint_router.credentials.clear()
     router = _router_with_two_pass_through_deployments([False, False])
+    passthrough_router = PassthroughEndpointRouter(llm_router_getter=lambda: router)
     assert len(router.get_model_list()) == 2
     assert (
-        passthrough_endpoint_router.get_credentials(
+        passthrough_router.get_credentials(
             custom_llm_provider="openai", region_name=None
         )
         == "sk-fake-for-tests"
@@ -6343,8 +6379,9 @@ async def test_acompletion_deferred_stream_skipped_when_stream_already_set():
         return
         yield
 
+    noop_stream = noop_aiter()
     already_set_wrapper = CustomStreamWrapper(
-        completion_stream=noop_aiter(),
+        completion_stream=noop_stream,
         model="openai/gpt-4o",
         logging_obj=logging_obj,
         custom_llm_provider="openai",
@@ -6376,6 +6413,89 @@ async def test_acompletion_deferred_stream_skipped_when_stream_already_set():
         )
 
     assert result is not None, "should return a streaming wrapper without errors"
+    assert already_set_wrapper.completion_stream is noop_stream, "completion_stream must not be re-fetched"
+    await noop_stream.aclose()
+
+
+def test_completion_deferred_stream_error_propagates_through_completion():
+    """Regression: the sync router path needs the same eager fetch as the async one.
+
+    A deferred-stream CustomStreamWrapper hands back a wrapper whose HTTP call has
+    not happened yet, so without fetch_sync_stream() the provider error surfaces on
+    first iteration, outside _completion's except block. The deployment is then never
+    marked failed and function_with_fallbacks never sees the error.
+    """
+    import litellm as _litellm
+
+    rate_limit_err = _litellm.RateLimitError(
+        message="Resource exhausted",
+        llm_provider="vertex_ai",
+        model="gemini-2.0-flash",
+    )
+    make_call_invocations = []
+
+    def failing_make_call(**kwargs):
+        make_call_invocations.append(kwargs)
+        raise rate_limit_err
+
+    router = _make_router_with_vertex_and_fallback()
+    deferred_wrapper = _make_deferred_stream_wrapper(failing_make_call)
+
+    with patch("litellm.completion", return_value=deferred_wrapper):
+        with pytest.raises(_litellm.RateLimitError):
+            router._completion(
+                model="vertex_ai/gemini-2.0-flash",
+                messages=[{"role": "user", "content": "Hello"}],
+                stream=True,
+                specific_deployment=router.model_list[0],
+            )
+
+    assert len(make_call_invocations) == 1, (
+        "the deferred HTTP call must run inside _completion's try block; "
+        "without the eager fetch_sync_stream() fix it is deferred to first iteration"
+    )
+
+
+def test_completion_deferred_stream_skipped_when_stream_already_set():
+    """A non-deferred sync provider already has completion_stream populated, so the
+    eager fetch must be skipped and make_call left untouched.
+    """
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    def would_fail(**kwargs):
+        raise RuntimeError("should not be called")
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"litellm_params": {}}
+    already_set_stream = iter([])
+
+    already_set_wrapper = CustomStreamWrapper(
+        completion_stream=already_set_stream,
+        model="openai/gpt-4o",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        make_call=would_fail,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+            }
+        ],
+    )
+
+    with patch("litellm.completion", return_value=already_set_wrapper):
+        result = router._completion(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            specific_deployment=router.model_list[0],
+        )
+
+    assert result is not None, "should return a streaming wrapper without errors"
+    assert already_set_wrapper.completion_stream is already_set_stream, "completion_stream must not be re-fetched"
 
 
 class TestAdvisorSubCallCooldown:
@@ -6588,6 +6708,51 @@ def test_get_configured_token_limits_coerces_numeric_strings():
     )
 
     assert router.get_configured_token_limits("quoted-limits-model") == (32000, 8000)
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_disable_fallbacks_surfaces_owning_provider_error():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "owning-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-owning",
+                },
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4o-mini",
+                    "api_key": "sk-fallback",
+                    "api_base": "https://fallback.openai.azure.com",
+                    "api_version": "2024-08-01-preview",
+                },
+            },
+        ],
+        fallbacks=[{"owning-model": ["fallback-model"]}],
+        num_retries=0,
+    )
+    owning_provider_error = litellm.BadRequestError(
+        message="completion_window must be one of: 24h",
+        model="openai/gpt-4o-mini",
+        llm_provider="openai",
+    )
+    mock_create = AsyncMock(side_effect=owning_provider_error)
+
+    with patch.object(router, "_acreate_batch", mock_create):
+        with pytest.raises(litellm.BadRequestError, match="24h"):
+            await router.acreate_batch(
+                model="owning-model",
+                input_file_id="file-owned-by-openai",
+                endpoint="/v1/chat/completions",
+                completion_window="5m",
+                disable_fallbacks=True,
+            )
+
+    mock_create.assert_awaited_once()
+    assert mock_create.call_args.kwargs["model"] == "owning-model"
 
 
 @pytest.mark.asyncio
@@ -7110,3 +7275,143 @@ def test_model_info_is_active_for_environment_matrix(monkeypatch):
     monkeypatch.delenv("LITELLM_ENVIRONMENT")
     with pytest.raises(ValueError, match="LITELLM_ENVIRONMENT"):
         model_info_is_active_for_environment(model_info={"supported_environments": ["production"]})
+
+
+def test_pre_call_checks_uses_deployment_model_when_model_info_lookup_raises(monkeypatch):
+    """
+    The supported-params check must run against the deployment's own
+    provider-qualified model. Resolving the per-deployment model only after the
+    model-info lookup leaves it unset whenever that lookup raises (an
+    unregistered custom model), so the check falls back to the bare model group
+    name and the request dies with 'LLM Provider NOT provided'.
+    """
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "custom-alias",
+                "litellm_params": {"model": "hosted_vllm/not-in-the-catalog"},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    def _raise_unmapped(**kwargs):
+        raise ValueError("This model isn't mapped yet")
+
+    monkeypatch.setattr(router, "get_router_model_info", _raise_unmapped)
+
+    seen: list[tuple] = []
+    original_get_supported_openai_params = litellm.get_supported_openai_params
+
+    def _record(model, custom_llm_provider=None, **kwargs):
+        seen.append((model, custom_llm_provider))
+        return original_get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider, **kwargs)
+
+    monkeypatch.setattr(litellm, "get_supported_openai_params", _record)
+
+    deployments = [
+        {
+            "litellm_params": {"model": "hosted_vllm/not-in-the-catalog"},
+            "model_info": {"id": "d1"},
+        }
+    ]
+    result = router._pre_call_checks(
+        model="custom-alias",
+        healthy_deployments=deployments,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={},
+    )
+
+    assert len(result) == 1
+    assert seen == [("not-in-the-catalog", "hosted_vllm")]
+
+
+def test_pre_call_checks_keeps_deployment_when_provider_is_unresolvable(monkeypatch):
+    """
+    Pre-call checks filter deployments; they must never be the thing that fails
+    a request. A deployment whose provider cannot be resolved simply skips the
+    supported-params check instead of raising out of deployment selection.
+    """
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "custom-alias",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    def _raise_no_provider(**kwargs):
+        raise litellm.BadRequestError(
+            message="LLM Provider NOT provided.",
+            model="custom-alias",
+            llm_provider="",
+        )
+
+    monkeypatch.setattr(litellm, "get_llm_provider", _raise_no_provider)
+
+    deployments = [
+        {
+            "litellm_params": {"model": "some-unresolvable-model"},
+            "model_info": {"id": "d1"},
+        }
+    ]
+    result = router._pre_call_checks(
+        model="custom-alias",
+        healthy_deployments=deployments,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={},
+    )
+
+    assert len(result) == 1
+
+
+class TestAutoRouterMaxInputCharsWiring:
+    """`auto_router_max_input_chars` on the deployment has to reach the AutoRouter that embeds prompts.
+
+    Without it the cap silently reverts to the default, so an operator whose embedding model has a
+    512-token window cannot lower it and every long prompt falls back to the default model instead
+    of being routed.
+    """
+
+    @staticmethod
+    def _router(**extra_params) -> "litellm.Router":
+        pytest.importorskip("semantic_router", reason="auto-router needs the semantic-router extra")
+        return litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
+                {
+                    "model_name": "my-auto-router",
+                    "litellm_params": {
+                        "model": "auto_router/my-auto-router",
+                        "auto_router_config": json.dumps(
+                            {"routes": [{"name": "gpt-4o", "utterances": ["write me code"]}]}
+                        ),
+                        "auto_router_default_model": "gpt-4o",
+                        "auto_router_embedding_model": "text-embedding-3-small",
+                        **extra_params,
+                    },
+                },
+            ]
+        )
+
+    @staticmethod
+    def _registered_auto_router(router: "litellm.Router"):
+        return router.auto_routers["my-auto-router"][0].strategy
+
+    def test_should_pass_the_configured_cap_to_the_auto_router(self):
+        router = self._router(auto_router_max_input_chars=512)
+
+        assert self._registered_auto_router(router).max_input_chars == 512
+
+    def test_should_fall_back_to_the_shared_default_when_the_deployment_omits_it(self):
+        from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
+
+        router = self._router()
+
+        assert self._registered_auto_router(router).max_input_chars == DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS

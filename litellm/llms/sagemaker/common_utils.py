@@ -210,10 +210,10 @@ class AWSEventStreamDecoder:
             chunk = parsed_response.get("chunk")
             if not chunk:
                 return None
-            return chunk.get("bytes").decode()  # type: ignore[no-any-return]
+            return chunk.get("bytes").decode()
         else:
             chunk = response_dict.get("body")
             if not chunk:
                 return None
 
-            return chunk.decode()  # type: ignore[no-any-return]
+            return chunk.decode()

@@ -207,7 +207,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
     ) -> tuple[str | None, str | None]:
         # lemonade is openai compatible, we just need to set this to custom_openai and have the api_base be lemonade's endpoint
         passed_api_base: Final = api_base
-        api_base = api_base or get_secret_str("LEMONADE_API_BASE") or "http://localhost:8000/api/v1"  # type: ignore
+        api_base = api_base or get_secret_str("LEMONADE_API_BASE") or "http://localhost:8000/api/v1"
         key = self._DEFAULT_API_KEY
         if passed_api_base is None or api_key:
             key = api_key or litellm.lemonade_key or get_secret_str("LEMONADE_API_KEY") or self._DEFAULT_API_KEY

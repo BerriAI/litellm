@@ -376,7 +376,7 @@ class SemanticToolFilterHook(CustomLogger):
             if mcp_tools:
                 filtered_mcp_tools = await self.filter.filter_tools(
                     query=user_query,
-                    available_tools=mcp_tools,  # type: ignore
+                    available_tools=mcp_tools,
                 )
             else:
                 filtered_mcp_tools = []
