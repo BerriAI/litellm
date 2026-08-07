@@ -28,7 +28,11 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import LiteLLMBatch, LlmProviders
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import CommonBatchFilesUtils, resolve_s3_encryption_key_id
+from ..common_utils import (
+    CommonBatchFilesUtils,
+    merge_bedrock_aws_request_params,
+    resolve_s3_encryption_key_id,
+)
 
 # Bedrock batch input files are uploaded as
 # s3://bucket/litellm-bedrock-files-{model, ":" -> "-"}-{uuid4}.jsonl (see
@@ -130,10 +134,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         Get the complete URL for Bedrock batch creation.
         Bedrock batch jobs are created via the model invocation job API.
         """
-        request_params: Final = {
-            **litellm_params,
-            **optional_params,
-        }  # mutable-ok: merged params are read by AWS helpers
+        request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
         aws_region_name: Final = self._get_aws_region_name(request_params, model)
 
         # Bedrock model invocation job endpoint
@@ -236,10 +237,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
         # For Bedrock, we need to return a pre-signed request with AWS auth headers
         # Use common utility for AWS signing
-        request_params: Final = {
-            **litellm_params,
-            **optional_params,
-        }  # mutable-ok: merged params are read by AWS helpers
+        request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
         endpoint_url: Final = (
             f"https://bedrock.{self._get_aws_region_name(request_params, model)}.amazonaws.com/model-invocation-job"
         )
@@ -395,10 +393,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         endpoint_url: Final = f"https://bedrock.{region}.amazonaws.com/model-invocation-job/{encoded_arn}"
 
         # Use common utility for AWS signing
-        request_params: Final = {
-            **litellm_params,
-            **optional_params,
-        }  # mutable-ok: merged params are read by AWS helpers
+        request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
         signed_headers, _ = self.common_utils.sign_aws_request(
             service_name="bedrock",
             data={},  # GET request has no body
