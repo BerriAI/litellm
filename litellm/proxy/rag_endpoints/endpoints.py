@@ -488,6 +488,7 @@ async def rag_ingest(
 
         # Add litellm data
         request_data: dict[str, Any] = {}
+        # rebind-ok: request_data is rebuilt from the litellm-enriched request.
         request_data = await add_litellm_data_to_request(
             data=request_data,
             request=request,
@@ -664,7 +665,7 @@ async def rag_query(
             _update_request_data_with_litellm_managed_vector_store_registry,
         )
 
-        resolved_vector_store = await _update_request_data_with_litellm_managed_vector_store_registry(
+        resolved_vector_store: Final = await _update_request_data_with_litellm_managed_vector_store_registry(
             data={},  # mutable-ok: resolver populates this dict in place
             vector_store_id=retrieval_config["vector_store_id"],
             user_api_key_dict=user_api_key_dict,
@@ -672,6 +673,7 @@ async def rag_query(
 
         # Add litellm data
         request_data: dict[str, Any] = {}
+        # rebind-ok: request_data is rebuilt from the litellm-enriched request.
         request_data = await add_litellm_data_to_request(
             data=request_data,
             request=request,
@@ -681,6 +683,8 @@ async def rag_query(
             proxy_config=proxy_config,
         )
 
+        # rebind-ok: resolver may override the provider; fall back to the
+        # caller-supplied value when the registry does not resolve one.
         resolved_provider = resolved_vector_store.pop("custom_llm_provider", None)
         if resolved_provider is None:
             resolved_provider = retrieval_config.get("custom_llm_provider")
@@ -693,6 +697,8 @@ async def rag_query(
         # site forwards only an allowlisted subset (see
         # ``_VECTOR_STORE_SEARCH_PARAMS`` in ``litellm/rag/main.py``), so
         # stored metadata / guardrail fields never reach the LLM call.
+        # mutable-ok: registry-resolved values are merged into the existing
+        # retrieval_config dict rather than copied, keeping them scoped to search.
         retrieval_config.update(resolved_vector_store)
 
         verbose_proxy_logger.debug("RAG Query - model: %s, retrieval_config: %s", model, retrieval_config)
