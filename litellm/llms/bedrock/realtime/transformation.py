@@ -1211,6 +1211,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             returned_messages.extend(events)
 
         elif "contentEnd" in event:
+            content_end: Final = event["contentEnd"]
             events, current_delta_chunks = self.transform_content_end_event(
                 event,
                 current_output_item_id,
@@ -1219,7 +1220,11 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 current_delta_chunks,
             )
             returned_messages.extend(events)
-            if BedrockContentEnd.model_validate(event["contentEnd"]).stopReason == "END_TURN":
+            if content_end.get("type") == "TOOL":
+                current_output_item_id = None
+                current_response_id = None
+                current_delta_type = None
+            if BedrockContentEnd.model_validate(content_end).stopReason == "END_TURN":
                 (
                     done_events,
                     current_output_item_id,

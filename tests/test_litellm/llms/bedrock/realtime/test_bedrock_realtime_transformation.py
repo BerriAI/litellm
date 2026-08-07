@@ -763,10 +763,39 @@ class TestBedrockRealtimeResponseTransformation:
                 "current_delta_type": result["current_delta_type"],
             },
         )
-        assert follow_up["current_response_id"] == result["current_response_id"]
-        assert follow_up["current_output_item_id"] == result["current_output_item_id"]
+        assert follow_up["current_response_id"] is None
+        assert follow_up["current_output_item_id"] is None
+        assert follow_up["current_delta_type"] is None
         assert follow_up["response"] == []
         assert all(msg["type"] != "response.output_item.done" for msg in follow_up["response"])
+
+        post_tool_state = {
+            "session_configuration_request": follow_up["session_configuration_request"],
+            "current_output_item_id": follow_up["current_output_item_id"],
+            "current_response_id": follow_up["current_response_id"],
+            "current_conversation_id": follow_up["current_conversation_id"],
+            "current_delta_chunks": follow_up["current_delta_chunks"],
+            "current_item_chunks": follow_up["current_item_chunks"],
+            "current_delta_type": follow_up["current_delta_type"],
+        }
+        assistant_start = config.transform_realtime_response(
+            json.dumps({"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}}),
+            "amazon.nova-2-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=post_tool_state,
+        )
+        tool_response_id = result["current_response_id"]
+        tool_item_id = result["current_output_item_id"]
+        assert assistant_start["current_response_id"] is not None
+        assert assistant_start["current_output_item_id"] is not None
+        assert assistant_start["current_response_id"] != tool_response_id
+        assert assistant_start["current_output_item_id"] != tool_item_id
+        created = [msg for msg in assistant_start["response"] if msg["type"] == "response.created"][0]
+        added = [msg for msg in assistant_start["response"] if msg["type"] == "response.output_item.added"][0]
+        assert created["response"]["id"] == assistant_start["current_response_id"]
+        assert added["item"]["id"] == assistant_start["current_output_item_id"]
+        assert created["response"]["id"] != function_call["response_id"]
+        assert added["item"]["id"] != function_call["item_id"]
 
     def test_tool_content_end_does_not_emit_message_output_item_done(self):
         """Minted tool ids must not unlock unpaired message output_item.done on TOOL contentEnd"""
@@ -798,9 +827,9 @@ class TestBedrockRealtimeResponseTransformation:
         )
 
         assert result["response"] == []
-        assert result["current_response_id"] == "resp_minted_for_tool"
-        assert result["current_output_item_id"] == "item_minted_for_tool"
-        assert result["current_delta_type"] == "text"
+        assert result["current_response_id"] is None
+        assert result["current_output_item_id"] is None
+        assert result["current_delta_type"] is None
 
     def test_transform_content_end_text(self):
         """Test contentEnd for text response"""
