@@ -2386,6 +2386,119 @@ async def test_follow_up_setup_updates_cached_session_configuration_request():
 
 
 @pytest.mark.asyncio
+async def test_realtime_guardrail_stamps_standard_logging_guardrail_information_on_read_path():
+    """
+    Regression test for the realtime guardrail observability gap.
+
+    Before the fix, run_realtime_guardrails handed apply_guardrail a throwaway
+    request_data dict, so the standard_logging_guardrail_information stamp (with
+    start_time / end_time / duration) was discarded. After the fix, the stamp
+    must land on logging_obj.model_call_details["litellm_params"]["metadata"]
+    — the same dict get_standard_logging_object_payload reads from.
+    """
+
+    class TimingProbeGuardrail(CustomGuardrail):
+        async def apply_guardrail(
+            self, inputs, request_data, input_type, logging_obj=None
+        ):
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response={"ok": True},
+                request_data=request_data,
+                guardrail_status="success",
+                start_time=1.0,
+                end_time=2.5,
+                duration=1.5,
+                event_type=GuardrailEventHooks.realtime_input_transcription,
+            )
+            return inputs
+
+    guardrail = TimingProbeGuardrail(
+        guardrail_name="test_timing_probe",
+        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        default_on=True,
+    )
+    litellm.callbacks = [guardrail]
+    try:
+        client_ws = MagicMock()
+        client_ws.send_text = AsyncMock()
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+
+        read_path_metadata: dict = {}
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {
+            "litellm_params": {"metadata": read_path_metadata}
+        }
+
+        streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+        blocked = await streaming.run_realtime_guardrails("hello world")
+
+        assert blocked is False
+        stamped = read_path_metadata.get("standard_logging_guardrail_information")
+        assert stamped, (
+            "Expected standard_logging_guardrail_information to be stamped on the "
+            "read-path metadata dict after run_realtime_guardrails returned."
+        )
+        assert stamped[0]["guardrail_name"] == "test_timing_probe"
+        assert stamped[0]["start_time"] == 1.0
+        assert stamped[0]["end_time"] == 2.5
+        assert stamped[0]["duration"] == 1.5
+    finally:
+        litellm.callbacks = []
+
+
+@pytest.mark.asyncio
+async def test_realtime_guardrail_creates_metadata_when_missing():
+    """
+    Defensive guard: if model_call_details has no 'litellm_params.metadata' yet
+    (e.g. a non-proxy entry that skipped update_from_kwargs), the dispatcher
+    must create it rather than crash, and still land the stamp on it.
+    """
+
+    class StampingGuardrail(CustomGuardrail):
+        async def apply_guardrail(
+            self, inputs, request_data, input_type, logging_obj=None
+        ):
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response={"ok": True},
+                request_data=request_data,
+                guardrail_status="success",
+                start_time=0.0,
+                end_time=0.1,
+                duration=0.1,
+                event_type=GuardrailEventHooks.realtime_input_transcription,
+            )
+            return inputs
+
+    guardrail = StampingGuardrail(
+        guardrail_name="test_defensive_stamp",
+        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        default_on=True,
+    )
+    litellm.callbacks = [guardrail]
+    try:
+        client_ws = MagicMock()
+        client_ws.send_text = AsyncMock()
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+
+        streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+        await streaming.run_realtime_guardrails("hello world")
+
+        litellm_params = logging_obj.model_call_details.get("litellm_params")
+        assert isinstance(litellm_params, dict)
+        metadata = litellm_params.get("metadata")
+        assert isinstance(metadata, dict)
+        stamped = metadata.get("standard_logging_guardrail_information")
+        assert stamped and stamped[0]["guardrail_name"] == "test_defensive_stamp"
+    finally:
+        litellm.callbacks = []
+
+
+@pytest.mark.asyncio
 async def test_deferred_setup_buffers_audio_until_backend_setup_complete(monkeypatch):
     """Pipecat may send audio before session.update when setup is deferred."""
     monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
