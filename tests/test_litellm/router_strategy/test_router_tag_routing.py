@@ -1715,3 +1715,89 @@ async def test_required_and_only_excludes_regex_deployment_missing_the_required_
             mock_response="hi",
         )
         assert response._hidden_params["model_id"] == "high-reasoning-no-regex"
+
+
+# --- allow_fail_open must also gate exhaustion after a non-empty required-AND survivor
+# set fails to match a plain preference tag, not just full !/& exhaustion ---
+
+
+@pytest.mark.asyncio()
+async def test_mixed_constraint_survivor_unmatched_by_positive_tag_raises_by_default():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:high", "provider:anthropic"],
+                },
+                "model_info": {"id": "high-reasoning-anthropic"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default", "reasoning_type:low"],
+                },
+                "model_info": {"id": "default-fallback"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&reasoning_type:high", "provider:openai"]},
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_mixed_constraint_survivor_unmatched_by_positive_tag_falls_open_when_allowed():
+    # &reasoning_type:high survives to a non-empty candidate set (the anthropic
+    # deployment), but the plain preference tag provider:openai matches none of the
+    # survivors, and the surviving deployment itself is not "default"-tagged (so the
+    # pre-existing in-loop default-collection escape hatch can't mask the fix). Greptile
+    # flagged this exact path as bypassing allow_fail_open by raising unconditionally;
+    # it must instead fall back to the group's actual default-tagged deployment, which
+    # is a different deployment than the one &reasoning_type:high matched.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["reasoning_type:high", "provider:anthropic"],
+                },
+                "model_info": {"id": "high-reasoning-anthropic", "allow_fail_open": True},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default", "reasoning_type:low"],
+                },
+                "model_info": {"id": "default-fallback", "allow_fail_open": True},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&reasoning_type:high", "provider:openai"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "default-fallback"
