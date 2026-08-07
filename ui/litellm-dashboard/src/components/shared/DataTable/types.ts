@@ -69,6 +69,12 @@ export interface DataTableProps<TData extends RowData, TValue> {
   rowClassName?: (row: Row<TData>) => string;
 
   maxBodyHeight?: number | string;
+  /**
+   * Scroll the rows inside whatever height the parent gives the table, rather than growing the page.
+   * The table becomes a flex column, so the parent must be a height-constrained flex container; without
+   * one it degrades to the normal auto-height layout. Use instead of `maxBodyHeight` to avoid a magic number.
+   */
+  fillHeight?: boolean;
   size?: DataTableSize;
 
   toolbar?: (table: Table<TData>) => React.ReactNode;

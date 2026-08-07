@@ -230,7 +230,9 @@ def test_cache_hit_is_zero_cost_and_suffixed(
     _ = unwrap(client.chat(scoped_key, "gemini-2.5-flash", prompt, max_tokens=16))
 
     rows = client.poll_logs_for_key(
-        scoped_key, predicate=lambda rs: any(r.cache_hit == "True" for r in rs)
+        scoped_key,
+        predicate=lambda rs: any(r.cache_hit == "True" for r in rs)
+        and any(r.cache_hit != "True" for r in rs),
     )
     cache_row = _require_row(
         rows,

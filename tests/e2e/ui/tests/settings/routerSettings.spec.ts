@@ -23,7 +23,7 @@ async function clearFallbackForPrimary(request: import("@playwright/test").APIRe
   const masterKey = users[Role.ProxyAdmin].password;
   const auth = { Authorization: `Bearer ${masterKey}` };
 
-  const current = await request.get("http://localhost:4000/get/config/callbacks", { headers: auth });
+  const current = await request.get("/get/config/callbacks", { headers: auth });
   if (!current.ok()) return;
   const body = await current.json();
   const router = body?.router_settings ?? {};
@@ -31,7 +31,7 @@ async function clearFallbackForPrimary(request: import("@playwright/test").APIRe
   const next = existing.filter((entry) => !(entry && PRIMARY in entry));
   if (next.length === existing.length) return;
 
-  await request.post("http://localhost:4000/config/update", {
+  await request.post("/config/update", {
     headers: auth,
     data: { router_settings: { ...router, fallbacks: next } },
   });
@@ -111,7 +111,6 @@ test.describe("Router Settings - Fallbacks", () => {
 type ConfigYAML = components["schemas"]["ConfigYAML"];
 type RouterSettingsResponse = components["schemas"]["RouterSettingsResponse"];
 
-const BASE_URL = "http://localhost:4000";
 const ADMIN_AUTH = { Authorization: `Bearer ${users[Role.ProxyAdmin].password}` };
 
 /**
@@ -123,7 +122,7 @@ async function patchRouterSettings(
   request: import("@playwright/test").APIRequestContext,
   patch: Partial<NonNullable<ConfigYAML["router_settings"]>>,
 ) {
-  const res = await request.post(`${BASE_URL}/config/update`, {
+  const res = await request.post(`/config/update`, {
     headers: ADMIN_AUTH,
     data: { router_settings: patch },
   });
@@ -179,7 +178,7 @@ test.describe("Router Settings - Loadbalancing", () => {
     await expect
       .poll(
         async () => {
-          const res = await request.get(`${BASE_URL}/router/settings`, { headers: ADMIN_AUTH });
+          const res = await request.get(`/router/settings`, { headers: ADMIN_AUTH });
           const data = (await res.json()) as RouterSettingsResponse;
           return data.current_values?.num_retries;
         },

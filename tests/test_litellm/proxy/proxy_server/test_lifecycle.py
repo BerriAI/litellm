@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
 from typing import List, Optional, Union
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -31,6 +32,7 @@ from typing_extensions import TypedDict
 
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import (
+    ProxyStartupEvent,
     _initialize_shared_aiohttp_session,
     _resolve_pydantic_type,
     _resolve_typed_dict_type,
@@ -121,6 +123,66 @@ async def test_proxy_shutdown_event_disconnects_prisma_and_resets(monkeypatch):
         "master_key_reset": None,
         "prisma_reset": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monkeypatch):
+    """
+    The gateway request fold lives in memory, so shutdown drains it to the database.
+
+    That drain has to happen while prisma is still connected: a write attempted
+    after ``disconnect()`` raises ClientNotConnectedError, the flush swallows it
+    and merges the counts back onto an accumulator the process is about to
+    discard, and the final interval is lost silently on every restart. Ordering is
+    the whole behavior here, so assert the order rather than that both ran.
+    """
+    calls: list = []  # mutable-ok: records call order, which is the assertion
+
+    fake_prisma = MagicMock()
+    fake_prisma.disconnect = AsyncMock(side_effect=lambda: calls.append("disconnect"))
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+
+    async def _record_flush(client, accumulator):
+        calls.append("flush")
+        assert client is fake_prisma
+
+    monkeypatch.setattr(ps, "flush_gateway_requests", _record_flush, raising=False)
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert calls == ["flush", "disconnect"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_skips_gateway_flush_without_a_database(monkeypatch):
+    """No prisma client means nothing to drain to, and no attempt is made."""
+    flush = AsyncMock()
+    monkeypatch.setattr(ps, "flush_gateway_requests", flush, raising=False)
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert flush.await_count == 0
 
 
 @pytest.mark.asyncio
@@ -667,4 +729,51 @@ def test_otel_global_provider_published_after_callback_init():
         "OTEL global provider is published before callbacks are initialized; a "
         "preset logger will not exist yet and a second generic logger will own "
         "the global provider, orphaning gen-ai spans"
+    )
+
+
+def test_startup_warns_for_global_budget_without_database(caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_budget_without_db(max_budget=100.0, prisma_client=None)
+
+    assert "litellm.max_budget=100.0" in caplog.text
+    assert "will NOT be enforced" in caplog.text
+    assert "requests will never be blocked" in caplog.text
+
+
+def test_startup_does_not_warn_for_global_budget_with_database(caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_budget_without_db(max_budget=100.0, prisma_client=MagicMock())
+
+    assert "litellm.max_budget" not in caplog.text
+
+
+@pytest.mark.parametrize("max_budget", [0, None])
+def test_startup_does_not_warn_without_global_budget(caplog, max_budget):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_budget_without_db(max_budget=max_budget, prisma_client=None)
+
+    assert "litellm.max_budget" not in caplog.text
+
+
+def test_proxy_startup_event_warns_for_global_budget_without_database():
+    """Pin the lifespan call that prevents silent DB-less budgets.
+
+    The call must follow Prisma setup so DB-backed deployments do not false-positive.
+    Direct ``_warn_budget_without_db`` tests cover the warning behavior itself.
+    """
+    wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
+    source = inspect.getsource(wrapped)
+    budget_check_pos = source.find("if prisma_client is not None and litellm.max_budget > 0:")
+    warn_pos = source.find("_warn_budget_without_db(")
+    next_startup_section_pos = source.find(
+        "await ProxyStartupEvent.initialize_scheduled_background_jobs(",
+        budget_check_pos,
+    )
+
+    assert budget_check_pos != -1, "global budget startup block not found"
+    assert warn_pos != -1, "DB-less budget warning call not found"
+    assert next_startup_section_pos != -1, "startup section after budget block not found"
+    assert budget_check_pos < warn_pos < next_startup_section_pos, (
+        "DB-less budget warning must run after Prisma setup and the DB-backed budget block"
     )

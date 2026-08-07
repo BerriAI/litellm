@@ -1,7 +1,9 @@
+import ast
 import asyncio
 import json
 import os
 import sys
+from pathlib import Path
 from typing import List
 
 import pytest
@@ -328,3 +330,66 @@ async def test_cache_hit_includes_custom_llm_provider():
         # Clean up
         litellm.callbacks = original_callbacks
         litellm.cache = None
+
+
+LITELLM_LOGGER_NAMES = frozenset(
+    {"verbose_logger", "verbose_proxy_logger", "verbose_router_logger", "logger", "logging"}
+)
+LOG_LEVEL_METHODS = frozenset({"debug", "info", "warning", "error", "exception", "critical"})
+LITELLM_PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "litellm"
+
+
+def _receiver_name(node: ast.expr) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
+def _is_logging_call(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in LOG_LEVEL_METHODS
+        and _receiver_name(node.func.value) in LITELLM_LOGGER_NAMES
+    )
+
+
+def _has_format_spec(message: ast.JoinedStr) -> bool:
+    return any(isinstance(value, ast.FormattedValue) and value.format_spec is not None for value in message.values)
+
+
+def _eager_logging_calls(source: str, path: Path) -> tuple[str, ...]:
+    return tuple(
+        f"{path}:{node.lineno}"
+        for node in ast.walk(ast.parse(source))
+        if _is_logging_call(node)
+        and node.args
+        and isinstance(node.args[0], ast.JoinedStr)
+        and not _has_format_spec(node.args[0])
+    )
+
+
+def test_logging_calls_do_not_build_their_message_eagerly():
+    """A discarded log record must not have cost anything to build.
+
+    `log.debug(f"payload: {body}")` interpolates before the call runs, so the message is
+    built and thrown away on every request the level filters out; `log.debug("payload: %s", body)`
+    defers that to `record.getMessage()`, which only runs once the record passes the level check.
+
+    f-strings carrying a format spec are exempt: `%`-style has no faithful equivalent for
+    specs like `{ratio:.1%}`, and those sites interpolate scalars rather than payloads.
+    """
+    offenders = tuple(
+        offender
+        for path in sorted(LITELLM_PACKAGE_ROOT.rglob("*.py"))
+        for offender in _eager_logging_calls(
+            path.read_text(encoding="utf-8"), path.relative_to(LITELLM_PACKAGE_ROOT.parent)
+        )
+    )
+
+    assert offenders == (), (
+        "these logging calls build their message eagerly; pass the values as %-style arguments instead:\n"
+        + "\n".join(offenders)
+    )

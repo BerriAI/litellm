@@ -66,6 +66,7 @@ export function TeamsTable({ userRole, userID, onSelectTeam, onEditTeam, onDelet
     team_alias: getFilterValue("alias"),
     teamID: getFilterValue("team_id"),
     search: searchQuery.trim() || undefined,
+    searchTeamIdMatch: "prefix" as const,
     userID: isAdminView ? undefined : userID ?? undefined,
     sortBy: sorting[0]?.id,
     sortOrder: toSortOrder(sorting),
