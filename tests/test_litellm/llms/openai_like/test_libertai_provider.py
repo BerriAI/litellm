@@ -70,9 +70,23 @@ class TestLibertAIProviderConfig:
         assert info["max_input_tokens"] == 262144
         assert info["max_output_tokens"] == 262144
 
+        assert "libertai/glm-5.2" in model_cost
+        glm = model_cost["libertai/glm-5.2"]
+        assert glm["litellm_provider"] == "libertai"
+        assert glm["mode"] == "chat"
+        assert glm["max_input_tokens"] == 262144
+        assert glm["max_output_tokens"] == 262144
+        assert glm["input_cost_per_token"] == 1.4e-06
+        assert glm["output_cost_per_token"] == 4.4e-06
+        assert glm["supports_vision"] is False
+
         # thinking variants are marked as reasoning models
         assert (
             model_cost["libertai/qwen3.6-27b-thinking"].get("supports_reasoning")
+            is True
+        )
+        assert (
+            model_cost["libertai/glm-5.2-thinking"].get("supports_reasoning")
             is True
         )
 
