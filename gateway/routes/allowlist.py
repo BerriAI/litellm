@@ -113,12 +113,14 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
 GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
     {
         "/",
+        "/alpha/search",
         "/routes",
         "/openapi.json",
         "/docs",
         "/docs/oauth2-redirect",
         "/redoc",
         "/test",
+        "/v1/alpha/search",
     }
 )
 
