@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2653,6 +2654,35 @@ class TestMCPServerManager:
 
         # Verify the MCP client call was awaited exactly once
         assert mock_client.call_tool.await_count == 1
+
+    @pytest.mark.parametrize("progress_token", [123, 0, "token-123456"])
+    @pytest.mark.asyncio
+    async def test_host_progress_callback_accepts_spec_progress_tokens(
+        self, progress_token
+    ):
+        """
+        MCP progressToken may be string or integer, including zero.
+        """
+        from litellm.proxy._experimental.mcp_server.server import (
+            _build_host_progress_callback,
+        )
+
+        session = MagicMock()
+        session.send_progress_notification = AsyncMock()
+        host_ctx = SimpleNamespace(
+            meta=SimpleNamespace(progressToken=progress_token),
+            session=session,
+        )
+
+        callback = _build_host_progress_callback(host_ctx)
+
+        assert callback is not None
+        await callback(progress=0.5, total=1.0)
+        session.send_progress_notification.assert_awaited_once_with(
+            progress_token=progress_token,
+            progress=0.5,
+            total=1.0,
+        )
 
     @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_with_user_api_key_auth(self):
