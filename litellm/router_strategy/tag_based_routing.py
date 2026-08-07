@@ -304,6 +304,17 @@ def _resolve_constraint_only_pool(
     )
 
 
+def _all_deployments_or_fallback(
+    llm_router_instance: LitellmRouter,
+    model: str,
+    fallback: Sequence[Any] | Mapping[Any, Any],
+) -> Sequence[Any] | Mapping[Any, Any]:
+    try:
+        return llm_router_instance._get_all_deployments(model_name=model)
+    except Exception:  # noqa: BLE001  # fail safe toward today's healthy-only behavior on lookup errors
+        return fallback
+
+
 def _chain_tag_filtering_override(
     llm_router_instance: LitellmRouter,
     model: str,
@@ -318,10 +329,7 @@ def _chain_tag_filtering_override(
     # repeatedly failing that one deployment into cooldown. Falls back to
     # healthy_deployments on a lookup error, preserving today's behavior rather
     # than crashing the request.
-    try:
-        all_deployments: Final = llm_router_instance._get_all_deployments(model_name=model)
-    except Exception:  # noqa: BLE001  # fail safe toward today's healthy-only behavior on lookup errors
-        all_deployments = healthy_deployments
+    all_deployments: Final = _all_deployments_or_fallback(llm_router_instance, model, healthy_deployments)
     for d in all_deployments:
         value = (d.get("model_info") or MappingProxyType({})).get("enable_tag_filtering")
         if value is not None:
