@@ -274,12 +274,14 @@ class ManagementClient:
             )
         ).user_id
 
-    def create_customer(self, user_id: str) -> str:
+    def create_customer(
+        self, user_id: str, *, alias: str | None = None, max_budget: float | None = None
+    ) -> str:
         _ = unwrap(
             self.proxy.transport.post(
                 "/customer/new",
                 headers=self.proxy.transport.master,
-                json=CustomerNewBody(user_id=user_id),
+                json=CustomerNewBody(user_id=user_id, alias=alias, max_budget=max_budget),
                 response_type=CustomerResponse,
             )
         )
