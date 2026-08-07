@@ -257,7 +257,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         Get the complete S3 URL for the file upload request
         """
-        request_params: Final = {**litellm_params, **optional_params}
+        request_params: Final = {
+            **litellm_params,
+            **optional_params,
+        }  # mutable-ok: merged params are read by AWS helpers
         bucket_name = litellm_params.get("s3_bucket_name") or os.getenv("AWS_S3_BUCKET_NAME")
         if not bucket_name:
             raise ValueError(
@@ -729,7 +732,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         if s3_region_name:
             optional_params = {**optional_params, "aws_region_name": s3_region_name}
 
-        request_params: Final = {**litellm_params, **optional_params}
+        request_params: Final = {
+            **litellm_params,
+            **optional_params,
+        }  # mutable-ok: merged params are read by AWS helpers
 
         # Sign the request and return a pre-signed request object
         signed_headers, signed_body = self._sign_s3_request(

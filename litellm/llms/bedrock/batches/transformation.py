@@ -130,7 +130,10 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         Get the complete URL for Bedrock batch creation.
         Bedrock batch jobs are created via the model invocation job API.
         """
-        request_params: Final = {**litellm_params, **optional_params}
+        request_params: Final = {
+            **litellm_params,
+            **optional_params,
+        }  # mutable-ok: merged params are read by AWS helpers
         aws_region_name: Final = self._get_aws_region_name(request_params, model)
 
         # Bedrock model invocation job endpoint
@@ -233,7 +236,10 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
         # For Bedrock, we need to return a pre-signed request with AWS auth headers
         # Use common utility for AWS signing
-        request_params: Final = {**litellm_params, **optional_params}
+        request_params: Final = {
+            **litellm_params,
+            **optional_params,
+        }  # mutable-ok: merged params are read by AWS helpers
         endpoint_url: Final = (
             f"https://bedrock.{self._get_aws_region_name(request_params, model)}.amazonaws.com/model-invocation-job"
         )
@@ -389,7 +395,10 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         endpoint_url: Final = f"https://bedrock.{region}.amazonaws.com/model-invocation-job/{encoded_arn}"
 
         # Use common utility for AWS signing
-        request_params: Final = {**litellm_params, **optional_params}
+        request_params: Final = {
+            **litellm_params,
+            **optional_params,
+        }  # mutable-ok: merged params are read by AWS helpers
         signed_headers, _ = self.common_utils.sign_aws_request(
             service_name="bedrock",
             data={},  # GET request has no body
