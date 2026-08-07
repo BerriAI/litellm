@@ -672,10 +672,8 @@ async def rag_query(
         )
 
         # Add litellm data
-        request_data: dict[str, Any] = {}
-        # rebind-ok: request_data is rebuilt from the litellm-enriched request.
-        request_data = await add_litellm_data_to_request(
-            data=request_data,
+        request_data: Final = await add_litellm_data_to_request(
+            data={},  # mutable-ok: resolver populates this dict in place
             request=request,
             general_settings=general_settings,
             user_api_key_dict=user_api_key_dict,
@@ -683,14 +681,12 @@ async def rag_query(
             proxy_config=proxy_config,
         )
 
-        # rebind-ok: resolver may override the provider; fall back to the
-        # caller-supplied value when the registry does not resolve one.
-        resolved_provider = resolved_vector_store.pop("custom_llm_provider", None)
-        if resolved_provider is None:
-            resolved_provider = retrieval_config.get("custom_llm_provider")
-        if resolved_provider:
-            retrieval_config["custom_llm_provider"] = resolved_provider
-        resolved_vector_store.pop("litellm_credential_name", None)
+        resolved_registry: Final = await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={},  # mutable-ok: resolver populates this dict in place
+            vector_store_id=retrieval_config["vector_store_id"],
+            user_api_key_dict=user_api_key_dict,
+        )
+        resolved_registry.pop("litellm_credential_name", None)
         # Registry credentials are scoped to the vector store search: merging
         # them into ``retrieval_config`` (instead of ``request_data``) keeps
         # them out of the generation-call kwargs entirely. The search call
@@ -699,7 +695,7 @@ async def rag_query(
         # stored metadata / guardrail fields never reach the LLM call.
         # mutable-ok: registry-resolved values are merged into the existing
         # retrieval_config dict rather than copied, keeping them scoped to search.
-        retrieval_config.update(resolved_vector_store)
+        retrieval_config.update(resolved_registry)
 
         verbose_proxy_logger.debug("RAG Query - model: %s, retrieval_config: %s", model, retrieval_config)
 
