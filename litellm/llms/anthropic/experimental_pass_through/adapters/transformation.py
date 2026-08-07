@@ -1383,8 +1383,8 @@ class LiteLLMAnthropicMessagesAdapter:
                 return "tool_use", cast("ContentBlockContentBlockDict", tool_block)
             elif choice.delta.content is not None and len(choice.delta.content) > 0:
                 return "text", TextBlock(type="text", text="")
-            elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
-                thinking_blocks = choice.delta.thinking_blocks or []
+            elif isinstance(choice, StreamingChoices):
+                thinking_blocks = getattr(choice.delta, "thinking_blocks", None) or []
                 if len(thinking_blocks) > 0:
                     thinking_block = thinking_blocks[0]
                     if thinking_block["type"] == "thinking":
@@ -1397,15 +1397,32 @@ class LiteLLMAnthropicMessagesAdapter:
                         return "thinking", ChatCompletionThinkingBlock(
                             type="thinking", thinking=thinking, signature=signature
                         )
-            # OpenAI-compatible reasoning backends (e.g. vLLM/SGLang reasoning
-            # parsers) populate ``reasoning_content`` without ``thinking_blocks``.
-            # ``Delta`` deletes the ``thinking_blocks`` attribute when unset, so the
-            # branch above is skipped entirely; open a ``thinking`` block here so the
-            # matching ``thinking_delta`` stream is not emitted into a text block.
-            elif isinstance(choice, StreamingChoices) and getattr(choice.delta, "reasoning_content", None):
-                return "thinking", ChatCompletionThinkingBlock(type="thinking", thinking="", signature="")
+                if getattr(choice.delta, "reasoning_content", None):
+                    return "thinking", ChatCompletionThinkingBlock(type="thinking", thinking="", signature="")
 
         return "text", TextBlock(type="text", text="")
+
+    @staticmethod
+    def _streaming_reasoning_fields(choice: StreamingChoices) -> tuple[str, str]:
+        reasoning_content = ""
+        reasoning_signature = ""
+        thinking_blocks = getattr(choice.delta, "thinking_blocks", None) or []
+        for thinking_block in thinking_blocks:
+            if thinking_block["type"] == "thinking":
+                thinking = thinking_block.get("thinking") or ""
+                signature = thinking_block.get("signature") or ""
+
+                assert isinstance(thinking, str)
+                assert isinstance(signature, str)
+
+                reasoning_content += thinking
+                reasoning_signature += signature
+
+        if reasoning_content or reasoning_signature:
+            return reasoning_content, reasoning_signature
+
+        fallback = getattr(choice.delta, "reasoning_content", None)
+        return fallback or "", ""
 
     def _translate_streaming_openai_chunk_to_anthropic(
         self, choices: list[OpenAIStreamingChoice | StreamingChoices]
@@ -1425,24 +1442,10 @@ class LiteLLMAnthropicMessagesAdapter:
                 for tool in choice.delta.tool_calls:
                     if tool.function is not None and tool.function.arguments is not None:
                         partial_json = (partial_json or "") + tool.function.arguments
-            elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
-                thinking_blocks = choice.delta.thinking_blocks or []
-                if len(thinking_blocks) > 0:
-                    for thinking_block in thinking_blocks:
-                        if thinking_block["type"] == "thinking":
-                            thinking = thinking_block.get("thinking") or ""
-                            signature = thinking_block.get("signature") or ""
-
-                            assert isinstance(thinking, str)
-                            assert isinstance(signature, str)
-
-                            reasoning_content += thinking
-                            reasoning_signature += signature
-            # Handle reasoning_content when thinking_blocks is not present
-            # This handles providers like OpenRouter that return reasoning_content
-            elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "reasoning_content"):
-                if choice.delta.reasoning_content is not None:
-                    reasoning_content += choice.delta.reasoning_content
+            elif isinstance(choice, StreamingChoices):
+                choice_reasoning_content, choice_reasoning_signature = self._streaming_reasoning_fields(choice)
+                reasoning_content += choice_reasoning_content
+                reasoning_signature += choice_reasoning_signature
 
         if partial_json is not None:
             return "input_json_delta", ContentJsonBlockDelta(type="input_json_delta", partial_json=partial_json)

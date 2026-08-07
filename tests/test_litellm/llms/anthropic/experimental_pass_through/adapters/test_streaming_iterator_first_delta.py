@@ -576,6 +576,43 @@ def test_reasoning_content_first_stream_opens_thinking_block_at_index_zero_sync(
     _assert_thinking_first_block_opens_at_index_zero(_drain_sync(wrapper))
 
 
+@pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        pytest.param([], id="empty"),
+        pytest.param(
+            [{"type": "redacted_thinking", "data": "redacted"}],
+            id="redacted-only",
+        ),
+    ],
+)
+def test_reasoning_content_falls_back_without_usable_thinking_blocks_sync(
+    thinking_blocks,
+):
+    chunks = [
+        _make_chunk(
+            Delta(
+                content=None,
+                reasoning_content="fallback thought",
+                thinking_blocks=thinking_blocks,
+            )
+        ),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+    events = _drain_sync(wrapper)
+
+    starts = [
+        (event["index"], event["content_block"]["type"])
+        for event in events
+        if event.get("type") == "content_block_start"
+    ]
+    assert starts == [(0, "thinking")]
+    assert _thinking_deltas(events) == ["fallback thought"]
+    assert _text_deltas(events) == []
+    _assert_deltas_match_their_block_type(events)
+
+
 def _blank_lead_chunks() -> List[MagicMock]:
     return [
         _make_chunk(Delta(content=None)),
