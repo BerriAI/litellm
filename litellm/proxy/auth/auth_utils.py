@@ -1152,8 +1152,6 @@ def _has_user_setup_sso() -> bool:
     microsoft_client_id: Final = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id: Final = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id: Final = os.getenv("GENERIC_CLIENT_ID", None)
-    # SAML is configured via IdP metadata URL or inline XML (not OAuth client IDs).
-    # Keep this in sync with SAMLAuthHandler.is_saml_configured().
     saml_idp_metadata_url: Final = os.getenv("SAML_IDP_METADATA_URL", None)
     saml_idp_metadata_xml: Final = os.getenv("SAML_IDP_METADATA_XML", None)
 
