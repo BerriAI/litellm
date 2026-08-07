@@ -4325,11 +4325,42 @@ class ProxyConfig:
         printed_yaml: Final = copy.deepcopy(config)
         printed_yaml.pop("environment_variables", None)
 
+        self._ensure_secret_manager_initialized(config=config, config_file_path=config_file_path)
+
         config = self._check_for_os_environ_vars(config=config)
 
         self.update_config_state(config=config)
 
         return config
+
+    def _ensure_secret_manager_initialized(self, config: Mapping[str, object], config_file_path: str | None) -> None:
+        """
+        Initialize the secret manager, if configured, before `os.environ/...` config references are resolved.
+
+        `proxy_cli.py` does this for the monolithic image; entrypoints that uvicorn the app directly
+        (the split gateway/backend images) never run it, so secret-manager-only keys resolve to None.
+        """
+        if litellm.secret_manager_client is not None:
+            return
+
+        general_settings = config.get("general_settings")
+        if not isinstance(general_settings, dict):
+            return
+
+        key_management_system = general_settings.get("key_management_system")
+        if not isinstance(key_management_system, str):
+            return
+
+        key_management_settings = general_settings.get("key_management_settings")
+        if isinstance(key_management_settings, dict):
+            litellm._key_management_settings = KeyManagementSettings(
+                **self._check_for_os_environ_vars(config=copy.deepcopy(key_management_settings))
+            )
+
+        self.initialize_secret_manager(
+            key_management_system=key_management_system,
+            config_file_path=config_file_path,
+        )
 
     def update_config_state(self, config: dict):
         self.config = config
