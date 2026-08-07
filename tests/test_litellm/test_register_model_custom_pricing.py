@@ -439,6 +439,91 @@ def test_register_model_warns_when_no_builtin_match_for_cache_pricing(caplog):
         litellm.model_cost.pop(registered_key, None)
 
 
+def test_register_model_no_cache_pricing_warning_when_base_model_resolves(caplog):
+    """Regression for https://github.com/BerriAI/litellm/issues/32484.
+
+    A custom Azure deployment name never resolves against the built-in cost
+    map, so #30044's cache-pricing warning fired on every proxy startup even
+    though the deployment sets ``base_model`` for accurate cost tracking. When
+    ``base_model`` points at a built-in entry, ``register_model`` must resolve
+    cache pricing through it (here an embedding model that simply has none)
+    instead of warning that cache cost will default to 0.
+    """
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    registered_key = "azure/my-embedding-deployment-name"
+    litellm.model_cost.pop(registered_key, None)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            litellm.register_model(
+                {
+                    registered_key: {
+                        "input_cost_per_token": 1.3e-07,
+                        "output_cost_per_token": 0.0,
+                        "litellm_provider": "azure",
+                        "base_model": "azure/text-embedding-3-large",
+                    }
+                }
+            )
+
+        assert not any(
+            registered_key in record.message
+            and "cache_creation_input_token_cost" in record.message
+            for record in caplog.records
+        ), "cache-pricing warning should not fire when base_model resolves to a built-in entry"
+
+        registered = litellm.model_cost[registered_key]
+        assert registered["input_cost_per_token"] == 1.3e-07
+    finally:
+        litellm.model_cost.pop(registered_key, None)
+
+
+def test_register_model_inherits_base_model_cache_pricing(caplog):
+    """When ``base_model`` resolves to a caching-capable built-in model,
+    ``register_model`` must inherit its cache pricing so cache tokens are billed
+    correctly, and it must not warn about missing cache pricing.
+    """
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    base_model = "claude-sonnet-4-6"
+    builtin = litellm.model_cost.get(base_model)
+    if builtin is None or not builtin.get("cache_read_input_token_cost"):
+        pytest.skip(f"{base_model} lacks built-in cache pricing in this environment")
+
+    registered_key = "bedrock/my-custom-claude-alias-xyz"
+    litellm.model_cost.pop(registered_key, None)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            litellm.register_model(
+                {
+                    registered_key: {
+                        "input_cost_per_token": builtin["input_cost_per_token"],
+                        "output_cost_per_token": builtin["output_cost_per_token"],
+                        "litellm_provider": "bedrock",
+                        "base_model": base_model,
+                    }
+                }
+            )
+
+        assert not any(
+            registered_key in record.message
+            and "cache_creation_input_token_cost" in record.message
+            for record in caplog.records
+        ), "should not warn when base_model supplies cache pricing"
+
+        registered = litellm.model_cost[registered_key]
+        assert registered["cache_read_input_token_cost"] == builtin["cache_read_input_token_cost"]
+        assert registered["cache_creation_input_token_cost"] == builtin["cache_creation_input_token_cost"]
+    finally:
+        litellm.model_cost.pop(registered_key, None)
+
+
 def test_register_model_router_add_deployment_custom_pricing_applies():
     """End-to-end regression for https://github.com/BerriAI/litellm/issues/28336.
 
