@@ -2,11 +2,12 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---- Hoisted shared mocks (safe to use inside vi.mock factories) ----
-const { keyUpdateCallMock, keyDeleteCallMock, mockUseAuthorized } = vi.hoisted(() => {
+const { keyUpdateCallMock, keyDeleteCallMock, mockUseAuthorized, invalidateQueriesMock } = vi.hoisted(() => {
   return {
     keyUpdateCallMock: vi.fn().mockResolvedValue({}),
     keyDeleteCallMock: vi.fn().mockResolvedValue({}),
     mockUseAuthorized: vi.fn(),
+    invalidateQueriesMock: vi.fn(),
   };
 });
 
@@ -270,12 +271,13 @@ vi.mock("@/app/(dashboard)/hooks/keys/useSetKeyBlockedState", () => ({
   }),
 }));
 
-// useQueryClient also needs a provider; the delete-path invalidation is covered in key_info_view.test.tsx
+// useQueryClient also needs a provider; return a hoisted spy so we can assert the
+// update path invalidates the keys list (mirrors the delete-path test in key_info_view.test.tsx)
 vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>();
   return {
     ...actual,
-    useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+    useQueryClient: () => ({ invalidateQueries: invalidateQueriesMock }),
   };
 });
 
@@ -301,6 +303,7 @@ vi.mock("./key_edit_view", async () => {
 
 // ---- SUT import AFTER mocks ----
 import KeyInfoView from "./key_info_view";
+import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 
 // ---- Test data helpers ----
 const baseKeyData = {
@@ -590,6 +593,29 @@ describe("KeyInfoView handleKeyUpdate empty strings", () => {
       const [sentAccessToken, sentPayload] = keyUpdateCallMock.mock.calls[0];
       expect(sentAccessToken).toBe("access_abc");
       expect(sentPayload[limit]).toBeNull();
+    });
+  });
+});
+
+describe("KeyInfoView handleKeyUpdate keys-list invalidation", () => {
+  it("invalidates the keys list query after a successful update so the table reflects the change", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      max_budget: 60,
+      budget_duration: "24h",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+    // The keys list must be invalidated, otherwise returning to the table shows
+    // stale (cached) values — the original bug behind "budget save looks invalid".
+    await waitFor(() => {
+      expect(invalidateQueriesMock).toHaveBeenCalledWith({ queryKey: keyKeys.lists() });
     });
   });
 });

@@ -314,7 +314,8 @@ export default function KeyInfoView({
       }
       NotificationManager.success("Key updated successfully");
       setIsEditing(false);
-      // Refresh key data here if needed
+      // Invalidate the keys list so the table reflects the update (mirrors handleDelete)
+      await queryClient.invalidateQueries({ queryKey: keyKeys.lists() });
     } catch (error) {
       NotificationManager.fromBackend(parseErrorMessage(error));
       console.error("Error updating key:", error);
