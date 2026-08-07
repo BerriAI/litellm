@@ -40,30 +40,36 @@ def gh(*args: str) -> str:
 
 
 def fetch_open_issues(repo: str | None) -> list[dict]:
-    """Fetch all open issues (excluding PRs) via gh api --paginate."""
+    """Fetch all open issues (excluding PRs) via `gh issue list --json`.
+
+    Using `gh issue list` instead of `gh api --paginate` because:
+      * it returns a single, well-formed JSON array (the `--paginate` output
+        concatenates pages as `...][...` with no separator, which is not valid
+        JSON on its own), and
+      * it already excludes pull requests, so we don't need a post-filter.
+
+    A previous implementation used `gh api --paginate` and tried to parse each
+    line with `json.loads`, but Python's ``str.splitlines`` also splits on
+    Unicode line/paragraph separators (``\\u2028``/``\\u2029``) that are valid
+    inside JSON strings. Issues whose body contains those characters then
+    caused ``Unterminated string`` errors mid-page (see the failure in
+    ``Check Duplicate Issues`` CI runs).
+    """
+    cmd = [
+        "issue",
+        "list",
+        "--state",
+        "open",
+        "--limit",
+        "100000",
+        "--json",
+        "number,title",
+    ]
     if repo:
-        endpoint = (
-            f"repos/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
-        )
-    else:
-        endpoint = "repos/{owner}/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
-    cmd = ["api", "--paginate", endpoint]
+        cmd.extend(["--repo", repo])
 
     raw = gh(*cmd)
-    # gh --paginate concatenates JSON arrays, so we may get multiple arrays
-    issues = []
-    for line in raw.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parsed = json.loads(line)
-        if isinstance(parsed, list):
-            issues.extend(parsed)
-        else:
-            issues.append(parsed)
-
-    # Filter out pull requests (they also appear in the issues endpoint)
-    return [i for i in issues if "pull_request" not in i]
+    return json.loads(raw)
 
 
 def close_as_duplicate(
