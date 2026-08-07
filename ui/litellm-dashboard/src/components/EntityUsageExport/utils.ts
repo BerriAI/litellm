@@ -3,10 +3,6 @@ import type { DateRangePickerValue } from "@tremor/react";
 import Papa from "papaparse";
 import type { EntityBreakdown, EntitySpendData, EntityType, ExportMetadata, ExportScope } from "./types";
 
-// Resolve display name for an entity, mirroring the precedence the usage
-// charts use (getEntityLabel in EntityUsage.tsx): team alias, then the
-// user email/alias the backend joins into entity metadata, then the raw
-// entity key (tag name, org id, customer id, …) which is already the label.
 const resolveEntityDisplay = (
   entity: string,
   teamAliasMap: Record<string, string>,
