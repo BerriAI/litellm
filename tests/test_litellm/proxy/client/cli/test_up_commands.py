@@ -2,12 +2,14 @@ import json
 import shutil
 import stat
 import sys
+import time
 from unittest.mock import patch
 
 import click
 import pytest
 from click.testing import CliRunner
 
+from litellm.proxy.client.cli.commands import auth as auth_module
 from litellm.proxy.client.cli.commands import up as up_module
 from litellm.proxy.client.cli.commands.agents import AgentRunError
 from litellm.proxy.client.cli.commands.up import (
@@ -23,6 +25,7 @@ from litellm.proxy.client.cli.commands.up import (
     up,
     write_backup,
 )
+from litellm.proxy.client.cli.native_oidc.errors import NativeOIDCError
 
 UP_MODULE = "litellm.proxy.client.cli.commands.up"
 
@@ -214,8 +217,8 @@ class TestResolveApiKeyHelper:
             resolve_api_key_helper("http://localhost:4000")
 
 
-def _make_ctx(base_url):
-    return click.Context(click.Command("test"), obj={"base_url": base_url})
+def _make_ctx(base_url, api_key=None):
+    return click.Context(click.Command("test"), obj={"base_url": base_url, "api_key": api_key})
 
 
 class TestEnsureFreshLogin:
@@ -255,6 +258,55 @@ class TestEnsureFreshLogin:
 
         assert login_calls == ["http://proxy-b:4000"]
 
+    def test_refreshes_an_expired_native_credential_instead_of_forcing_a_browser_login(self, monkeypatch):
+        expired_native = {
+            "key": "sk-a",
+            "base_url": "http://proxy-a:4000",
+            "auth_type": "native_oidc",
+            "expires_at": time.time() - 60,
+            "refresh_token": "refresh-1",
+        }
+        monkeypatch.setattr(up_module, "load_token", lambda: expired_native)
+        monkeypatch.setattr(
+            auth_module,
+            "refresh_native_credential",
+            lambda token_data: {**token_data, "key": "sk-new", "expires_at": time.time() + 3600},
+        )
+        login_calls = []
+        monkeypatch.setattr(up_module, "login", lambda ctx: login_calls.append(ctx))
+
+        _ensure_fresh_login(_make_ctx("http://proxy-a:4000"))
+
+        assert login_calls == []
+
+    def test_falls_back_to_login_when_the_native_refresh_fails(self, monkeypatch):
+        expired_native = {
+            "key": "sk-a",
+            "base_url": "http://proxy-a:4000",
+            "auth_type": "native_oidc",
+            "expires_at": time.time() - 60,
+            "refresh_token": "refresh-1",
+        }
+        monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: True)
+        tokens = iter([expired_native, {**expired_native, "expires_at": time.time() + 3600}])
+        monkeypatch.setattr(up_module, "load_token", lambda: next(tokens))
+
+        def fail(token_data):
+            raise NativeOIDCError("provider said no")
+
+        monkeypatch.setattr(auth_module, "refresh_native_credential", fail)
+        login_calls = []
+
+        @click.pass_context
+        def fake_login(ctx):
+            login_calls.append(ctx.obj["base_url"])
+
+        monkeypatch.setattr(up_module, "login", fake_login)
+
+        _ensure_fresh_login(_make_ctx("http://proxy-a:4000"))
+
+        assert login_calls == ["http://proxy-a:4000"]
+
     def test_fails_cleanly_non_interactively_when_only_a_different_proxys_token_is_cached(self, monkeypatch):
         monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: False)
         monkeypatch.setattr(up_module, "load_token", lambda: {"key": "sk-a", "base_url": "http://proxy-a:4000"})
@@ -262,6 +314,91 @@ class TestEnsureFreshLogin:
 
         with pytest.raises(UpError, match="lite login"):
             _ensure_fresh_login(_make_ctx("http://proxy-b:4000"))
+
+    def test_context_picks_up_the_key_produced_by_the_native_refresh(self, monkeypatch):
+        expired_native = {
+            "key": "sk-a",
+            "base_url": "http://proxy-a:4000",
+            "auth_type": "native_oidc",
+            "expires_at": time.time() - 60,
+            "refresh_token": "refresh-1",
+        }
+        monkeypatch.setattr(up_module, "load_token", lambda: expired_native)
+        monkeypatch.setattr(
+            auth_module,
+            "refresh_native_credential",
+            lambda token_data: {**token_data, "key": "sk-new", "expires_at": time.time() + 3600},
+        )
+        ctx = _make_ctx("http://proxy-a:4000", api_key="sk-a")
+
+        _ensure_fresh_login(ctx)
+
+        assert ctx.obj["api_key"] == "sk-new"
+
+    def test_context_picks_up_the_key_produced_by_an_interactive_login(self, monkeypatch):
+        monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: True)
+        tokens = iter(
+            [
+                {"key": "sk-old", "base_url": "http://proxy-a:4000"},
+                {"key": "sk-new", "base_url": "http://proxy-a:4000"},
+            ]
+        )
+        monkeypatch.setattr(up_module, "load_token", lambda: next(tokens))
+        monkeypatch.setattr(up_module, "is_cli_token_fresh", lambda token_data: token_data["key"] == "sk-new")
+        monkeypatch.setattr(up_module, "login", lambda: None)
+        ctx = _make_ctx("http://proxy-a:4000", api_key="sk-old")
+
+        _ensure_fresh_login(ctx)
+
+        assert ctx.obj["api_key"] == "sk-new"
+
+    def test_explicitly_supplied_key_survives_a_native_refresh(self, monkeypatch):
+        expired_native = {
+            "key": "sk-stored",
+            "base_url": "http://proxy-a:4000",
+            "auth_type": "native_oidc",
+            "expires_at": time.time() - 60,
+            "refresh_token": "refresh-1",
+        }
+        monkeypatch.setattr(up_module, "load_token", lambda: expired_native)
+        monkeypatch.setattr(
+            auth_module,
+            "refresh_native_credential",
+            lambda token_data: {**token_data, "key": "sk-new", "expires_at": time.time() + 3600},
+        )
+        ctx = _make_ctx("http://proxy-a:4000", api_key="sk-explicit")
+
+        _ensure_fresh_login(ctx)
+
+        assert ctx.obj["api_key"] == "sk-explicit"
+
+    def test_credential_inside_the_freshness_buffer_is_refreshed_not_re_logged_in(self, monkeypatch):
+        """`is_cli_token_fresh` and `needs_refresh` must agree on when a native credential is due.
+
+        A token expiring in four minutes is already "not fresh"; if the refresh path applied a
+        tighter buffer it would decline, dropping the user into a browser login they don't need."""
+        monkeypatch.setattr(up_module.sys.stdin, "isatty", lambda: True)
+        soon_expiring = {
+            "key": "sk-a",
+            "base_url": "http://proxy-a:4000",
+            "auth_type": "native_oidc",
+            "expires_at": time.time() + 240,
+            "refresh_token": "refresh-1",
+        }
+        monkeypatch.setattr(up_module, "load_token", lambda: soon_expiring)
+        monkeypatch.setattr(
+            auth_module,
+            "refresh_native_credential",
+            lambda token_data: {**token_data, "key": "sk-new", "expires_at": time.time() + 3600},
+        )
+        login_calls = []
+        monkeypatch.setattr(up_module, "login", lambda ctx: login_calls.append(ctx))
+        ctx = _make_ctx("http://proxy-a:4000", api_key="sk-a")
+
+        _ensure_fresh_login(ctx)
+
+        assert login_calls == []
+        assert ctx.obj["api_key"] == "sk-new"
 
 
 class TestUpCommand:

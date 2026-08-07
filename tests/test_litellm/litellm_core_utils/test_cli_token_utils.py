@@ -3,14 +3,9 @@ Unit tests for CLI token utilities
 """
 
 import json
-import os
-import tempfile
-from pathlib import Path
 from unittest.mock import mock_open, patch
 
-import pytest
-
-from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
+from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key, is_cli_token_fresh
 
 
 class TestCLITokenUtils:
@@ -51,6 +46,12 @@ class TestCLITokenUtils:
             result = get_litellm_gateway_api_key()
 
             assert result is None
+
+    def test_native_oidc_freshness_uses_expires_at(self):
+        with patch("litellm.litellm_core_utils.cli_token_utils.time.time", return_value=1000):
+            assert is_cli_token_fresh({"auth_type": "native_oidc", "expires_at": 2000})
+            assert not is_cli_token_fresh({"auth_type": "native_oidc", "expires_at": 1000})
+            assert not is_cli_token_fresh({"auth_type": "native_oidc", "expires_at": True})
 
     def test_get_litellm_gateway_api_key_invalid_json(self):
         """Test getting CLI API key when token file has invalid JSON"""

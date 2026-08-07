@@ -490,7 +490,29 @@ To pin the model, pass the agent's own model flag (for example `lite claude --mo
 
 The token minted by `lite login` is a short-lived, per-session agent credential, not a managed virtual key. It is scoped to the user and team you authenticated as, inherits that user's and team's models and budgets, and is enforced on the proxy exactly like a virtual key on the same team (guardrails, routing, logging, spend). Spend is tracked against the shared team and user budgets, so running several agents (or logging in more than once) does not hand each session its own separate budget; they all draw down the same team/user allowance. There is no separate per-session cap, so sustained agent use is not capped at a small chat-session limit.
 
-The credential is short-lived by design (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`); run `lite login` again to refresh it, which also re-reads your latest team and user settings. It does not appear in the Keys UI and cannot be rotated or revoked mid-session. `lite auth print-token` (usable as Claude Code's `apiKeyHelper`) prints it while it's still fresh and fails once it expires -- there is no silent renewal, so a long-running session needs a fresh `lite login` once a day. `lite claude`, `lite codex`, and `lite opencode` work with it on a default deployment; `EXPERIMENTAL_UI_LOGIN` is not required. If you need a long-lived, rotatable key that shows up in the Keys UI, create a dedicated virtual key in the dashboard and pass it via `--api-key` or `LITELLM_PROXY_API_KEY` instead.
+The credential is short-lived by design (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`); run `lite login` again to refresh it, which also re-reads your latest team and user settings. It does not appear in the Keys UI and cannot be rotated or revoked mid-session. `lite auth print-token` (usable as Claude Code's `apiKeyHelper`) prints it while it's still fresh and fails once it expires -- for this proxy-minted credential there is no silent renewal, so a long-running session needs a fresh `lite login` once a day. (A native OIDC credential refreshes itself instead; see below.) `lite claude`, `lite codex`, and `lite opencode` work with it on a default deployment; `EXPERIMENTAL_UI_LOGIN` is not required. If you need a long-lived, rotatable key that shows up in the Keys UI, create a dedicated virtual key in the dashboard and pass it via `--api-key` or `LITELLM_PROXY_API_KEY` instead.
+
+#### Native OIDC Login
+
+By default `lite login` is proxy-mediated: the proxy runs the SSO dance and mints the credential described above. If your deployment configures native OIDC instead, the CLI authenticates directly with your identity provider and the credential it stores is the IdP's own access token -- the proxy verifies it on every request (issuer, signature, audience, claims) rather than issuing it.
+
+You do not opt in per command. `lite login` fetches the proxy's discovery document, and if the proxy advertises a `native_oidc` object (issuer, `client_id`, scopes) it uses that automatically:
+
+```bash
+lite login                    # native OIDC when advertised, proxy-mediated SSO otherwise
+lite login --flow browser     # force Authorization Code + PKCE S256 on a loopback redirect
+lite login --flow device      # force the RFC 8628 device code flow
+lite login --flow proxy       # force the legacy proxy-mediated SSO flow
+lite login --no-browser       # prefer the device flow; never launch a browser
+```
+
+`auto` prefers the browser flow, and falls back to the device flow when you pass `--no-browser` or when the provider's configuration document does not advertise the browser flow. There is no headless auto-detection: on a machine with no browser -- an SSH session, a container -- pass `--no-browser` yourself. Forcing `browser` or `device` fails with the specific reason if the provider does not advertise that flow, rather than silently falling back.
+
+The selection is fail-closed in one direction that matters: once a proxy advertises native OIDC, a failure part-way through the flow is an error. `auto` falls back to proxy-mediated SSO only when the proxy genuinely does not offer native OIDC -- an older proxy whose discovery route 404s, or a discovery document with no `native_oidc` object. `--flow proxy` remains the explicit escape hatch.
+
+The CLI registers as a public native client: PKCE S256 always, no client secret, an OS-assigned loopback redirect URI (RFC 8252), and no browser-embedded credential entry. The proxy URL must be HTTPS (a numeric loopback address such as `http://127.0.0.1:4000` is allowed for local development), since the discovery document is the trust anchor for the issuer.
+
+The credential lands in the same `~/.litellm/token.json`, owner-only (0600), and records the issuer and proxy origin it was obtained for. `lite auth print-token` refreshes it automatically using the stored refresh token when it is close to expiry, so a long-running Claude Code session wired up through `lite up` (whose `apiKeyHelper` is exactly that command) does not need a daily re-login. The agent wrappers resolve a key once at launch, refreshing an expired native credential first and only falling back to an interactive login when that fails; `lite up` does the same before it patches Claude Code's settings. A key you supplied yourself through `--api-key` or `LITELLM_PROXY_API_KEY` is always used as-is. The refresh is origin-bound -- a token minted for one proxy is never replayed against another -- and concurrent CLI processes serialize through a lock file, so several agents sharing one machine cannot race each other into a refresh storm. `lite logout` deletes the file; because the access token is the IdP's, revoking access at the identity provider takes effect on the proxy as soon as the current token expires.
 
 ### Route Every Claude Code Session Through the Proxy
 

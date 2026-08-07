@@ -3095,7 +3095,7 @@ async def update_cache(
 
         try:
             for tag_name in tags:
-                if not tag_name or not isinstance(tag_name, str):
+                if not tag_name:
                     continue
 
                 cache_key = f"tag:{tag_name}"

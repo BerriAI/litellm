@@ -19,7 +19,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 
 from .agents import AgentRunError, resolve_api_key, verify_proxy_key
-from .auth import load_token, login
+from .auth import load_token, login, try_refresh_native
 
 ENV_KEY: Final = "env"
 API_KEY_HELPER_KEY: Final = "apiKeyHelper"
@@ -156,11 +156,35 @@ def resolve_api_key_helper(base_url: str) -> str:
     return f"{shlex.quote(lite_path)} auth print-token --base-url {shlex.quote(base_url)}"
 
 
+def _adopt_stored_key(ctx: click.Context, superseded_key: object, token_data: Mapping[str, object]) -> None:
+    """Point the context at the credential now on disk.
+
+    `ctx.obj["api_key"]` was resolved before the refresh or login ran, so it still
+    holds the token that was just replaced. An explicit --api-key (or
+    LITELLM_PROXY_API_KEY) never equals the superseded stored key, so it is left
+    alone rather than swapped out from under the caller.
+    """
+    current_key: Final = ctx.obj.get("api_key")
+    if current_key is not None and current_key != superseded_key:
+        return
+    new_key: Final = token_data.get("key")
+    if isinstance(new_key, str) and new_key:
+        ctx.obj["api_key"] = new_key
+
+
 def _ensure_fresh_login(ctx: click.Context) -> None:
     base_url: Final = ctx.obj["base_url"].rstrip("/")
     token_data = load_token()
-    if token_data and token_data.get("base_url") == base_url and is_cli_token_fresh(token_data):
-        return
+    superseded_key: Final = token_data.get("key") if token_data else None
+    if token_data and token_data.get("base_url") == base_url:
+        if is_cli_token_fresh(token_data):
+            return
+        # A native credential carries a refresh token, so an expired one is no
+        # reason to make the user sit through a browser login again.
+        refreshed: Final = try_refresh_native(token_data)
+        if refreshed is not None:
+            _adopt_stored_key(ctx, superseded_key, refreshed)
+            return
 
     if not sys.stdin.isatty():
         raise UpError(
@@ -173,6 +197,7 @@ def _ensure_fresh_login(ctx: click.Context) -> None:
     token_data = load_token()
     if not token_data or token_data.get("base_url") != base_url or not is_cli_token_fresh(token_data):
         raise UpError("Login did not produce a usable token; cannot start `lite up`.")
+    _adopt_stored_key(ctx, superseded_key, token_data)
 
 
 def _restore_and_report() -> None:

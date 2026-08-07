@@ -4423,6 +4423,22 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         default=300,
         description="TTL (in seconds) for caching UserInfo responses. Default: 300s (5 minutes).",
     )
+    native_oidc_issuer: str | None = Field(
+        default=None,
+        description=(
+            "Public OIDC issuer identifier advertised to native clients (e.g. the "
+            "`lite` CLI) via /.well-known/litellm-ui-config. The CLI derives the "
+            "provider configuration URL from this and requires an exact issuer match."
+        ),
+    )
+    native_oidc_client_id: str | None = Field(
+        default=None,
+        description="Public/native OAuth client id (no client secret) used by `lite login`.",
+    )
+    native_oidc_scopes: tuple[str, ...] | None = Field(
+        default=None,
+        description="Scopes the native client requests. Must be RFC 6749 scope-tokens.",
+    )
     # JWT-to-Virtual-Key Mapping
     virtual_key_claim_field: str | None = Field(
         default=None,
