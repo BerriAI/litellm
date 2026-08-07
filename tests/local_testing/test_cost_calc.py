@@ -18,6 +18,8 @@ from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm import Router, completion_cost, stream_chunk_builder
+from litellm.cost_calculator import _select_model_name_for_cost_calc
+from litellm.types.utils import ModelResponse
 
 models = [
     dict(
@@ -119,3 +121,29 @@ def test_run(model: str):
     if output == non_stream_output:
         # assert cost is the same
         assert streaming_cost_calc == non_stream_cost_calc
+
+
+def test_select_model_name_uses_region_name_when_response_model_is_none():
+    """
+    `region_name` lives in completion_response._hidden_params (set by litellm for
+    bedrock region pricing). When the provider does not echo `model` back (so
+    completion_response.model is None), the region_name must still be applied to the
+    resolved model name. Regression: previously this branch was skipped, dropping the
+    region prefix and producing a wrong cost lookup.
+    """
+    response = ModelResponse(
+        id="x", created=0, model="", object="chat.completion", choices=[]
+    )
+    response.model = None
+    response._hidden_params = {
+        "region_name": "us-east-1",
+        "custom_llm_provider": "bedrock",
+    }
+
+    result = _select_model_name_for_cost_calc(
+        model="anthropic.claude-v2",
+        completion_response=response,
+        custom_llm_provider="bedrock",
+    )
+
+    assert result == "bedrock/us-east-1/anthropic.claude-v2"
