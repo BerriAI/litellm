@@ -15,7 +15,7 @@ class TestBedrockInvokeClaudeJson(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         litellm._turn_on_debug()
         return {
-            "model": "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "model": f"bedrock/invoke/us.{os.environ.get('CI_CD_DEFAULT_BEDROCK_MODEL', 'anthropic.claude-haiku-4-5-20251001-v1:0')}",
         }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):

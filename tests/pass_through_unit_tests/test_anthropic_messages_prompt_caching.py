@@ -31,7 +31,7 @@ class TestBedrockConversePromptCaching(BaseAnthropicMessagesPromptCachingTest):
     """
 
     def get_model(self) -> str:
-        return "bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        return f"bedrock/converse/us.{os.environ.get('CI_CD_DEFAULT_BEDROCK_MODEL', 'anthropic.claude-haiku-4-5-20251001-v1:0')}"
 
 
 class TestBedrockInvokePromptCaching(BaseAnthropicMessagesPromptCachingTest):
@@ -43,4 +43,4 @@ class TestBedrockInvokePromptCaching(BaseAnthropicMessagesPromptCachingTest):
     """
 
     def get_model(self) -> str:
-        return "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        return f"bedrock/invoke/us.{os.environ.get('CI_CD_DEFAULT_BEDROCK_MODEL', 'anthropic.claude-haiku-4-5-20251001-v1:0')}"
