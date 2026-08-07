@@ -446,7 +446,7 @@ class TestBedrockFilesTransformation:
 
         captured_optional_params: dict = {}
 
-        def fake_sign(content, api_base, optional_params):
+        def fake_sign(content, api_base, optional_params, s3_encryption_key_id=None):
             captured_optional_params.update(optional_params)
             return {"Authorization": "fake"}, content
 
@@ -502,7 +502,7 @@ class TestBedrockFilesTransformation:
 
         captured_optional_params: dict = {}
 
-        def fake_sign(content, api_base, optional_params):
+        def fake_sign(content, api_base, optional_params, s3_encryption_key_id=None):
             captured_optional_params.update(optional_params)
             return {"Authorization": "fake"}, content
 
@@ -517,6 +517,74 @@ class TestBedrockFilesTransformation:
         assert (
             captured_optional_params.get("aws_region_name") == "us-gov-west-1"
         ), "s3_region_name must override aws_region_name for SigV4 signing"
+
+    def _signed_upload_request(self, litellm_params: dict) -> dict:
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        config = BedrockFilesConfig()
+        jsonl_content = json.dumps(
+            {
+                "custom_id": "req-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "bedrock/amazon.nova-pro-v1:0",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 10,
+                },
+            }
+        ).encode()
+
+        request = config.transform_create_file_request(
+            model="amazon.nova-pro-v1:0",
+            create_file_data={
+                "file": ("batch.jsonl", jsonl_content, "application/jsonl"),
+                "purpose": "batch",
+            },
+            optional_params={
+                "aws_access_key_id": "test-key-id",
+                "aws_secret_access_key": "test-secret",
+                "aws_region_name": "us-west-2",
+            },
+            litellm_params={"s3_bucket_name": "litellm-batch-bucket", **litellm_params},
+        )
+        assert isinstance(request, dict)
+        return request
+
+    def test_upload_signs_sse_kms_headers_when_key_configured(self, monkeypatch):
+        """
+        Buckets whose policy requires SSE-KMS reject the batch input-file PutObject
+        unless the upload carries the aws:kms encryption headers; they must also be
+        covered by SigV4 SignedHeaders or S3 answers SignatureDoesNotMatch.
+        """
+        monkeypatch.delenv("AWS_S3_ENCRYPTION_KEY_ID", raising=False)
+        kms_key = "arn:aws:kms:us-west-2:1234:key/abcd"
+
+        request = self._signed_upload_request({"s3_encryption_key_id": kms_key})
+
+        headers = {key.lower(): value for key, value in request["headers"].items()}
+        assert headers["x-amz-server-side-encryption"] == "aws:kms"
+        assert headers["x-amz-server-side-encryption-aws-kms-key-id"] == kms_key
+        signed_headers = headers["authorization"].split("SignedHeaders=")[1].split(",")[0]
+        assert "x-amz-server-side-encryption" in signed_headers
+        assert "x-amz-server-side-encryption-aws-kms-key-id" in signed_headers
+
+    def test_upload_reads_sse_kms_key_from_env(self, monkeypatch):
+        monkeypatch.setenv("AWS_S3_ENCRYPTION_KEY_ID", "env-kms-key")
+
+        request = self._signed_upload_request({})
+
+        headers = {key.lower(): value for key, value in request["headers"].items()}
+        assert headers["x-amz-server-side-encryption-aws-kms-key-id"] == "env-kms-key"
+
+    def test_upload_omits_sse_headers_when_no_key_configured(self, monkeypatch):
+        monkeypatch.delenv("AWS_S3_ENCRYPTION_KEY_ID", raising=False)
+
+        request = self._signed_upload_request({})
+
+        headers = {key.lower() for key in request["headers"]}
+        assert "x-amz-server-side-encryption" not in headers
+        assert "x-amz-server-side-encryption-aws-kms-key-id" not in headers
 
     def test_openai_passthrough_still_works(self):
         """
