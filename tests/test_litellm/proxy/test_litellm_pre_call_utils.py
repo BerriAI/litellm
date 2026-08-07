@@ -20,6 +20,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     _get_enforced_params,
     _get_metadata_variable_name,
+    _promoted_trace_control_fields,
     _resolve_credential_from_model_config,
     _resolve_provider_from_deployment,
     _update_model_if_key_alias_exists,
@@ -5870,3 +5871,182 @@ async def test_key_level_callback_vars_survive_the_strip():
 
     assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {"dd_api_key": "key-dd-key", "dd_site": "us5.datadoghq.com"}
     assert updated["dd_site"] == "us5.datadoghq.com"
+
+
+class TestPromotedTraceControlFields:
+    """LIT-5137: caller metadata trace fields must reach litellm_metadata."""
+
+    def _make_request(self, path: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.url = MagicMock()
+        request.url.path = path
+        request.url.__str__.return_value = f"http://localhost{path}"
+        request.method = "POST"
+        request.query_params = {}
+        request.headers = {"Content-Type": "application/json"}
+        request.client = MagicMock()
+        request.client.host = "127.0.0.1"
+        return request
+
+    async def _run(self, path: str, data: dict, headers: dict | None = None) -> dict:
+        request = self._make_request(path)
+        if headers is not None:
+            request.headers = {"Content-Type": "application/json", **headers}
+        return await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    def test_returns_litellm_metadata_for_responses_route(self):
+        assert _get_metadata_variable_name(self._make_request("/v1/responses")) == "litellm_metadata"
+
+    def test_promotes_trace_prefixed_and_allow_listed_fields(self):
+        requester_metadata = {
+            "trace_id": "trace-1",
+            "trace_name": "name-1",
+            "trace_user_id": "user-1",
+            "trace_metadata": {"tenant_id": "tenant-1"},
+            "trace_version": "v1",
+            "trace_release": "r1",
+            "session_id": "session-1",
+            "mask_input": True,
+            "mask_output": True,
+        }
+
+        promoted = _promoted_trace_control_fields(
+            requester_metadata=requester_metadata,
+            litellm_metadata={},
+        )
+
+        assert dict(promoted) == requester_metadata
+
+    def test_does_not_promote_unlisted_trace_prefixed_fields(self):
+        """trace_public flips a trace to publicly readable, so the allow-list is explicit."""
+        promoted = _promoted_trace_control_fields(
+            requester_metadata={"trace_id": "trace-1", "trace_public": True, "trace_tags": ["a"]},
+            litellm_metadata={},
+        )
+
+        assert dict(promoted) == {"trace_id": "trace-1"}
+
+    def test_does_not_promote_non_trace_fields(self):
+        promoted = _promoted_trace_control_fields(
+            requester_metadata={
+                "trace_id": "trace-1",
+                "tags": ["free-tier"],
+                "user_api_key": "forged",
+                "user_api_key_user_id": "forged-user",
+                "spend_logs_metadata": {"forged": True},
+                "guardrails": ["disabled"],
+                "debug_langfuse": True,
+                "session": "not-session-id",
+                "existing_trace_id": "victim-trace",
+                "update_trace_keys": ["input", "output"],
+            },
+            litellm_metadata={},
+        )
+
+        assert dict(promoted) == {"trace_id": "trace-1"}
+
+    def test_does_not_promote_trace_mutation_controls(self):
+        """existing_trace_id + update_trace_keys let a caller overwrite any trace in the project."""
+        promoted = _promoted_trace_control_fields(
+            requester_metadata={
+                "trace_id": "trace-1",
+                "existing_trace_id": "someone-elses-trace",
+                "update_trace_keys": ["input", "output"],
+            },
+            litellm_metadata={},
+        )
+
+        assert dict(promoted) == {"trace_id": "trace-1"}
+
+    def test_existing_litellm_metadata_value_wins(self):
+        promoted = _promoted_trace_control_fields(
+            requester_metadata={"trace_id": "from-body", "session_id": "from-body", "trace_name": "from-body"},
+            litellm_metadata={"trace_id": "from-header", "session_id": "from-header"},
+        )
+
+        assert dict(promoted) == {"trace_name": "from-body"}
+
+    def test_empty_requester_metadata_promotes_nothing(self):
+        assert _promoted_trace_control_fields(requester_metadata={}, litellm_metadata={}) == ()
+
+    @pytest.mark.asyncio
+    async def test_responses_route_end_to_end(self):
+        caller_metadata = {
+            "trace_id": "22662678-30c1-41a1-a24b-216d6e5fb83d",
+            "session_id": "218af06c-28a2-4705-8a0a-5f9970d39326",
+            "trace_user_id": "user-123",
+            "trace_metadata": {"tenant_id": "tenant-1"},
+            "mask_input": True,
+        }
+
+        updated = await self._run(
+            "/v1/responses",
+            {"model": "gpt-4.1-mini", "input": "say resp", "metadata": copy.deepcopy(caller_metadata)},
+        )
+
+        litellm_metadata = updated["litellm_metadata"]
+        for key, value in caller_metadata.items():
+            assert litellm_metadata[key] == value
+        assert updated["metadata"] == caller_metadata
+
+    @pytest.mark.asyncio
+    async def test_messages_route_end_to_end(self):
+        updated = await self._run(
+            "/v1/messages",
+            {
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 32,
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata": {"trace_id": "msg-trace-1", "session_id": "msg-session-1"},
+            },
+        )
+
+        assert updated["litellm_metadata"]["trace_id"] == "msg-trace-1"
+        assert updated["litellm_metadata"]["session_id"] == "msg-session-1"
+
+    @pytest.mark.asyncio
+    async def test_session_id_header_beats_body_metadata(self):
+        updated = await self._run(
+            "/v1/responses",
+            {"model": "gpt-4.1-mini", "input": "say resp", "metadata": {"session_id": "from-body"}},
+            headers={"x-litellm-session-id": "from-header-12345678"},
+        )
+
+        assert updated["litellm_metadata"]["session_id"] == "from-header-12345678"
+
+    @pytest.mark.asyncio
+    async def test_forged_user_api_key_fields_are_not_promoted(self):
+        updated = await self._run(
+            "/v1/responses",
+            {
+                "model": "gpt-4.1-mini",
+                "input": "say resp",
+                "metadata": {"trace_id": "trace-1", "user_api_key_user_id": "forged", "spend_logs_metadata": {"a": 1}},
+            },
+        )
+
+        litellm_metadata = updated["litellm_metadata"]
+        assert litellm_metadata["trace_id"] == "trace-1"
+        assert litellm_metadata.get("user_api_key_user_id") != "forged"
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_route_is_untouched(self):
+        updated = await self._run(
+            "/v1/chat/completions",
+            {
+                "model": "gpt-4.1-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "metadata": {"trace_id": "trace-1", "session_id": "session-1"},
+            },
+        )
+
+        assert "litellm_metadata" not in updated
+        assert updated["metadata"]["trace_id"] == "trace-1"
+        assert updated["metadata"]["session_id"] == "session-1"
