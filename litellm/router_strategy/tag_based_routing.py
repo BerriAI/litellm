@@ -228,6 +228,17 @@ def _chain_tag_filtering_override(deployments: Sequence[Any] | Mapping[Any, Any]
     return None
 
 
+def _tag_known_to_group(llm_router_instance: LitellmRouter, model: str, positive_tags: Sequence[str]) -> bool:
+    try:
+        all_deployments: Final = llm_router_instance._get_all_deployments(model_name=model)
+    except Exception:  # noqa: BLE001  # fail safe toward "unrecognized" so lookup errors preserve the existing silent-fallback behavior
+        return False
+    tag_set: Final = frozenset(positive_tags)
+    return any(
+        tag_set.intersection(d.get("litellm_params", MappingProxyType({})).get("tags") or ()) for d in all_deployments
+    )
+
+
 async def get_deployments_for_tag(
     llm_router_instance: LitellmRouter,
     model: str,  # used to raise the correct error
@@ -332,6 +343,13 @@ async def get_deployments_for_tag(
                     default_deployments.append(deployment)
 
             if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
+                return _resolve_or_fail_open((), healthy_deployments, excluded_set, required_set, model, request_tags)
+
+            if (
+                len(new_healthy_deployments) == 0
+                and positive_tags
+                and _tag_known_to_group(llm_router_instance, model, positive_tags)
+            ):
                 return _resolve_or_fail_open((), healthy_deployments, excluded_set, required_set, model, request_tags)
 
             return new_healthy_deployments if len(new_healthy_deployments) > 0 else default_deployments
