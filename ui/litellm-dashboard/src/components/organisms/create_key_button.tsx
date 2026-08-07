@@ -39,7 +39,6 @@ import {
 } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
-import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
@@ -1467,9 +1466,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <div className="mt-6">
                             <MCPToolPermissions
                               accessToken={accessToken}
-                              selectedServers={(
-                                form.getFieldValue("allowed_mcp_servers_and_groups")?.servers || []
-                              ).filter((s: string) => s !== NO_MCP_SERVERS_SENTINEL)}
+                              selectedServers={form.getFieldValue("allowed_mcp_servers_and_groups")?.servers || []}
+                              selectedAccessGroups={
+                                form.getFieldValue("allowed_mcp_servers_and_groups")?.accessGroups || []
+                              }
+                              selectedToolsets={form.getFieldValue("allowed_mcp_servers_and_groups")?.toolsets || []}
                               toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
                               onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
                             />

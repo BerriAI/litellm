@@ -1369,6 +1369,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           <MCPToolPermissions
                             accessToken={accessToken || ""}
                             selectedServers={form.getFieldValue("mcp_servers_and_groups")?.servers || []}
+                            selectedAccessGroups={form.getFieldValue("mcp_servers_and_groups")?.accessGroups || []}
+                            selectedToolsets={form.getFieldValue("mcp_servers_and_groups")?.toolsets || []}
                             toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
                             onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
                           />

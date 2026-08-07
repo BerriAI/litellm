@@ -356,6 +356,69 @@ describe("MCPServerPermissions", () => {
     expect(networking.fetchMCPServers).not.toHaveBeenCalled();
   });
 
+  it("should name a server a grant references by server name rather than by id", async () => {
+    /**
+     * The backend accepts a server id, name or alias interchangeably, so a grant written by API
+     * or config can name the server. Falling through to the raw string hides which server it is.
+     */
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      {
+        server_id: mockServerId1,
+        server_name: "github_mcp",
+        alias: "GitHub",
+      },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={["github_mcp"]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    expect(await screen.findByText(/GitHub/)).toBeInTheDocument();
+    expect(screen.queryByText("github_mcp")).not.toBeInTheDocument();
+  });
+
+  it("should display tools for a name-keyed allowlist on an id-referenced server", async () => {
+    /**
+     * The allowlist key and the grant entry can name the same server differently; matching only on
+     * server_id renders the server as if it had no tool restrictions at all.
+     */
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      {
+        server_id: mockServerId1,
+        server_name: "github_mcp",
+        alias: "GitHub",
+      },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[mockServerId1]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{ github_mcp: ["list_issues", "list_prs"] }}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/GitHub/)).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.getByText("tools")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText(/GitHub/).closest("div")!);
+
+    await waitFor(() => {
+      expect(screen.getByText("list_issues")).toBeInTheDocument();
+      expect(screen.getByText("list_prs")).toBeInTheDocument();
+    });
+  });
+
   it("should display the All Proxy MCP Servers state instead of the raw sentinel string", async () => {
     vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
 
