@@ -228,3 +228,30 @@ def test_update_valid_token_db_values_override_custom_auth_when_set():
     # DB values should win
     assert result.end_user_tpm_limit == 500
     assert result.end_user_model_max_budget == db_budget
+
+
+def test_cached_token_end_user_not_pinned_to_first_request():
+    """
+    Regression test for #31441.
+    When a cached valid_token is reused across requests with different end-users,
+    update_valid_token_with_end_user_params must be called on the cached path so
+    spend is attributed to the current request's user, not the first one cached.
+    """
+    # Simulate a cached token that was first used by "alice"
+    cached_token = UserAPIKeyAuth(
+        token="shared_key",
+        end_user_id="alice",
+    )
+
+    # Second request comes in as "bob"
+    end_user_params_bob = {
+        "end_user_id": "bob",
+    }
+
+    result = update_valid_token_with_end_user_params(cached_token, end_user_params_bob)
+
+    # end_user must be "bob", not "alice"
+    assert result.end_user_id == "bob", (
+        f"Expected end_user_id='bob' but got '{result.end_user_id}'. "
+        "Cached token is leaking first request's end_user to subsequent requests."
+    )
