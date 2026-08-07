@@ -29,11 +29,6 @@ _NON_REASONING_MODEL = "fireworks_ai/accounts/fireworks/models/llama-v3-70b-inst
 
 
 def test_map_extra_body_params_strips_truncate_params():
-    """
-    prompt_truncate_len is accepted on chat completions but rejected by
-    /v1/completions ("Extra inputs are not permitted"), so both the NIM/vLLM
-    name and the Fireworks name must be stripped on the text completion path.
-    """
     config = FireworksAITextCompletionConfig()
     result = config.map_extra_body_params(
         {"extra_body": {"truncate_prompt_tokens": 4096, "prompt_truncate_len": 2048}},
@@ -79,10 +74,6 @@ def test_map_extra_body_params_chat_template_kwargs_dropped_for_non_reasoning_mo
 
 
 def test_map_extra_body_params_top_level_reasoning_effort_moves_into_extra_body():
-    """
-    The OpenAI SDK completions.create() rejects a top-level reasoning_effort
-    kwarg, so it must ride inside extra_body (and win over kwargs-derived effort).
-    """
     config = FireworksAITextCompletionConfig()
     result = config.map_extra_body_params(
         {
@@ -172,12 +163,6 @@ def test_map_extra_body_params_strips_unsupported_and_preserves_passthrough():
 
 
 def test_transform_text_completion_request_keeps_sdk_rejected_keys_in_extra_body():
-    """
-    The request data is spread into the typed OpenAI SDK completions.create(),
-    so anything the SDK does not accept (reasoning_effort, response_format,
-    prompt_truncate_len, fireworks-native extras) must live inside extra_body
-    or the call raises TypeError before it reaches Fireworks.
-    """
     config = FireworksAITextCompletionConfig()
     data = config.transform_text_completion_request(
         model="glm-5p1",

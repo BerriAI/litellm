@@ -1154,11 +1154,6 @@ def test_reasoning_effort_integer_passthrough():
 
 
 def test_reasoning_effort_auto_dropped_to_model_default():
-    """
-    Fireworks rejects reasoning_effort="auto" (accepted set: low/medium/high/
-    xhigh/max/none/adaptive). Omitting the param is the model default, which is
-    exactly what "auto" means on OpenAI's side, so it must not reach the request.
-    """
     config = FireworksAIConfig()
     result = config.map_openai_params(
         {"reasoning_effort": "auto"},
@@ -1498,11 +1493,6 @@ def test_map_extra_body_params_guided_native_response_format_wins():
 
 
 def test_map_extra_body_params_top_level_response_format_beats_nested():
-    """
-    With response_format set both top-level and inside extra_body, the http
-    handler merges extra_body last, so the nested copy would silently clobber
-    the explicit top-level one. The nested copy must be dropped instead.
-    """
     config = FireworksAIConfig()
     result = config.map_extra_body_params(
         {
@@ -1584,15 +1574,6 @@ def test_map_extra_body_params_no_extra_body():
 
 
 def test_nim_vllm_extras_translated_end_to_end_in_request_body():
-    """
-    Passing NIM/vLLM extras to litellm.completion must reach the Fireworks
-    request body translated, not verbatim: truncate_prompt_tokens becomes
-    prompt_truncate_len, chat_template_kwargs.enable_thinking becomes
-    reasoning_effort, include_reasoning is dropped, and min_tokens and
-    fireworks-native top_k still pass through. Asserts on the actual JSON
-    posted to the API, so a revert of the _complete_fireworks_ai wiring
-    fails this test.
-    """
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     model = "accounts/fireworks/models/glm-5p1"
@@ -1616,21 +1597,21 @@ def test_nim_vllm_extras_translated_end_to_end_in_request_body():
     raw_response.text = json.dumps(body)
     raw_response.json = lambda: body
 
-    client = HTTPHandler()
-    with patch.object(client, "post", return_value=raw_response) as mock_post:
-        litellm.completion(
-            model=f"fireworks_ai/{model}",
-            messages=[{"role": "user", "content": "hi"}],
-            api_key="fw-test-key",
-            client=client,
-            truncate_prompt_tokens=4096,
-            chat_template_kwargs={"enable_thinking": False},
-            min_tokens=10,
-            include_reasoning=False,
-            top_k=40,
-        )
+    client = MagicMock(spec=HTTPHandler)
+    client.post.return_value = raw_response
+    litellm.completion(
+        model=f"fireworks_ai/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="fw-test-key",
+        client=client,
+        truncate_prompt_tokens=4096,
+        chat_template_kwargs={"enable_thinking": False},
+        min_tokens=10,
+        include_reasoning=False,
+        top_k=40,
+    )
 
-    request_body = json.loads(mock_post.call_args.kwargs["data"])
+    request_body = json.loads(client.post.call_args.kwargs["data"])
     assert request_body["prompt_truncate_len"] == 4096
     assert "truncate_prompt_tokens" not in request_body
     assert request_body["reasoning_effort"] == "none"
@@ -1641,11 +1622,6 @@ def test_nim_vllm_extras_translated_end_to_end_in_request_body():
 
 
 def test_in_schema_unsupported_params_still_raise():
-    """
-    The extras translation channel does not weaken the supported-params gate
-    for in-schema OpenAI params: store is still rejected with drop_params=False
-    and dropped with drop_params=True.
-    """
     with pytest.raises(litellm.UnsupportedParamsError):
         litellm.get_optional_params(
             model="accounts/fireworks/models/llama-v3-70b-instruct",
