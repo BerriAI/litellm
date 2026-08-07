@@ -2129,7 +2129,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     if callback == "logfire" and logfireLogger is not None:
                         verbose_logger.debug("reaches logfire for success logging!")
                         kwargs = {}
-                        for k, v in self.model_call_details.items():
+                        for k, v in list(self.model_call_details.items()):
                             if k != "original_response":  # copy.deepcopy raises errors as this could be a coroutine
                                 kwargs[k] = v
 
@@ -2208,7 +2208,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         global langFuseLogger
                         print_verbose("reaches langfuse for success logging!")
                         kwargs = {}
-                        for k, v in self.model_call_details.items():
+                        for k, v in list(self.model_call_details.items()):
                             if k != "original_response":  # copy.deepcopy raises errors as this could be a coroutine
                                 kwargs[k] = v
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
@@ -2246,7 +2246,7 @@ class Logging(LiteLLMLoggingBaseClass):
                                     )
                     if callback == "greenscale" and greenscaleLogger is not None:
                         kwargs = {}
-                        for k, v in self.model_call_details.items():
+                        for k, v in list(self.model_call_details.items()):
                             if k != "original_response":  # copy.deepcopy raises errors as this could be a coroutine
                                 kwargs[k] = v
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
@@ -2270,7 +2270,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
                     if callback == "athina" and athinaLogger is not None:
                         deep_copy = {}
-                        for k, v in self.model_call_details.items():
+                        for k, v in list(self.model_call_details.items()):
                             deep_copy[k] = v
                         athinaLogger.log_event(
                             kwargs=deep_copy,
@@ -2281,7 +2281,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
                     if callback == "traceloop":
                         deep_copy = {}
-                        for k, v in self.model_call_details.items():
+                        for k, v in list(self.model_call_details.items()):
                             if k != "original_response":
                                 deep_copy[k] = v
                         traceloopLogger.log_event(
@@ -2894,7 +2894,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         global langFuseLogger
                         verbose_logger.debug("reaches langfuse for logging failure")
                         kwargs = {}
-                        for k, v in self.model_call_details.items():
+                        for k, v in list(self.model_call_details.items()):
                             if k != "original_response":  # copy.deepcopy raises errors as this could be a coroutine
                                 kwargs[k] = v
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
@@ -2934,7 +2934,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     if callback == "logfire" and logfireLogger is not None:
                         verbose_logger.debug("reaches logfire for failure logging!")
                         kwargs = {}
-                        for k, v in self.model_call_details.items():
+                        for k, v in list(self.model_call_details.items()):
                             if k != "original_response":  # copy.deepcopy raises errors as this could be a coroutine
                                 kwargs[k] = v
                         kwargs["exception"] = exception
