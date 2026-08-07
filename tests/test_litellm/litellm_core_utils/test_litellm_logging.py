@@ -36,6 +36,47 @@ def test_get_masked_api_base(logging_obj):
     assert type(masked_api_base) == str
 
 
+def test_get_assembled_streaming_response_dict_response_usage(logging_obj):
+    """Regression test for #29913.
+
+    On the streaming ``/v1/responses`` path ``result.response`` is stored as a
+    plain dict at runtime, so ``_get_assembled_streaming_response`` must read
+    ``usage`` defensively rather than assuming an object attribute. Previously
+    this raised ``'dict' object has no attribute 'usage'``, which crashed the
+    success-logging callback and dropped the spend log for streamed responses.
+    """
+    import datetime
+
+    from litellm.types.llms.openai import (
+        ResponseCompletedEvent,
+        ResponsesAPIStreamEvents,
+    )
+
+    event = ResponseCompletedEvent.model_construct(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response={
+            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+        },
+    )
+
+    now = datetime.datetime.now()
+    result = logging_obj._get_assembled_streaming_response(
+        result=event,
+        start_time=now,
+        end_time=now,
+        is_async=True,
+        streaming_chunks=[],
+    )
+
+    assert result is not None
+    # Response API usage ({input_tokens, output_tokens}) is normalized to the
+    # unified chat usage shape so cost can be computed downstream.
+    usage = result["usage"]
+    assert usage["prompt_tokens"] == 10
+    assert usage["completion_tokens"] == 5
+    assert usage["total_tokens"] == 15
+
+
 def test_post_call_serializes_dict_with_datetime(logging_obj):
     import datetime
 
