@@ -57,6 +57,33 @@ class FakeBedrockStream:
 class FakeLogging:
     def __init__(self, trace_id="trace-nova-sonic"):
         self.litellm_trace_id = trace_id
+        self.dispatched_results = []
+        self.model_call_details = {}
+        self.pre_call_args = []
+
+    def pre_call(self, input=None, api_key="", model=None, additional_args=None):
+        self.pre_call_args.append(
+            {"input": input, "api_key": api_key, "model": model, "additional_args": additional_args or {}}
+        )
+
+    async def dispatch_success_handlers(self, result=None, prefer_async_handlers=False, **kwargs):
+        self.dispatched_results.append(result)
+
+
+@pytest.fixture(autouse=True)
+def drain_bedrock_realtime_logging_worker(monkeypatch):
+    pending = []
+
+    def capture_enqueue(coro):
+        pending.append(coro)
+
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.realtime_streaming.GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue",
+        capture_enqueue,
+    )
+    yield pending
+    for coro in pending:
+        coro.close()
 
 
 class DisconnectingClientWS:
@@ -312,6 +339,30 @@ class TestBedrockRealtimeSessionLifecycle:
         assert first_event["type"] == "session.created"
         assert first_event["session"]["id"] == "trace-nova-sonic"
         assert first_event["session"]["model"] == "amazon.nova-sonic-v1:0"
+
+    @pytest.mark.asyncio
+    async def test_session_dispatches_logged_events_via_realtime_streaming(
+        self, stub_aws_sdk_client, drain_bedrock_realtime_logging_worker
+    ):
+        handler = BedrockRealtime()
+        websocket = RealtimeClientWS()
+        logging_obj = FakeLogging()
+
+        await handler.async_realtime(
+            model="amazon.nova-sonic-v1:0",
+            websocket=websocket,
+            logging_obj=logging_obj,
+            aws_region_name="us-east-1",
+            aws_access_key_id="k",
+            aws_secret_access_key="s",
+        )
+
+        assert logging_obj.pre_call_args
+        assert len(drain_bedrock_realtime_logging_worker) == 1
+        await drain_bedrock_realtime_logging_worker.pop()
+        assert logging_obj.dispatched_results
+        dispatched = logging_obj.dispatched_results[0]
+        assert any(event.get("type") == "session.created" for event in dispatched)
 
     @pytest.mark.asyncio
     async def test_session_update_is_acked_with_session_updated(self, stub_aws_models):

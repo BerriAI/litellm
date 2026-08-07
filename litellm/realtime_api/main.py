@@ -434,6 +434,8 @@ async def _arealtime(
             aws_sts_endpoint=aws_sts_endpoint,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_external_id=aws_external_id,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "xai":
         api_base = (

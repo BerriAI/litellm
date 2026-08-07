@@ -36,9 +36,6 @@ from litellm.types.realtime import (
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
 )
-from litellm.utils import get_empty_usage
-
-
 class BedrockContentEnd(BaseModel):
     stopReason: str | None = None
 
@@ -61,6 +58,74 @@ def _parse_bedrock_tool_use_input(raw_input: object) -> object:
         return {}
 
 
+def _as_nonneg_int(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    return max(0, int(value))
+
+
+def _empty_usage_snapshot() -> dict[str, int]:
+    return {
+        "input_speech": 0,
+        "input_text": 0,
+        "output_speech": 0,
+        "output_text": 0,
+        "total_input": 0,
+        "total_output": 0,
+        "total": 0,
+    }
+
+
+def _usage_snapshot_from_event(usage_event: dict) -> dict[str, int]:
+    details: Final = usage_event.get("details") if isinstance(usage_event.get("details"), dict) else {}
+    total_block: Final = details.get("total") if isinstance(details.get("total"), dict) else {}
+    input_block: Final = total_block.get("input") if isinstance(total_block.get("input"), dict) else {}
+    output_block: Final = total_block.get("output") if isinstance(total_block.get("output"), dict) else {}
+    input_speech: Final = _as_nonneg_int(input_block.get("speechTokens"))
+    input_text: Final = _as_nonneg_int(input_block.get("textTokens"))
+    output_speech: Final = _as_nonneg_int(output_block.get("speechTokens"))
+    output_text: Final = _as_nonneg_int(output_block.get("textTokens"))
+    total_input: Final = _as_nonneg_int(usage_event.get("totalInputTokens")) or (input_speech + input_text)
+    total_output: Final = _as_nonneg_int(usage_event.get("totalOutputTokens")) or (output_speech + output_text)
+    total: Final = _as_nonneg_int(usage_event.get("totalTokens")) or (total_input + total_output)
+    return {
+        "input_speech": input_speech,
+        "input_text": input_text,
+        "output_speech": output_speech,
+        "output_text": output_text,
+        "total_input": total_input,
+        "total_output": total_output,
+        "total": total,
+    }
+
+
+def _usage_snapshot_delta(current: dict[str, int], previous: dict[str, int]) -> dict[str, int]:
+    return {key: max(0, current.get(key, 0) - previous.get(key, 0)) for key in _empty_usage_snapshot()}
+
+
+def _openai_usage_from_snapshot(snapshot: dict[str, int]) -> dict[str, Any]:
+    input_tokens: Final = snapshot.get("total_input", 0) or (
+        snapshot.get("input_speech", 0) + snapshot.get("input_text", 0)
+    )
+    output_tokens: Final = snapshot.get("total_output", 0) or (
+        snapshot.get("output_speech", 0) + snapshot.get("output_text", 0)
+    )
+    return {
+        "total_tokens": snapshot.get("total", 0) or (input_tokens + output_tokens),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "input_token_details": {
+            "text_tokens": snapshot.get("input_text", 0),
+            "audio_tokens": snapshot.get("input_speech", 0),
+            "cached_tokens": 0,
+        },
+        "output_token_details": {
+            "text_tokens": snapshot.get("output_text", 0),
+            "audio_tokens": snapshot.get("output_speech", 0),
+        },
+    }
+
+
 class BedrockRealtimeConfig(BaseRealtimeConfig):
     """Configuration for Bedrock Nova Sonic realtime transformations."""
 
@@ -71,6 +136,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self.audio_content_name = str(uuid_lib.uuid4())
         self.prompt_started = False
         self.client_audio_streamed = False
+        self._usage_totals = _empty_usage_snapshot()
+        self._usage_at_last_response_done = _empty_usage_snapshot()
 
         # Default configuration values
         # Inference configuration
@@ -97,6 +164,14 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         # Text configuration
         self.text_media_type = "text/plain"
+
+    def record_usage_event(self, usage_event: dict) -> None:
+        self._usage_totals = _usage_snapshot_from_event(usage_event)
+
+    def consume_usage_for_response_done(self) -> dict[str, Any]:
+        delta: Final = _usage_snapshot_delta(self._usage_totals, self._usage_at_last_response_done)
+        self._usage_at_last_response_done = dict(self._usage_totals)
+        return _openai_usage_from_snapshot(delta)
 
     def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
         """Validate environment - no special validation needed for Bedrock."""
@@ -999,7 +1074,6 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         if not current_response_id or not current_conversation_id:
             return [], None, None, None
 
-        usage_obj: Final = get_empty_usage()
         response_done: Final = OpenAIRealtimeDoneEvent(
             type="response.done",
             event_id=f"event_{uuid.uuid4()}",
@@ -1009,15 +1083,10 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 status="completed",
                 output=[],
                 conversation_id=current_conversation_id,
-                usage={
-                    "prompt_tokens": usage_obj.prompt_tokens,
-                    "completion_tokens": usage_obj.completion_tokens,
-                    "total_tokens": usage_obj.total_tokens,
-                },
+                usage=self.consume_usage_for_response_done(),
             ),
         )
 
-        # Reset state for next response
         return [response_done], None, None, None
 
     def transform_tool_use_event(
@@ -1186,6 +1255,11 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         # Route to appropriate transformation method
         if "sessionStart" in event:
             session_configuration_request = json.dumps({"configured": True})
+
+        elif "usageEvent" in event:
+            usage_event: Final = event["usageEvent"]
+            if isinstance(usage_event, dict):
+                self.record_usage_event(usage_event)
 
         elif "contentStart" in event:
             (

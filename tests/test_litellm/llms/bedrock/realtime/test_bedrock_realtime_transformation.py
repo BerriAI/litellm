@@ -1090,5 +1090,116 @@ class TestBedrockRealtimeSessionEvents:
         assert event["session"]["modalities"] == ["text", "audio"]
 
 
+class TestBedrockRealtimeUsageAccounting:
+    def _usage_event(
+        self,
+        *,
+        input_speech: int,
+        input_text: int,
+        output_speech: int,
+        output_text: int,
+        total_input: int | None = None,
+        total_output: int | None = None,
+        total: int | None = None,
+    ) -> dict:
+        resolved_input = total_input if total_input is not None else input_speech + input_text
+        resolved_output = total_output if total_output is not None else output_speech + output_text
+        resolved_total = total if total is not None else resolved_input + resolved_output
+        return {
+            "event": {
+                "usageEvent": {
+                    "completionId": "completion_1",
+                    "details": {
+                        "total": {
+                            "input": {"speechTokens": input_speech, "textTokens": input_text},
+                            "output": {"speechTokens": output_speech, "textTokens": output_text},
+                        }
+                    },
+                    "promptName": "prompt_1",
+                    "sessionId": "session_1",
+                    "totalInputTokens": resolved_input,
+                    "totalOutputTokens": resolved_output,
+                    "totalTokens": resolved_total,
+                }
+            }
+        }
+
+    def test_usage_event_fills_response_done_turn_delta(self):
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+        state = {
+            "session_configuration_request": json.dumps({"configured": True}),
+            "current_output_item_id": "item_1",
+            "current_response_id": "resp_1",
+            "current_conversation_id": "conv_1",
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": "audio",
+        }
+
+        config.transform_realtime_response(
+            json.dumps(self._usage_event(input_speech=10, input_text=2, output_speech=20, output_text=3)),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        first_done = config.transform_realtime_response(
+            json.dumps({"event": {"contentEnd": {"stopReason": "END_TURN", "type": "AUDIO"}}}),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input=state,
+        )
+        done_events = [msg for msg in first_done["response"] if msg["type"] == "response.done"]
+        assert len(done_events) == 1
+        usage = done_events[0]["response"]["usage"]
+        assert usage["input_tokens"] == 12
+        assert usage["output_tokens"] == 23
+        assert usage["total_tokens"] == 35
+        assert usage["input_token_details"]["audio_tokens"] == 10
+        assert usage["input_token_details"]["text_tokens"] == 2
+        assert usage["output_token_details"]["audio_tokens"] == 20
+        assert usage["output_token_details"]["text_tokens"] == 3
+
+        config.transform_realtime_response(
+            json.dumps(
+                self._usage_event(
+                    input_speech=15,
+                    input_text=2,
+                    output_speech=30,
+                    output_text=3,
+                    total_input=17,
+                    total_output=33,
+                    total=50,
+                )
+            ),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                **state,
+                "current_output_item_id": "item_2",
+                "current_response_id": "resp_2",
+            },
+        )
+        second_done = config.transform_realtime_response(
+            json.dumps({"event": {"contentEnd": {"stopReason": "END_TURN", "type": "AUDIO"}}}),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                **state,
+                "current_output_item_id": "item_2",
+                "current_response_id": "resp_2",
+            },
+        )
+        second_usage = [msg for msg in second_done["response"] if msg["type"] == "response.done"][0]["response"][
+            "usage"
+        ]
+        assert second_usage["input_tokens"] == 5
+        assert second_usage["output_tokens"] == 10
+        assert second_usage["total_tokens"] == 15
+        assert second_usage["input_token_details"]["audio_tokens"] == 5
+        assert second_usage["output_token_details"]["audio_tokens"] == 10
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

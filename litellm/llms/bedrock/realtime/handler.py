@@ -2,17 +2,20 @@
 This file contains the handler for AWS Bedrock Nova Sonic realtime API.
 
 This uses aws_sdk_bedrock_runtime for bidirectional streaming with Nova Sonic.
+Spend / budget logging follows the same RealTimeStreaming path as OpenAI/Azure:
+store_message for backend events, store_input for client events, log_messages on close.
 """
 
 import asyncio
 import contextlib
 import json
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from pydantic import TypeAdapter
 
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
@@ -46,6 +49,8 @@ class BedrockRealtime(BaseAWSLLM):
         aws_sts_endpoint: str | None = None,
         aws_bedrock_runtime_endpoint: str | None = None,
         aws_external_id: str | None = None,
+        user_api_key_dict: Any | None = None,
+        litellm_metadata: dict | None = None,
         **kwargs,
     ):
         """
@@ -120,6 +125,27 @@ class BedrockRealtime(BaseAWSLLM):
 
         transformation_config: Final = BedrockRealtimeConfig()
 
+        logging_obj.pre_call(
+            input=None,
+            api_key=api_key or "",
+            additional_args={
+                "api_base": endpoint_uri,
+                "complete_input_dict": {"model": model},
+            },
+        )
+
+        # RealTimeStreaming owns spend logging for other realtime providers. Bedrock cannot
+        # use its WebSocket bidirectional_forward (AWS SDK stream instead), but store_message /
+        # store_input / log_messages are the same path used by OpenAI and Azure.
+        realtime_streaming: Final = RealTimeStreaming(
+            websocket=websocket,
+            backend_ws=cast(Any, object()),
+            logging_obj=logging_obj,
+            model=model,
+            user_api_key_dict=user_api_key_dict,
+            request_data={"litellm_metadata": litellm_metadata or {}},
+        )
+
         try:
             # Initialize the bidirectional stream
             bedrock_stream: Final = await bedrock_client.invoke_model_with_bidirectional_stream(
@@ -128,7 +154,9 @@ class BedrockRealtime(BaseAWSLLM):
 
             verbose_proxy_logger.debug("Bedrock Realtime: Bidirectional stream established")
 
-            await websocket.send_text(json.dumps(transformation_config.session_created_event(model, logging_obj)))
+            session_created: Final = transformation_config.session_created_event(model, logging_obj)
+            realtime_streaming.store_message(session_created)
+            await websocket.send_text(json.dumps(session_created))
             verbose_proxy_logger.debug("Bedrock Realtime: sent session.created to client on connect")
 
             # Track state for transformation
@@ -142,35 +170,38 @@ class BedrockRealtime(BaseAWSLLM):
                 "session_configuration_request": None,
             }
 
-            # Create tasks for bidirectional forwarding
-            client_to_bedrock_task: Final = asyncio.create_task(
-                self._forward_client_to_bedrock(
-                    websocket,
-                    bedrock_stream,
-                    transformation_config,
-                    model,
-                    session_state,
-                    logging_obj,
+            try:
+                client_to_bedrock_task: Final = asyncio.create_task(
+                    self._forward_client_to_bedrock(
+                        websocket,
+                        bedrock_stream,
+                        transformation_config,
+                        model,
+                        session_state,
+                        logging_obj,
+                        realtime_streaming,
+                    )
                 )
-            )
 
-            bedrock_to_client_task: Final = asyncio.create_task(
-                self._forward_bedrock_to_client(
-                    bedrock_stream,
-                    websocket,
-                    transformation_config,
-                    model,
-                    logging_obj,
-                    session_state,
+                bedrock_to_client_task: Final = asyncio.create_task(
+                    self._forward_bedrock_to_client(
+                        bedrock_stream,
+                        websocket,
+                        transformation_config,
+                        model,
+                        logging_obj,
+                        session_state,
+                        realtime_streaming,
+                    )
                 )
-            )
 
-            # Wait for both tasks to complete
-            await asyncio.gather(
-                client_to_bedrock_task,
-                bedrock_to_client_task,
-                return_exceptions=True,
-            )
+                await asyncio.gather(
+                    client_to_bedrock_task,
+                    bedrock_to_client_task,
+                    return_exceptions=True,
+                )
+            finally:
+                await realtime_streaming.log_messages()
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in BedrockRealtime.async_realtime: %s", e)
@@ -180,6 +211,24 @@ class BedrockRealtime(BaseAWSLLM):
                 pass
             raise
 
+    @staticmethod
+    def _collect_tool_call_from_function_call_event(
+        realtime_streaming: RealTimeStreaming,
+        message: object,
+    ) -> None:
+        if not isinstance(message, dict) or message.get("type") != "response.function_call_arguments.done":
+            return
+        realtime_streaming.tool_calls.append(
+            {
+                "id": message.get("call_id", ""),
+                "type": "function",
+                "function": {
+                    "name": message.get("name", ""),
+                    "arguments": message.get("arguments", "{}"),
+                },
+            }
+        )
+
     async def _forward_client_to_bedrock(
         self,
         client_ws: Any,
@@ -188,6 +237,7 @@ class BedrockRealtime(BaseAWSLLM):
         model: str,
         session_state: dict,
         logging_obj: LiteLLMLogging | None = None,
+        realtime_streaming: RealTimeStreaming | None = None,
     ):
         """Forward messages from client WebSocket to Bedrock stream."""
         from aws_sdk_bedrock_runtime.models import (
@@ -207,6 +257,9 @@ class BedrockRealtime(BaseAWSLLM):
                 # Receive message from client
                 message = await client_ws.receive_text()
                 verbose_proxy_logger.debug("Bedrock Realtime: Received from client: %s", message[:200])
+
+                if realtime_streaming is not None:
+                    realtime_streaming.store_input(message)
 
                 # Transform OpenAI format to Bedrock format
                 transformed_messages = transformation_config.transform_realtime_request(
@@ -230,11 +283,12 @@ class BedrockRealtime(BaseAWSLLM):
                                 parsed_client_message.get("session", {}).get("modalities")
                             )
                     if client_message_type == "session.update":
-                        await client_ws.send_text(
-                            json.dumps(
-                                transformation_config.session_updated_event(model, logging_obj, requested_modalities)
-                            )
+                        session_updated: Final = transformation_config.session_updated_event(
+                            model, logging_obj, requested_modalities
                         )
+                        if realtime_streaming is not None:
+                            realtime_streaming.store_message(session_updated)
+                        await client_ws.send_text(json.dumps(session_updated))
 
         except Exception as e:
             verbose_proxy_logger.debug("Client to Bedrock forwarding ended: %s", e, exc_info=True)
@@ -252,6 +306,7 @@ class BedrockRealtime(BaseAWSLLM):
         model: str,
         logging_obj: LiteLLMLogging,
         session_state: dict,
+        realtime_streaming: RealTimeStreaming | None = None,
     ):
         """Forward messages from Bedrock stream to client WebSocket."""
         try:
@@ -304,6 +359,9 @@ class BedrockRealtime(BaseAWSLLM):
                     # Send transformed messages to client
                     openai_messages = transformed_response.get("response", [])
                     for openai_message in openai_messages:
+                        if realtime_streaming is not None:
+                            realtime_streaming.store_message(openai_message)
+                            self._collect_tool_call_from_function_call_event(realtime_streaming, openai_message)
                         message_json = json.dumps(openai_message)
                         await client_ws.send_text(message_json)
                         verbose_proxy_logger.debug("Bedrock Realtime: Sent to client: %s", message_json[:200])
