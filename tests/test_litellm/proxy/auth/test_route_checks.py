@@ -3246,3 +3246,55 @@ def test_internal_user_still_blocked_from_another_users_info():
 
     assert exc_info.value.status_code == 403
     assert "key not allowed to access this user's info" in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/user/daily/activity",
+        "/user/daily/activity/aggregated",
+    ],
+)
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+def test_user_daily_activity_routes_reachable_by_non_admin(route, user_role):
+    """Both /user/daily/activity and its /aggregated sibling power the default
+    "Your Usage" dashboard view, and both handlers self-scope to the caller
+    (_user_has_admin_view -> require_caller_user_id_for_non_admin -> 403 on a
+    user_id mismatch). self_managed_routes is the ONLY list that grants either
+    route to a non-admin, so dropping one from it 401s every internal user's
+    main Usage page before the handler ever runs.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=user_role,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=user_role,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+def test_user_daily_activity_aggregated_not_covered_by_prefix_match():
+    """check_route_access is exact-match plus explicit wildcards, so listing the
+    parent /user/daily/activity does not implicitly cover the /aggregated
+    sub-path. Pins the reason the sibling needs its own entry.
+    """
+    assert not RouteChecks.check_route_access(
+        route="/user/daily/activity/aggregated",
+        allowed_routes=["/user/daily/activity"],
+    )

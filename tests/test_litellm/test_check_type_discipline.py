@@ -175,6 +175,13 @@ def test_unfrozen_literal_still_counts(tmp_path):
     assert "LIT002" in _codes(tmp_path, "from types import MappingProxyType\nd = {'a': 1}\nm = MappingProxyType(d)\n")
 
 
+def test_lit002_fix_message_names_mappingproxytype(tmp_path):
+    f = tmp_path / "snippet.py"
+    f.write_text("x = {'a': 1}\n", encoding="utf-8")
+    messages = [v.message for v in checker.check_file(f) if v.code == "LIT002"]
+    assert "MappingProxyType" in messages[0]
+
+
 def test_mutable_ok_with_reason_suppresses_both_rules(tmp_path):
     codes = _codes(tmp_path, "x: dict[str, int] = {}  # mutable-ok: in-place buffer mutated hot path\n")
     assert "LIT001" not in codes

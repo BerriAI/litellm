@@ -281,7 +281,10 @@ class TestFilterAnthropicOutputSchema:
             "unevaluatedProperties",
         ):
             assert field not in result
-        assert 'properties whose names match each pattern must satisfy: {"^x": {"type": "string"}}' in result["description"]
+        assert (
+            'properties whose names match each pattern must satisfy: {"^x": {"type": "string"}}'
+            in result["description"]
+        )
         assert 'property names must satisfy: {"pattern": "^[a-z]+$"}' in result["description"]
         assert 'dependent required properties: {"first": ["last"]}' in result["description"]
         assert 'dependent schemas: {"first": {"required": ["last"]}}' in result["description"]
@@ -347,3 +350,70 @@ class TestFilterAnthropicOutputSchema:
             "all array items must be unique, minimum number of matching items: 2, "
             "maximum number of matching items: 3."
         )
+
+    def test_coerces_explicit_additional_properties_true(self):
+        """An explicit ``additionalProperties: true`` must be coerced to false.
+
+        Anthropic rejects anything other than false with:
+        "output_format.schema: For 'object' type, 'additionalProperties: true' is
+        not supported".
+        """
+        schema = {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {"a": {"type": "string"}},
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result["additionalProperties"] is False
+
+    def test_coerces_additional_properties_true_when_nested(self):
+        """Nested object schemas are coerced too, at every recursion site."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "obj": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "properties": {"a": {"type": "string"}},
+                },
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {"b": {"type": "string"}},
+                    },
+                },
+            },
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result["properties"]["obj"]["additionalProperties"] is False
+        assert result["properties"]["rows"]["items"]["additionalProperties"] is False
+
+    def test_coerces_additional_properties_sub_schema(self):
+        """A sub-schema value (free-form map) is also rejected by Anthropic."""
+        schema = {
+            "type": "object",
+            "additionalProperties": {"type": "string"},
+            "properties": {"a": {"type": "string"}},
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result["additionalProperties"] is False
+
+    def test_explicit_additional_properties_false_is_preserved(self):
+        """The already-correct value must survive untouched."""
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"a": {"type": "string"}},
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result["additionalProperties"] is False

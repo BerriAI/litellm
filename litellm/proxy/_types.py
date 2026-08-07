@@ -781,6 +781,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/update",
         "/model/delete",
         "/user/daily/activity",
+        "/user/daily/activity/aggregated",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/model/{model_id}/update",

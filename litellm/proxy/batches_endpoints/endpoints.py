@@ -264,6 +264,7 @@ async def create_batch(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
+            _create_batch_data.update(disable_fallbacks=True)  # pyright: ignore[reportCallIssue]  # router flag
             response = await llm_router.acreate_batch(**_create_batch_data)
             response.input_file_id = input_file_id
             response._hidden_params["unified_file_id"] = unified_file_id
@@ -961,6 +962,7 @@ async def cancel_batch(
             prisma_client=prisma_client,
             verbose_proxy_logger=verbose_proxy_logger,
             operation="cancel",
+            user_api_key_dict=user_api_key_dict,
         )
 
         ### CALL HOOKS ### - modify outgoing data

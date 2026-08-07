@@ -469,13 +469,14 @@ async def test_create__fallback_body_custom_llm_provider(harness):
 
 
 @pytest.mark.asyncio
-async def test_create__unified_file_id_single_model(harness):
+async def test_create__unified_file_id_single_model_disables_cross_model_fallbacks(harness):
     set_body(
         harness,
         {
             "input_file_id": "litellm_proxy_unified_id",
             "endpoint": "/v1/chat/completions",
             "completion_window": "24h",
+            "disable_fallbacks": False,
         },
     )
     with (
@@ -489,6 +490,7 @@ async def test_create__unified_file_id_single_model(harness):
     harness.litellm_acreate.assert_not_called()
     # model injected from the unified id, input_file_id restored, hidden param set
     assert harness.router_kwargs()["model"] == "gpt-4o-mini"
+    assert harness.router_kwargs()["disable_fallbacks"] is True
     assert resp.input_file_id == "litellm_proxy_unified_id"
     assert resp._hidden_params["unified_file_id"] == "unified-xyz"
 
@@ -1894,6 +1896,17 @@ async def test_cancel__unified_batch_id_routes_to_router(cancel_harness):
     assert resp._hidden_params["model_id"] == "gpt-4o-mini"
 
     assert cancel_harness.update_batch_in_db.call_args.kwargs["operation"] == "cancel"
+
+
+@pytest.mark.asyncio
+async def test_cancel__db_write_receives_caller_auth(cancel_harness):
+    """update_batch_in_database can only mint managed IDs for a cancelled batch's
+    output files when it has an auth context, so cancel must forward the caller's."""
+    caller = UserAPIKeyAuth(api_key="sk-test", user_id="user-cancel-1")
+    with patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+        await call_cancel(cancel_harness, "batch-unified-blob", user=caller)
+
+    assert cancel_harness.update_batch_in_db.call_args.kwargs["user_api_key_dict"] is caller
 
 
 @pytest.mark.asyncio

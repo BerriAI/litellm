@@ -115,6 +115,7 @@ jobs:
       - name: Check basedpyright budget (delta vs base)
         env:
           GH_TOKEN: ${{ github.token }}
+          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
           uv run --no-sync python scripts/type_check_gate.py --base "$GATE_BASE_SHA"
 

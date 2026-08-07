@@ -6742,6 +6742,51 @@ def test_get_configured_token_limits_coerces_numeric_strings():
 
 
 @pytest.mark.asyncio
+async def test_acreate_batch_disable_fallbacks_surfaces_owning_provider_error():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "owning-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-owning",
+                },
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4o-mini",
+                    "api_key": "sk-fallback",
+                    "api_base": "https://fallback.openai.azure.com",
+                    "api_version": "2024-08-01-preview",
+                },
+            },
+        ],
+        fallbacks=[{"owning-model": ["fallback-model"]}],
+        num_retries=0,
+    )
+    owning_provider_error = litellm.BadRequestError(
+        message="completion_window must be one of: 24h",
+        model="openai/gpt-4o-mini",
+        llm_provider="openai",
+    )
+    mock_create = AsyncMock(side_effect=owning_provider_error)
+
+    with patch.object(router, "_acreate_batch", mock_create):
+        with pytest.raises(litellm.BadRequestError, match="24h"):
+            await router.acreate_batch(
+                model="owning-model",
+                input_file_id="file-owned-by-openai",
+                endpoint="/v1/chat/completions",
+                completion_window="5m",
+                disable_fallbacks=True,
+            )
+
+    mock_create.assert_awaited_once()
+    assert mock_create.call_args.kwargs["model"] == "owning-model"
+
+
+@pytest.mark.asyncio
 async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
     import httpx
 
