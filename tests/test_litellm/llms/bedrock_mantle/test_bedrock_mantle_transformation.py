@@ -669,6 +669,56 @@ def test_gemma_4_bedrock_mantle_model_metadata(
     )
 
 
+def test_streaming_handler_pins_first_chunk_id():
+    """Bedrock Mantle emits a fresh id on every SSE chunk; the OpenAI contract
+    requires all chunks in a response to share one id, so the handler must pin
+    the first chunk's id onto every subsequent chunk."""
+    from litellm.llms.bedrock_mantle.chat.handler import (
+        BedrockMantleChatCompletionStreamingHandler,
+    )
+
+    handler = BedrockMantleChatCompletionStreamingHandler(
+        streaming_response=iter([]), sync_stream=True
+    )
+
+    raw_chunks = [
+        {
+            "id": f"chatcmpl-{i}",
+            "created": 1,
+            "model": "openai.gpt-5.5",
+            "choices": [{"index": 0, "delta": {"content": token}}],
+        }
+        for i, token in enumerate(["Hel", "lo", "!"])
+    ]
+
+    parsed_ids = [handler.chunk_parser(chunk).id for chunk in raw_chunks]
+
+    assert parsed_ids == ["chatcmpl-0", "chatcmpl-0", "chatcmpl-0"]
+
+
+def test_streaming_handler_pins_id_when_first_chunk_lacks_one():
+    """Some backends omit id on an initial role-only chunk; the handler should
+    pin the first id it actually sees and keep it stable afterwards."""
+    from litellm.llms.bedrock_mantle.chat.handler import (
+        BedrockMantleChatCompletionStreamingHandler,
+    )
+
+    handler = BedrockMantleChatCompletionStreamingHandler(
+        streaming_response=iter([]), sync_stream=True
+    )
+
+    raw_chunks = [
+        {"created": 1, "model": "openai.gpt-5.5", "choices": [{"index": 0, "delta": {"role": "assistant"}}]},
+        {"id": "chatcmpl-real", "created": 1, "model": "openai.gpt-5.5", "choices": [{"index": 0, "delta": {"content": "Hi"}}]},
+        {"id": "chatcmpl-other", "created": 1, "model": "openai.gpt-5.5", "choices": [{"index": 0, "delta": {"content": "!"}}]},
+    ]
+
+    parsed_ids = [handler.chunk_parser(chunk).id for chunk in raw_chunks]
+
+    assert parsed_ids[1] == "chatcmpl-real"
+    assert parsed_ids[2] == "chatcmpl-real"
+
+
 @pytest.mark.parametrize(
     "model_id",
     [
