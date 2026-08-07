@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final
 
@@ -9,6 +10,15 @@ from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     get_fallback_error_info,
 )
+from litellm.router_utils.cooldown_handlers import (
+    _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper, used across router_utils
+    _set_cooldown_deployments,  # pyright: ignore[reportPrivateUsage] - shared helper, used across router_utils
+    cast_exception_status_to_int,
+    is_advisor_orchestration_failure,
+)
+from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+    increment_deployment_failures_for_current_minute,
+)
 from litellm.types.router import LiteLLMParamsTypedDict
 
 if TYPE_CHECKING:
@@ -17,6 +27,116 @@ if TYPE_CHECKING:
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
+
+# Status codes a generic API call's caller-supplied resource id can trigger on its own
+# (e.g. a nonexistent file/batch/thread id), independent of the selected deployment's health.
+_REQUEST_SCOPED_STATUS_CODES: Final = frozenset((404,))
+
+
+def _trigger_cooldown_for_failed_deployment(
+    litellm_router: LitellmRouter,
+    kwargs: Mapping[str, Any],
+    exception: Exception,
+) -> None:
+    """
+    Trigger cooldown for a failed fallback deployment.
+
+    In the fallback path the normal failure-callback cooldown is skipped because the
+    Logging object sets has_logged_async_failure=True after the first failure and
+    blocks all subsequent failure callbacks. This helper ensures every failed
+    fallback deployment is evaluated for cooldown regardless.
+    """
+    try:
+        if is_advisor_orchestration_failure(exception):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment: failure originated "
+                "from advisor orchestration, not the selected deployment."
+            )
+            return
+
+        exception_status: Final[str | int] = getattr(exception, "status_code", "")
+
+        # Generic API calls (files, batches, threads, rerank, ...) take a caller-supplied
+        # resource id, so a 404 there usually means "that id doesn't exist" rather than
+        # "this deployment is unhealthy". Left unguarded, one bad id would 404 every
+        # deployment in the fallback chain and cool all of them down from a single request.
+        if (
+            kwargs.get("original_generic_function") is not None
+            and cast_exception_status_to_int(exception_status) in _REQUEST_SCOPED_STATUS_CODES
+        ):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment: status %s on a generic API "
+                "call is caller-attributable, not a deployment health signal.",
+                exception_status,
+            )
+            return
+
+        # The proxy's `x-litellm-timeout` header lets a caller set an arbitrarily short
+        # timeout, which litellm.Timeout reports as status 408 regardless of the deployment's
+        # actual health. Left unguarded, a caller could force a 408 on every deployment in
+        # the fallback chain from a single request with a near-zero timeout.
+        if kwargs.get("client_side_timeout") and cast_exception_status_to_int(exception_status) == 408:
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment: a caller-supplied "
+                "x-litellm-timeout caused this 408, not deployment health."
+            )
+            return
+
+        # Only Router._set_failed_deployment_id_on_exception()'s server-stamped id is
+        # trusted here: a metadata-bucket lookup (e.g. "metadata"/"litellm_metadata")
+        # can't reliably tell a caller-supplied bucket from a router-authored one
+        # without knowing this call's function_name, so a client with permission to
+        # set metadata could otherwise get an arbitrary deployment cooled down.
+        deployment_id: Final[str | None] = getattr(exception, "failed_deployment_id", None)
+
+        if deployment_id is None:
+            verbose_router_logger.debug("Cannot trigger cooldown for fallback: no failed_deployment_id on exception")
+            return
+
+        # Priority: deployment config > response header > router default, matching
+        # Router.deployment_callback_on_failure's precedence for the primary path.
+        deployment_dict: Final = litellm_router.get_model_info(id=deployment_id)
+        deployment_cooldown: Final = (
+            _first_present(
+                deployment_dict.get("model_info"), deployment_dict.get("litellm_params"), key="cooldown_time"
+            )
+            if deployment_dict is not None
+            else None
+        )
+        exception_headers: Final = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
+            original_exception=exception
+        )
+        _get_retry_after: Final = (
+            litellm.utils._get_retry_after_from_exception_header  # pyright: ignore[reportPrivateUsage] - as router.py
+        )
+        header_cooldown: Final = (
+            _get_retry_after(response_headers=exception_headers) if exception_headers is not None else None
+        )
+        time_to_cooldown: Final = (
+            deployment_cooldown
+            if deployment_cooldown is not None and deployment_cooldown >= 0
+            else (
+                header_cooldown
+                if header_cooldown is not None and header_cooldown >= 0
+                else litellm_router.cooldown_time
+            )
+        )
+
+        increment_deployment_failures_for_current_minute(
+            litellm_router_instance=litellm_router,
+            deployment_id=deployment_id,
+        )
+        _set_cooldown_deployments(
+            litellm_router_instance=litellm_router,
+            exception_status=exception_status,
+            original_exception=exception,
+            deployment=deployment_id,
+            time_to_cooldown=time_to_cooldown,
+        )
+
+        verbose_router_logger.debug("Triggered cooldown for fallback deployment %s", deployment_id)
+    except Exception as e:  # noqa: BLE001 - best-effort cooldown trigger must never break the fallback response itself
+        verbose_router_logger.debug("Error triggering cooldown for fallback deployment: %s", e)
 
 
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
@@ -162,6 +282,13 @@ async def run_async_fallback(
                 kwargs=kwargs,
                 original_exception=original_exception,
             )
+            logging_obj = kwargs.get("litellm_logging_obj")
+            if logging_obj is not None and logging_obj.model_call_details.get("has_logged_async_failure", False):
+                _trigger_cooldown_for_failed_deployment(
+                    litellm_router=litellm_router,
+                    kwargs=kwargs,
+                    exception=e,
+                )
     raise error_from_fallbacks
 
 

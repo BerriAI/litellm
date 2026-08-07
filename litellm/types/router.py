@@ -417,6 +417,9 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     max_budget: float | None
     budget_duration: str | None
 
+    # per-deployment cooldown override
+    cooldown_time: float | None
+
 
 class DeploymentTypedDict(TypedDict, total=False):
     model_name: Required[str]
@@ -515,6 +518,9 @@ class AllowedFailsPolicy(BaseModel):
     RateLimitErrorAllowedFails: int | None = None
     ContentPolicyViolationErrorAllowedFails: int | None = None
     InternalServerErrorAllowedFails: int | None = None
+    ServiceUnavailableErrorAllowedFails: int | None = None
+    BadGatewayErrorAllowedFails: int | None = None
+    NotFoundErrorAllowedFails: int | None = None
 
 
 class AlertingConfig(BaseModel):
