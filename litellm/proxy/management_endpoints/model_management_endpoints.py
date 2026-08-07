@@ -81,8 +81,10 @@ from litellm.types.router import (
     DeploymentTypedDict,
     GenericLiteLLMParams,
     LiteLLMParamsTypedDict,
+    ModelInfo,
     updateDeployment,
 )
+from litellm.types.utils import without_server_derived_pricing
 from litellm.utils import get_utc_datetime
 
 router: Final = APIRouter()
@@ -188,11 +190,14 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     if updated_patch.model_info:
         if "model_info" not in merged_deployment_dict:
             merged_deployment_dict["model_info"] = {}
-        merged_deployment_dict["model_info"].update(updated_patch.model_info.model_dump(exclude_none=True))
+        merged_deployment_dict["model_info"].update(
+            without_server_derived_pricing(updated_patch.model_info.model_dump(exclude_none=True))
+        )
 
-    # Honor explicit-null clears LAST, after both merges, so a model_info blob the UI
-    # passes through (which today re-sends the OLD pricing on every save) cannot
-    # silently undo a litellm_params clear via .update().
+    # Honor explicit-null clears LAST, after both merges, so a model_info blob a client
+    # passes through cannot silently undo a litellm_params clear via .update(). The clears
+    # are read off the incoming model, not the filtered dict above, so dropping derived
+    # pricing from the merge leaves this path intact.
     #
     # Restricted to SPECIAL_MODEL_INFO_PARAMS (input/output cost per token/character
     # and cache read/write costs) so this path cannot be used to null out privileged
@@ -1362,6 +1367,13 @@ async def add_new_model(
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
             existing_params=None,
+        )
+
+        # Applied here rather than in _add_model_to_db, which master-key rotation reuses to
+        # re-serialize every stored deployment. Rebuilt from the dumped dict so the real id
+        # rides along; ModelInfo mints a fresh uuid when it is absent.
+        model_params.model_info = ModelInfo(  # rebind-ok: downstream team-model handling mutates this same object
+            **without_server_derived_pricing(model_params.model_info.model_dump(exclude_none=True))
         )
 
         model_response: LiteLLM_ProxyModelTable | None = None
