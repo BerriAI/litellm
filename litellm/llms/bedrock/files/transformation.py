@@ -788,20 +788,24 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         # Prepare headers with required S3 headers (same as s3_v2.py)
         sse_headers: Final = (
-            {
-                "x-amz-server-side-encryption": "aws:kms",
-                "x-amz-server-side-encryption-aws-kms-key-id": s3_encryption_key_id,
-            }
+            MappingProxyType(
+                {
+                    "x-amz-server-side-encryption": "aws:kms",
+                    "x-amz-server-side-encryption-aws-kms-key-id": s3_encryption_key_id,
+                }
+            )
             if s3_encryption_key_id
-            else {}
+            else MappingProxyType({})
         )
-        request_headers: Final = {
-            "Content-Type": "application/json",  # JSONL files are JSON content
-            "x-amz-content-sha256": content_hash,  # REQUIRED by S3
-            "Content-Language": "en",
-            "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
-            **sse_headers,
-        }
+        request_headers: Final = MappingProxyType(
+            {
+                "Content-Type": "application/json",  # JSONL files are JSON content
+                "x-amz-content-sha256": content_hash,  # REQUIRED by S3
+                "Content-Language": "en",
+                "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
+                **sse_headers,
+            }
+        )
 
         # Use requests.Request to prepare the request (same pattern as s3_v2.py)
         req: Final = requests.Request("PUT", api_base, data=content, headers=request_headers)
