@@ -1160,17 +1160,76 @@ def test_chain_allows_fail_open_true_when_any_member_sets_flag():
     from litellm.router_strategy.tag_based_routing import _chain_allows_fail_open
 
     deployments = [
-        {"model_info": {}},
-        {"model_info": {"allow_fail_open": True}},
+        {"model_info": {}, "litellm_params": {"tags": ["provider:anthropic"]}},
+        {"model_info": {"allow_fail_open": True}, "litellm_params": {"tags": ["provider:openai"]}},
     ]
-    assert _chain_allows_fail_open(deployments) is True
+    assert _chain_allows_fail_open(deployments, frozenset(), frozenset({"provider:anthropic"})) is True
 
 
 def test_chain_allows_fail_open_false_by_default():
     from litellm.router_strategy.tag_based_routing import _chain_allows_fail_open
 
     deployments = [{"model_info": {}}, {}]
-    assert _chain_allows_fail_open(deployments) is False
+    assert _chain_allows_fail_open(deployments, frozenset(), frozenset()) is False
+
+
+def test_chain_allows_fail_open_true_when_no_required_tag_is_known_at_all():
+    # An entirely-invented required tag with nothing else known to compare against
+    # has no narrower answer to hide; a single-deployment catch-all fallback is a
+    # legitimate use of allow_fail_open, not something to deny.
+    from litellm.router_strategy.tag_based_routing import _chain_allows_fail_open
+
+    deployments = [
+        {"model_info": {"allow_fail_open": True}, "litellm_params": {"tags": ["default", "reasoning_type:low"]}},
+    ]
+    assert _chain_allows_fail_open(deployments, frozenset(), frozenset({"reasoning_type:high"})) is True
+
+
+def test_unknown_required_tag_hides_an_answer_denies_fail_open():
+    from litellm.router_strategy.tag_based_routing import _chain_allows_fail_open
+
+    deployments = [
+        {
+            "model_info": {},
+            "litellm_params": {"tags": ["provider:anthropic", "region:us-east"]},
+        },
+        {
+            "model_info": {"allow_fail_open": True},
+            "litellm_params": {"tags": ["default", "provider:openai"]},
+        },
+    ]
+    # region:us-east is real and satisfiable on the first deployment; the invented tag
+    # alone forces emptiness. Dropping it reveals a specific, non-default answer, so
+    # fail-open must be denied even though the flag is set on the group.
+    assert (
+        _chain_allows_fail_open(
+            deployments, frozenset(), frozenset({"region:us-east", "totally-invented-tag-nobody-has"})
+        )
+        is False
+    )
+
+
+def test_unknown_required_tag_allows_fail_open_when_no_answer_is_hidden():
+    from litellm.router_strategy.tag_based_routing import _chain_allows_fail_open
+
+    deployments = [
+        {
+            "model_info": {"allow_fail_open": True},
+            "litellm_params": {"tags": ["provider:anthropic", "region:us-east"]},
+        },
+        {
+            "model_info": {"allow_fail_open": True},
+            "litellm_params": {"tags": ["provider:eu", "region:eu"]},
+        },
+        {
+            "model_info": {"allow_fail_open": True},
+            "litellm_params": {"tags": ["default", "provider:openai"]},
+        },
+    ]
+    # region:us-east and region:eu are both real, known tags; no single deployment
+    # carries both, so this is a genuinely unsatisfiable combination, not an invented
+    # tag masking a narrower answer. Fail-open must proceed normally.
+    assert _chain_allows_fail_open(deployments, frozenset(), frozenset({"region:us-east", "region:eu"})) is True
 
 
 # --- get_deployments_for_tag required-AND ("&") integration tests ---
@@ -1801,3 +1860,101 @@ async def test_mixed_constraint_survivor_unmatched_by_positive_tag_falls_open_wh
             mock_response="hi",
         )
         assert response._hidden_params["model_id"] == "default-fallback"
+
+
+# --- allow_fail_open must not be triggerable by an invented tag the chain has never
+# carried; a caller-supplied garbage tag must not be able to force an otherwise-
+# satisfiable constraint (e.g. one inherited from the key/team) to be discarded ---
+
+
+@pytest.mark.asyncio()
+async def test_allow_fail_open_denied_when_request_includes_unknown_tag():
+    # region:us-east is a real, satisfiable constraint on anthropic-deployment. Adding
+    # a single invented tag no deployment in this group has ever carried empties the
+    # required-AND set regardless of region:us-east's own satisfiability. allow_fail_open
+    # is set on the default deployment, but must not fire here: none of the *other*
+    # deployments carry the invented tag either, so it is unknown to the chain, and
+    # falling back would silently discard the still-satisfiable region:us-east ask.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic", "region:us-east"],
+                },
+                "model_info": {"id": "anthropic-deployment"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default", "provider:openai"],
+                },
+                "model_info": {"id": "openai-default", "allow_fail_open": True},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&region:us-east", "&totally-invented-tag-nobody-has"]},
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_allow_fail_open_still_fires_when_every_requested_tag_is_known():
+    # region:us-east and region:eu are both real tags this chain uses; no single
+    # deployment carries both, so the combination is genuinely unsatisfiable, not
+    # invented. allow_fail_open must still fall back normally in this case.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic", "region:us-east"],
+                },
+                "model_info": {"id": "anthropic-deployment", "allow_fail_open": True},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:eu", "region:eu"],
+                },
+                "model_info": {"id": "eu-deployment", "allow_fail_open": True},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default", "provider:openai"],
+                },
+                "model_info": {"id": "openai-default", "allow_fail_open": True},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["&region:us-east", "&region:eu"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "openai-default"
