@@ -2451,8 +2451,8 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
-    "provider": "RUNWAYML",
-    "provider_display_name": "Runwayml",
+    "provider": "RunwayML",
+    "provider_display_name": "RunwayML",
     "litellm_provider": "runwayml",
     "credential_fields": [
       {

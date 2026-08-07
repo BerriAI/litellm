@@ -639,3 +639,32 @@ def test_clean_display_name_strips_suffix():
 def test_clean_display_name_passthrough_when_no_suffix():
     assert _clean_display_name("OpenAI") == "OpenAI"
     assert _clean_display_name("") == ""
+
+
+def test_runwayml_provider_entry_matches_ui_enum():
+    """Regression for #29302.
+
+    The UI's Providers.RunwayML enum is `"RunwayML"` (key==value), and the
+    field lookup in provider_specific_fields.tsx matches the backend entry by
+    `provider` (against the enum key) or `provider_display_name` (against the
+    enum value). Both must be `"RunwayML"` or the form renders no inputs and
+    POST /credentials returns 422.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    client = TestClient(app_instance)
+
+    response = client.get("/public/providers/fields")
+    assert response.status_code == 200
+
+    runwayml_entries = [
+        p for p in response.json() if p.get("litellm_provider") == "runwayml"
+    ]
+    assert len(runwayml_entries) == 1, "expected exactly one runwayml entry"
+    entry = runwayml_entries[0]
+
+    assert entry["provider"] == "RunwayML"
+    assert entry["provider_display_name"] == "RunwayML"
+
+    field_keys = {f["key"] for f in entry["credential_fields"]}
+    assert {"api_key", "api_base"}.issubset(field_keys)

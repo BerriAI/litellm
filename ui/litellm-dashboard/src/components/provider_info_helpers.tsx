@@ -281,7 +281,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Perplexity]: `${asset_logos_folder}perplexity-ai.svg`,
   [Providers.RECRAFT]: `${asset_logos_folder}recraft.svg`,
   [Providers.REPLICATE]: `${asset_logos_folder}replicate.svg`,
-  [Providers.RunwayML]: `${asset_logos_folder}runwayml.png`,
+  [Providers.RunwayML]: `${asset_logos_folder}runway.png`,
   [Providers.SAGEMAKER_LEGACY]: `${asset_logos_folder}bedrock.svg`,
   [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
   [Providers.SAP]: `${asset_logos_folder}sap.png`,
