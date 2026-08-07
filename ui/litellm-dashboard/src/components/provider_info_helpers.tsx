@@ -49,6 +49,7 @@ import recraftLogo from "../../public/assets/logos/recraft.svg";
 import replicateLogo from "../../public/assets/logos/replicate.svg";
 import runwayLogo from "../../public/assets/logos/runway.png";
 import sambanovaLogo from "../../public/assets/logos/sambanova.svg";
+import scalewayLogo from "../../public/assets/logos/scaleway.svg";
 import sapLogo from "../../public/assets/logos/sap.png";
 import snowflakeLogo from "../../public/assets/logos/snowflake.svg";
 import sonioxLogo from "../../public/assets/logos/soniox.svg";
@@ -151,6 +152,7 @@ export enum Providers {
   SAGEMAKER_LEGACY = "Sagemaker",
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
+  Scaleway = "Scaleway",
   Snowflake = "Snowflake",
   Soniox = "Soniox",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
@@ -260,6 +262,7 @@ export const provider_map: Record<string, string> = {
   SageMaker: "sagemaker_chat",
   Sambanova: "sambanova",
   SAP: "sap",
+  Scaleway: "scaleway",
   Snowflake: "snowflake",
   Soniox: "soniox",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
@@ -351,6 +354,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.SAGEMAKER_LEGACY]: bedrockLogo.src,
   [Providers.Sambanova]: sambanovaLogo.src,
   [Providers.SAP]: sapLogo.src,
+  [Providers.Scaleway]: scalewayLogo.src,
   [Providers.Snowflake]: snowflakeLogo.src,
   [Providers.Soniox]: sonioxLogo.src,
   [Providers.TEXT_COMPLETION_CODESTRAL]: mistralLogo.src,
