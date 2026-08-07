@@ -27,6 +27,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm.proxy.proxy_server as ps
+from litellm.proxy._types import UserAPIKeyAuth
 
 from .conftest import normalize
 
@@ -1247,6 +1248,48 @@ async def test_update_cache_no_cached_entities_schedules_pipeline_flush(monkeypa
         "lookups": 4,
         "got_user": True,
         "got_team": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_cache_does_not_rewrite_cached_key_auth_object(monkeypatch):
+    cached_key = UserAPIKeyAuth(
+        token="hashed-token",
+        models=["old-model"],
+        spend=10.0,
+        team_spend=20.0,
+        team_member_spend=30.0,
+    )
+    fake_user_cache = _make_user_api_key_cache(get_value=cached_key)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+
+    await ps.update_cache(
+        token="hashed-token",
+        user_id=None,
+        end_user_id=None,
+        team_id=None,
+        response_cost=1.0,
+        parent_otel_span=None,
+        tags=None,
+    )
+    await asyncio.sleep(0.1)
+
+    cache_list = fake_user_cache.async_set_cache_pipeline.call_args.kwargs[
+        "cache_list"
+    ]
+    observed = {
+        "cache_list": cache_list,
+        "spend": cached_key.spend,
+        "team_spend": cached_key.team_spend,
+        "team_member_spend": cached_key.team_member_spend,
+        "models": cached_key.models,
+    }
+    assert normalize(observed) == {
+        "cache_list": [],
+        "spend": 10.0,
+        "team_spend": 20.0,
+        "team_member_spend": 30.0,
+        "models": ["old-model"],
     }
 
 
