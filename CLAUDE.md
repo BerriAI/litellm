@@ -59,6 +59,8 @@ Do not add `Co-Authored-By: Claude` or any Claude attribution to commit messages
 
 When working on a PR, keep the PR description in sync with new commits being made
 
+Every new commit pushed to a PR requires re-running the live QA proof at that new head and de-staling the description in the same pass. Proof blocks, commit hashes, labels like "this PR's head", expected test counts, env vars, and thresholds silently stop matching HEAD once you push, and a reviewer following the runbook then verifies the wrong thing. Don't just append the new run next to the old ones: replace the superseded sections so the body shows a single proof captured at the current head. Broad unit-test sweeps are the exception since CI covers those at the head, so label old pytest numbers with the commit they were captured at instead of re-running them locally. Local re-capture is for live-proxy proofs, lint/type gate outputs, and the targeted tests for whatever the commit touched
+
 All GitHub comments must be human-readable and 15-25 words max
 
 Monkeypatching attributes of a class to do testing is an anti-pattern. Prefer dependency-injecting things into classes. That way, at unit test time, you can pass a mocked dependency in
