@@ -49,7 +49,7 @@ async def test_get_state_snapshot_returns_cell_per_request_type_per_model():
     # Top-level shape
     assert snap["router_name"] == "r1"
     assert snap["available_models"] == ["fast", "smart"]
-    assert snap["weights"] == {"quality": 0.7, "cost": 0.3}
+    assert snap["weights"] == {"quality": 0.7, "cost": 0.3, "efficiency": 0.0}
     assert snap["model_costs"] == {"fast": 0.0001, "smart": 0.001}
     assert set(snap["queue"].keys()) == {
         "state_pending",
@@ -66,8 +66,11 @@ async def test_get_state_snapshot_returns_cell_per_request_type_per_model():
             "model",
             "alpha",
             "beta",
+            "alpha_eff",
+            "beta_eff",
             "samples",
             "quality_mean",
+            "efficiency_mean",
         }
         assert cell["model"] in {"fast", "smart"}
         assert cell["request_type"] in {rt.value for rt in RequestType}

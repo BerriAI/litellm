@@ -13,6 +13,13 @@ from litellm.types.router import RequestType  # re-export for convenience  # noq
 DEFAULT_QUALITY_WEIGHT: Final[float] = 0.7  # UNVALIDATED — calibrated against [0] sessions
 DEFAULT_COST_WEIGHT: Final[float] = 0.3  # UNVALIDATED — calibrated against [0] sessions
 
+DEFAULT_EFFICIENCY_WEIGHT: Final[float] = 0.0
+EFFICIENCY_GAMMA: Final[float] = 0.5
+DEFAULT_TARGET_LATENCY_SECONDS: Final[float] = 1.0
+EFFICIENCY_THROUGHPUT_MAX: Final[float] = 100.0
+EFFICIENCY_PRIOR_ALPHA: Final[float] = 1.0
+EFFICIENCY_PRIOR_BETA: Final[float] = 1.0
+
 # D4 — Cold-start prior: (alpha + beta) total mass = COLD_START_MASS
 # Mean of Beta = base_tier_weight + (strength_bonus if declared)
 BASE_TIER_WEIGHT: Final[dict[int, float]] = {1: 0.3, 2: 0.5, 3: 0.7}  # UNVALIDATED

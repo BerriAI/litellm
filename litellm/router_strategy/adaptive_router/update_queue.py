@@ -26,6 +26,10 @@ from litellm.repositories.table_repositories import (
     AdaptiveRouterSessionRepository,
     AdaptiveRouterStateRepository,
 )
+from litellm.router_strategy.adaptive_router.config import (
+    EFFICIENCY_PRIOR_ALPHA,
+    EFFICIENCY_PRIOR_BETA,
+)
 
 StateKey = tuple[str, str, str]  # (router_name, request_type, model_name)
 SessionKey = tuple[str, str, str]  # (session_id, router_name, model_name)
@@ -53,6 +57,8 @@ class AdaptiveRouterUpdateQueue:
         model_name: str,
         delta_alpha: float,
         delta_beta: float,
+        delta_alpha_eff: float = 0.0,
+        delta_beta_eff: float = 0.0,
     ) -> None:
         """Aggregate a bandit-cell delta. Multiple deltas to the same cell sum."""
         key: Final[StateKey] = (router_name, request_type, model_name)
@@ -62,11 +68,15 @@ class AdaptiveRouterUpdateQueue:
                 self._state_agg[key] = {
                     "delta_alpha": delta_alpha,
                     "delta_beta": delta_beta,
+                    "delta_alpha_eff": delta_alpha_eff,
+                    "delta_beta_eff": delta_beta_eff,
                     "samples_added": 1,
                 }
             else:
                 current["delta_alpha"] += delta_alpha
                 current["delta_beta"] += delta_beta
+                current["delta_alpha_eff"] += delta_alpha_eff
+                current["delta_beta_eff"] += delta_beta_eff
                 current["samples_added"] += 1
             self._max_state_size_seen = max(self._max_state_size_seen, len(self._state_agg))
 
@@ -129,11 +139,15 @@ class AdaptiveRouterUpdateQueue:
                             "model_name": model,
                             "alpha": payload["delta_alpha"],
                             "beta": payload["delta_beta"],
+                            "alpha_eff": EFFICIENCY_PRIOR_ALPHA + payload["delta_alpha_eff"],
+                            "beta_eff": EFFICIENCY_PRIOR_BETA + payload["delta_beta_eff"],
                             "total_samples": int(payload["samples_added"]),
                         },
                         "update": {
                             "alpha": {"increment": payload["delta_alpha"]},
                             "beta": {"increment": payload["delta_beta"]},
+                            "alpha_eff": {"increment": payload["delta_alpha_eff"]},
+                            "beta_eff": {"increment": payload["delta_beta_eff"]},
                             "total_samples": {"increment": int(payload["samples_added"])},
                         },
                     },

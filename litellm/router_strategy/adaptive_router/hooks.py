@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import timedelta
 from typing import Any, Final
 
 from litellm._logging import verbose_router_logger
@@ -25,6 +26,7 @@ from litellm.router_strategy.adaptive_router.config import (
     SIGNAL_GATE_MIN_MESSAGES,
 )
 from litellm.router_strategy.adaptive_router.signals import Turn
+from litellm.types.utils import ModelResponse
 
 # Identity fields hashed into a derived session key so the same conversation
 # from the same caller produces a stable key, while different keys/teams/users
@@ -197,20 +199,50 @@ class AdaptiveRouterPostCallHook(CustomLogger):
         return {ADAPTIVE_ROUTER_RESPONSE_HEADER: chosen}
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        await self._record(kwargs, response_obj, response_status=200)
+        await self._record(kwargs, response_obj, response_status=200, start_time=start_time, end_time=end_time)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         status = kwargs.get("response_status")
         if status is None:
             exc: Final = kwargs.get("exception")
             status = getattr(exc, "status_code", 500) if exc is not None else 500
-        await self._record(kwargs, response_obj, response_status=int(status))
+        await self._record(
+            kwargs, response_obj, response_status=int(status), start_time=start_time, end_time=end_time
+        )
+
+    @staticmethod
+    def _extract_latency_seconds(start_time: Any, end_time: Any) -> float | None:
+        if start_time is None or end_time is None:
+            return None
+        try:
+            elapsed = end_time - start_time
+        except TypeError:
+            return None
+        if isinstance(elapsed, timedelta):
+            elapsed = elapsed.total_seconds()
+        try:
+            elapsed = float(elapsed)
+        except (TypeError, ValueError):
+            return None
+        return elapsed if elapsed > 0 else None
+
+    @staticmethod
+    def _extract_completion_tokens(response_obj: Any) -> int | None:
+        if not isinstance(response_obj, ModelResponse):
+            return None
+        usage: Final = getattr(response_obj, "usage", None)
+        if usage is None:
+            return None
+        tokens = getattr(usage, "completion_tokens", None)
+        return int(tokens) if isinstance(tokens, (int, float)) else None
 
     async def _record(
         self,
         kwargs: dict[str, Any],
         response_obj: Any,
         response_status: int,
+        start_time: Any = None,
+        end_time: Any = None,
     ) -> None:
         try:
             messages: Final = kwargs.get("messages") or []
@@ -247,5 +279,17 @@ class AdaptiveRouterPostCallHook(CustomLogger):
                 request_type=request_type,
                 turn=turn,
             )
+
+            latency_seconds: Final = self._extract_latency_seconds(start_time, end_time)
+            if latency_seconds is not None:
+                is_failure: Final = not (200 <= response_status < 300)
+                completion_tokens: Final = 0 if is_failure else (self._extract_completion_tokens(response_obj) or 0)
+                await self.adaptive_router.record_efficiency(
+                    model_name=current_model,
+                    request_type=request_type,
+                    latency_seconds=latency_seconds,
+                    completion_tokens=completion_tokens,
+                    is_failure=is_failure,
+                )
         except Exception as e:
             verbose_router_logger.exception("AdaptiveRouterPostCallHook: failed to record turn: %s", e)
