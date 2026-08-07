@@ -1,24 +1,3 @@
-"""
-Vertex AI Chirp 3 HD TTS handler via gRPC streaming.
-
-This module bridges litellm's speech() dispatch to Google Cloud Text-to-Speech
-v1's gRPC streaming_synthesize API. It does NOT go through base_llm_http_handler
-because Chirp 3 HD voices are only available through the streaming gRPC path —
-the REST synthesize endpoint does not support them.
-
-The handler is intentionally a thin orchestration layer:
-
-1. Load Google credentials via VertexBase (the Credentials object, not just the token
-   string, so the SDK can auto-refresh during long streams).
-2. Build a TextToSpeechAsyncClient from google-cloud-texttospeech with those credentials.
-3. Construct a StreamingSynthesizeConfig for the requested Chirp HD voice.
-4. Stream the text through streaming_synthesize() and collect all audio_content chunks.
-5. Return a normalized HttpxBinaryResponseContent with the concatenated audio bytes.
-
-google-cloud-texttospeech is imported lazily so litellm core remains usable without the
-optional tts-vertex-chirp-grpc extra installed.
-"""
-
 from __future__ import annotations
 
 import asyncio

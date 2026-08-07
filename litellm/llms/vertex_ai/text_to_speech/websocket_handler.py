@@ -1,28 +1,3 @@
-"""
-Vertex AI Chirp 3 HD TTS — WebSocket-to-gRPC bridge.
-
-Exposes a WebSocket endpoint so callers can stream text in real-time (e.g., from
-a streaming LLM response) and receive audio chunks as they are synthesized,
-without waiting for the full text to be available.
-
-Wire protocol (client → server):
-    1. First message (text/JSON):
-       {"model": "vertex_ai/chirp-3-hd",
-        "voice": "es-ES-Chirp3-HD-Charon",
-        "encoding": "OGG_OPUS",
-        "vertex_project": "...", "vertex_location": "us-central1"}
-    2. Subsequent messages (text/JSON):
-       {"type": "text", "content": "Siguiente frase parcial del LLM..."}
-    3. Termination: send {"type": "end"} OR simply close the WebSocket
-
-Wire protocol (server → client):
-    binary: <audio chunk bytes>   (OGG_OPUS, MULAW, or ALAW — never LINEAR16/MP3)
-    text/JSON: {"type": "done", "chunks": N, "total_bytes": M, "chars": K}
-    text/JSON: {"type": "error", "message": "..."}
-
-google-cloud-texttospeech is imported lazily so litellm core stays usable without it.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -43,10 +18,10 @@ _INSTALL_HINT: Final = (
     "Install with: pip install 'litellm[tts-vertex-chirp-grpc]'"
 )
 
-# streaming_synthesize only supports these encodings — LINEAR16 and MP3 are rejected.
 _SUPPORTED_ENCODINGS: Final = frozenset({"OGG_OPUS", "MULAW", "ALAW"})
 _DEFAULT_ENCODING: Final = "OGG_OPUS"
 _DEFAULT_VOICE: Final = "en-US-Chirp3-HD-Charon"
+_TEXT_QUEUE_MAX: Final = 200
 
 
 def _import_texttospeech() -> Any:
@@ -58,7 +33,6 @@ def _import_texttospeech() -> Any:
 
 
 class ChirpTtsWebSocketSession(VertexBase):
-    """Bridges one WebSocket connection to a gRPC streaming_synthesize session."""
 
     async def run(
         self,
@@ -68,16 +42,15 @@ class ChirpTtsWebSocketSession(VertexBase):
         await websocket.accept()
         try:
             await self._session(websocket, user_api_key_dict)
-        except Exception as e:  # noqa: BLE001  # any session error → error msg to client
+        except Exception as e:  # noqa: BLE001  # any session error -> error msg to client
             await _send_error(websocket, str(e))
         finally:
             try:
                 await websocket.close()
-            except Exception:  # noqa: BLE001,S110  # already closed — ignore
+            except Exception:  # noqa: BLE001,S110  # already closed, ignore
                 pass
 
     async def _session(self, websocket: WebSocket, user_api_key_dict: Any) -> None:
-        # First message must be the config
         raw_config = await websocket.receive_text()
         config_msg = json.loads(raw_config)
 
@@ -85,15 +58,17 @@ class ChirpTtsWebSocketSession(VertexBase):
         encoding_raw: Final = config_msg.get("encoding", _DEFAULT_ENCODING).upper()
         encoding_name: Final = encoding_raw if encoding_raw in _SUPPORTED_ENCODINGS else _DEFAULT_ENCODING
 
-        litellm_params: Final = {
+        # Credentials are always resolved server-side via ADC or env vars.
+        # vertex_credentials is intentionally not accepted from the client message
+        # to prevent SSRF attacks via external-account credential injection.
+        server_params: Final = {
             "vertex_project": config_msg.get("vertex_project"),
             "vertex_location": config_msg.get("vertex_location"),
-            "vertex_credentials": config_msg.get("vertex_credentials"),
         }
 
         credentials, _ = self.load_auth(
-            credentials=self.safe_get_vertex_ai_credentials(litellm_params),
-            project_id=self.safe_get_vertex_ai_project(litellm_params),
+            credentials=self.safe_get_vertex_ai_credentials(server_params),
+            project_id=self.safe_get_vertex_ai_project(server_params),
         )
 
         tts: Final = _import_texttospeech()
@@ -112,9 +87,7 @@ class ChirpTtsWebSocketSession(VertexBase):
             ),
         )
 
-        # Queue bridges the WebSocket receive loop and the gRPC request generator.
-        # None is the sentinel signalling end-of-stream.
-        text_queue: Final[asyncio.Queue[str | None]] = asyncio.Queue()
+        text_queue: Final[asyncio.Queue[str | None]] = asyncio.Queue(maxsize=_TEXT_QUEUE_MAX)
 
         async def request_generator():
             yield tts.StreamingSynthesizeRequest(streaming_config=streaming_config)
@@ -131,9 +104,9 @@ class ChirpTtsWebSocketSession(VertexBase):
             requests=request_generator(), timeout=3600
         )
 
-        total_chars = 0
-        total_audio_chunks = 0
-        total_audio_bytes = 0
+        total_chars = 0        # mutable-ok: accumulated across receive loop iterations
+        total_audio_chunks = 0  # mutable-ok: accumulated across forward loop iterations
+        total_audio_bytes = 0   # mutable-ok: accumulated across forward loop iterations
 
         async def receive_from_client() -> None:
             nonlocal total_chars
@@ -178,12 +151,35 @@ class ChirpTtsWebSocketSession(VertexBase):
 
         receive_task: Final = asyncio.create_task(receive_from_client())
         forward_task: Final = asyncio.create_task(forward_to_client())
+
+        # Wait for whichever direction finishes first, then drain the other.
+        # receive_task ending signals input is closed; wait for forward_task to
+        # drain remaining audio before returning so no chunks are dropped.
+        # forward_task ending means the gRPC stream closed; cancel receive_task.
         done, pending = await asyncio.wait(
             {receive_task, forward_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
-        for task in pending:
-            task.cancel()
+        if receive_task in done and forward_task in pending:
+            # Input done: give the gRPC response stream a short window to drain
+            # any audio chunks already in-flight, then cancel.
+            try:
+                await asyncio.wait_for(asyncio.shield(forward_task), timeout=0.5)
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001,S110  # drain window expired or error already sent
+                pass
+            finally:
+                forward_task.cancel()
+                try:
+                    await forward_task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001,S110  # expected on cancel
+                    pass
+        else:
+            receive_task.cancel()
+            try:
+                await receive_task
+            except asyncio.CancelledError:
+                pass
+
         for task in done:
             exc = task.exception()
             if exc is not None:

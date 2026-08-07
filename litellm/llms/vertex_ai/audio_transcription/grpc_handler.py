@@ -1,23 +1,3 @@
-"""
-Vertex AI Chirp 3 HD STT handler via gRPC streaming.
-
-This module bridges litellm's transcription dispatch to Google Cloud Speech-to-Text
-v2's gRPC StreamingRecognize API. It does NOT go through base_llm_http_handler because
-gRPC-streaming has no HTTP-shaped abstractions (no httpx.Response, no multipart bodies).
-
-The handler is intentionally a thin orchestration layer:
-
-1. Load Google credentials via VertexBase (the Credentials object, not just the token
-   string, so the SDK can auto-refresh during long streams).
-2. Build a SpeechAsyncClient from google-cloud-speech with those credentials.
-3. Construct a StreamingRecognitionConfig for the requested Chirp model.
-4. Stream audio chunks through streaming_recognize() and collect is_final results.
-5. Return a normalized TranscriptionResponse.
-
-google-cloud-speech is imported lazily so litellm core remains usable without the
-optional stt-vertex-chirp-grpc extra installed.
-"""
-
 from __future__ import annotations
 
 import asyncio

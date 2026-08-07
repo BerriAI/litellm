@@ -1,27 +1,3 @@
-"""
-Vertex AI Chirp STT — WebSocket-to-gRPC bridge.
-
-Exposes a WebSocket endpoint so callers can stream raw audio in real-time and
-receive interim/final transcription results as they are produced, without
-buffering the entire audio file first.
-
-Wire protocol (client → server):
-    1. First message (text/JSON):
-       {"model": "vertex_ai/chirp_2", "language": "es-ES",
-        "sample_rate": 16000, "encoding": "LINEAR16",
-        "vertex_project": "...", "vertex_location": "us-central1"}
-    2. Subsequent messages (binary): raw audio chunks (PCM or WAV)
-    3. Termination: send {"type": "end"} OR simply close the WebSocket
-
-Wire protocol (server → client):
-    {"type": "interim", "transcript": "hola...", "stability": 0.8}
-    {"type": "final",   "transcript": "hola mundo", "confidence": 0.98,
-                        "language": "es-ES"}
-    {"type": "error",   "message": "..."}
-
-google-cloud-speech is imported lazily so litellm core stays usable without it.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -46,6 +22,7 @@ _INSTALL_HINT: Final = (
 
 _DEFAULT_SAMPLE_RATE: Final = 16000
 _DEFAULT_ENCODING: Final = "LINEAR16"
+_AUDIO_QUEUE_MAX: Final = 200
 
 
 def _import_speech_v2() -> Any:
@@ -57,7 +34,6 @@ def _import_speech_v2() -> Any:
 
 
 class ChirpSttWebSocketSession(VertexBase):
-    """Bridges one WebSocket connection to a gRPC StreamingRecognize session."""
 
     async def run(
         self,
@@ -67,16 +43,15 @@ class ChirpSttWebSocketSession(VertexBase):
         await websocket.accept()
         try:
             await self._session(websocket, user_api_key_dict)
-        except Exception as e:  # noqa: BLE001  # any session error → error msg to client
+        except Exception as e:  # noqa: BLE001  # any session error -> error msg to client
             await _send_error(websocket, str(e))
         finally:
             try:
                 await websocket.close()
-            except Exception:  # noqa: BLE001,S110  # already closed — ignore
+            except Exception:  # noqa: BLE001,S110  # already closed, ignore
                 pass
 
     async def _session(self, websocket: WebSocket, user_api_key_dict: Any) -> None:
-        # First message must be the config
         raw_config = await websocket.receive_text()
         config_msg = json.loads(raw_config)
 
@@ -85,19 +60,21 @@ class ChirpSttWebSocketSession(VertexBase):
         sample_rate: Final = int(config_msg.get("sample_rate", _DEFAULT_SAMPLE_RATE))
         encoding_name: Final = config_msg.get("encoding", _DEFAULT_ENCODING).upper()
 
-        litellm_params: Final = {
+        # Credentials are always resolved server-side via ADC or env vars.
+        # vertex_credentials is intentionally not accepted from the client message
+        # to prevent SSRF attacks via external-account credential injection.
+        server_params: Final = {
             "vertex_project": config_msg.get("vertex_project"),
             "vertex_location": config_msg.get("vertex_location"),
-            "vertex_credentials": config_msg.get("vertex_credentials"),
         }
 
         credentials, project_id = self.load_auth(
-            credentials=self.safe_get_vertex_ai_credentials(litellm_params),
-            project_id=self.safe_get_vertex_ai_project(litellm_params),
+            credentials=self.safe_get_vertex_ai_credentials(server_params),
+            project_id=self.safe_get_vertex_ai_project(server_params),
         )
 
         raw_location: Final = (
-            self.safe_get_vertex_ai_location(litellm_params) or DEFAULT_SPEECH_TO_TEXT_LOCATION
+            self.safe_get_vertex_ai_location(server_params) or DEFAULT_SPEECH_TO_TEXT_LOCATION
         )
         try:
             validate_vertex_location(raw_location)
@@ -129,8 +106,7 @@ class ChirpSttWebSocketSession(VertexBase):
             streaming_features=cs.StreamingRecognitionFeatures(interim_results=True),
         )
 
-        # Queue bridges the WebSocket receive loop and the gRPC request generator
-        audio_queue: Final[asyncio.Queue[bytes | None]] = asyncio.Queue()
+        audio_queue: Final[asyncio.Queue[bytes | None]] = asyncio.Queue(maxsize=_AUDIO_QUEUE_MAX)
 
         async def request_generator():
             yield cs.StreamingRecognizeRequest(
@@ -146,8 +122,8 @@ class ChirpSttWebSocketSession(VertexBase):
             requests=request_generator(), timeout=3600
         )
 
-        total_audio_bytes = 0
-        start_time = time.perf_counter()
+        total_audio_bytes = 0  # mutable-ok: accumulated across receive loop iterations
+        start_time: Final = time.perf_counter()
 
         async def receive_from_client() -> None:
             nonlocal total_audio_bytes
@@ -192,20 +168,43 @@ class ChirpSttWebSocketSession(VertexBase):
                             payload["confidence"] = round(alt.confidence, 4)
                         if result.language_code:
                             payload["language"] = result.language_code
-                        elapsed = time.perf_counter() - start_time
-                        payload["latency_s"] = round(elapsed, 3)
+                        payload["latency_s"] = round(time.perf_counter() - start_time, 3)
                     else:
                         payload["stability"] = round(getattr(result, "stability", 0.0), 4)
                     await websocket.send_text(json.dumps(payload))
 
         receive_task: Final = asyncio.create_task(receive_from_client())
         forward_task: Final = asyncio.create_task(forward_to_client())
+
+        # Wait for whichever direction finishes first, then drain the other.
+        # receive_task ending signals the input stream is closed; we still wait
+        # for forward_task so trailing final results are not dropped.
+        # forward_task ending means the gRPC stream closed; we then stop reading.
         done, pending = await asyncio.wait(
             {receive_task, forward_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
-        for task in pending:
-            task.cancel()
+        if receive_task in done and forward_task in pending:
+            # Input done: give the gRPC response stream a short window to drain
+            # any final results that were already in-flight, then cancel.
+            try:
+                await asyncio.wait_for(asyncio.shield(forward_task), timeout=0.5)
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001,S110  # drain window expired or error already sent
+                pass
+            finally:
+                forward_task.cancel()
+                try:
+                    await forward_task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001,S110  # expected on cancel
+                    pass
+        else:
+            # gRPC stream ended first: stop receiving.
+            receive_task.cancel()
+            try:
+                await receive_task
+            except asyncio.CancelledError:
+                pass
+
         for task in done:
             exc = task.exception()
             if exc is not None:
