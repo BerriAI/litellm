@@ -8483,6 +8483,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/openai/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: openai_websocket_proxy_route
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_openai_websocket_proxy_route_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/openai/deployments/{model}/chat/completions": {
         parameters: {
             query?: never;
@@ -8981,6 +9001,26 @@ export interface paths {
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
         patch: operations["openai_proxy_route_openai__endpoint__patch"];
+        trace?: never;
+    };
+    "/openai_passthrough/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: openai_websocket_proxy_route
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_openai_websocket_proxy_route_get_2"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/openai_passthrough/{endpoint}": {
@@ -46427,6 +46467,24 @@ export interface operations {
             };
         };
     };
+    websocket_openai_websocket_proxy_route_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     chat_completion_openai_deployments__model__chat_completions_post: {
         parameters: {
             query?: never;
@@ -47283,6 +47341,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    websocket_openai_websocket_proxy_route_get_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
