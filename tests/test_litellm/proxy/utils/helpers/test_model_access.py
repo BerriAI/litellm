@@ -404,3 +404,81 @@ async def test_get_available_models_for_user_error_path_complete_list_raises(
             general_settings={},
             user_model=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_resolves_team_access_group_models(
+    monkeypatch,
+):
+    """GH#31966: a team whose only grant is an entity access group listed
+    'no-default-models' instead of the models the access group grants."""
+    from litellm.models.access_group import LiteLLM_AccessGroupTable
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
+
+    team = LiteLLM_TeamTableCachedObj(
+        team_id="team-1",
+        models=["no-default-models"],
+        access_group_ids=["ag-1"],
+    )
+    access_group = LiteLLM_AccessGroupTable(
+        access_group_id="ag-1",
+        access_group_name="repro-group",
+        access_model_names=["model-a", "model-b"],
+        assigned_team_ids=["team-1"],
+    )
+
+    async def _get_team_object(**_kwargs):
+        return team
+
+    async def _get_access_object(**_kwargs):
+        return access_group
+
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", _get_team_object)
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_access_object", _get_access_object)
+
+    result = await get_available_models_for_user(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test-key",
+            user_id="user-1",
+            team_id="team-1",
+            models=["all-team-models"],
+            team_models=["no-default-models"],
+        ),
+        llm_router=_router_with_models(["model-a", "model-b", "model-c"]),
+        general_settings={},
+        user_model=None,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=MagicMock(),
+    )
+    assert sorted(result) == ["model-a", "model-b"]
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_without_access_groups_grants_nothing(
+    monkeypatch,
+):
+    """Stripping the sentinel must not widen a team that has no access groups."""
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
+
+    async def _get_team_object(**_kwargs):
+        return LiteLLM_TeamTableCachedObj(team_id="team-1", models=["no-default-models"])
+
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", _get_team_object)
+
+    result = await get_available_models_for_user(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test-key",
+            user_id="user-1",
+            team_id="team-1",
+            models=["all-team-models"],
+            team_models=["no-default-models"],
+        ),
+        llm_router=_router_with_models(["model-a", "model-b"]),
+        general_settings={},
+        user_model=None,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=MagicMock(),
+    )
+    assert result == []

@@ -165,6 +165,7 @@ if TYPE_CHECKING:
     from prisma.client import TransactionManager
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
 
@@ -6419,6 +6420,61 @@ def construct_database_url_from_env_vars() -> str | None:
     return None
 
 
+async def _get_team_object_for_model_listing(
+    team_id: str | None,
+    prisma_client: Optional["PrismaClient"],
+    user_api_key_cache: Optional["UserApiKeyCache"],
+    proxy_logging_obj: Optional["ProxyLogging"],
+) -> Optional["LiteLLM_TeamTableCachedObj"]:
+    from litellm.proxy.auth.auth_checks import get_team_object
+
+    if team_id is None or prisma_client is None or user_api_key_cache is None or proxy_logging_obj is None:
+        return None
+    try:
+        return await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except HTTPException:
+        verbose_proxy_logger.debug("Could not fetch team %s while listing models", team_id)
+        return None
+
+
+async def _get_access_group_models(
+    user_api_key_dict: "UserAPIKeyAuth",
+    team_object: Optional["LiteLLM_TeamTableCachedObj"],
+    prisma_client: Optional["PrismaClient"],
+    user_api_key_cache: Optional["UserApiKeyCache"],
+    proxy_logging_obj: Optional["ProxyLogging"],
+) -> tuple[str, ...]:
+    """
+    Models granted through entity access groups (`access_group_ids`) on the team or the key.
+
+    These grants are enforced by `can_team_access_model` / `can_key_call_model` at request
+    time, so the listing endpoints have to resolve them too, otherwise a caller can invoke
+    a model that never shows up in `/v1/models`.
+    """
+    from litellm.proxy.auth.auth_checks import (
+        _get_models_from_access_groups,
+        get_authorized_resources_from_key_access_groups,
+    )
+
+    team_group_models: Final = await _get_models_from_access_groups(
+        access_group_ids=(team_object.access_group_ids or ()) if team_object is not None else (),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    key_group_models: Final = await get_authorized_resources_from_key_access_groups(
+        valid_token=user_api_key_dict,
+        team_object=team_object,
+        resource_field="access_model_names",
+    )
+    return tuple(dict.fromkeys((*team_group_models, *key_group_models)))
+
+
 async def get_available_models_for_user(
     user_api_key_dict: "UserAPIKeyAuth",
     llm_router: Optional["Router"],
@@ -6498,10 +6554,26 @@ async def get_available_models_for_user(
 
     effective_team_id: Final = team_id or user_api_key_dict.team_id
 
+    access_group_models: Final = await _get_access_group_models(
+        user_api_key_dict=user_api_key_dict,
+        team_object=await _get_team_object_for_model_listing(
+            team_id=effective_team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        ),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    granted_key_models: Final = (*key_models, *access_group_models) if key_models else key_models
+    granted_team_models: Final = (*team_models, *access_group_models) if team_models else team_models
+
     # Get complete model list
     all_models: Final = get_complete_model_list(
-        key_models=key_models,
-        team_models=team_models,
+        key_models=granted_key_models,
+        team_models=granted_team_models,
         proxy_model_list=proxy_model_list,
         user_model=user_model,
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
