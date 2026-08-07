@@ -561,7 +561,7 @@ The Terraform modules live at [`terraform/litellm/aws/`](./terraform/litellm/aws
 
 ### Verify Docker Image Signatures
 
-All LiteLLM Docker images published to GHCR are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). Every release is signed with the same key introduced in [commit `0112e53`](https://github.com/BerriAI/litellm/commit/0112e53046018d726492c814b3644b7d376029d0).
+All LiteLLM Docker images published to GHCR are signed with [cosign](https://docs.sigstore.dev/cosign/). Every release is signed with the same key introduced in [commit `0112e53`](https://github.com/BerriAI/litellm/commit/0112e53046018d726492c814b3644b7d376029d0).
 
 **Verify using the pinned commit hash (recommended):**
 
@@ -594,7 +594,7 @@ For companies that need better security, user management and professional suppor
 [Talk to founders](https://enterprise.litellm.ai/demo)
 
 This covers:
-- ✅ **Features under the [LiteLLM Commercial License](https://docs.litellm.ai/docs/proxy/enterprise):**
+- ✅ **Features under the [LiteLLM Commercial License](https://docs.litellm.ai/docs/enterprise):**
 - ✅ **Feature Prioritization**
 - ✅ **Custom Integrations**
 - ✅ **Professional Support - Dedicated discord + slack**
