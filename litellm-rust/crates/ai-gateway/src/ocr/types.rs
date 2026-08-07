@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleRequest};
+use litellm_core::logging::{CallLogger, LogSink};
 use litellm_core::ocr::transformation::OcrProviderConfig;
 use serde_json::{Map, Value};
 
@@ -22,6 +23,7 @@ pub struct OcrRequest<'a> {
     pub guardrails: Vec<Arc<dyn CustomGuardrail>>,
     pub request_metadata: RequestMetadata,
     pub litellm_call_id: Option<&'a str>,
+    pub logging_sink: Option<Arc<dyn LogSink>>,
 }
 
 pub(crate) struct PreparedOcrRequest {
@@ -34,6 +36,7 @@ pub(crate) struct PreparedOcrRequest {
     pub(crate) extra_headers: Option<Map<String, Value>>,
     pub(crate) optional_params: Map<String, Value>,
     pub(crate) timeout: Option<Duration>,
+    pub(crate) logger: Arc<CallLogger>,
 }
 
 impl CallLifecycleRequest for PreparedOcrRequest {
@@ -54,4 +57,5 @@ pub(crate) struct ProviderOcrRequest {
     pub(crate) body: Value,
     pub(crate) upstream_headers: Vec<(String, String)>,
     pub(crate) timeout: Option<Duration>,
+    pub(crate) logger: Arc<CallLogger>,
 }

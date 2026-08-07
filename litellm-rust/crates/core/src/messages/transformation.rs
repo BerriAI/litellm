@@ -25,6 +25,14 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> CoreResult<String>;
 
+    fn signing_region(
+        &self,
+        _api_base: Option<&str>,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Option<String> {
+        None
+    }
+
     fn resolve_api_key(
         &self,
         api_key: Option<&str>,
